@@ -1,0 +1,89 @@
+package com.example.tset
+
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+
+internal data class BookReaderCollectedCue(
+    val id: String,
+    val bookTitle: String,
+    val text: String,
+    val startMs: Long,
+    val endMs: Long,
+    val savedAtMs: Long
+)
+
+private const val BOOK_READER_COLLECTION_PREFS = "book_reader_collections"
+private const val BOOK_READER_COLLECTION_KEY = "items_json"
+
+internal fun loadBookReaderCollectedCues(context: Context): List<BookReaderCollectedCue> {
+    val prefs = context.getSharedPreferences(BOOK_READER_COLLECTION_PREFS, Context.MODE_PRIVATE)
+    val raw = prefs.getString(BOOK_READER_COLLECTION_KEY, null) ?: return emptyList()
+    val root = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyList()
+    val array = root.optJSONArray("items") ?: JSONArray()
+
+    val output = mutableListOf<BookReaderCollectedCue>()
+    for (i in 0 until array.length()) {
+        val item = array.optJSONObject(i) ?: continue
+        val id = item.optString("id").trim()
+        val bookTitle = item.optString("bookTitle").trim()
+        val text = item.optString("text").trim()
+        if (id.isBlank() || text.isBlank()) continue
+
+        output += BookReaderCollectedCue(
+            id = id,
+            bookTitle = bookTitle,
+            text = text,
+            startMs = item.optLong("startMs", 0L),
+            endMs = item.optLong("endMs", 0L),
+            savedAtMs = item.optLong("savedAtMs", 0L)
+        )
+    }
+    return output.sortedByDescending { it.savedAtMs }
+}
+
+internal fun appendBookReaderCollectedCue(context: Context, cue: BookReaderCollectedCue): Boolean {
+    val existing = loadBookReaderCollectedCues(context).toMutableList()
+    val duplicated = existing.any {
+        it.bookTitle == cue.bookTitle &&
+            it.startMs == cue.startMs &&
+            it.endMs == cue.endMs &&
+            it.text == cue.text
+    }
+    if (duplicated) return false
+
+    existing += cue
+    saveBookReaderCollectedCues(context, existing.sortedByDescending { it.savedAtMs }.take(1200))
+    return true
+}
+
+internal fun removeBookReaderCollectedCue(context: Context, id: String) {
+    if (id.isBlank()) return
+    val remaining = loadBookReaderCollectedCues(context).filterNot { it.id == id }
+    saveBookReaderCollectedCues(context, remaining)
+}
+
+private fun saveBookReaderCollectedCues(context: Context, cues: List<BookReaderCollectedCue>) {
+    val root = JSONObject().apply {
+        put(
+            "items",
+            JSONArray().apply {
+                cues.forEach { cue ->
+                    put(JSONObject().apply {
+                        put("id", cue.id)
+                        put("bookTitle", cue.bookTitle)
+                        put("text", cue.text)
+                        put("startMs", cue.startMs)
+                        put("endMs", cue.endMs)
+                        put("savedAtMs", cue.savedAtMs)
+                    })
+                }
+            }
+        )
+    }
+
+    context.getSharedPreferences(BOOK_READER_COLLECTION_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(BOOK_READER_COLLECTION_KEY, root.toString())
+        .apply()
+}
