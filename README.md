@@ -11,7 +11,7 @@
 3. App 会自动：
    - 在有声书文件夹下新建一个 AudX 文件夹
    - 把音频和 SRT 移动到该文件夹
-
+```
 目录示例：
 text
 有声书文件夹/
@@ -21,6 +21,7 @@ text
 └── Aud2/
     ├── 2.m4b
     └── 2.srt
+```
 
 SRT 可参考：
 [SubPlz](https://github.com/kanjieater/SubPlz)
