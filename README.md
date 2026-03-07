@@ -23,7 +23,7 @@ text
     └── 2.srt
 
 SRT 可参考：
-SubPlz
+[SubPlz](https://github.com/kanjieater/SubPlz)
 
 
 ## 手柄
@@ -54,7 +54,7 @@ SubPlz
 点击查词
 
 ##  特别感谢
-hoshidicts
+[hoshidicts](https://github.com/Manhhao/hoshidicts)
 
 ## License
 
