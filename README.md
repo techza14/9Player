@@ -50,17 +50,5 @@ SRT 可参考：
   <img src="https://github.com/user-attachments/assets/00299aa3-0e81-4917-85d4-8833ffd0ceec" width="260" alt="Anki设置2" />
 </p>
 
-## GitHub 图片太大怎么办
-
-在 GitHub 的 Markdown 里，普通 `![]()` 不能直接改尺寸。可用 HTML：
-
-```html
-<img src="图片链接" width="260" alt="说明" />
-```
-
-常用宽度：`220` / `260` / `320`。
-
-## 许可证
-
 本项目采用 `GNU General Public License v3.0`（`GPL-3.0-only`）开源。
 完整协议见 [LICENSE](LICENSE)。
