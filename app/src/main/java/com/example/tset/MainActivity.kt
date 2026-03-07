@@ -1,15 +1,18 @@
-﻿package com.example.tset
+﻿package com.tekuza.p9player
 
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.text.Html
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.ImageView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -25,12 +28,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
@@ -63,6 +69,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -70,10 +78,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import androidx.documentfile.provider.DocumentFile
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import com.example.tset.ui.theme.TsetTheme
+import com.tekuza.p9player.ui.theme.TsetTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -108,12 +119,11 @@ private enum class HomeLibraryView {
 
 private val FIELD_VARIABLE_CHOICES = listOf(
     "",
+    "{cut-audio}",
     "{expression}",
     "{word}",
     "{reading}",
     "{furigana-plain}",
-    "{audio}",
-    "{audioTag}",
     "{glossary}",
     "{glossary-first}",
     "{single-glossary}",
@@ -139,6 +149,9 @@ private val FIELD_VARIABLE_CHOICES = listOf(
     "{search-query}"
 )
 
+private const val BOOK_DELETE_PREFS = "book_delete_prefs"
+private const val KEY_SKIP_DELETE_CONFIRM = "skip_delete_confirm"
+
 private data class ReaderBook(
     val id: String,
     val title: String,
@@ -146,13 +159,16 @@ private data class ReaderBook(
     val audioName: String,
     val srtUri: Uri,
     val srtName: String,
-    val cues: List<SubtitleCue>
+    val cues: List<SubtitleCue>,
+    val coverUri: Uri?
 )
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 private fun ReaderSyncScreen() {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val view = LocalView.current
     val contentResolver = context.contentResolver
     val scope = rememberCoroutineScope()
 
@@ -165,6 +181,9 @@ private fun ReaderSyncScreen() {
     var srtLoading by remember { mutableStateOf(false) }
     var srtError by remember { mutableStateOf<String?>(null) }
     var readerBooks by remember { mutableStateOf<List<ReaderBook>>(emptyList()) }
+    var readerBookPlaybackSnapshots by remember {
+        mutableStateOf<Map<String, BookReaderPlaybackSnapshot>>(emptyMap())
+    }
     var selectedBookId by remember { mutableStateOf<String?>(null) }
     var homeLibraryView by remember { mutableStateOf(HomeLibraryView.BOOKSHELF) }
     var addBookDialogVisible by remember { mutableStateOf(false) }
@@ -172,6 +191,8 @@ private fun ReaderSyncScreen() {
     var addBookAudioName by remember { mutableStateOf<String?>(null) }
     var addBookSrtUri by remember { mutableStateOf<Uri?>(null) }
     var addBookSrtName by remember { mutableStateOf<String?>(null) }
+    var addBookFolderUri by remember { mutableStateOf<Uri?>(null) }
+    var addBookFolderName by remember { mutableStateOf<String?>(null) }
     val selectedBookIds = remember { mutableStateListOf<String>() }
 
     var loadedDictionaries by remember { mutableStateOf<List<LoadedDictionary>>(emptyList()) }
@@ -180,14 +201,11 @@ private fun ReaderSyncScreen() {
     var dictionaryProgressText by remember { mutableStateOf<String?>(null) }
     var dictionaryProgressValue by remember { mutableStateOf<Float?>(null) }
     var dictionaryError by remember { mutableStateOf<String?>(null) }
-    var mecabDictionaryRef by remember { mutableStateOf<PersistedMecabDictionaryRef?>(null) }
-    var mecabTokenizer by remember { mutableStateOf<MecabTokenizer?>(null) }
 
     var lookupQuery by remember { mutableStateOf("") }
     var lookupResults by remember { mutableStateOf<List<DictionarySearchResult>>(emptyList()) }
     var lookupLoading by remember { mutableStateOf(false) }
     var selectedEntryKey by remember { mutableStateOf<String?>(null) }
-    val expandedResultKeys = remember { mutableStateMapOf<String, Boolean>() }
 
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var pendingAnkiCard by remember { mutableStateOf<MinedCard?>(null) }
@@ -205,6 +223,11 @@ private fun ReaderSyncScreen() {
     var showDictionaryManager by remember { mutableStateOf(false) }
     var activeSection by remember { mutableStateOf(MiningSection.MAIN) }
     var collectedCues by remember { mutableStateOf<List<BookReaderCollectedCue>>(emptyList()) }
+    var clearCollectionsConfirmVisible by remember { mutableStateOf(false) }
+    var deleteBooksConfirmVisible by remember { mutableStateOf(false) }
+    var deleteBooksDontAskAgain by remember { mutableStateOf(false) }
+    var pendingDeleteBookIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var skipDeleteBookConfirm by remember { mutableStateOf(loadSkipDeleteBookConfirm(context)) }
     var mainLookupPopupVisible by remember { mutableStateOf(false) }
     var mainLookupPopupTitle by remember { mutableStateOf("") }
     var mainLookupPopupResults by remember { mutableStateOf<List<DictionarySearchResult>>(emptyList()) }
@@ -213,32 +236,88 @@ private fun ReaderSyncScreen() {
     var mainLookupPopupError by remember { mutableStateOf<String?>(null) }
     var mainLookupPopupCue by remember { mutableStateOf<SubtitleCue?>(null) }
     var mainLookupPopupSelectedRange by remember { mutableStateOf<IntRange?>(null) }
+    var mainLookupPopupAudioUri by remember { mutableStateOf<Uri?>(null) }
+    var mainLookupAnkiStatus by remember { mutableStateOf<String?>(null) }
 
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
     var dragProgress by remember { mutableStateOf<Float?>(null) }
+    var pendingCollectionPlayMs by remember { mutableStateOf<Long?>(null) }
+    var pendingCollectionStopMs by remember { mutableStateOf<Long?>(null) }
+    var collectionPlayRequestNonce by remember { mutableStateOf(0L) }
 
     val player = remember(context) { ExoPlayer.Builder(context).build() }
     DisposableEffect(player) {
         onDispose { player.release() }
     }
 
+    DisposableEffect(dictionaryLoading, view) {
+        view.keepScreenOn = dictionaryLoading
+        onDispose {
+            view.keepScreenOn = false
+        }
+    }
+
+    LaunchedEffect(readerBooks) {
+        readerBookPlaybackSnapshots = loadReaderBookPlaybackSnapshotsForBooks(
+            context = context,
+            books = readerBooks
+        )
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                scope.launch {
+                    readerBookPlaybackSnapshots = loadReaderBookPlaybackSnapshotsForBooks(
+                        context = context,
+                        books = readerBooks
+                    )
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
+                positionMs = player.currentPosition.coerceAtLeast(0L)
+                durationMs = if (player.duration > 0L) player.duration else 0L
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                positionMs = player.currentPosition.coerceAtLeast(0L)
+                durationMs = if (player.duration > 0L) player.duration else 0L
+            }
+
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int
+            ) {
+                positionMs = newPosition.positionMs.coerceAtLeast(0L)
             }
         }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
 
-    LaunchedEffect(player) {
+    LaunchedEffect(player, isPlaying) {
+        if (!isPlaying) {
+            positionMs = player.currentPosition.coerceAtLeast(0L)
+            durationMs = if (player.duration > 0L) player.duration else 0L
+            return@LaunchedEffect
+        }
         while (true) {
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = if (player.duration > 0L) player.duration else 0L
-            delay(200L)
+            delay(320L)
         }
     }
 
@@ -248,6 +327,28 @@ private fun ReaderSyncScreen() {
         player.prepare()
         player.pause()
         player.seekTo(0L)
+    }
+
+    LaunchedEffect(audioUri, pendingCollectionPlayMs, collectionPlayRequestNonce) {
+        val targetMs = pendingCollectionPlayMs ?: return@LaunchedEffect
+        if (audioUri == null) return@LaunchedEffect
+        var waitedMs = 0L
+        while (player.playbackState == Player.STATE_IDLE && waitedMs < 2_000L) {
+            delay(50L)
+            waitedMs += 50L
+        }
+        player.seekTo(targetMs.coerceAtLeast(0L))
+        player.play()
+        pendingCollectionPlayMs = null
+    }
+
+    LaunchedEffect(positionMs, isPlaying, pendingCollectionStopMs) {
+        val stopMs = pendingCollectionStopMs ?: return@LaunchedEffect
+        if (!isPlaying) return@LaunchedEffect
+        if (positionMs >= stopMs) {
+            player.pause()
+            pendingCollectionStopMs = null
+        }
     }
 
     val requestAnkiPermissionLauncher =
@@ -262,6 +363,16 @@ private fun ReaderSyncScreen() {
         }
 
     fun persistImportState() {
+        val persistedBooks = readerBooks.map { book ->
+            PersistedReaderBook(
+                id = book.id,
+                title = book.title,
+                audioUri = book.audioUri.toString(),
+                audioName = book.audioName,
+                srtUri = book.srtUri.toString(),
+                srtName = book.srtName
+            )
+        }
         savePersistedImports(
             context = context,
             state = PersistedImports(
@@ -269,8 +380,11 @@ private fun ReaderSyncScreen() {
                 audioName = audioName,
                 srtUri = srtUri?.toString(),
                 srtName = srtName,
-                dictionaries = dictionaryRefs,
-                mecabDictionary = mecabDictionaryRef
+                audiobookFolderUri = addBookFolderUri?.toString(),
+                audiobookFolderName = addBookFolderName,
+                books = persistedBooks,
+                selectedBookId = selectedBookId,
+                dictionaries = dictionaryRefs
             )
         )
     }
@@ -400,13 +514,6 @@ private fun ReaderSyncScreen() {
         dictionaryProgressValue = null
     }
 
-    fun replaceTokenizer(next: MecabTokenizer?) {
-        val previous = mecabTokenizer
-        if (previous === next) return
-        previous?.close()
-        mecabTokenizer = next
-    }
-
     fun buildReaderBook(
         audio: Uri,
         audioDisplayName: String?,
@@ -419,6 +526,11 @@ private fun ReaderSyncScreen() {
         val resolvedSrtName = srtDisplayName?.takeIf { it.isNotBlank() }
             ?: queryDisplayName(contentResolver, srt)
         val title = buildBookTitle(resolvedAudioName, resolvedSrtName)
+        val coverUri = resolveEmbeddedCoverUriForM4b(
+            context = context,
+            audioUri = audio,
+            audioDisplayName = resolvedAudioName
+        )
         val id = buildDictionaryCacheKey(
             uri = "book|${audio}|${srt}",
             displayName = "$resolvedAudioName|$resolvedSrtName"
@@ -430,7 +542,8 @@ private fun ReaderSyncScreen() {
             audioName = resolvedAudioName,
             srtUri = srt,
             srtName = resolvedSrtName,
-            cues = cues
+            cues = cues,
+            coverUri = coverUri
         )
     }
 
@@ -442,6 +555,8 @@ private fun ReaderSyncScreen() {
         srtName = book.srtName
         srtCues = book.cues
         srtError = null
+        pendingCollectionPlayMs = null
+        pendingCollectionStopMs = null
         if (persist) {
             persistImportState()
         }
@@ -476,9 +591,12 @@ private fun ReaderSyncScreen() {
         selectedBookIds.clear()
     }
 
-    fun deleteSelectedBooks() {
-        if (selectedBookIds.isEmpty()) return
-        val removeIds = selectedBookIds.toSet()
+    fun deleteSelectedBooks(removeIds: Set<String>) {
+        if (removeIds.isEmpty()) return
+        val deletingBooks = readerBooks.filter { it.id in removeIds }
+        val failedFolderDeletes = deletingBooks.filterNot { book ->
+            deleteBookStorageFolder(context, book)
+        }
         val remaining = readerBooks.filterNot { it.id in removeIds }
         readerBooks = remaining
         if (selectedBookId in removeIds) {
@@ -492,18 +610,51 @@ private fun ReaderSyncScreen() {
                 srtUri = null
                 srtName = null
                 srtCues = emptyList()
-                persistImportState()
             }
         }
+        persistImportState()
         clearBookSelection()
-        exportStatus = "Deleted selected books."
+        exportStatus = if (failedFolderDeletes.isEmpty()) {
+            "已删除 ${removeIds.size} 本书（含文件夹）。"
+        } else {
+            "已删书 ${removeIds.size} 本；${failedFolderDeletes.size} 个文件夹删除失败。"
+        }
+    }
+
+    fun requestDeleteSelectedBooks() {
+        val removeIds = selectedBookIds.toSet()
+        if (removeIds.isEmpty()) return
+        if (skipDeleteBookConfirm) {
+            deleteSelectedBooks(removeIds)
+            return
+        }
+        pendingDeleteBookIds = removeIds
+        deleteBooksDontAskAgain = false
+        deleteBooksConfirmVisible = true
+    }
+
+    fun playCollectedCue(item: BookReaderCollectedCue) {
+        val targetBook = readerBooks.firstOrNull { it.title == item.bookTitle }
+        if (targetBook == null) {
+            exportStatus = "No matched book audio for this collection item."
+            return
+        }
+        activateReaderBook(targetBook, persist = true)
+        pendingCollectionPlayMs = item.startMs
+        pendingCollectionStopMs = item.endMs.takeIf { it > item.startMs }
+        collectionPlayRequestNonce += 1L
     }
 
     fun confirmAddBookFromDialog() {
+        val selectedFolder = addBookFolderUri
+        if (selectedFolder == null) {
+            exportStatus = "请先选择有声书文件夹。"
+            return
+        }
         val pickedAudio = addBookAudioUri
         val pickedSrt = addBookSrtUri
         if (pickedAudio == null || pickedSrt == null) {
-            exportStatus = "Please select both audio and SRT."
+            exportStatus = "请选择音频和 SRT。"
             return
         }
         val pickedAudioName = addBookAudioName
@@ -513,45 +664,113 @@ private fun ReaderSyncScreen() {
             srtError = null
             val importResult = withContext(Dispatchers.IO) {
                 runCatching {
-                    val importedAudio = importBookFileToLocalStorage(
+                    val relocated = relocateSelectedBookFilesToAudFolder(
                         context = context,
                         contentResolver = contentResolver,
-                        sourceUri = pickedAudio,
-                        sourceDisplayName = pickedAudioName,
-                        typeLabel = "audio",
-                        fallbackExtension = "m4a"
+                        rootFolderUri = selectedFolder,
+                        audioSourceUri = pickedAudio,
+                        audioSourceName = pickedAudioName,
+                        srtSourceUri = pickedSrt,
+                        srtSourceName = pickedSrtName
                     )
-                    val importedSrt = importBookFileToLocalStorage(
-                        context = context,
-                        contentResolver = contentResolver,
-                        sourceUri = pickedSrt,
-                        sourceDisplayName = pickedSrtName,
-                        typeLabel = "srt",
-                        fallbackExtension = "srt"
+                    val cues = parseSrt(contentResolver, relocated.srtUri)
+                    val book = buildReaderBook(
+                        audio = relocated.audioUri,
+                        audioDisplayName = relocated.audioName,
+                        srt = relocated.srtUri,
+                        srtDisplayName = relocated.srtName,
+                        cues = cues
                     )
-                    val cues = parseSrt(contentResolver, importedSrt.uri)
-                    Triple(importedAudio, importedSrt, cues)
+                    relocated to book
                 }
             }
             srtLoading = false
-            importResult.onSuccess { (importedAudio, importedSrt, cues) ->
-                val book = buildReaderBook(
-                    audio = importedAudio.uri,
-                    audioDisplayName = importedAudio.displayName,
-                    srt = importedSrt.uri,
-                    srtDisplayName = importedSrt.displayName,
-                    cues = cues
-                )
+            importResult.onSuccess { (relocated, book) ->
                 upsertReaderBook(book, activate = true)
                 addBookDialogVisible = false
                 addBookAudioUri = null
                 addBookAudioName = null
                 addBookSrtUri = null
                 addBookSrtName = null
-                exportStatus = "Added book: ${book.title}"
+                val warning = relocated.moveWarnings.takeIf { it.isNotEmpty() }?.joinToString(" ")
+                exportStatus = buildString {
+                    append("已添加书籍：${book.title}（存入 ${relocated.folderName}）。")
+                    if (!warning.isNullOrBlank()) {
+                        append(' ')
+                        append(warning)
+                    }
+                }
             }.onFailure { error ->
-                srtError = error.message ?: "Failed to parse SRT"
-                exportStatus = "Failed to add new book."
+                srtError = error.message ?: "添加书籍失败"
+                exportStatus = "添加书籍失败。"
+            }
+        }
+    }
+
+    fun refreshBookshelfFromFolder() {
+        val selectedFolder = addBookFolderUri
+        if (selectedFolder == null) {
+            exportStatus = "请先选择有声书文件夹。"
+            return
+        }
+        val previousSelectedId = selectedBookId
+        scope.launch {
+            srtLoading = true
+            srtError = null
+            val refreshResult = withContext(Dispatchers.IO) {
+                runCatching {
+                    val scanResult = scanBooksFromRootFolder(
+                        context = context,
+                        contentResolver = contentResolver,
+                        rootFolderUri = selectedFolder
+                    )
+                    val refreshedBooks = mutableListOf<ReaderBook>()
+                    val parseFailed = mutableListOf<String>()
+                    scanResult.books.forEach { candidate ->
+                        runCatching {
+                            val cues = parseSrt(contentResolver, candidate.srtUri)
+                            val rebuilt = buildReaderBook(
+                                audio = candidate.audioUri,
+                                audioDisplayName = candidate.audioName,
+                                srt = candidate.srtUri,
+                                srtDisplayName = candidate.srtName,
+                                cues = cues
+                            )
+                            rebuilt.copy(title = candidate.folderName)
+                        }.onSuccess { refreshedBooks += it }
+                            .onFailure {
+                                parseFailed += candidate.folderName
+                            }
+                    }
+                    Triple(refreshedBooks, scanResult.skippedFolders, parseFailed)
+                }
+            }
+            srtLoading = false
+            refreshResult.onSuccess { (books, skippedFolders, parseFailed) ->
+                if (books.isEmpty()) {
+                    srtError = "未找到可导入书籍。"
+                    exportStatus = "刷新完成：0 本。"
+                    return@onSuccess
+                }
+                readerBooks = books
+                clearBookSelection()
+                val selected = books.firstOrNull { it.id == previousSelectedId } ?: books.first()
+                activateReaderBook(selected, persist = false)
+                selectedBookId = selected.id
+                persistImportState()
+
+                exportStatus = buildString {
+                    append("刷新完成：${books.size} 本。")
+                    if (skippedFolders.isNotEmpty()) {
+                        append(" 跳过 ${skippedFolders.size} 个文件夹（缺少音频或SRT）。")
+                    }
+                    if (parseFailed.isNotEmpty()) {
+                        append(" 失败 ${parseFailed.size} 个文件夹（SRT无效）。")
+                    }
+                }
+            }.onFailure { error ->
+                srtError = error.message ?: "刷新书架失败"
+                exportStatus = "刷新书架失败。"
             }
         }
     }
@@ -580,7 +799,10 @@ private fun ReaderSyncScreen() {
             exportStatus = "Select an Anki model/template first, then export."
             return
         }
-
+        if (!hasAnyAnkiFieldTemplate(config.fieldTemplates)) {
+            exportStatus = "All field variables are empty. Configure at least one marker in 设置 > Anki."
+            return
+        }
         val exportResult = runCatching {
             exportToAnkiDroidApi(context, card, config)
         }
@@ -607,6 +829,12 @@ private fun ReaderSyncScreen() {
         if (activeSection == MiningSection.COLLECTIONS) {
             refreshCollectedCues()
         }
+        if (activeSection != MiningSection.DICTIONARY) {
+            lookupQuery = ""
+            lookupResults = emptyList()
+            selectedEntryKey = null
+            lookupLoading = false
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -621,95 +849,125 @@ private fun ReaderSyncScreen() {
         }
 
         val persisted = loadPersistedImports(context)
+        addBookFolderUri = persisted.audiobookFolderUri
+            ?.let { rawUri -> runCatching { Uri.parse(rawUri) }.getOrNull() }
+        addBookFolderName = persisted.audiobookFolderName?.ifBlank { null }
+            ?: addBookFolderUri?.let { uri ->
+                queryTreeDisplayName(context, contentResolver, uri)
+            }
 
-        val restoredAudioRaw = persisted.audioUri?.let { rawUri ->
-            runCatching { Uri.parse(rawUri) }.getOrNull()
-        }
-        val restoredSrtRaw = persisted.srtUri?.let { rawUri ->
-            runCatching { Uri.parse(rawUri) }.getOrNull()
-        }
-
-        if (restoredAudioRaw != null && restoredSrtRaw != null) {
+        if (persisted.books.isNotEmpty()) {
             srtLoading = true
             srtError = null
-            val restoreResult = withContext(Dispatchers.IO) {
+            val restoreBooksResult = withContext(Dispatchers.IO) {
                 runCatching {
-                    val localBookFiles = ensureBookFilesInLocalStorage(
-                        context = context,
-                        contentResolver = contentResolver,
-                        audioUri = restoredAudioRaw,
-                        audioDisplayName = persisted.audioName,
-                        srtUri = restoredSrtRaw,
-                        srtDisplayName = persisted.srtName
-                    )
-                    val cues = parseSrt(contentResolver, localBookFiles.srt.uri)
-                    localBookFiles to cues
+                    val restoredBooks = mutableListOf<ReaderBook>()
+                    val failedBooks = mutableListOf<String>()
+                    persisted.books.forEach { savedBook ->
+                        val audio = runCatching { Uri.parse(savedBook.audioUri) }.getOrNull()
+                        val srt = runCatching { Uri.parse(savedBook.srtUri) }.getOrNull()
+                        if (audio == null || srt == null) {
+                            failedBooks += savedBook.title.ifBlank { savedBook.audioName }
+                            return@forEach
+                        }
+                        runCatching {
+                            val cues = parseSrt(contentResolver, srt)
+                            val rebuilt = buildReaderBook(
+                                audio = audio,
+                                audioDisplayName = savedBook.audioName,
+                                srt = srt,
+                                srtDisplayName = savedBook.srtName,
+                                cues = cues
+                            )
+                            val restoredTitle = savedBook.title.trim().ifBlank { rebuilt.title }
+                            rebuilt.copy(title = restoredTitle)
+                        }.onSuccess { restoredBooks += it }
+                            .onFailure {
+                                failedBooks += savedBook.title.ifBlank { savedBook.audioName }
+                            }
+                    }
+                    restoredBooks to failedBooks
                 }
             }
             srtLoading = false
-            restoreResult.onSuccess { (localFiles, cues) ->
-                audioUri = localFiles.audio.uri
-                audioName = localFiles.audio.displayName
-                srtUri = localFiles.srt.uri
-                srtName = localFiles.srt.displayName
-                srtCues = cues
-                persistImportState()
+            restoreBooksResult.onSuccess { (restoredBooks, failedBooks) ->
+                readerBooks = restoredBooks
+                val restoredSelected = restoredBooks.firstOrNull { it.id == persisted.selectedBookId }
+                    ?: restoredBooks.firstOrNull()
+                if (restoredSelected != null) {
+                    activateReaderBook(restoredSelected, persist = false)
+                    selectedBookId = restoredSelected.id
+                } else {
+                    selectedBookId = null
+                    audioUri = null
+                    audioName = null
+                    srtUri = null
+                    srtName = null
+                    srtCues = emptyList()
+                }
+                if (failedBooks.isNotEmpty()) {
+                    exportStatus = "恢复书籍时有 ${failedBooks.size} 本失败。"
+                }
             }.onFailure { error ->
+                readerBooks = emptyList()
+                selectedBookId = null
                 audioUri = null
                 audioName = null
                 srtUri = null
                 srtName = null
                 srtCues = emptyList()
-                srtError = "Failed to restore book files. Please re-add audio and SRT. ${error.message ?: "unknown error"}"
-                exportStatus = "Saved book file permission expired. Re-add audio and SRT."
+                srtError = "恢复书籍失败：${error.message ?: "unknown error"}"
+                exportStatus = "恢复书架失败。"
             }
-        }
-
-        val restoredAudio = audioUri
-        val restoredSrt = srtUri
-        if (restoredAudio != null && restoredSrt != null && srtCues.isNotEmpty()) {
-            val restoredBook = buildReaderBook(
-                audio = restoredAudio,
-                audioDisplayName = audioName,
-                srt = restoredSrt,
-                srtDisplayName = srtName,
-                cues = srtCues
-            )
-            readerBooks = listOf(restoredBook)
-            selectedBookId = restoredBook.id
-        }
-
-        persisted.mecabDictionary?.let { ref ->
-            val cachedTokenizer = withContext(Dispatchers.IO) {
-                loadInstalledMecabTokenizer(context, ref.name, ref.cacheKey)
+        } else {
+            // Backward compatibility with older single-book persistence format.
+            val restoredAudioRaw = persisted.audioUri?.let { rawUri ->
+                runCatching { Uri.parse(rawUri) }.getOrNull()
             }
-            if (cachedTokenizer != null) {
-                replaceTokenizer(cachedTokenizer)
-                mecabDictionaryRef = ref
-            } else {
-                val restoredUri = runCatching { Uri.parse(ref.uri) }.getOrNull()
-                if (restoredUri != null) {
-                    val installResult = withContext(Dispatchers.IO) {
-                        runCatching {
-                            installMecabDictionaryZip(
-                                context = context,
-                                contentResolver = contentResolver,
-                                uri = restoredUri,
-                                displayName = ref.name,
-                                cacheKey = ref.cacheKey
-                            )
-                        }
+            val restoredSrtRaw = persisted.srtUri?.let { rawUri ->
+                runCatching { Uri.parse(rawUri) }.getOrNull()
+            }
+
+            if (restoredAudioRaw != null && restoredSrtRaw != null) {
+                srtLoading = true
+                srtError = null
+                val restoreResult = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val restoredAudioName = persisted.audioName?.ifBlank { null }
+                            ?: queryDisplayName(contentResolver, restoredAudioRaw)
+                        val restoredSrtName = persisted.srtName?.ifBlank { null }
+                            ?: queryDisplayName(contentResolver, restoredSrtRaw)
+                        val cues = parseSrt(contentResolver, restoredSrtRaw)
+                        Triple(restoredAudioRaw, restoredAudioName, Pair(restoredSrtRaw, restoredSrtName)) to cues
                     }
-                    installResult.onSuccess { installed ->
-                        replaceTokenizer(installed.tokenizer)
-                        mecabDictionaryRef = PersistedMecabDictionaryRef(
-                            uri = ref.uri,
-                            name = installed.name,
-                            cacheKey = installed.cacheKey
-                        )
-                    }.onFailure { error ->
-                        dictionaryError = "Failed to restore Sudachi dictionary ${ref.name}: ${error.message ?: "unknown error"}"
-                    }
+                }
+                srtLoading = false
+                restoreResult.onSuccess { (restored, cues) ->
+                    val (audio, audioDisplay, srtPair) = restored
+                    val (srt, srtDisplay) = srtPair
+                    audioUri = audio
+                    audioName = audioDisplay
+                    srtUri = srt
+                    srtName = srtDisplay
+                    srtCues = cues
+                    val restoredBook = buildReaderBook(
+                        audio = audio,
+                        audioDisplayName = audioDisplay,
+                        srt = srt,
+                        srtDisplayName = srtDisplay,
+                        cues = cues
+                    )
+                    readerBooks = listOf(restoredBook)
+                    selectedBookId = restoredBook.id
+                    persistImportState()
+                }.onFailure { error ->
+                    audioUri = null
+                    audioName = null
+                    srtUri = null
+                    srtName = null
+                    srtCues = emptyList()
+                    srtError = "Failed to restore book files. Please re-add audio and SRT. ${error.message ?: "unknown error"}"
+                    exportStatus = "Saved book file permission expired. Re-add audio and SRT."
                 }
             }
         }
@@ -792,33 +1050,86 @@ private fun ReaderSyncScreen() {
     }
 
     fun normalizeLookupCandidates(rawCandidates: List<String>): List<String> {
-        return rawCandidates
-            .flatMap { extractLookupCandidatesWithMecab(it, mecabTokenizer) }
+        val direct = rawCandidates
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .distinct()
-            .take(6)
+            .take(16)
+        if (direct.isEmpty()) return emptyList()
+        if (direct.size >= 16) return direct
+
+        val expanded = linkedSetOf<String>()
+        direct.forEach(expanded::add)
+        direct
+            .asSequence()
+            .take(4)
+            .filter { it.length <= 40 }
+            .forEach { candidate ->
+                extractLookupCandidates(candidate)
+                    .asSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .take(6)
+                    .forEach { expanded += it }
+            }
+        return expanded.take(16)
     }
 
     fun computeLookupResults(
         dictionaries: List<LoadedDictionary>,
         candidates: List<String>
     ): List<DictionarySearchResult> {
-        val merged = linkedMapOf<String, Pair<DictionaryEntry, Int>>()
-        candidates.forEachIndexed { index, candidate ->
-            val candidateBoost = (candidates.size - index).coerceAtLeast(1) * 2
-            searchDictionarySql(context, dictionaries, candidate, MAX_LOOKUP_RESULTS).forEach { hit ->
-                val key = entryStableKey(hit.entry)
-                val boostedScore = hit.score + candidateBoost
-                val existing = merged[key]
-                if (existing == null || boostedScore > existing.second) {
-                    merged[key] = hit.entry to boostedScore
+        if (dictionaries.isEmpty() || candidates.isEmpty()) return emptyList()
+        val prioritizedCandidates = candidates
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .take(16)
+        if (prioritizedCandidates.isEmpty()) return emptyList()
+
+        val merged = linkedMapOf<String, DictionarySearchResult>()
+        val candidateOrder = prioritizedCandidates.withIndex().associate { it.value to it.index }
+
+        fun mergeProfileHits(
+            profile: DictionaryQueryProfile,
+            sourceCandidates: List<String>,
+            perCandidateLimit: Int
+        ) {
+            sourceCandidates.forEach { candidate ->
+                val index = candidateOrder[candidate] ?: return@forEach
+                val candidateBoost = (prioritizedCandidates.size - index).coerceAtLeast(1) * 2
+                searchDictionarySql(
+                    context = context,
+                    dictionaries = dictionaries,
+                    query = candidate,
+                    maxResults = perCandidateLimit,
+                    profile = profile
+                ).forEach { hit ->
+                    val key = entryStableKey(hit.entry)
+                    val boosted = hit.copy(score = hit.score + candidateBoost)
+                    val existing = merged[key]
+                    if (existing == null || boosted.score > existing.score) {
+                        merged[key] = boosted
+                    }
                 }
             }
         }
 
+        mergeProfileHits(
+            profile = DictionaryQueryProfile.FAST,
+            sourceCandidates = prioritizedCandidates.take(8),
+            perCandidateLimit = (MAX_LOOKUP_RESULTS / 2).coerceAtLeast(12)
+        )
+
+        if (merged.size < 8) {
+            mergeProfileHits(
+                profile = DictionaryQueryProfile.FULL,
+                sourceCandidates = prioritizedCandidates.take(6),
+                perCandidateLimit = MAX_LOOKUP_RESULTS
+            )
+        }
+
         return merged.values
-            .map { (entry, score) -> DictionarySearchResult(entry = entry, score = score) }
             .sortedWith(
                 compareByDescending<DictionarySearchResult> { it.score }
                     .thenBy { it.entry.term.length }
@@ -827,12 +1138,16 @@ private fun ReaderSyncScreen() {
             .take(MAX_LOOKUP_RESULTS)
     }
 
-    fun triggerLookupCandidates(rawCandidates: List<String>) {
+    fun triggerLookupCandidates(
+        rawCandidates: List<String>,
+        onResult: ((Result<List<DictionarySearchResult>>) -> Unit)? = null
+    ) {
         val candidates = normalizeLookupCandidates(rawCandidates)
         if (candidates.isEmpty()) {
             lookupResults = emptyList()
             selectedEntryKey = null
             lookupLoading = false
+            onResult?.invoke(Result.success(emptyList()))
             return
         }
 
@@ -856,6 +1171,7 @@ private fun ReaderSyncScreen() {
                 exportStatus = "Lookup failed: ${error.message ?: "unknown error"}"
             }
             lookupLoading = false
+            onResult?.invoke(result)
         }
     }
 
@@ -865,30 +1181,21 @@ private fun ReaderSyncScreen() {
             return
         }
 
-        val selectionRange = findMainLookupSelectionRange(cue.text, offset, mecabTokenizer)
+        val selection = findMainLookupSelection(cue.text, offset)
+        val selectionRange = selection?.range
         mainLookupPopupSelectedRange = selectionRange
         mainLookupPopupCue = cue
 
-        val selectedToken = selectionRange?.let { range ->
-            val start = range.first.coerceIn(0, cue.text.length)
-            val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
-            cue.text.substring(start, endExclusive).trim()
-        }?.takeIf { it.isNotBlank() }
+        val selectedToken = selection?.text?.trim()?.takeIf { it.isNotBlank() }
 
         val candidates = buildList {
             selectedToken?.let { add(it) }
-            addAll(
-                extractLookupCandidatesAtWithMecab(
-                    text = cue.text,
-                    charOffset = offset,
-                    tokenizer = mecabTokenizer
-                )
-            )
+            selectedToken?.let { addAll(extractLookupCandidates(it)) }
         }
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .distinct()
-            .take(6)
+            .take(16)
 
         if (candidates.isEmpty()) {
             mainLookupPopupVisible = true
@@ -901,22 +1208,22 @@ private fun ReaderSyncScreen() {
         }
 
         mainLookupPopupVisible = true
-        mainLookupPopupTitle = selectedToken ?: candidates.first()
+        mainLookupPopupTitle = candidates.firstOrNull() ?: selectedToken.orEmpty()
         mainLookupPopupResults = emptyList()
         mainLookupPopupSelectedKey = null
         mainLookupPopupError = null
         mainLookupPopupLoading = true
+        mainLookupAnkiStatus = null
 
-        triggerLookupCandidates(candidates)
-
-        val dictionariesSnapshot = loadedDictionaries
-        scope.launch {
-            val result = withContext(Dispatchers.Default) {
-                runCatching { computeLookupResults(dictionariesSnapshot, candidates) }
-            }
+        triggerLookupCandidates(candidates) { result ->
             result.onSuccess { hits ->
                 mainLookupPopupResults = hits
                 mainLookupPopupSelectedKey = hits.firstOrNull()?.let { entryStableKey(it.entry) }
+                mainLookupPopupSelectedRange = if (hits.isNotEmpty()) {
+                    trimSelectionRangeByMatchedLength(selectionRange, hits.first().matchedLength)
+                } else {
+                    null
+                }
                 mainLookupPopupLoading = false
             }.onFailure { error ->
                 mainLookupPopupError = error.message ?: "Lookup failed"
@@ -925,7 +1232,12 @@ private fun ReaderSyncScreen() {
         }
     }
 
-    fun openMainLookupPopup(cue: SubtitleCue) {
+    fun openMainLookupPopup(cue: SubtitleCue, sourceBookTitle: String? = null) {
+        mainLookupPopupAudioUri = if (sourceBookTitle.isNullOrBlank()) {
+            audioUri
+        } else {
+            readerBooks.firstOrNull { it.title == sourceBookTitle }?.audioUri ?: audioUri
+        }
         triggerMainCueLookup(cue, 0)
     }
 
@@ -946,16 +1258,10 @@ private fun ReaderSyncScreen() {
         mainLookupPopupLoading = true
         mainLookupPopupCue = null
         mainLookupPopupSelectedRange = null
+        mainLookupPopupAudioUri = null
+        mainLookupAnkiStatus = null
 
-        triggerLookupCandidates(candidates)
-
-        val dictionariesSnapshot = loadedDictionaries
-        scope.launch {
-            val result = withContext(Dispatchers.Default) {
-                runCatching {
-                    computeLookupResults(dictionariesSnapshot, candidates)
-                }
-            }
+        triggerLookupCandidates(candidates) { result ->
             result.onSuccess { hits ->
                 mainLookupPopupResults = hits
                 mainLookupPopupSelectedKey = hits.firstOrNull()?.let { entryStableKey(it.entry) }
@@ -964,6 +1270,60 @@ private fun ReaderSyncScreen() {
                 mainLookupPopupError = error.message ?: "Lookup failed"
                 mainLookupPopupLoading = false
             }
+        }
+    }
+
+    fun exportLookupGroupToAnki(
+        groupedResult: GroupedLookupResult,
+        sourceCue: SubtitleCue?,
+        lookupTitle: String
+    ) {
+        val dictionaryGroup = groupedResult.dictionaries.firstOrNull() ?: run {
+            mainLookupAnkiStatus = "No dictionary content to export."
+            return
+        }
+        val cueText = sourceCue?.text?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: lookupTitle.trim().ifBlank { groupedResult.term }
+        val cue = sourceCue ?: SubtitleCue(
+            startMs = 0L,
+            endMs = 0L,
+            text = cueText
+        )
+        val popupSelectionText = sourceCue?.let { cueItem ->
+            mainLookupPopupSelectedRange?.let { range ->
+                val start = range.first.coerceIn(0, cueItem.text.length)
+                val endExclusive = (range.last + 1).coerceIn(start, cueItem.text.length)
+                if (endExclusive > start) cueItem.text.substring(start, endExclusive) else ""
+            }
+        }?.trim()?.takeIf { it.isNotBlank() }
+        val glossarySections = buildGroupedGlossarySections(groupedResult)
+        val primaryDefinition = dictionaryGroup.definitions
+            .firstOrNull { it.isNotBlank() }
+            ?.trim()
+            .orEmpty()
+        scope.launch {
+            mainLookupAnkiStatus = "Adding to Anki..."
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    addLookupDefinitionToAnkiMain(
+                        context = context,
+                        cue = cue,
+                        audioUri = mainLookupPopupAudioUri,
+                        entry = dictionaryGroup.entry,
+                        definition = primaryDefinition.ifBlank { groupedResult.term },
+                        dictionaryCss = null,
+                        glossarySections = glossarySections,
+                        popupSelectionText = popupSelectionText
+                    )
+                }
+            }
+            val status = result.fold(
+                onSuccess = { "Added to Anki." },
+                onFailure = { it.message ?: "Failed to add to Anki." }
+            )
+            mainLookupAnkiStatus = status
+            exportStatus = status
         }
     }
 
@@ -983,62 +1343,26 @@ private fun ReaderSyncScreen() {
         }
     }
 
-    fun removeMecabTokenizer() {
-        val ref = mecabDictionaryRef ?: return
-        mecabDictionaryRef = null
-        replaceTokenizer(null)
-        scope.launch(Dispatchers.IO) {
-            deleteInstalledMecabTokenizer(context, ref.cacheKey)
+    fun moveDictionary(fromIndex: Int, toIndex: Int) {
+        if (fromIndex == toIndex) return
+        if (fromIndex !in dictionaryRefs.indices || toIndex !in dictionaryRefs.indices) return
+
+        val refs = dictionaryRefs.toMutableList()
+        val movedRef = refs.removeAt(fromIndex)
+        refs.add(toIndex, movedRef)
+        dictionaryRefs = refs
+
+        val dictionaries = loadedDictionaries.toMutableList()
+        if (fromIndex in dictionaries.indices) {
+            val movedDictionary = dictionaries.removeAt(fromIndex)
+            val targetIndex = toIndex.coerceIn(0, dictionaries.size)
+            dictionaries.add(targetIndex, movedDictionary)
+            loadedDictionaries = dictionaries
         }
+
         persistImportState()
         if (lookupQuery.isNotBlank()) {
             triggerLookupCandidates(listOf(lookupQuery))
-        }
-    }
-
-    fun importMecabTokenizer(uri: Uri, displayName: String) {
-        val uriValue = uri.toString()
-        val cacheKey = buildDictionaryCacheKey("mecab|$uriValue", displayName)
-
-        scope.launch {
-            dictionaryLoading = true
-            dictionaryError = null
-            updateDictionaryProgress(
-                DictionaryImportProgress(stage = "Scanning Sudachi dictionary", current = 0, total = 0)
-            )
-            val installResult = withContext(Dispatchers.IO) {
-                runCatching {
-                    installMecabDictionaryZip(
-                        context = context,
-                        contentResolver = contentResolver,
-                        uri = uri,
-                        displayName = displayName,
-                        cacheKey = cacheKey
-                    ) { progress ->
-                        scope.launch(Dispatchers.Main.immediate) {
-                            updateDictionaryProgress(progress)
-                        }
-                    }
-                }
-            }
-            dictionaryLoading = false
-            installResult.onSuccess { installed ->
-                mecabDictionaryRef = PersistedMecabDictionaryRef(
-                    uri = uriValue,
-                    name = installed.name,
-                    cacheKey = installed.cacheKey
-                )
-                replaceTokenizer(installed.tokenizer)
-                exportStatus = "Sudachi tokenizer loaded: ${installed.name}"
-                persistImportState()
-                clearDictionaryProgress()
-                if (lookupQuery.isNotBlank()) {
-                    triggerLookupCandidates(listOf(lookupQuery))
-                }
-            }.onFailure { error ->
-                dictionaryError = error.message ?: "Failed to import Sudachi dictionary"
-                clearDictionaryProgress()
-            }
         }
     }
 
@@ -1056,13 +1380,17 @@ private fun ReaderSyncScreen() {
         addBookSrtName = queryDisplayName(contentResolver, uri)
     }
 
-    val pickMecabDictionaryLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri == null) return@rememberLauncherForActivityResult
-            keepReadPermission(context, uri)
-            val displayName = queryDisplayName(contentResolver, uri)
-            importMecabTokenizer(uri, displayName)
-        }
+    val pickBookFolderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        keepReadPermission(context, uri)
+        addBookFolderUri = uri
+        addBookFolderName = queryTreeDisplayName(context, contentResolver, uri)
+        addBookAudioUri = null
+        addBookAudioName = null
+        addBookSrtUri = null
+        addBookSrtName = null
+        persistImportState()
+    }
 
     val pickDictionaryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -1075,14 +1403,6 @@ private fun ReaderSyncScreen() {
             dictionaryLoading = true
             updateDictionaryProgress(DictionaryImportProgress(stage = "Scanning archive", current = 0, total = 0))
             dictionaryError = null
-            val mecabArchive = withContext(Dispatchers.IO) {
-                runCatching { isMecabDictionaryArchive(contentResolver, uri) }.getOrDefault(false)
-            }
-            if (mecabArchive) {
-                dictionaryLoading = false
-                importMecabTokenizer(uri, displayName)
-                return@launch
-            }
             val parseResult = withContext(Dispatchers.IO) {
                 runCatching {
                     importDictionaryToSqlite(
@@ -1135,6 +1455,23 @@ private fun ReaderSyncScreen() {
     val dictionaryCssByName = remember(loadedDictionaries) {
         loadedDictionaries.associate { it.name to it.stylesCss }
     }
+    val dictionaryPriorityByName = remember(loadedDictionaries) {
+        loadedDictionaries.mapIndexed { index, dictionary -> dictionary.name to index }.toMap()
+    }
+    val groupedLookupResults = remember(lookupResults, dictionaryCssByName, dictionaryPriorityByName) {
+        groupLookupResultsByTerm(
+            results = lookupResults,
+            dictionaryCssByName = dictionaryCssByName,
+            dictionaryPriorityByName = dictionaryPriorityByName
+        )
+    }
+    val groupedMainLookupPopupResults = remember(mainLookupPopupResults, dictionaryCssByName, dictionaryPriorityByName) {
+        groupLookupResultsByTerm(
+            results = mainLookupPopupResults,
+            dictionaryCssByName = dictionaryCssByName,
+            dictionaryPriorityByName = dictionaryPriorityByName
+        ).take(10)
+    }
     val dictionarySpecificVariableChoices = remember(loadedDictionaries) {
         loadedDictionaries.map { "{single-glossary-${it.name}}" }.distinct()
     }
@@ -1152,20 +1489,38 @@ private fun ReaderSyncScreen() {
 
     val dictionaryCount = loadedDictionaries.size
     val totalDictionaryEntries = loadedDictionaries.sumOf { it.entryCount }
-    val cueLookupTokens = remember(activeCue?.text, mecabDictionaryRef?.cacheKey) {
-        activeCue?.let { tokenizeLookupTermsWithMecab(it.text, mecabTokenizer).take(12) } ?: emptyList()
+    val cueLookupTokens = remember(activeCue?.text) {
+        activeCue?.let { tokenizeLookupTerms(it.text).take(12) } ?: emptyList()
     }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         floatingActionButton = {
-            if (activeSection == MiningSection.MAIN) {
-                FloatingActionButton(
-                    onClick = {
-                        addBookDialogVisible = true
+            when {
+                activeSection == MiningSection.MAIN -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        FloatingActionButton(
+                            onClick = { refreshBookshelfFromFolder() },
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Text("刷新")
+                        }
+                        FloatingActionButton(
+                            onClick = {
+                                addBookDialogVisible = true
+                            }
+                        ) {
+                            Text("+书籍")
+                        }
                     }
-                ) {
-                    Text("+Book")
+                }
+
+                activeSection == MiningSection.COLLECTIONS && collectedCues.isNotEmpty() -> {
+                    FloatingActionButton(
+                        onClick = { clearCollectionsConfirmVisible = true }
+                    ) {
+                        Text("清空")
+                    }
                 }
             }
         },
@@ -1174,26 +1529,26 @@ private fun ReaderSyncScreen() {
                 NavigationBarItem(
                     selected = activeSection == MiningSection.MAIN,
                     onClick = { activeSection = MiningSection.MAIN },
-                    icon = { Text("M") },
-                    label = { Text("Main") }
+                    icon = { Text("主") },
+                    label = { Text("主页") }
                 )
                 NavigationBarItem(
                     selected = activeSection == MiningSection.DICTIONARY,
                     onClick = { activeSection = MiningSection.DICTIONARY },
-                    icon = { Text("D") },
-                    label = { Text("Dictionary & Lookup") }
+                    icon = { Text("词") },
+                    label = { Text("辞典查询") }
                 )
                 NavigationBarItem(
                     selected = activeSection == MiningSection.COLLECTIONS,
                     onClick = { activeSection = MiningSection.COLLECTIONS },
-                    icon = { Text("C") },
+                    icon = { Text("藏") },
                     label = { Text("收藏") }
                 )
                 NavigationBarItem(
                     selected = activeSection == MiningSection.SETTINGS,
                     onClick = { activeSection = MiningSection.SETTINGS },
-                    icon = { Text("S") },
-                    label = { Text("設定") }
+                    icon = { Text("设") },
+                    label = { Text("设置") }
                 )
             }
         }
@@ -1206,7 +1561,7 @@ private fun ReaderSyncScreen() {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("Audio + SRT + Dictionary Mining", style = MaterialTheme.typography.titleLarge)
+            Text("⑨Player", style = MaterialTheme.typography.titleLarge)
 
             if (activeSection == MiningSection.MAIN) {
                 Row(
@@ -1214,10 +1569,10 @@ private fun ReaderSyncScreen() {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("My Shelf", style = MaterialTheme.typography.titleMedium)
+                    Text("我的书架", style = MaterialTheme.typography.titleMedium)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (selectedBookIds.isNotEmpty()) {
-                            OutlinedButton(onClick = { deleteSelectedBooks() }) {
+                            OutlinedButton(onClick = { requestDeleteSelectedBooks() }) {
                                 Text("删除(${selectedBookIds.size})")
                             }
                             OutlinedButton(onClick = { clearBookSelection() }) {
@@ -1227,7 +1582,7 @@ private fun ReaderSyncScreen() {
                         OutlinedButton(
                             onClick = { activeSection = MiningSection.SETTINGS }
                         ) {
-                            Text("設定")
+                            Text("设置")
                         }
                         OutlinedButton(
                             onClick = {
@@ -1240,9 +1595,9 @@ private fun ReaderSyncScreen() {
                         ) {
                             Text(
                                 if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
-                                    "Switch to List"
+                                    "切换到列表"
                                 } else {
-                                    "Switch to Shelf"
+                                    "切换到书架"
                                 }
                             )
                         }
@@ -1255,8 +1610,8 @@ private fun ReaderSyncScreen() {
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Text("No books yet.")
-                            Text("Tap +Book, then select audio and SRT in the dialog.")
+                            Text("还没有书籍。")
+                            Text("点击 +书籍，先选择有声书文件夹，再选择音频/m4b 和 SRT。")
                         }
                     }
                 } else if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
@@ -1268,6 +1623,8 @@ private fun ReaderSyncScreen() {
                             rowBooks.forEach { book ->
                                 val selected = selectedBookId == book.id
                                 val multiSelected = selectedBookIds.contains(book.id)
+                                val playbackSnapshot = readerBookPlaybackSnapshots[book.id]
+                                val playbackPercent = playbackSnapshot?.progressPercent ?: 0
                                 Card(
                                     modifier = Modifier
                                         .weight(1f)
@@ -1288,14 +1645,23 @@ private fun ReaderSyncScreen() {
                                         modifier = Modifier.padding(12.dp),
                                         verticalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
+                                        if (book.coverUri != null) {
+                                            BookCoverThumbnail(
+                                                coverUri = book.coverUri,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(132.dp)
+                                            )
+                                        }
                                         Text(book.title, style = MaterialTheme.typography.titleSmall)
                                         Text(book.audioName, maxLines = 1)
-                                        Text("${book.cues.size} cues")
+                                        Text("${book.cues.size} 条字幕")
+                                        Text("$playbackPercent%")
                                         if (multiSelected) {
                                             Text("已选中", color = MaterialTheme.colorScheme.primary)
                                         }
                                         if (selected) {
-                                            Text("Opened", color = MaterialTheme.colorScheme.primary)
+                                            Text("已打开", color = MaterialTheme.colorScheme.primary)
                                         }
                                     }
                                 }
@@ -1309,6 +1675,8 @@ private fun ReaderSyncScreen() {
                     readerBooks.forEach { book ->
                         val selected = selectedBookId == book.id
                         val multiSelected = selectedBookIds.contains(book.id)
+                        val playbackSnapshot = readerBookPlaybackSnapshots[book.id]
+                        val playbackPercent = playbackSnapshot?.progressPercent ?: 0
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1332,21 +1700,28 @@ private fun ReaderSyncScreen() {
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                if (book.coverUri != null) {
+                                    BookCoverThumbnail(
+                                        coverUri = book.coverUri,
+                                        modifier = Modifier
+                                            .width(72.dp)
+                                            .height(96.dp)
+                                    )
+                                }
                                 Column(
                                     modifier = Modifier.weight(1f),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Text(book.title, style = MaterialTheme.typography.titleSmall)
-                                    Text("Audio: ${book.audioName}", maxLines = 1)
-                                    Text("SRT: ${book.srtName}", maxLines = 1)
-                                    Text("${book.cues.size} cues")
+                                    Text("${book.cues.size} 条字幕")
+                                    Text("$playbackPercent%")
                                     if (multiSelected) {
                                         Text("已选中", color = MaterialTheme.colorScheme.primary)
                                     }
                                 }
                                 if (selectedBookIds.isEmpty()) {
                                     OutlinedButton(onClick = { openReaderBook(book, persist = true) }) {
-                                        Text(if (selected) "Opened" else "Open")
+                                        Text(if (selected) "已打开" else "打开")
                                     }
                                 }
                             }
@@ -1354,26 +1729,14 @@ private fun ReaderSyncScreen() {
                     }
                 }
 
-                if (srtLoading || dictionaryLoading || srtError != null || dictionaryError != null || exportStatus != null) {
+                if (srtLoading || srtError != null || exportStatus != null) {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            if (srtLoading) Text("Parsing SRT...")
-                            if (dictionaryLoading) {
-                                Text(dictionaryProgressText ?: "Importing dictionary...")
-                                if (dictionaryProgressValue != null) {
-                                    LinearProgressIndicator(
-                                        progress = { dictionaryProgressValue ?: 0f },
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                } else {
-                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                }
-                            }
+                            if (srtLoading) Text("正在解析 SRT...")
                             if (srtError != null) Text("SRT error: $srtError", color = MaterialTheme.colorScheme.error)
-                            if (dictionaryError != null) Text("Dictionary error: $dictionaryError", color = MaterialTheme.colorScheme.error)
                             if (exportStatus != null) Text(exportStatus!!)
                         }
                     }
@@ -1386,68 +1749,69 @@ private fun ReaderSyncScreen() {
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("Dictionary & Lookup", style = MaterialTheme.typography.titleMedium)
-                        Text("Dictionaries: $dictionaryCount ($totalDictionaryEntries entries)")
-                        Text("Tokenizer: ${mecabDictionaryRef?.name ?: "Default regex tokenization"}")
+                        Text("辞典与查询", style = MaterialTheme.typography.titleMedium)
+                        Text("辞典：$dictionaryCount（共 $totalDictionaryEntries 条）")
+                        Text("查词器：hoshidicts")
+                        if (dictionaryLoading) {
+                            Text(dictionaryProgressText ?: "正在导入辞典...")
+                            if (dictionaryProgressValue != null) {
+                                LinearProgressIndicator(
+                                    progress = { dictionaryProgressValue ?: 0f },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            } else {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                        if (dictionaryError != null) {
+                            Text("辞典错误：$dictionaryError", color = MaterialTheme.colorScheme.error)
+                        }
                         Row(
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Button(onClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "application/json", "text/plain", "*/*")) }) {
-                                Text("Import Dictionary")
-                            }
-                            OutlinedButton(
-                                onClick = { pickMecabDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) }
-                            ) {
-                                Text("Import Sudachi")
-                            }
-                            if (mecabDictionaryRef != null) {
-                                OutlinedButton(
-                                    onClick = { removeMecabTokenizer() },
-                                    enabled = !dictionaryLoading
-                                ) {
-                                    Text("Remove Sudachi")
-                                }
+                            Button(onClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) }) {
+                                Text("导入辞典")
                             }
                             OutlinedButton(
                                 onClick = { showDictionaryManager = !showDictionaryManager }
                             ) {
-                                Text(if (showDictionaryManager) "Hide Dictionaries" else "View Dictionaries")
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    activeCue?.let {
-                                        triggerLookupCandidates(
-                                            extractLookupCandidatesWithMecab(it.text, mecabTokenizer)
-                                        )
-                                    }
-                                },
-                                enabled = activeCue != null && loadedDictionaries.isNotEmpty()
-                            ) {
-                                Text("Use Current Cue")
+                                Text(if (showDictionaryManager) "隐藏辞典列表" else "查看辞典列表")
                             }
                         }
 
                         if (showDictionaryManager) {
                             if (dictionaryRefs.isEmpty()) {
-                                Text("No imported dictionaries.")
+                                Text("暂无已导入辞典。")
                             } else {
                                 dictionaryRefs.forEachIndexed { index, ref ->
                                     val loaded = loadedDictionaries.getOrNull(index)
-                                    val countText = loaded?.entryCount?.let { "$it entries" } ?: "not loaded"
+                                    val countText = loaded?.entryCount?.let { "$it 条" } ?: "未加载"
                                     Card(modifier = Modifier.fillMaxWidth()) {
                                         Column(
                                             modifier = Modifier.padding(10.dp),
                                             verticalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
-                                            Text(ref.name.ifBlank { "Dictionary ${index + 1}" })
+                                            Text(ref.name.ifBlank { "辞典 ${index + 1}" })
                                             Text(countText)
                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                OutlinedButton(
+                                                    onClick = { moveDictionary(index, index - 1) },
+                                                    enabled = !dictionaryLoading && index > 0
+                                                ) {
+                                                    Text("↑")
+                                                }
+                                                OutlinedButton(
+                                                    onClick = { moveDictionary(index, index + 1) },
+                                                    enabled = !dictionaryLoading && index < dictionaryRefs.lastIndex
+                                                ) {
+                                                    Text("↓")
+                                                }
                                                 OutlinedButton(
                                                     onClick = { removeDictionaryAt(index) },
                                                     enabled = !dictionaryLoading
                                                 ) {
-                                                    Text("Delete")
+                                                    Text("删除")
                                                 }
                                             }
                                         }
@@ -1460,7 +1824,7 @@ private fun ReaderSyncScreen() {
                             value = lookupQuery,
                             onValueChange = { lookupQuery = it },
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Lookup term") },
+                            label = { Text("查词") },
                             singleLine = true
                         )
 
@@ -1469,7 +1833,7 @@ private fun ReaderSyncScreen() {
                                 onClick = { triggerLookupCandidates(listOf(lookupQuery)) },
                                 enabled = loadedDictionaries.isNotEmpty() && lookupQuery.isNotBlank()
                             ) {
-                                Text("Search")
+                                Text("查询")
                             }
                             OutlinedButton(
                                 onClick = {
@@ -1478,46 +1842,67 @@ private fun ReaderSyncScreen() {
                                     selectedEntryKey = null
                                 }
                             ) {
-                                Text("Clear")
+                                Text("清空")
                             }
                         }
 
                         if (lookupLoading) {
-                            Text("Searching dictionary...")
-                        } else if (lookupQuery.isNotBlank() && lookupResults.isEmpty()) {
-                            Text("No lookup result.")
+                            Text("正在查询辞典...")
+                        } else if (lookupQuery.isNotBlank() && groupedLookupResults.isEmpty()) {
+                            Text("无查询结果。")
                         }
 
-                        lookupResults.forEach { result ->
-                            val entry = result.entry
-                            val key = entryStableKey(entry)
-                            val expanded = expandedResultKeys[key] ?: false
-                            val definitionList = if (expanded) entry.definitions else entry.definitions.take(1)
-
+                        groupedLookupResults.forEach { groupedResult ->
                             Card(modifier = Modifier.fillMaxWidth()) {
                                 Column(
                                     modifier = Modifier.padding(10.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    val readingText = entry.reading?.takeIf { it.isNotBlank() }?.let { " [$it]" } ?: ""
-                                    Text("${entry.term}$readingText")
-                                    Text("${entry.dictionary} | score ${result.score}")
-                                    if (!entry.pitch.isNullOrBlank()) Text("Pitch: ${entry.pitch}")
-                                    if (!entry.frequency.isNullOrBlank()) Text("Frequency: ${entry.frequency}")
-                                    definitionList.forEachIndexed { index, definition ->
-                                        RichDefinitionView(
-                                            definition = definition,
-                                            indexLabel = "${index + 1}. ",
-                                            dictionaryName = entry.dictionary,
-                                            dictionaryCss = dictionaryCssByName[entry.dictionary]
-                                        )
-                                    }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        OutlinedButton(onClick = { expandedResultKeys[key] = !expanded }) {
-                                            Text(if (expanded) "Collapse" else "Expand")
+                                    val readingText = groupedResult.reading?.takeIf { it.isNotBlank() }?.let { " [$it]" } ?: ""
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("${groupedResult.term}$readingText")
+                                        OutlinedButton(
+                                            onClick = {
+                                                val primary = groupedResult.dictionaries.firstOrNull() ?: return@OutlinedButton
+                                                selectedEntryKey = entryStableKey(primary.entry)
+                                                exportLookupGroupToAnki(
+                                                    groupedResult = groupedResult,
+                                                    sourceCue = null,
+                                                    lookupTitle = lookupQuery
+                                                )
+                                            }
+                                        ) {
+                                            Text("+")
                                         }
-                                        Button(onClick = { selectedEntryKey = key }) {
-                                            Text(if (selectedEntryKey == key) "Selected" else "Use for Mining")
+                                    }
+                                    groupedResult.dictionaries.forEach { dictionaryGroup ->
+                                        Card(modifier = Modifier.fillMaxWidth()) {
+                                            Column(
+                                                modifier = Modifier.padding(8.dp),
+                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                if (!dictionaryGroup.pitch.isNullOrBlank()) Text("音调：${dictionaryGroup.pitch}")
+                                                if (!dictionaryGroup.frequency.isNullOrBlank()) Text("词频：${dictionaryGroup.frequency}")
+
+                                                dictionaryGroup.definitions.forEach { definition ->
+                                                    Card(modifier = Modifier.fillMaxWidth()) {
+                                                        Column(
+                                                            modifier = Modifier.padding(8.dp),
+                                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                        ) {
+                                                            RichDefinitionView(
+                                                                definition = definition,
+                                                                dictionaryName = null,
+                                                                dictionaryCss = dictionaryGroup.css
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1533,10 +1918,10 @@ private fun ReaderSyncScreen() {
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("BookReader 收藏", style = MaterialTheme.typography.titleMedium)
+                        Text("收藏", style = MaterialTheme.typography.titleMedium)
                         Text("共 ${collectedCues.size} 条")
                         if (collectedCues.isEmpty()) {
-                            Text("暂无收藏。请在 BookReader 控制模式下播放字幕后自动收藏。")
+                            Text("暂无收藏。")
                         } else {
                             collectedCues.forEach { item ->
                                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -1551,13 +1936,19 @@ private fun ReaderSyncScreen() {
                                         )
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             OutlinedButton(
+                                                onClick = { playCollectedCue(item) }
+                                            ) {
+                                                Text("播放")
+                                            }
+                                            OutlinedButton(
                                                 onClick = {
                                                     openMainLookupPopup(
                                                         SubtitleCue(
                                                             startMs = item.startMs,
                                                             endMs = item.endMs,
                                                             text = item.text
-                                                        )
+                                                        ),
+                                                        sourceBookTitle = item.bookTitle
                                                     )
                                                 },
                                                 enabled = loadedDictionaries.isNotEmpty()
@@ -1587,215 +1978,136 @@ private fun ReaderSyncScreen() {
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("設定", style = MaterialTheme.typography.titleMedium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
-                                onClick = { context.startActivity(Intent(context, InfoActivity::class.java)) }
-                            ) {
-                                Text("Info")
-                            }
-                            OutlinedButton(
-                                onClick = { refreshCollectedCues() }
-                            ) {
-                                Text("刷新收藏")
-                            }
-                        }
+                        Text("设置", style = MaterialTheme.typography.titleMedium)
+                        SettingsListItem(
+                            title = "Anki",
+                            onClick = { context.startActivity(Intent(context, AnkiSettingsActivity::class.java)) }
+                        )
+                        SettingsListItem(
+                            title = "控制模式",
+                            onClick = { context.startActivity(Intent(context, ControlModeSettingsActivity::class.java)) }
+                        )
+                        SettingsListItem(
+                            title = "手柄",
+                            onClick = { context.startActivity(Intent(context, ControllerSettingsActivity::class.java)) }
+                        )
+                        SettingsListItem(
+                            title = "手柄蓝牙",
+                            onClick = { context.startActivity(Intent(context, ControllerBluetoothSettingsActivity::class.java)) }
+                        )
                     }
                 }
+        }
+        }
 
-                Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("Flashcard Creation (Sentence Mining)", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        if (ankiPermissionGranted) {
-                            "Anki access: granted"
-                        } else {
-                            "Anki access: not granted"
-                        }
-                    )
-                    OutlinedButton(
+        if (clearCollectionsConfirmVisible) {
+            AlertDialog(
+                onDismissRequest = { clearCollectionsConfirmVisible = false },
+                title = { Text("清空收藏") },
+                text = { Text("确认删除全部收藏吗？此操作不可恢复。") },
+                dismissButton = {
+                    TextButton(onClick = { clearCollectionsConfirmVisible = false }) {
+                        Text("取消")
+                    }
+                },
+                confirmButton = {
+                    Button(
                         onClick = {
-                            if (!isAnkiInstalled(context)) {
-                                exportStatus = "AnkiDroid is not installed."
-                            } else if (ankiPermissionGranted) {
-                                exportStatus = "Anki access already granted."
-                            } else {
-                                exportStatus = "Requesting Anki access permission..."
-                                requestAnkiPermissionLauncher.launch(ANKI_READ_WRITE_PERMISSION)
-                            }
+                            clearBookReaderCollectedCues(context)
+                            refreshCollectedCues()
+                            clearCollectionsConfirmVisible = false
                         }
                     ) {
-                        Text(if (ankiPermissionGranted) "Anki Access Granted" else "Authorize Anki Access")
+                        Text("确认删除")
                     }
+                }
+            )
+        }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { refreshAnkiCatalog() },
-                            enabled = ankiPermissionGranted && !ankiLoading
-                        ) {
-                            Text(if (ankiLoading) "Loading..." else "Refresh Decks/Models")
-                        }
-                    }
-                    if (ankiError != null) {
-                        Text("Anki error: $ankiError", color = MaterialTheme.colorScheme.error)
-                    }
-
-                    OutlinedTextField(
-                        value = ankiDeckName,
-                        onValueChange = {
-                            ankiDeckName = it
-                            persistAnkiConfig()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Deck") },
-                        singleLine = true
-                    )
-                    if (ankiDecks.isNotEmpty()) {
+        if (deleteBooksConfirmVisible) {
+            AlertDialog(
+                onDismissRequest = { deleteBooksConfirmVisible = false },
+                title = { Text("删除书籍") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("确认删除所选书籍，并删除对应文件夹吗？")
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            ankiDecks.take(20).forEach { deck ->
-                                OutlinedButton(
-                                    onClick = {
-                                        ankiDeckName = deck
-                                        persistAnkiConfig()
-                                    }
-                                ) {
-                                    Text(deck)
-                                }
-                            }
-                        }
-                    }
-
-                    OutlinedTextField(
-                        value = ankiModelName,
-                        onValueChange = {
-                            val previousModelName = ankiModelName
-                            ankiModelName = it
-                            val model = ankiModels.firstOrNull { candidate -> candidate.name == it }
-                            if (model != null) {
-                                syncTemplatesWithModelFields(
-                                    fields = model.fields,
-                                    clearExisting = previousModelName != it
-                                )
-                            } else {
-                                syncTemplatesWithModelFields(
-                                    fields = emptyList(),
-                                    clearExisting = previousModelName != it
-                                )
-                            }
-                            persistAnkiConfig()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Note model/template") },
-                        singleLine = true
-                    )
-                    if (ankiModels.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            ankiModels.take(20).forEach { model ->
-                                OutlinedButton(
-                                    onClick = { selectAnkiModel(model.name) }
-                                ) {
-                                    Text(model.name)
-                                }
-                            }
-                        }
-                    }
-
-                    OutlinedTextField(
-                        value = ankiTagsInput,
-                        onValueChange = {
-                            ankiTagsInput = it
-                            persistAnkiConfig()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Tags (space/comma separated)") },
-                        singleLine = true
-                    )
-
-                    if (ankiModelFields.isNotEmpty()) {
-                        Text("Field Variables", style = MaterialTheme.typography.titleSmall)
-                        OutlinedButton(
-                            onClick = { clearCurrentFieldTemplates() }
-                        ) {
-                            Text("Clear Field Variables")
-                        }
-                        Text("Available: {expression} {word} {reading} {furigana-plain} {audio} {glossary} {glossary-first} {single-glossary} {popup-selection-text} {sentence} {frequencies} {frequency-harmonic-rank} {pitch-accent-positions} {pitch-accent-categories} {document-title} {book-cover}")
-                        if (dictionarySpecificVariableChoices.isNotEmpty()) {
-                            Text("Dictionary-specific: ${dictionarySpecificVariableChoices.joinToString(" ")}")
-                        }
-                        ankiModelFields.forEach { field ->
-                            val selectedValue = ankiFieldTemplates[field].orEmpty()
-                            val options = if (selectedValue.isNotBlank() && selectedValue !in fieldVariableChoices) {
-                                fieldVariableChoices + selectedValue
-                            } else {
-                                fieldVariableChoices
-                            }
-                            FieldVariableDropdown(
-                                fieldName = field,
-                                selectedValue = selectedValue,
-                                options = options,
-                                onSelect = { value ->
-                                    ankiFieldTemplates[field] = value
-                                    persistAnkiConfig()
+                            Checkbox(
+                                checked = deleteBooksDontAskAgain,
+                                onCheckedChange = { checked ->
+                                    deleteBooksDontAskAgain = checked
                                 }
                             )
+                            Text("下次不再提醒")
                         }
                     }
-
-                    Text("Sentence: ${activeCue?.text ?: "No active subtitle"}")
-                    Text("Word: ${selectedEntry?.term ?: extractLookupToken(lookupQuery).ifBlank { "-" }}")
-                    if (!selectedEntry?.reading.isNullOrBlank()) {
-                        Text("Reading: ${selectedEntry?.reading}")
-                    }
-                    if (!selectedEntry?.pitch.isNullOrBlank()) {
-                        Text("Pitch: ${selectedEntry?.pitch}")
-                    }
-                    if (!selectedEntry?.frequency.isNullOrBlank()) {
-                        Text("Frequency: ${selectedEntry?.frequency}")
-                    }
-                    if (selectedEntry != null) {
-                        Text("Definitions:")
-                        selectedEntry.definitions.take(3).forEachIndexed { index, definition ->
-                            Text("${index + 1}. $definition")
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            deleteBooksConfirmVisible = false
+                            pendingDeleteBookIds = emptySet()
                         }
-                    } else {
-                        Text("Definitions: (none selected)")
+                    ) {
+                        Text("取消")
                     }
-                    Text(
-                        if (audioUri != null) {
-                            "Audio source is attached. Clip range uses current subtitle timestamps."
-                        } else {
-                            "No audio attached. Card will be text only."
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (deleteBooksDontAskAgain) {
+                                skipDeleteBookConfirm = true
+                                saveSkipDeleteBookConfirm(context, true)
+                            }
+                            val removeIds = pendingDeleteBookIds
+                            deleteBooksConfirmVisible = false
+                            pendingDeleteBookIds = emptySet()
+                            deleteSelectedBooks(removeIds)
                         }
-                    )
+                    ) {
+                        Text("确认删除")
+                    }
                 }
-            }
-            }
+            )
         }
 
         if (addBookDialogVisible) {
             AlertDialog(
                 onDismissRequest = { addBookDialogVisible = false },
-                title = { Text("添加 Book") },
+                title = { Text("添加书籍") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("音频: ${addBookAudioName ?: "未选择"}")
+                        Text("有声书文件夹: ${addBookFolderName ?: "未选择"}")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { pickBookFolderLauncher.launch(null) }
+                            ) {
+                                Text("选择文件夹")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    addBookFolderUri = null
+                                    addBookFolderName = null
+                                    addBookAudioUri = null
+                                    addBookAudioName = null
+                                    addBookSrtUri = null
+                                    addBookSrtName = null
+                                    persistImportState()
+                                },
+                                enabled = addBookFolderUri != null
+                            ) {
+                                Text("清除")
+                            }
+                        }
+
+                        Text("音频/m4b: ${addBookAudioName ?: "未选择"}")
                         OutlinedButton(
                             onClick = {
                                 pickBookAudioLauncher.launch(
-                                    arrayOf(
+                                        arrayOf(
                                         "audio/*",
                                         "audio/mp4",
                                         "audio/x-m4a",
@@ -1805,9 +2117,10 @@ private fun ReaderSyncScreen() {
                                         "application/mp4"
                                     )
                                 )
-                            }
+                            },
+                            enabled = addBookFolderUri != null
                         ) {
-                            Text("选择音频")
+                            Text("选择音频/m4b")
                         }
                         Text("SRT: ${addBookSrtName ?: "未选择"}")
                         OutlinedButton(
@@ -1815,9 +2128,10 @@ private fun ReaderSyncScreen() {
                                 pickBookSrtLauncher.launch(
                                     arrayOf("application/x-subrip", "text/plain", "*/*")
                                 )
-                            }
+                            },
+                            enabled = addBookFolderUri != null
                         ) {
-                            Text("选择 SRT")
+                            Text("选择字幕 SRT")
                         }
                     }
                 },
@@ -1829,7 +2143,10 @@ private fun ReaderSyncScreen() {
                 confirmButton = {
                     Button(
                         onClick = { confirmAddBookFromDialog() },
-                        enabled = addBookAudioUri != null && addBookSrtUri != null && !srtLoading
+                        enabled = addBookFolderUri != null &&
+                            addBookAudioUri != null &&
+                            addBookSrtUri != null &&
+                            !srtLoading
                     ) {
                         Text("确认")
                     }
@@ -1844,6 +2161,7 @@ private fun ReaderSyncScreen() {
                     mainLookupPopupVisible = false
                     mainLookupPopupCue = null
                     mainLookupPopupSelectedRange = null
+                    mainLookupPopupAudioUri = null
                 },
                 properties = PopupProperties(
                     focusable = true,
@@ -1864,10 +2182,6 @@ private fun ReaderSyncScreen() {
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         val popupCue = mainLookupPopupCue
-                        Text(
-                            text = "Lookup: ${mainLookupPopupTitle.ifBlank { "-" }}",
-                            style = MaterialTheme.typography.titleMedium
-                        )
                         if (popupCue != null) {
                             ClickableText(
                                 text = buildMainHighlightedText(popupCue.text, mainLookupPopupSelectedRange),
@@ -1879,6 +2193,9 @@ private fun ReaderSyncScreen() {
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
+                        if (mainLookupAnkiStatus != null) {
+                            Text(mainLookupAnkiStatus!!)
+                        }
 
                         Column(
                             modifier = Modifier
@@ -1888,45 +2205,69 @@ private fun ReaderSyncScreen() {
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             if (mainLookupPopupLoading) {
-                                Text("Searching...")
+                                Text("查询中...")
                             }
                             if (mainLookupPopupError != null) {
                                 Text(
-                                    "Lookup error: $mainLookupPopupError",
+                                    "查询错误：$mainLookupPopupError",
                                     color = MaterialTheme.colorScheme.error
                                 )
                             }
-                            if (!mainLookupPopupLoading && mainLookupPopupResults.isEmpty()) {
-                                Text("No lookup result.")
+                            if (!mainLookupPopupLoading && groupedMainLookupPopupResults.isEmpty()) {
+                                Text("无查询结果。")
                             }
-                            mainLookupPopupResults.take(10).forEach { result ->
-                                val entry = result.entry
-                                val key = entryStableKey(entry)
-                                val reading = entry.reading?.takeIf { it.isNotBlank() }?.let { " [$it]" } ?: ""
+                            groupedMainLookupPopupResults.forEach { groupedResult ->
+                                val reading = groupedResult.reading?.takeIf { it.isNotBlank() }?.let { " [$it]" } ?: ""
                                 Card(modifier = Modifier.fillMaxWidth()) {
                                     Column(
                                         modifier = Modifier.padding(10.dp),
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        Text("${entry.term}$reading")
-                                        Text("${entry.dictionary} | score ${result.score}")
-                                        if (!entry.pitch.isNullOrBlank()) Text("Pitch: ${entry.pitch}")
-                                        if (!entry.frequency.isNullOrBlank()) Text("Frequency: ${entry.frequency}")
-                                        if (entry.definitions.isNotEmpty()) {
-                                            RichDefinitionView(
-                                                definition = entry.definitions.first(),
-                                                dictionaryName = entry.dictionary,
-                                                dictionaryCss = dictionaryCssByName[entry.dictionary]
-                                            )
-                                        }
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("${groupedResult.term}$reading")
                                             OutlinedButton(
                                                 onClick = {
-                                                    mainLookupPopupSelectedKey = key
-                                                    selectedEntryKey = key
+                                                    val primary = groupedResult.dictionaries.firstOrNull() ?: return@OutlinedButton
+                                                    selectedEntryKey = entryStableKey(primary.entry)
+                                                    mainLookupPopupSelectedKey = selectedEntryKey
+                                                    exportLookupGroupToAnki(
+                                                        groupedResult = groupedResult,
+                                                        sourceCue = popupCue,
+                                                        lookupTitle = mainLookupPopupTitle
+                                                    )
                                                 }
                                             ) {
-                                                Text(if (mainLookupPopupSelectedKey == key) "Selected" else "Select")
+                                                Text("+")
+                                            }
+                                        }
+                                        groupedResult.dictionaries.forEach { dictionaryGroup ->
+                                            Card(modifier = Modifier.fillMaxWidth()) {
+                                                Column(
+                                                    modifier = Modifier.padding(8.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    if (!dictionaryGroup.pitch.isNullOrBlank()) Text("音调：${dictionaryGroup.pitch}")
+                                                    if (!dictionaryGroup.frequency.isNullOrBlank()) Text("词频：${dictionaryGroup.frequency}")
+
+                                                    dictionaryGroup.definitions.forEach { definition ->
+                                                        Card(modifier = Modifier.fillMaxWidth()) {
+                                                            Column(
+                                                                modifier = Modifier.padding(8.dp),
+                                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                            ) {
+                                                                RichDefinitionView(
+                                                                    definition = definition,
+                                                                    dictionaryName = null,
+                                                                    dictionaryCss = dictionaryGroup.css
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -1940,38 +2281,41 @@ private fun ReaderSyncScreen() {
                                     mainLookupPopupVisible = false
                                     mainLookupPopupCue = null
                                     mainLookupPopupSelectedRange = null
+                                    mainLookupPopupAudioUri = null
+                                    mainLookupAnkiStatus = null
                                 }
                             ) {
-                                Text("Close")
-                            }
-                            Button(
-                                onClick = {
-                                    val cue = mainLookupPopupCue ?: activeCue
-                                    val entry = mainPopupSelectedEntry
-                                    if (cue == null || entry == null) {
-                                        exportStatus = "Need selected lookup result and a subtitle."
-                                        return@Button
-                                    }
-                                    val card = buildMinedCard(
-                                        cue = cue,
-                                        selectedEntry = entry,
-                                        lookupQuery = mainLookupPopupTitle,
-                                        audioUri = audioUri,
-                                        dictionaryCss = mainPopupSelectedEntryCss
-                                    )
-                                    tryExportCardToAnki(card)
-                                    mainLookupPopupVisible = false
-                                    mainLookupPopupCue = null
-                                    mainLookupPopupSelectedRange = null
-                                },
-                                enabled = (mainLookupPopupCue != null || activeCue != null) && mainPopupSelectedEntry != null
-                            ) {
-                                Text("Mine")
+                                Text("关闭")
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SettingsListItem(
+    title: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        tonalElevation = 1.dp,
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(">")
         }
     }
 }
@@ -2080,7 +2424,7 @@ private fun buildDefinitionHtml(
         <div class="yomitan-glossary">
             <ol>
                 <li data-dictionary="$safeDictionaryAttr">
-                    <i>($safeDictionaryLabel)</i> <span>$definitionHtml</span>
+                    <i>($safeDictionaryLabel)</i> $definitionHtml
                 </li>
             </ol>
         </div>
@@ -2165,101 +2509,78 @@ private data class SubtitleCue(
     val text: String
 )
 
-private data class LocalBookFile(
-    val uri: Uri,
-    val displayName: String
-)
-
-private data class LocalBookFiles(
-    val audio: LocalBookFile,
-    val srt: LocalBookFile
-)
-
-private fun ensureBookFilesInLocalStorage(
-    context: Context,
-    contentResolver: ContentResolver,
-    audioUri: Uri,
-    audioDisplayName: String?,
-    srtUri: Uri,
-    srtDisplayName: String?
-): LocalBookFiles {
-    val localAudio = if (isAppLocalBookFileUri(context, audioUri)) {
-        LocalBookFile(
-            uri = audioUri,
-            displayName = audioDisplayName?.ifBlank { null }
-                ?: queryDisplayName(contentResolver, audioUri)
-        )
-    } else {
-        importBookFileToLocalStorage(
-            context = context,
-            contentResolver = contentResolver,
-            sourceUri = audioUri,
-            sourceDisplayName = audioDisplayName,
-            typeLabel = "audio",
-            fallbackExtension = "m4a"
-        )
-    }
-
-    val localSrt = if (isAppLocalBookFileUri(context, srtUri)) {
-        LocalBookFile(
-            uri = srtUri,
-            displayName = srtDisplayName?.ifBlank { null }
-                ?: queryDisplayName(contentResolver, srtUri)
-        )
-    } else {
-        importBookFileToLocalStorage(
-            context = context,
-            contentResolver = contentResolver,
-            sourceUri = srtUri,
-            sourceDisplayName = srtDisplayName,
-            typeLabel = "srt",
-            fallbackExtension = "srt"
-        )
-    }
-
-    return LocalBookFiles(
-        audio = localAudio,
-        srt = localSrt
+@Composable
+private fun BookCoverThumbnail(
+    coverUri: Uri,
+    modifier: Modifier = Modifier
+) {
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            ImageView(context).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                adjustViewBounds = true
+            }
+        },
+        update = { view ->
+            view.setImageURI(coverUri)
+        }
     )
 }
 
-private fun importBookFileToLocalStorage(
+private fun resolveEmbeddedCoverUriForM4b(
     context: Context,
-    contentResolver: ContentResolver,
-    sourceUri: Uri,
-    sourceDisplayName: String?,
-    typeLabel: String,
-    fallbackExtension: String
-): LocalBookFile {
-    val displayName = sourceDisplayName
-        ?.trim()
-        ?.ifBlank { null }
-        ?: queryDisplayName(contentResolver, sourceUri)
-    val ext = detectBookFileExtension(
-        contentResolver = contentResolver,
-        uri = sourceUri,
-        fallback = fallbackExtension
-    )
-    val base = sanitizeBookFileBase(displayName.substringBeforeLast('.', missingDelimiterValue = displayName))
-    val booksDir = File(context.filesDir, "books")
-    if (!booksDir.exists()) {
-        booksDir.mkdirs()
-    }
-    val file = File(booksDir, "${typeLabel}-${System.currentTimeMillis()}-$base.$ext")
+    audioUri: Uri,
+    audioDisplayName: String
+): Uri? {
+    val isM4b = audioDisplayName.endsWith(".m4b", ignoreCase = true) ||
+        audioUri.toString().contains(".m4b", ignoreCase = true)
+    if (!isM4b) return null
 
-    openBookInputStream(contentResolver, sourceUri)?.use { input ->
-        file.outputStream().use { output -> input.copyTo(output) }
-    } ?: error("Cannot read $typeLabel file from source URI.")
-
-    if (!file.exists() || file.length() <= 0L) {
-        file.delete()
-        error("Imported $typeLabel file is empty.")
+    val coverDir = File(File(context.filesDir, "books"), "covers")
+    if (!coverDir.exists()) {
+        coverDir.mkdirs()
     }
 
-    return LocalBookFile(
-        uri = Uri.fromFile(file),
-        displayName = displayName.ifBlank { file.name }
-    )
+    val cacheKey = buildDictionaryCacheKey(audioUri.toString(), audioDisplayName)
+    val existing = coverDir.listFiles()
+        ?.firstOrNull { it.nameWithoutExtension == "cover-$cacheKey" }
+    if (existing != null && existing.exists() && existing.length() > 0L) {
+        return Uri.fromFile(existing)
+    }
+
+    val retriever = MediaMetadataRetriever()
+    return try {
+        if (audioUri.scheme.equals("file", ignoreCase = true)) {
+            val path = audioUri.path ?: return null
+            retriever.setDataSource(path)
+        } else {
+            retriever.setDataSource(context, audioUri)
+        }
+        val picture = retriever.embeddedPicture ?: return null
+        val ext = if (
+            picture.size >= 4 &&
+            picture[0] == 0x89.toByte() &&
+            picture[1] == 0x50.toByte() &&
+            picture[2] == 0x4E.toByte() &&
+            picture[3] == 0x47.toByte()
+        ) {
+            "png"
+        } else {
+            "jpg"
+        }
+        val outFile = File(coverDir, "cover-$cacheKey.$ext")
+        outFile.writeBytes(picture)
+        if (outFile.exists() && outFile.length() > 0L) {
+            Uri.fromFile(outFile)
+        } else {
+            null
+        }
+    } catch (_: Throwable) {
+        null
+    } finally {
+        runCatching { retriever.release() }
+    }
 }
 
 private fun openBookInputStream(contentResolver: ContentResolver, uri: Uri): InputStream? {
@@ -2278,54 +2599,312 @@ private fun openBookInputStream(contentResolver: ContentResolver, uri: Uri): Inp
     return ParcelFileDescriptor.AutoCloseInputStream(pfd)
 }
 
-private fun isAppLocalBookFileUri(context: Context, uri: Uri): Boolean {
-    if (!uri.scheme.equals("file", ignoreCase = true)) return false
-    val path = uri.path ?: return false
-    val filesRoot = context.filesDir.absolutePath
-    return path.startsWith(filesRoot, ignoreCase = true) && File(path).exists()
-}
+private data class RelocatedBookFiles(
+    val folderName: String,
+    val audioUri: Uri,
+    val audioName: String,
+    val srtUri: Uri,
+    val srtName: String,
+    val moveWarnings: List<String>
+)
 
-private fun detectBookFileExtension(
+private data class CopiedBookFile(
+    val uri: Uri,
+    val displayName: String
+)
+
+private data class FolderBookCandidate(
+    val folderName: String,
+    val audioUri: Uri,
+    val audioName: String,
+    val srtUri: Uri,
+    val srtName: String
+)
+
+private data class FolderBookScanResult(
+    val books: List<FolderBookCandidate>,
+    val skippedFolders: List<String>
+)
+
+private fun relocateSelectedBookFilesToAudFolder(
+    context: Context,
     contentResolver: ContentResolver,
-    uri: Uri,
-    fallback: String
-): String {
-    fun extFromName(name: String?): String? {
-        val raw = name
-            ?.substringAfterLast('.', missingDelimiterValue = "")
-            ?.trim()
-            ?.trimStart('.')
-            ?.lowercase(Locale.ROOT)
-            .orEmpty()
-        return raw.takeIf { it.isNotBlank() }
+    rootFolderUri: Uri,
+    audioSourceUri: Uri,
+    audioSourceName: String?,
+    srtSourceUri: Uri,
+    srtSourceName: String?
+): RelocatedBookFiles {
+    val root = DocumentFile.fromTreeUri(context, rootFolderUri)
+        ?: error("无法访问有声书文件夹。")
+    if (!root.isDirectory) error("所选有声书路径不是文件夹。")
+
+    val audFolder = createNextAudFolder(root)
+    val audioDisplayName = audioSourceName?.trim().takeUnless { it.isNullOrBlank() }
+        ?: queryDisplayName(contentResolver, audioSourceUri)
+    val srtDisplayName = srtSourceName?.trim().takeUnless { it.isNullOrBlank() }
+        ?: queryDisplayName(contentResolver, srtSourceUri)
+
+    val copiedAudio = copyUriIntoFolder(
+        contentResolver = contentResolver,
+        parentFolder = audFolder,
+        sourceUri = audioSourceUri,
+        preferredDisplayName = audioDisplayName
+    )
+    val copiedSrt = copyUriIntoFolder(
+        contentResolver = contentResolver,
+        parentFolder = audFolder,
+        sourceUri = srtSourceUri,
+        preferredDisplayName = srtDisplayName
+    )
+
+    val warnings = mutableListOf<String>()
+    if (!deleteSourceUri(context, contentResolver, audioSourceUri)) {
+        warnings += "音频原文件删除失败，已保留原文件。"
+    }
+    if (!deleteSourceUri(context, contentResolver, srtSourceUri)) {
+        warnings += "SRT原文件删除失败，已保留原文件。"
     }
 
-    val fromPath = extFromName(uri.lastPathSegment)
-    if (!fromPath.isNullOrBlank()) return fromPath
-
-    val fromDisplayName = runCatching {
-        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-            if (!cursor.moveToFirst()) return@use null
-            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (index < 0) null else extFromName(cursor.getString(index))
-        }
-    }.getOrNull()
-    if (!fromDisplayName.isNullOrBlank()) return fromDisplayName
-
-    return fallback.trim().trimStart('.').ifBlank { "bin" }
+    return RelocatedBookFiles(
+        folderName = audFolder.name?.ifBlank { "Aud" } ?: "Aud",
+        audioUri = copiedAudio.uri,
+        audioName = copiedAudio.displayName,
+        srtUri = copiedSrt.uri,
+        srtName = copiedSrt.displayName,
+        moveWarnings = warnings
+    )
 }
 
-private fun sanitizeBookFileBase(value: String): String {
-    val normalized = value
-        .replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), " ")
-        .replace(Regex("\\s+"), " ")
+private fun createNextAudFolder(rootFolder: DocumentFile): DocumentFile {
+    val pattern = Regex("^Aud(\\d+)$", RegexOption.IGNORE_CASE)
+    var next = rootFolder.listFiles()
+        .filter { it.isDirectory }
+        .mapNotNull { dir ->
+            dir.name
+                ?.trim()
+                ?.let { pattern.matchEntire(it)?.groupValues?.getOrNull(1)?.toIntOrNull() }
+        }
+        .maxOrNull()
+        ?.plus(1)
+        ?: 1
+
+    repeat(1000) {
+        val candidate = "Aud$next"
+        if (rootFolder.findFile(candidate) == null) {
+            return rootFolder.createDirectory(candidate) ?: error("无法创建文件夹：$candidate")
+        }
+        next += 1
+    }
+    error("无法创建新的 Aud 文件夹。")
+}
+
+private fun copyUriIntoFolder(
+    contentResolver: ContentResolver,
+    parentFolder: DocumentFile,
+    sourceUri: Uri,
+    preferredDisplayName: String
+): CopiedBookFile {
+    val normalizedName = preferredDisplayName.trim().ifBlank { "file" }
+    val uniqueName = resolveUniqueDocumentName(parentFolder, normalizedName)
+    val sourceMime = contentResolver.getType(sourceUri)
+    val targetMime = resolveMimeTypeForDocument(uniqueName, sourceMime)
+    val created = parentFolder.createFile(targetMime, uniqueName)
+        ?: error("无法在目标文件夹创建文件：$uniqueName")
+
+    val input = openBookInputStream(contentResolver, sourceUri)
+        ?: error("无法读取源文件：$normalizedName")
+    input.use { src ->
+        contentResolver.openOutputStream(created.uri, "w")?.use { output ->
+            src.copyTo(output)
+        } ?: error("无法写入目标文件：$uniqueName")
+    }
+
+    return CopiedBookFile(
+        uri = created.uri,
+        displayName = uniqueName
+    )
+}
+
+private fun resolveUniqueDocumentName(folder: DocumentFile, originalName: String): String {
+    val cleaned = originalName.trim().ifBlank { "file" }
+    if (folder.findFile(cleaned) == null) return cleaned
+
+    val dot = cleaned.lastIndexOf('.')
+    val hasExtension = dot > 0 && dot < cleaned.lastIndex
+    val base = if (hasExtension) cleaned.substring(0, dot) else cleaned
+    val ext = if (hasExtension) cleaned.substring(dot) else ""
+
+    var index = 2
+    while (index <= 9999) {
+        val candidate = "$base ($index)$ext"
+        if (folder.findFile(candidate) == null) return candidate
+        index += 1
+    }
+    return "$base-${System.currentTimeMillis()}$ext"
+}
+
+private fun scanBooksFromRootFolder(
+    context: Context,
+    contentResolver: ContentResolver,
+    rootFolderUri: Uri
+): FolderBookScanResult {
+    val root = DocumentFile.fromTreeUri(context, rootFolderUri)
+        ?: error("无法访问有声书文件夹。")
+    if (!root.isDirectory) error("所选有声书路径不是文件夹。")
+
+    val books = mutableListOf<FolderBookCandidate>()
+    val skippedFolders = mutableListOf<String>()
+
+    root.listFiles()
+        .filter { it.isDirectory }
+        .sortedBy { it.name?.lowercase(Locale.ROOT) ?: it.uri.toString() }
+        .forEach { folder ->
+            val folderName = folder.name?.trim().takeUnless { it.isNullOrBlank() }
+                ?: "Untitled"
+            val files = folder.listFiles()
+                .filter { it.isFile }
+                .sortedBy { it.name?.lowercase(Locale.ROOT) ?: it.uri.toString() }
+
+            val audioFile = files.firstOrNull { isAudioDocumentFile(it) }
+            val srtFile = files.firstOrNull { isSrtDocumentFile(it) }
+            if (audioFile == null || srtFile == null) {
+                skippedFolders += folderName
+                return@forEach
+            }
+
+            val audioName = audioFile.name?.trim().takeUnless { it.isNullOrBlank() }
+                ?: queryDisplayName(contentResolver, audioFile.uri)
+            val srtName = srtFile.name?.trim().takeUnless { it.isNullOrBlank() }
+                ?: queryDisplayName(contentResolver, srtFile.uri)
+
+            books += FolderBookCandidate(
+                folderName = folderName,
+                audioUri = audioFile.uri,
+                audioName = audioName,
+                srtUri = srtFile.uri,
+                srtName = srtName
+            )
+        }
+
+    return FolderBookScanResult(
+        books = books,
+        skippedFolders = skippedFolders
+    )
+}
+
+private fun isAudioDocumentFile(file: DocumentFile): Boolean {
+    val name = file.name?.trim().orEmpty()
+    val mime = file.type?.lowercase(Locale.ROOT).orEmpty()
+    val extension = name.substringAfterLast('.', missingDelimiterValue = "")
         .trim()
-    return normalized.ifBlank { "book" }.take(80)
+        .lowercase(Locale.ROOT)
+    if (extension in setOf("m4b", "m4a", "mp3", "aac", "flac", "wav", "ogg", "opus")) {
+        return true
+    }
+    return mime.startsWith("audio/") || mime == "application/mp4"
+}
+
+private fun isSrtDocumentFile(file: DocumentFile): Boolean {
+    val name = file.name?.trim().orEmpty().lowercase(Locale.ROOT)
+    val mime = file.type?.lowercase(Locale.ROOT).orEmpty()
+    if (name.endsWith(".srt")) return true
+    return mime == "application/x-subrip" || mime.contains("subrip") || mime == "text/plain"
+}
+
+private fun resolveMimeTypeForDocument(fileName: String, sourceMime: String?): String {
+    if (!sourceMime.isNullOrBlank() && sourceMime != "application/octet-stream") {
+        return sourceMime
+    }
+    val ext = fileName.substringAfterLast('.', missingDelimiterValue = "")
+        .trim()
+        .lowercase(Locale.ROOT)
+    return when (ext) {
+        "m4b", "m4a" -> "audio/mp4"
+        "mp3" -> "audio/mpeg"
+        "aac" -> "audio/aac"
+        "flac" -> "audio/flac"
+        "wav" -> "audio/wav"
+        "ogg" -> "audio/ogg"
+        "opus" -> "audio/opus"
+        "srt" -> "application/x-subrip"
+        "txt" -> "text/plain"
+        else -> "application/octet-stream"
+    }
+}
+
+private fun deleteSourceUri(
+    context: Context,
+    contentResolver: ContentResolver,
+    uri: Uri
+): Boolean {
+    if (uri.scheme.equals("file", ignoreCase = true)) {
+        val path = uri.path ?: return false
+        return runCatching { File(path).delete() }.getOrDefault(false)
+    }
+
+    val documentDeleted = runCatching {
+        DocumentFile.fromSingleUri(context, uri)?.delete()
+    }.getOrNull()
+    if (documentDeleted == true) return true
+
+    return runCatching {
+        contentResolver.delete(uri, null, null) > 0
+    }.getOrDefault(false)
+}
+
+private fun loadSkipDeleteBookConfirm(context: Context): Boolean {
+    return context
+        .getSharedPreferences(BOOK_DELETE_PREFS, Context.MODE_PRIVATE)
+        .getBoolean(KEY_SKIP_DELETE_CONFIRM, false)
+}
+
+private fun saveSkipDeleteBookConfirm(context: Context, skip: Boolean) {
+    context
+        .getSharedPreferences(BOOK_DELETE_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(KEY_SKIP_DELETE_CONFIRM, skip)
+        .apply()
+}
+
+private fun deleteBookStorageFolder(context: Context, book: ReaderBook): Boolean {
+    return deleteAudParentFolder(context, book.audioUri)
+}
+
+private fun deleteAudParentFolder(context: Context, fileUri: Uri): Boolean {
+    if (fileUri.scheme.equals("file", ignoreCase = true)) {
+        val file = fileUri.path?.let { File(it) } ?: return false
+        val parent = file.parentFile ?: return false
+        if (!Regex("^Aud\\d+$", RegexOption.IGNORE_CASE).matches(parent.name)) return false
+        return runCatching { parent.deleteRecursively() }.getOrDefault(false)
+    }
+
+    if (!DocumentsContract.isDocumentUri(context, fileUri)) return false
+    val documentId = runCatching { DocumentsContract.getDocumentId(fileUri) }.getOrNull() ?: return false
+    val parentDocumentId = documentId.substringBeforeLast('/', missingDelimiterValue = "")
+    if (parentDocumentId.isBlank()) return false
+    val parentName = parentDocumentId.substringAfterLast('/')
+    if (!Regex("^Aud\\d+$", RegexOption.IGNORE_CASE).matches(parentName)) return false
+
+    val parentUri = runCatching {
+        DocumentsContract.buildDocumentUriUsingTree(fileUri, parentDocumentId)
+    }.getOrNull() ?: return false
+
+    val parentDocument = DocumentFile.fromSingleUri(context, parentUri) ?: return false
+    return runCatching { parentDocument.delete() }.getOrDefault(false)
 }
 
 private fun keepReadPermission(context: Context, uri: Uri) {
+    val resolver = context.contentResolver
+    val readWriteFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
     try {
-        context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        resolver.takePersistableUriPermission(uri, readWriteFlags)
+        return
+    } catch (_: SecurityException) {
+        // Fallback to read-only permission.
+    }
+    try {
+        resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
     } catch (_: SecurityException) {
         // Some providers do not support persistable permission.
     }
@@ -2343,12 +2922,52 @@ private fun queryDisplayName(contentResolver: ContentResolver, uri: Uri): String
     } ?: fallback
 }
 
+private fun queryTreeDisplayName(
+    context: Context,
+    contentResolver: ContentResolver,
+    treeUri: Uri
+): String {
+    val fromDocument = runCatching {
+        DocumentFile.fromTreeUri(context, treeUri)?.name?.trim()
+    }.getOrNull().orEmpty()
+    if (fromDocument.isNotBlank()) return fromDocument
+    return queryDisplayName(contentResolver, treeUri)
+}
+
 private fun buildBookTitle(audioName: String, srtName: String): String {
     val audioBase = audioName.substringBeforeLast('.').trim().ifBlank { audioName.trim() }
     if (audioBase.isNotBlank()) return audioBase
     val srtBase = srtName.substringBeforeLast('.').trim().ifBlank { srtName.trim() }
     if (srtBase.isNotBlank()) return srtBase
     return "Untitled Book"
+}
+
+private fun buildReaderBookPlaybackKeyMain(book: ReaderBook): String {
+    val raw = "title=${book.title}|audio=${book.audioUri}|srt=${book.srtUri}"
+    return buildDictionaryCacheKey(raw, book.title.ifBlank { "book" })
+}
+
+private suspend fun loadReaderBookPlaybackSnapshotsForBooks(
+    context: Context,
+    books: List<ReaderBook>
+): Map<String, BookReaderPlaybackSnapshot> {
+    return withContext(Dispatchers.IO) {
+        books.associate { book ->
+            val playbackKey = buildReaderBookPlaybackKeyMain(book)
+            val stored = loadBookReaderPlaybackSnapshot(context, playbackKey)
+            val normalized = if (stored.durationMs > 0L) {
+                stored
+            } else {
+                val fallbackDuration = book.cues.lastOrNull()?.endMs?.coerceAtLeast(0L) ?: 0L
+                if (fallbackDuration > 0L) {
+                    stored.copy(durationMs = fallbackDuration)
+                } else {
+                    stored
+                }
+            }
+            book.id to normalized
+        }
+    }
 }
 
 private fun parseSrt(contentResolver: ContentResolver, uri: Uri): List<SubtitleCue> {
@@ -2427,6 +3046,98 @@ private fun findCueAtTime(cues: List<SubtitleCue>, timeMs: Long): SubtitleCue? {
     return cues[candidateIndex]
 }
 
+private fun addLookupDefinitionToAnkiMain(
+    context: Context,
+    cue: SubtitleCue,
+    audioUri: Uri?,
+    entry: DictionaryEntry,
+    definition: String,
+    dictionaryCss: String?,
+    glossarySections: List<String> = emptyList(),
+    popupSelectionText: String? = null
+) {
+    if (!isAnkiInstalled(context)) error("AnkiDroid is not installed.")
+    if (!hasAnkiReadWritePermission(context)) {
+        error("Anki permission not granted. Authorize in 设置 > Anki.")
+    }
+
+    val persistedConfig = loadPersistedAnkiConfig(context)
+    if (persistedConfig.modelName.isBlank()) {
+        error("No Anki model configured. Open 设置 > Anki.")
+    }
+
+    val catalog = loadAnkiCatalog(context)
+    val model = catalog.models.firstOrNull { it.name == persistedConfig.modelName }
+        ?: error("Configured model not found: ${persistedConfig.modelName}")
+
+    val templates = model.fields.associateWith { field ->
+        persistedConfig.fieldTemplates[field].orEmpty()
+    }
+    if (!hasAnyAnkiFieldTemplate(templates)) {
+        error("All field variables are empty. Configure at least one marker in 设置 > Anki.")
+    }
+    if (audioUri != null && !templates.values.any { templateUsesVariableMain(it, "cut-audio") }) {
+        error("Current model templates do not include {cut-audio}. Set audio field to {cut-audio} in 设置 > Anki.")
+    }
+
+    val normalizedGlossarySections = glossarySections
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+    val cardDefinitions = if (normalizedGlossarySections.isNotEmpty()) {
+        normalizedGlossarySections
+    } else {
+        listOf(definition)
+    }
+    val cardDictionaryName = if (normalizedGlossarySections.isNotEmpty()) null else entry.dictionary
+    val cardDictionaryCss = dictionaryCss
+
+    val config = AnkiExportConfig(
+        deckName = persistedConfig.deckName.ifBlank { "Default" },
+        modelName = model.name,
+        fieldTemplates = templates,
+        tags = parseAnkiTags(persistedConfig.tags)
+    )
+
+    val card = MinedCard(
+        word = entry.term,
+        popupSelectionText = popupSelectionText,
+        sentence = cue.text,
+        reading = entry.reading,
+        definitions = cardDefinitions,
+        dictionaryName = cardDictionaryName,
+        dictionaryCss = cardDictionaryCss,
+        pitch = entry.pitch,
+        frequency = entry.frequency,
+        cueStartMs = cue.startMs,
+        cueEndMs = cue.endMs,
+        audioUri = audioUri,
+        audioTagOnly = true,
+        requireCueAudioClip = audioUri != null
+    )
+
+    exportToAnkiDroidApi(context, card, config)
+}
+
+private fun templateUsesVariableMain(template: String, variableName: String): Boolean {
+    if (template.isBlank()) return false
+    val target = variableName
+        .trim()
+        .lowercase(Locale.ROOT)
+        .replace(Regex("[^a-z0-9]"), "")
+    if (target.isBlank()) return false
+
+    return Regex("\\{([^{}]+)\\}")
+        .findAll(template)
+        .any { match ->
+            match.groupValues
+                .getOrNull(1)
+                .orEmpty()
+                .trim()
+                .lowercase(Locale.ROOT)
+                .replace(Regex("[^a-z0-9]"), "") == target
+        }
+}
+
 private fun buildMinedCard(
     cue: SubtitleCue,
     selectedEntry: DictionaryEntry?,
@@ -2458,38 +3169,18 @@ private fun buildMainHighlightedText(text: String, selectedRange: IntRange?): An
         val start = range.first.coerceIn(0, text.length)
         val endExclusive = (range.last + 1).coerceIn(start, text.length)
         if (endExclusive <= start) return@buildAnnotatedString
-        addStyle(SpanStyle(background = Color(0xFFDADADA)), start, endExclusive)
+        addStyle(SpanStyle(background = Color(0x66A0A0A0)), start, endExclusive)
     }
 }
 
-private fun findMainLookupSelectionRange(
+private fun findMainLookupSelection(
     text: String,
-    offset: Int,
-    tokenizer: MecabTokenizer?
-): IntRange? {
-    if (text.isBlank()) return null
-    val maxIndex = (text.length - 1).coerceAtLeast(0)
-    val clamped = offset.coerceIn(0, maxIndex)
-
-    val span = tokenizer
-        ?.tokenize(text)
-        ?.firstOrNull { clamped in it.startChar until it.endChar }
-    if (span != null && span.endChar > span.startChar) {
-        return span.startChar until span.endChar
-    }
-
-    val charRegex = Regex("[\\p{L}\\p{N}\\u3400-\\u9FFF\\u3040-\\u30FF\\u3005\\u3006\\u30F6\\u30FC]")
-    if (!charRegex.matches(text[clamped].toString())) return null
-
-    var start = clamped
-    while (start > 0 && charRegex.matches(text[start - 1].toString())) {
-        start -= 1
-    }
-    var endExclusive = clamped + 1
-    while (endExclusive < text.length && charRegex.matches(text[endExclusive].toString())) {
-        endExclusive += 1
-    }
-    return start until endExclusive
+    offset: Int
+): LookupScanSelection? {
+    return selectLookupScanText(
+        text = text,
+        charOffset = offset
+    )
 }
 
 private fun formatTime(ms: Long): String {
@@ -2503,4 +3194,9 @@ private fun formatTime(ms: Long): String {
         String.format(Locale.US, "%02d:%02d", minutes, seconds)
     }
 }
+
+
+
+
+
 

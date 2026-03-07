@@ -1,0 +1,175 @@
+package com.tekuza.p9player
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.graphics.Bitmap
+import android.os.Build
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
+import androidx.media3.session.MediaSession
+import androidx.media3.ui.PlayerNotificationManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import java.util.Locale
+
+internal class PlaybackNotificationController(
+    context: Context,
+    private val player: Player,
+    private val title: String,
+    private val contentIntent: PendingIntent?
+) {
+    private val appContext = context.applicationContext
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var progressJob: Job? = null
+
+    private val mediaSession = MediaSession.Builder(appContext, player).build()
+    private val notificationManager = PlayerNotificationManager.Builder(
+        appContext,
+        NOTIFICATION_ID,
+        CHANNEL_ID
+    )
+        .setMediaDescriptionAdapter(
+            object : PlayerNotificationManager.MediaDescriptionAdapter {
+                override fun getCurrentContentTitle(player: Player): CharSequence {
+                    return title.ifBlank { appContext.getString(R.string.app_name) }
+                }
+
+                override fun createCurrentContentIntent(player: Player): PendingIntent? {
+                    return contentIntent
+                }
+
+                override fun getCurrentContentText(player: Player): CharSequence {
+                    val durationMs = player.duration.takeIf { it > 0L }
+                    if (durationMs == null) {
+                        return appContext.getString(R.string.playback_progress_unknown)
+                    }
+                    val currentMs = player.currentPosition.coerceIn(0L, durationMs)
+                    val percent = ((currentMs.toDouble() / durationMs.toDouble()) * 100.0)
+                        .toInt()
+                        .coerceIn(0, 100)
+                    return appContext.getString(
+                        R.string.playback_progress_template,
+                        percent,
+                        formatTime(currentMs),
+                        formatTime(durationMs)
+                    )
+                }
+
+                override fun getCurrentLargeIcon(
+                    player: Player,
+                    callback: PlayerNotificationManager.BitmapCallback
+                ): Bitmap? {
+                    return null
+                }
+            }
+        )
+        .build()
+
+    private val playerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            syncProgressLoop()
+            notificationManager.invalidate()
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            syncProgressLoop()
+            notificationManager.invalidate()
+        }
+
+        override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+            notificationManager.invalidate()
+        }
+
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int
+        ) {
+            notificationManager.invalidate()
+        }
+    }
+
+    init {
+        ensureNotificationChannel(appContext)
+        notificationManager.setMediaSessionToken(mediaSession.sessionCompatToken)
+        notificationManager.setUseNextAction(false)
+        notificationManager.setUsePreviousAction(false)
+        notificationManager.setUseFastForwardAction(false)
+        notificationManager.setUseRewindAction(false)
+        notificationManager.setPlayer(player)
+        player.addListener(playerListener)
+        syncProgressLoop()
+        notificationManager.invalidate()
+    }
+
+    fun release() {
+        progressJob?.cancel()
+        progressJob = null
+        player.removeListener(playerListener)
+        notificationManager.setPlayer(null)
+        mediaSession.release()
+        scope.cancel()
+    }
+
+    private fun syncProgressLoop() {
+        if (!player.isPlaying || player.duration <= 0L) {
+            progressJob?.cancel()
+            progressJob = null
+            return
+        }
+        if (progressJob?.isActive == true) return
+
+        progressJob = scope.launch {
+            while (isActive && player.isPlaying) {
+                notificationManager.invalidate()
+                delay(PROGRESS_REFRESH_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun ensureNotificationChannel(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val notificationService = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            ?: return
+        val existing = notificationService.getNotificationChannel(CHANNEL_ID)
+        if (existing != null) return
+
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            context.getString(R.string.playback_notification_channel_name),
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = context.getString(R.string.playback_notification_channel_description)
+            setShowBadge(false)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
+        notificationService.createNotificationChannel(channel)
+    }
+
+    companion object {
+        private const val CHANNEL_ID = "book_playback"
+        private const val NOTIFICATION_ID = 31_001
+        private const val PROGRESS_REFRESH_INTERVAL_MS = 1_000L
+
+        private fun formatTime(ms: Long): String {
+            val totalSeconds = (ms.coerceAtLeast(0L) / 1000L)
+            val hours = totalSeconds / 3600L
+            val minutes = (totalSeconds % 3600L) / 60L
+            val seconds = totalSeconds % 60L
+            return if (hours > 0L) {
+                String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+            } else {
+                String.format(Locale.US, "%02d:%02d", minutes, seconds)
+            }
+        }
+    }
+}

@@ -1,3 +1,7 @@
 <resources>
-    <string name="app_name">tset</string>
+    <string name="app_name">⑨Player</string>
+    <string name="playback_notification_channel_name">Playback</string>
+    <string name="playback_notification_channel_description">Book playback controls</string>
+    <string name="playback_progress_template">%1$d%% · %2$s / %3$s</string>
+    <string name="playback_progress_unknown">Progress unavailable</string>
 </resources>

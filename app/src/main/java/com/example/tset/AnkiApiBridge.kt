@@ -1,4 +1,4 @@
-package com.example.tset
+﻿package com.tekuza.p9player
 
 import android.content.ContentValues
 import android.content.Context
@@ -55,6 +55,14 @@ private data class StagedAnkiAudio(
     val cleanup: () -> Unit
 )
 
+private val TEMPLATE_VARIABLE_REGEX = Regex("\\{([^{}]+)\\}")
+private val SINGLE_GLOSSARY_DICT_MARKER_REGEX = Regex("\\{single-glossary-([^{}]+)\\}", RegexOption.IGNORE_CASE)
+private val SINGLE_FREQUENCY_NUMBER_DICT_MARKER_REGEX =
+    Regex("\\{single-frequency-number-([^{}]+)\\}", RegexOption.IGNORE_CASE)
+private val SINGLE_FREQUENCY_DICT_MARKER_REGEX = Regex("\\{single-frequency-([^{}]+)\\}", RegexOption.IGNORE_CASE)
+private val NON_ALNUM_TEMPLATE_KEY_REGEX = Regex("[^a-z0-9]")
+private val DICTIONARY_TOKEN_STRIP_REGEX = Regex("[\\s\\p{Punct}\\p{S}]")
+
 internal fun loadAnkiCatalog(context: Context): AnkiCatalog {
     if (!isAnkiInstalled(context)) error("AnkiDroid is not installed")
     if (!hasAnkiReadWritePermission(context)) {
@@ -101,13 +109,17 @@ internal fun defaultFieldTemplate(fieldName: String): String {
         lowered.contains("meaning") || lowered.contains("definition") || lowered.contains("gloss") -> "{glossary}"
         lowered.contains("pitch") -> "{pitch-accent-positions}"
         lowered.contains("freq") || lowered.contains("frequency") -> "{frequencies}"
-        lowered.contains("audio") || lowered.contains("sound") -> "{audio}"
+        lowered.contains("audio") || lowered.contains("sound") -> "{cut-audio}"
         else -> ""
     }
 }
 
 internal fun defaultTemplatesForFields(fields: List<String>): Map<String, String> {
     return fields.associateWith(::defaultFieldTemplate)
+}
+
+internal fun hasAnyAnkiFieldTemplate(templates: Map<String, String>): Boolean {
+    return templates.values.any { it.trim().isNotBlank() }
 }
 
 internal fun parseAnkiTags(raw: String): Set<String> {
@@ -137,11 +149,20 @@ internal fun exportToAnkiDroidApi(
     }
         ?: error("Anki model not found: ${config.modelName}")
 
+    val templatesByField = model.fields.associateWith { fieldName ->
+        config.fieldTemplates[fieldName].orEmpty().trim()
+    }
+    if (templatesByField.values.none { it.isNotBlank() }) {
+        error("All field variables are empty. Configure at least one marker in Settings > Anki.")
+    }
+    val requiresCutAudio = templatesByField.values.any { templateUsesVariable(it, "cut-audio") }
+
     val variables = runCatching {
         buildAnkiVariables(
             context = context,
             api = api,
-            card = card
+            card = card,
+            includeCutAudio = requiresCutAudio
         )
     }.getOrElse { throwable ->
         error("Anki variable build failed. ${throwableDetail(throwable)}")
@@ -149,12 +170,15 @@ internal fun exportToAnkiDroidApi(
 
     val fieldValues = runCatching {
         model.fields.map { fieldName ->
-            val template = config.fieldTemplates[fieldName].orEmpty()
+            val template = templatesByField[fieldName].orEmpty()
             val value = resolveTemplate(template, variables).trim()
             value
         }.toTypedArray()
     }.getOrElse { throwable ->
         error("Anki field rendering failed for model '${model.name}'. ${throwableDetail(throwable)}")
+    }
+    if (fieldValues.all { it.isBlank() }) {
+        error("All rendered field values are empty. Check your field variables in Settings > Anki.")
     }
 
     val tags = if (config.tags.isEmpty()) setOf("tset") else config.tags
@@ -237,35 +261,47 @@ private fun throwableDetail(throwable: Throwable): String {
 private fun buildAnkiVariables(
     context: Context,
     api: AddContentApi,
-    card: MinedCard
+    card: MinedCard,
+    includeCutAudio: Boolean
 ): Map<String, String> {
+    val dictionaryName = card.dictionaryName.orEmpty()
     val glossaryHtml = buildStyledGlossary(
         definitions = card.definitions,
-        dictionaryName = card.dictionaryName,
+        dictionaryName = dictionaryName,
         dictionaryCss = card.dictionaryCss
     )
     val glossaryFirst = card.definitions.firstOrNull().orEmpty()
+    val glossaryNoDictionary = card.definitions.joinToString("<br>")
+    val glossaryPlain = card.definitions.joinToString("\n")
     val styledGlossaryFirst = if (glossaryFirst.isBlank()) {
         ""
     } else {
         buildStyledGlossary(
             definitions = listOf(glossaryFirst),
-            dictionaryName = card.dictionaryName,
+            dictionaryName = dictionaryName,
             dictionaryCss = card.dictionaryCss
         )
     }
-    val audioTag = attachAudio(api, context, card).orEmpty()
-    val audio = if (card.audioTagOnly) "" else audioTag
-    val (clozePrefix, clozeBody, clozeSuffix) = splitCloze(card.sentence, card.word)
+    val cutAudio = if (includeCutAudio) {
+        attachAudio(api, context, card).orEmpty()
+    } else {
+        ""
+    }
+    val popupSelectionText = card.popupSelectionText?.trim().orEmpty()
+    val clozeTarget = popupSelectionText.ifBlank { card.word }
+    val (clozePrefix, clozeBody, clozeSuffix) = splitCloze(card.sentence, clozeTarget)
     val frequencyNumber = extractFirstNumber(card.frequency)
     val expressionFurigana = buildExpressionFurigana(card.word, card.reading)
     val sentenceFurigana = ""
+    val singleFrequency = card.frequency.orEmpty()
 
     return mapOf(
         "word" to card.word,
         "expression" to card.word,
-        "dictionary-name" to card.dictionaryName.orEmpty(),
-        "popup-selection-text" to card.word,
+        "dictionary-name" to dictionaryName,
+        "dictionary" to dictionaryName,
+        "dictionary-alias" to dictionaryName,
+        "popup-selection-text" to popupSelectionText.ifBlank { card.word },
         "search-query" to card.word,
         "sentence" to card.sentence,
         "sentence-furigana" to sentenceFurigana,
@@ -277,26 +313,46 @@ private fun buildAnkiVariables(
         "cloze-body-kana" to (card.reading ?: clozeBody),
         "cloze-suffix" to clozeSuffix,
         "reading" to card.reading.orEmpty(),
+        "furigana" to expressionFurigana,
         "furigana-plain" to expressionFurigana,
         "expression-furigana" to expressionFurigana,
+        "conjugation" to "",
+        "part-of-speech" to "",
+        "phonetic-transcriptions" to "",
         "definitions" to glossaryHtml,
         "definition" to glossaryHtml,
         "glossary" to glossaryHtml,
+        "glossary-no-dictionary" to glossaryNoDictionary,
         "glossary-first" to styledGlossaryFirst,
-        "single-glossary" to styledGlossaryFirst,
+        "glossary-first-brief" to glossaryFirst,
+        "glossary-first-no-dictionary" to glossaryFirst,
+        "single-glossary" to glossaryHtml,
+        "single-glossary-brief" to glossaryFirst,
+        "single-glossary-no-dictionary" to glossaryNoDictionary,
         "glossary-brief" to glossaryFirst,
-        "glossary-plain" to card.definitions.joinToString("\n"),
+        "glossary-plain" to glossaryPlain,
+        "glossary-plain-no-dictionary" to glossaryPlain,
         "dictionary-css" to card.dictionaryCss.orEmpty(),
         "pitch" to card.pitch.orEmpty(),
         "pitch-accents" to card.pitch.orEmpty(),
         "pitch-accent-positions" to card.pitch.orEmpty(),
         "pitch-accent-categories" to card.pitch.orEmpty(),
+        "pitch-accent-graphs" to "",
+        "pitch-accent-graphs-jj" to "",
         "frequency" to card.frequency.orEmpty(),
         "frequencies" to card.frequency.orEmpty(),
+        "single-frequency" to singleFrequency,
+        "single-frequency-number" to frequencyNumber,
         "frequency-harmonic-rank" to frequencyNumber,
+        "frequency-harmonic-occurrence" to frequencyNumber,
         "frequency-average-rank" to frequencyNumber,
-        "audio" to audio,
-        "audioTag" to audioTag,
+        "frequency-average-occurrence" to frequencyNumber,
+        "audio" to "",
+        "audioTag" to "",
+        "cut-audio" to cutAudio,
+        "screenshot" to "",
+        "tags" to "",
+        "url" to "",
         "document-title" to "",
         "book-cover" to ""
     )
@@ -308,21 +364,43 @@ private fun buildStyledGlossary(
     dictionaryCss: String?
 ): String {
     if (definitions.isEmpty()) return ""
-    val body = definitions.joinToString("<br>") { it.trim() }
+    val normalizedDefinitions = definitions
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+    if (normalizedDefinitions.isEmpty()) return ""
     val dictName = dictionaryName?.trim().orEmpty()
-    if (dictName.isBlank()) return body
+    if (dictName.isBlank()) {
+        val rawCss = dictionaryCss?.trim().orEmpty()
+        val styleBlock = if (rawCss.isBlank()) {
+            ""
+        } else {
+            "<style>$rawCss</style>"
+        }
+        val body = if (normalizedDefinitions.all { it.startsWith("<li") }) {
+            "<ol>${normalizedDefinitions.joinToString("")}</ol>"
+        } else {
+            normalizedDefinitions.joinToString("<br>")
+        }
+        return """
+            <div style="text-align: left;" class="yomitan-glossary">
+                $body
+                $styleBlock
+            </div>
+        """.trimIndent()
+    }
 
+    val body = normalizedDefinitions.joinToString("<br>")
     val safeName = escapeHtmlText(dictName)
     val safeAttr = escapeHtmlAttribute(dictName)
     val scopedCss = buildScopedDictionaryCss(dictionaryCss.orEmpty(), dictName)
     return """
-        <div class="yomitan-glossary">
+        <div style="text-align: left;" class="yomitan-glossary">
             <ol>
                 <li data-dictionary="$safeAttr">
                     <i>($safeName)</i> <span>$body</span>
                 </li>
+                <style>$scopedCss</style>
             </ol>
-            <style>$scopedCss</style>
         </div>
     """.trimIndent()
 }
@@ -984,13 +1062,47 @@ private fun createAnkiMediaTempFile(
 
 private fun resolveTemplate(template: String, variables: Map<String, String>): String {
     var output = template
-    val selectedDictionaryName = normalizeDictionaryToken(variables["dictionary-name"].orEmpty())
-    output = output.replace(Regex("\\{single-glossary-([^}]+)\\}")) { match ->
+    val selectedDictionaryName = normalizeDictionaryToken(
+        variables["dictionary"].orEmpty().ifBlank { variables["dictionary-name"].orEmpty() }
+    )
+    output = output.replace(SINGLE_GLOSSARY_DICT_MARKER_REGEX) { match ->
+        val rawMarker = match.groupValues.getOrNull(1).orEmpty().trim()
+        val (requestedNameRaw, markerKey) = when {
+            rawMarker.endsWith("-brief", ignoreCase = true) -> {
+                rawMarker.removeSuffix("-brief").trimEnd() to "single-glossary-brief"
+            }
+
+            rawMarker.endsWith("-no-dictionary", ignoreCase = true) -> {
+                rawMarker.removeSuffix("-no-dictionary").trimEnd() to "single-glossary-no-dictionary"
+            }
+
+            else -> rawMarker to "single-glossary"
+        }
+        val requestedDictionaryName = normalizeDictionaryToken(requestedNameRaw)
+        if (requestedDictionaryName.isBlank() || selectedDictionaryName.isBlank()) {
+            ""
+        } else if (requestedDictionaryName == selectedDictionaryName) {
+            variables[markerKey].orEmpty()
+        } else {
+            ""
+        }
+    }
+    output = output.replace(SINGLE_FREQUENCY_NUMBER_DICT_MARKER_REGEX) { match ->
         val requestedDictionaryName = normalizeDictionaryToken(match.groupValues.getOrNull(1).orEmpty())
         if (requestedDictionaryName.isBlank() || selectedDictionaryName.isBlank()) {
             ""
         } else if (requestedDictionaryName == selectedDictionaryName) {
-            variables["single-glossary"].orEmpty()
+            variables["single-frequency-number"].orEmpty()
+        } else {
+            ""
+        }
+    }
+    output = output.replace(SINGLE_FREQUENCY_DICT_MARKER_REGEX) { match ->
+        val requestedDictionaryName = normalizeDictionaryToken(match.groupValues.getOrNull(1).orEmpty())
+        if (requestedDictionaryName.isBlank() || selectedDictionaryName.isBlank()) {
+            ""
+        } else if (requestedDictionaryName == selectedDictionaryName) {
+            variables["single-frequency"].orEmpty()
         } else {
             ""
         }
@@ -1000,7 +1112,7 @@ private fun resolveTemplate(template: String, variables: Map<String, String>): S
         normalizedVariables.putIfAbsent(key, value)
         normalizedVariables.putIfAbsent(canonicalizeTemplateKey(key), value)
     }
-    return output.replace(Regex("\\{([^{}]+)\\}")) { match ->
+    return output.replace(TEMPLATE_VARIABLE_REGEX) { match ->
         val key = match.groupValues.getOrNull(1).orEmpty()
         normalizedVariables[key]
             ?: normalizedVariables[canonicalizeTemplateKey(key)]
@@ -1008,18 +1120,30 @@ private fun resolveTemplate(template: String, variables: Map<String, String>): S
     }
 }
 
+private fun templateUsesVariable(template: String, variableName: String): Boolean {
+    if (template.isBlank()) return false
+    val target = canonicalizeTemplateKey(variableName)
+    if (target.isBlank()) return false
+    return TEMPLATE_VARIABLE_REGEX
+        .findAll(template)
+        .any { match ->
+            val marker = match.groupValues.getOrNull(1).orEmpty()
+            canonicalizeTemplateKey(marker) == target
+        }
+}
+
 private fun canonicalizeTemplateKey(key: String): String {
     return key
         .trim()
         .lowercase(Locale.ROOT)
-        .replace(Regex("[^a-z0-9]"), "")
+        .replace(NON_ALNUM_TEMPLATE_KEY_REGEX, "")
 }
 
 private fun normalizeDictionaryToken(value: String): String {
     return value
         .trim()
         .lowercase(Locale.ROOT)
-        .replace(Regex("[\\s\\p{Punct}\\p{S}]"), "")
+        .replace(DICTIONARY_TOKEN_STRIP_REGEX, "")
         .replace("\u8bcd\u5178", "\u8f9e\u5178")
         .replace("\u93e1", "\u955c")
 }
@@ -1044,6 +1168,7 @@ private fun escapeCssString(value: String): String {
 private fun buildScopedDictionaryCss(rawCss: String, dictionaryName: String): String {
     val trimmed = rawCss.trim()
     if (trimmed.isBlank()) return ""
+    if (dictionaryName.isBlank()) return trimmed
 
     val dictionaryAttr = escapeCssString(dictionaryName)
     val prefix = ".yomitan-glossary [data-dictionary=\"$dictionaryAttr\"]"
@@ -1062,10 +1187,7 @@ private fun buildScopedDictionaryCss(rawCss: String, dictionaryName: String): St
         "$prefixed {$body}"
     }
 
-    return buildString {
-        appendLine(scoped)
-        appendLine(trimmed)
-    }.trim()
+    return scoped.trim()
 }
 
 private fun splitCloze(sentence: String, word: String): Triple<String, String, String> {
@@ -1090,4 +1212,6 @@ private fun buildExpressionFurigana(expression: String, reading: String?): Strin
     if (rd.isBlank()) return exp
     return "$exp[$rd]"
 }
+
+
 

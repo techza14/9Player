@@ -1,4 +1,4 @@
-package com.example.tset.ui.theme
+﻿package com.tekuza.p9player.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

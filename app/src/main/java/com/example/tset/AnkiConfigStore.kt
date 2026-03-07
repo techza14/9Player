@@ -1,4 +1,4 @@
-package com.example.tset
+﻿package com.tekuza.p9player
 
 import android.content.Context
 import org.json.JSONObject
@@ -65,3 +65,4 @@ internal fun savePersistedAnkiConfig(context: Context, config: PersistedAnkiConf
         .putString(ANKI_KEY_STATE, obj.toString())
         .apply()
 }
+

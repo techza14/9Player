@@ -1,4 +1,4 @@
-package com.example.tset
+﻿package com.tekuza.p9player
 
 import android.content.ActivityNotFoundException
 import android.content.ClipData
@@ -123,3 +123,4 @@ private fun formatCardTime(ms: Long): String {
         String.format(Locale.US, "%02d:%02d", minutes, seconds)
     }
 }
+

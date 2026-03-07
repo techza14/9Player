@@ -1,4 +1,5 @@
-package com.example.tset
+﻿
+package com.tekuza.p9player
 
 import android.content.ContentResolver
 import android.net.Uri
@@ -18,6 +19,8 @@ internal const val MAX_LOOKUP_RESULTS = 40
 private const val MAX_DEFS_PER_ENTRY = 1
 private const val MAX_DEF_LENGTH = 1200
 private const val MAX_ENTRIES_PER_DICTIONARY = 90_000
+
+private val STRUCTURED_DATA_KEY_SANITIZE_REGEX = Regex("[^a-z0-9_-]")
 
 private data class TermMeta(
     val pitches: MutableSet<String> = linkedSetOf(),
@@ -222,7 +225,7 @@ private fun scoreEntryByNormalized(
 
 private fun extractAliasForLookup(entry: DictionaryEntry): String {
     val definitionPlain = stripHtmlTags(entry.definitions.firstOrNull().orEmpty()).take(140)
-    val tokens = Regex("[\\u4E00-\\u9FFF\\u3400-\\u4DBF\\uF900-\\uFAFF々〆ヶ]+")
+    val tokens = Regex("[\\u4E00-\\u9FFF\\u3400-\\u4DBF\\uF900-\\uFAFF銆呫€嗐兌]+")
         .findAll(definitionPlain)
         .map { it.value.trim() }
         .filter { it.length in 1..12 }
@@ -377,6 +380,7 @@ private fun scanDictionaryZip(
     var firstDslPath: String? = null
     var firstJsonPath: String? = null
     var stylesCssPath: String? = null
+    var stylesCssPriority = Int.MIN_VALUE
     val termMeta = mutableMapOf<String, TermMeta>()
     var scannedEntries = 0
 
@@ -396,8 +400,9 @@ private fun scanDictionaryZip(
                 }
                 if (!entry.isDirectory) {
                     val path = normalizeZipPath(entry.name)
+                    val fileName = path.substringAfterLast('/').lowercase(Locale.US)
                     when {
-                        path.substringAfterLast('/').equals("index.json", true) -> {
+                        fileName == "index.json" -> {
                             val name = extractTitleFromIndexJson(zip.readBytes().decodeToString())
                             if (!name.isNullOrBlank()) dictionaryName = name
                         }
@@ -408,8 +413,16 @@ private fun scanDictionaryZip(
                             termBankPaths += path
                         }
 
-                        stylesCssPath == null && path.substringAfterLast('/').equals("styles.css", true) -> {
-                            stylesCssPath = path
+                        fileName.endsWith(".css") -> {
+                            val priority = when (fileName) {
+                                "styles.css" -> 3
+                                "style.css" -> 2
+                                else -> 1
+                            }
+                            if (priority >= stylesCssPriority) {
+                                stylesCssPath = path
+                                stylesCssPriority = priority
+                            }
                         }
 
                         firstDslPath == null && path.lowercase(Locale.US).endsWith(".dsl") -> {
@@ -883,7 +896,7 @@ private fun extractGlossaryFromTermRow(row: JSONArray): List<String> {
 private fun extractTextSnippet(value: Any?): String? {
     if (value == null || value == JSONObject.NULL) return null
     val raw = when (value) {
-        is String -> value.trim()
+        is String -> value
         is Number, is Boolean -> value.toString()
         is List<*> -> {
             buildString {
@@ -986,12 +999,7 @@ private fun structuredJsonToHtml(obj: JSONObject): String {
         val tag = tagRaw.replace(Regex("[^a-z0-9-]"), "")
         if (tag.isBlank()) return content
 
-        val dataObj = obj.optJSONObject("data")
-        val dataScClass = firstNonBlank(
-            dataObj?.optString("sc-class"),
-            dataObj?.optString("scClass"),
-            dataObj?.optString("class")
-        ).orEmpty()
+        val dataAttributes = extractStructuredDataAttributes(obj.opt("data")).toMutableMap()
         val styleValue = styleValueToCss(obj.opt("style"))
         val styleAttr = styleValue.takeIf { it.isNotBlank() }?.let {
             " style=\"${escapeHtmlAttribute(it)}\""
@@ -1000,20 +1008,16 @@ private fun structuredJsonToHtml(obj: JSONObject): String {
             " lang=\"${escapeHtmlAttribute(it)}\""
         } ?: ""
         val explicitClass = obj.optString("class").trim()
-        val dataClass = dataObj?.optString("class")?.trim().orEmpty()
-        val mergedClass = when {
-            explicitClass.isNotBlank() && dataClass.isNotBlank() -> "$explicitClass $dataClass"
-            explicitClass.isNotBlank() -> explicitClass
-            dataClass.isNotBlank() -> dataClass
-            else -> ""
+        if (dataAttributes["class"].isNullOrBlank() && explicitClass.isNotBlank()) {
+            dataAttributes["class"] = explicitClass
         }
-        val classAttr = mergedClass.takeIf { it.isNotBlank() }?.let {
-            " class=\"${escapeHtmlAttribute(it)}\""
-        } ?: ""
-        val dataScClassAttr = dataScClass.takeIf { it.isNotBlank() }?.let {
-            " data-sc-class=\"${escapeHtmlAttribute(it)}\""
-        } ?: ""
-        return "<$tag$classAttr$dataScClassAttr$langAttr$styleAttr>$content</$tag>"
+        val dataScAttrs = buildStructuredDataScAttributes(dataAttributes)
+        val inlineAttrs = buildInlineHtmlAttributes(obj)
+        return if (isVoidHtmlTag(tag)) {
+            "<$tag$dataScAttrs$langAttr$styleAttr$inlineAttrs>"
+        } else {
+            "<$tag$dataScAttrs$langAttr$styleAttr$inlineAttrs>$content</$tag>"
+        }
     }
 
     if (content.isNotBlank()) return content
@@ -1031,7 +1035,90 @@ private fun structuredJsonToHtml(obj: JSONObject): String {
         val part = extractTextSnippet(obj.opt(key)).orEmpty()
         if (part.isNotBlank()) fallbackParts += part
     }
-    return fallbackParts.joinToString("<br>")
+    return fallbackParts.joinToString("")
+}
+
+private fun extractStructuredDataAttributes(rawData: Any?): Map<String, String> {
+    val attributes = linkedMapOf<String, String>()
+
+    fun putAttribute(rawKey: String?, rawValue: Any?) {
+        val key = normalizeStructuredDataKey(rawKey)
+        if (key.isBlank()) return
+        val value = when (rawValue) {
+            null, JSONObject.NULL -> ""
+            is String -> rawValue.trim()
+            is Number, is Boolean -> rawValue.toString()
+            else -> rawValue.toString().trim()
+        }
+        attributes[key] = value
+    }
+
+    when (rawData) {
+        null, JSONObject.NULL -> Unit
+        is JSONObject -> {
+            val keys = rawData.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                putAttribute(key, rawData.opt(key))
+            }
+        }
+
+        is String -> {
+            val trimmed = rawData.trim()
+            if (trimmed.startsWith("@{") && trimmed.endsWith("}")) {
+                val body = trimmed.substring(2, trimmed.length - 1)
+                body.split(';').forEach { token ->
+                    val part = token.trim()
+                    if (part.isBlank()) return@forEach
+                    val separator = part.indexOf('=')
+                    if (separator < 0) {
+                        putAttribute(part, "")
+                    } else {
+                        putAttribute(part.substring(0, separator), part.substring(separator + 1))
+                    }
+                }
+            }
+        }
+    }
+
+    return attributes
+}
+
+private fun normalizeStructuredDataKey(rawKey: String?): String {
+    val base = rawKey
+        ?.trim()
+        .orEmpty()
+    if (base.isBlank()) return ""
+
+    val canonical = when (base.lowercase(Locale.ROOT)) {
+        "sc-class", "scclass", "class" -> "class"
+        else -> base
+            .replace(Regex("([a-z])([A-Z])"), "$1_$2")
+            .lowercase(Locale.ROOT)
+    }
+    return canonical
+        .replace(STRUCTURED_DATA_KEY_SANITIZE_REGEX, "")
+        .trim('_', '-')
+}
+
+private fun buildStructuredDataScAttributes(data: Map<String, String>): String {
+    if (data.isEmpty()) return ""
+    return data.entries.joinToString(separator = "") { (key, value) ->
+        val attrName = "data-sc-$key"
+        " $attrName=\"${escapeHtmlAttribute(value)}\""
+    }
+}
+
+private fun isVoidHtmlTag(tag: String): Boolean {
+    return tag in setOf("area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr")
+}
+
+private fun buildInlineHtmlAttributes(obj: JSONObject): String {
+    val allowed = listOf("src", "href", "alt", "title", "target", "rel", "width", "height", "colspan", "rowspan")
+    return allowed.joinToString(separator = "") { key ->
+        val value = obj.optString(key).trim()
+        if (value.isBlank()) "" else " $key=\"${escapeHtmlAttribute(value)}\""
+    }
 }
 
 private fun styleValueToCss(value: Any?): String {
@@ -1290,3 +1377,4 @@ private fun isLikelyDefinition(text: String): Boolean {
 private fun firstNonBlank(vararg values: String?): String? {
     return values.firstOrNull { !it.isNullOrBlank() }?.trim()
 }
+

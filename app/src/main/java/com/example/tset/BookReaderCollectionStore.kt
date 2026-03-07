@@ -1,4 +1,4 @@
-package com.example.tset
+﻿package com.tekuza.p9player
 
 import android.content.Context
 import org.json.JSONArray
@@ -63,6 +63,10 @@ internal fun removeBookReaderCollectedCue(context: Context, id: String) {
     saveBookReaderCollectedCues(context, remaining)
 }
 
+internal fun clearBookReaderCollectedCues(context: Context) {
+    saveBookReaderCollectedCues(context, emptyList())
+}
+
 private fun saveBookReaderCollectedCues(context: Context, cues: List<BookReaderCollectedCue>) {
     val root = JSONObject().apply {
         put(
@@ -87,3 +91,4 @@ private fun saveBookReaderCollectedCues(context: Context, cues: List<BookReaderC
         .putString(BOOK_READER_COLLECTION_KEY, root.toString())
         .apply()
 }
+

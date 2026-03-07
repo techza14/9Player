@@ -1,4 +1,4 @@
-package com.example.tset
+﻿package com.tekuza.p9player
 
 import android.content.Context
 import java.io.BufferedInputStream
@@ -124,3 +124,4 @@ internal fun deleteDictionaryCache(context: Context, cacheKey: String): Boolean 
 private fun dictionaryCacheFile(context: Context, cacheKey: String): File {
     return File(File(context.filesDir, CACHE_DIR_NAME), "$cacheKey$CACHE_FILE_SUFFIX")
 }
+

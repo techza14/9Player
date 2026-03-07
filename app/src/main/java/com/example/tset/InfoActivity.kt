@@ -1,4 +1,4 @@
-package com.example.tset
+﻿package com.tekuza.p9player
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -16,7 +16,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.tset.ui.theme.TsetTheme
+import com.tekuza.p9player.ui.theme.TsetTheme
 
 class InfoActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,19 +35,17 @@ class InfoActivity : ComponentActivity() {
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TextButton(onClick = { finish() }) {
-                            Text("< Back")
-                        }
-                        Text("Info", style = MaterialTheme.typography.titleLarge)
+                        TextButton(onClick = { finish() }) { Text("< 返回") }
+                        Text("说明", style = MaterialTheme.typography.titleLarge)
                     }
                     Card {
                         Column(
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("Use Main to manage your bookshelf and open a book.")
-                            Text("Use Dictionary & Lookup to import dictionaries and Sudachi.")
-                            Text("Use Flashcard Creation for Anki export.")
+                            Text("在“主页”管理书架并打开书籍。")
+                            Text("在“辞典与查询”导入 ZIP 辞典（hoshidicts）。")
+                            Text("在“卡片制作”导出到 Anki。")
                         }
                     }
                 }

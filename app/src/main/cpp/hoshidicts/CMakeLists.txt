@@ -1,0 +1,68 @@
+cmake_minimum_required(VERSION 3.22.1)
+cmake_policy(SET CMP0077 NEW)
+
+project(hoshidicts LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "")
+set(ZSTD_BUILD_TESTS OFF CACHE BOOL "")
+set(ZSTD_BUILD_SHARED OFF CACHE BOOL "")
+set(ZSTD_BUILD_STATIC ON CACHE BOOL "")
+
+add_subdirectory(external/zip)
+add_subdirectory(external/glaze)
+add_subdirectory(external/pthash)
+add_subdirectory(external/zstd)
+
+target_compile_definitions(zip PRIVATE MINIZ_DISABLE_ZIP_READER_CRC32_CHECKS)
+
+add_library(hoshidicts
+    src/hash/hash.cpp
+    src/importer.cpp
+    src/json/yomitan_parser.cpp
+    src/text_processor/text_processor.cpp
+    src/deconjugator/deconjugator.cpp
+    src/query.cpp
+    src/lookup.cpp
+)
+
+target_include_directories(hoshidicts PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/utfcpp/source
+)
+
+target_link_libraries(hoshidicts PRIVATE
+    PTHASH
+    zip
+    glaze::glaze
+    libzstd_static
+)
+
+add_executable(hoshidicts-cli
+    cli/main.cpp
+)
+
+target_link_libraries(hoshidicts-cli PRIVATE
+    PTHASH
+    glaze::glaze
+    hoshidicts
+)
+
+add_executable(benchmark-import
+    benchmark/import.cpp
+)
+
+target_link_libraries(benchmark-import PRIVATE
+    hoshidicts
+)
+
+add_executable(benchmark-lookup
+    benchmark/lookup.cpp
+)
+
+target_link_libraries(benchmark-lookup PRIVATE
+    hoshidicts
+)

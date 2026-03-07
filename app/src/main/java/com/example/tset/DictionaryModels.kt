@@ -1,4 +1,4 @@
-package com.example.tset
+﻿package com.tekuza.p9player
 
 import android.net.Uri
 
@@ -22,11 +22,13 @@ internal data class DictionaryEntry(
 
 internal data class DictionarySearchResult(
     val entry: DictionaryEntry,
-    val score: Int
+    val score: Int,
+    val matchedLength: Int = 0
 )
 
 internal data class MinedCard(
     val word: String,
+    val popupSelectionText: String? = null,
     val sentence: String,
     val reading: String?,
     val definitions: List<String>,
@@ -40,3 +42,5 @@ internal data class MinedCard(
     val audioTagOnly: Boolean = false,
     val requireCueAudioClip: Boolean = false
 )
+
+

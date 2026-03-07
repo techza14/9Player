@@ -13,3 +13,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+.tmp_compare/
+.tmp_hoshi_reader/
+.tmp_shz/
+classes-shizuku-provider.jar
