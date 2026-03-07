@@ -157,8 +157,8 @@ private data class ReaderBook(
     val title: String,
     val audioUri: Uri,
     val audioName: String,
-    val srtUri: Uri,
-    val srtName: String,
+    val srtUri: Uri?,
+    val srtName: String?,
     val cues: List<SubtitleCue>,
     val coverUri: Uri?
 )
@@ -369,7 +369,7 @@ private fun ReaderSyncScreen() {
                 title = book.title,
                 audioUri = book.audioUri.toString(),
                 audioName = book.audioName,
-                srtUri = book.srtUri.toString(),
+                srtUri = book.srtUri?.toString(),
                 srtName = book.srtName
             )
         }
@@ -517,23 +517,27 @@ private fun ReaderSyncScreen() {
     fun buildReaderBook(
         audio: Uri,
         audioDisplayName: String?,
-        srt: Uri,
+        srt: Uri?,
         srtDisplayName: String?,
         cues: List<SubtitleCue>
     ): ReaderBook {
         val resolvedAudioName = audioDisplayName?.takeIf { it.isNotBlank() }
             ?: queryDisplayName(contentResolver, audio)
-        val resolvedSrtName = srtDisplayName?.takeIf { it.isNotBlank() }
-            ?: queryDisplayName(contentResolver, srt)
+        val resolvedSrtName = srt?.let {
+            srtDisplayName?.takeIf { name -> name.isNotBlank() }
+                ?: queryDisplayName(contentResolver, it)
+        }
         val title = buildBookTitle(resolvedAudioName, resolvedSrtName)
         val coverUri = resolveEmbeddedCoverUriForM4b(
             context = context,
             audioUri = audio,
             audioDisplayName = resolvedAudioName
         )
+        val srtIdPart = srt?.toString().orEmpty()
+        val srtNamePart = resolvedSrtName.orEmpty()
         val id = buildDictionaryCacheKey(
-            uri = "book|${audio}|${srt}",
-            displayName = "$resolvedAudioName|$resolvedSrtName"
+            uri = "book|${audio}|$srtIdPart",
+            displayName = "$resolvedAudioName|$srtNamePart"
         )
         return ReaderBook(
             id = id,
@@ -567,7 +571,7 @@ private fun ReaderSyncScreen() {
         val intent = Intent(context, BookReaderActivity::class.java).apply {
             putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, book.title)
             putExtra(BookReaderActivity.EXTRA_AUDIO_URI, book.audioUri.toString())
-            putExtra(BookReaderActivity.EXTRA_SRT_URI, book.srtUri.toString())
+            book.srtUri?.let { putExtra(BookReaderActivity.EXTRA_SRT_URI, it.toString()) }
         }
         context.startActivity(intent)
     }
@@ -652,11 +656,11 @@ private fun ReaderSyncScreen() {
             return
         }
         val pickedAudio = addBookAudioUri
-        val pickedSrt = addBookSrtUri
-        if (pickedAudio == null || pickedSrt == null) {
-            exportStatus = "请选择音频和 SRT。"
+        if (pickedAudio == null) {
+            exportStatus = "请选择音频文件。"
             return
         }
+        val pickedSrt = addBookSrtUri
         val pickedAudioName = addBookAudioName
         val pickedSrtName = addBookSrtName
         scope.launch {
@@ -673,7 +677,7 @@ private fun ReaderSyncScreen() {
                         srtSourceUri = pickedSrt,
                         srtSourceName = pickedSrtName
                     )
-                    val cues = parseSrt(contentResolver, relocated.srtUri)
+                    val cues = relocated.srtUri?.let { parseSrt(contentResolver, it) } ?: emptyList()
                     val book = buildReaderBook(
                         audio = relocated.audioUri,
                         audioDisplayName = relocated.audioName,
@@ -728,7 +732,7 @@ private fun ReaderSyncScreen() {
                     val parseFailed = mutableListOf<String>()
                     scanResult.books.forEach { candidate ->
                         runCatching {
-                            val cues = parseSrt(contentResolver, candidate.srtUri)
+                            val cues = candidate.srtUri?.let { parseSrt(contentResolver, it) } ?: emptyList()
                             val rebuilt = buildReaderBook(
                                 audio = candidate.audioUri,
                                 audioDisplayName = candidate.audioName,
@@ -762,7 +766,7 @@ private fun ReaderSyncScreen() {
                 exportStatus = buildString {
                     append("刷新完成：${books.size} 本。")
                     if (skippedFolders.isNotEmpty()) {
-                        append(" 跳过 ${skippedFolders.size} 个文件夹（缺少音频或SRT）。")
+                        append(" 跳过 ${skippedFolders.size} 个文件夹（缺少音频）。")
                     }
                     if (parseFailed.isNotEmpty()) {
                         append(" 失败 ${parseFailed.size} 个文件夹（SRT无效）。")
@@ -865,13 +869,13 @@ private fun ReaderSyncScreen() {
                     val failedBooks = mutableListOf<String>()
                     persisted.books.forEach { savedBook ->
                         val audio = runCatching { Uri.parse(savedBook.audioUri) }.getOrNull()
-                        val srt = runCatching { Uri.parse(savedBook.srtUri) }.getOrNull()
-                        if (audio == null || srt == null) {
+                        val srt = savedBook.srtUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                        if (audio == null) {
                             failedBooks += savedBook.title.ifBlank { savedBook.audioName }
                             return@forEach
                         }
                         runCatching {
-                            val cues = parseSrt(contentResolver, srt)
+                            val cues = srt?.let { parseSrt(contentResolver, it) } ?: emptyList()
                             val rebuilt = buildReaderBook(
                                 audio = audio,
                                 audioDisplayName = savedBook.audioName,
@@ -928,16 +932,18 @@ private fun ReaderSyncScreen() {
                 runCatching { Uri.parse(rawUri) }.getOrNull()
             }
 
-            if (restoredAudioRaw != null && restoredSrtRaw != null) {
+            if (restoredAudioRaw != null) {
                 srtLoading = true
                 srtError = null
                 val restoreResult = withContext(Dispatchers.IO) {
                     runCatching {
                         val restoredAudioName = persisted.audioName?.ifBlank { null }
                             ?: queryDisplayName(contentResolver, restoredAudioRaw)
-                        val restoredSrtName = persisted.srtName?.ifBlank { null }
-                            ?: queryDisplayName(contentResolver, restoredSrtRaw)
-                        val cues = parseSrt(contentResolver, restoredSrtRaw)
+                        val restoredSrtName = restoredSrtRaw?.let {
+                            persisted.srtName?.ifBlank { null }
+                                ?: queryDisplayName(contentResolver, it)
+                        }
+                        val cues = restoredSrtRaw?.let { parseSrt(contentResolver, it) } ?: emptyList()
                         Triple(restoredAudioRaw, restoredAudioName, Pair(restoredSrtRaw, restoredSrtName)) to cues
                     }
                 }
@@ -966,8 +972,8 @@ private fun ReaderSyncScreen() {
                     srtUri = null
                     srtName = null
                     srtCues = emptyList()
-                    srtError = "Failed to restore book files. Please re-add audio and SRT. ${error.message ?: "unknown error"}"
-                    exportStatus = "Saved book file permission expired. Re-add audio and SRT."
+                    srtError = "Failed to restore book files. Please re-add audio. ${error.message ?: "unknown error"}"
+                    exportStatus = "Saved book file permission expired. Re-add audio."
                 }
             }
         }
@@ -1611,7 +1617,7 @@ private fun ReaderSyncScreen() {
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Text("还没有书籍。")
-                            Text("点击 +书籍，先选择有声书文件夹，再选择音频/m4b 和 SRT。")
+                            Text("点击 +书籍，先选择有声书文件夹，再选择音频/m4b（SRT可选）。")
                         }
                     }
                 } else if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
@@ -2122,7 +2128,7 @@ private fun ReaderSyncScreen() {
                         ) {
                             Text("选择音频/m4b")
                         }
-                        Text("SRT: ${addBookSrtName ?: "未选择"}")
+                        Text("SRT（可选）: ${addBookSrtName ?: "未选择"}")
                         OutlinedButton(
                             onClick = {
                                 pickBookSrtLauncher.launch(
@@ -2131,7 +2137,7 @@ private fun ReaderSyncScreen() {
                             },
                             enabled = addBookFolderUri != null
                         ) {
-                            Text("选择字幕 SRT")
+                            Text("选择字幕 SRT（可选）")
                         }
                     }
                 },
@@ -2145,7 +2151,6 @@ private fun ReaderSyncScreen() {
                         onClick = { confirmAddBookFromDialog() },
                         enabled = addBookFolderUri != null &&
                             addBookAudioUri != null &&
-                            addBookSrtUri != null &&
                             !srtLoading
                     ) {
                         Text("确认")
@@ -2603,8 +2608,8 @@ private data class RelocatedBookFiles(
     val folderName: String,
     val audioUri: Uri,
     val audioName: String,
-    val srtUri: Uri,
-    val srtName: String,
+    val srtUri: Uri?,
+    val srtName: String?,
     val moveWarnings: List<String>
 )
 
@@ -2617,8 +2622,8 @@ private data class FolderBookCandidate(
     val folderName: String,
     val audioUri: Uri,
     val audioName: String,
-    val srtUri: Uri,
-    val srtName: String
+    val srtUri: Uri?,
+    val srtName: String?
 )
 
 private data class FolderBookScanResult(
@@ -2632,7 +2637,7 @@ private fun relocateSelectedBookFilesToAudFolder(
     rootFolderUri: Uri,
     audioSourceUri: Uri,
     audioSourceName: String?,
-    srtSourceUri: Uri,
+    srtSourceUri: Uri?,
     srtSourceName: String?
 ): RelocatedBookFiles {
     val root = DocumentFile.fromTreeUri(context, rootFolderUri)
@@ -2642,8 +2647,6 @@ private fun relocateSelectedBookFilesToAudFolder(
     val audFolder = createNextAudFolder(root)
     val audioDisplayName = audioSourceName?.trim().takeUnless { it.isNullOrBlank() }
         ?: queryDisplayName(contentResolver, audioSourceUri)
-    val srtDisplayName = srtSourceName?.trim().takeUnless { it.isNullOrBlank() }
-        ?: queryDisplayName(contentResolver, srtSourceUri)
 
     val copiedAudio = copyUriIntoFolder(
         contentResolver = contentResolver,
@@ -2651,18 +2654,22 @@ private fun relocateSelectedBookFilesToAudFolder(
         sourceUri = audioSourceUri,
         preferredDisplayName = audioDisplayName
     )
-    val copiedSrt = copyUriIntoFolder(
-        contentResolver = contentResolver,
-        parentFolder = audFolder,
-        sourceUri = srtSourceUri,
-        preferredDisplayName = srtDisplayName
-    )
+    val copiedSrt = srtSourceUri?.let { sourceUri ->
+        val srtDisplayName = srtSourceName?.trim().takeUnless { it.isNullOrBlank() }
+            ?: queryDisplayName(contentResolver, sourceUri)
+        copyUriIntoFolder(
+            contentResolver = contentResolver,
+            parentFolder = audFolder,
+            sourceUri = sourceUri,
+            preferredDisplayName = srtDisplayName
+        )
+    }
 
     val warnings = mutableListOf<String>()
     if (!deleteSourceUri(context, contentResolver, audioSourceUri)) {
         warnings += "音频原文件删除失败，已保留原文件。"
     }
-    if (!deleteSourceUri(context, contentResolver, srtSourceUri)) {
+    if (srtSourceUri != null && !deleteSourceUri(context, contentResolver, srtSourceUri)) {
         warnings += "SRT原文件删除失败，已保留原文件。"
     }
 
@@ -2670,8 +2677,8 @@ private fun relocateSelectedBookFilesToAudFolder(
         folderName = audFolder.name?.ifBlank { "Aud" } ?: "Aud",
         audioUri = copiedAudio.uri,
         audioName = copiedAudio.displayName,
-        srtUri = copiedSrt.uri,
-        srtName = copiedSrt.displayName,
+        srtUri = copiedSrt?.uri,
+        srtName = copiedSrt?.displayName,
         moveWarnings = warnings
     )
 }
@@ -2768,21 +2775,21 @@ private fun scanBooksFromRootFolder(
 
             val audioFile = files.firstOrNull { isAudioDocumentFile(it) }
             val srtFile = files.firstOrNull { isSrtDocumentFile(it) }
-            if (audioFile == null || srtFile == null) {
+            if (audioFile == null) {
                 skippedFolders += folderName
                 return@forEach
             }
 
             val audioName = audioFile.name?.trim().takeUnless { it.isNullOrBlank() }
                 ?: queryDisplayName(contentResolver, audioFile.uri)
-            val srtName = srtFile.name?.trim().takeUnless { it.isNullOrBlank() }
-                ?: queryDisplayName(contentResolver, srtFile.uri)
+            val srtName = srtFile?.name?.trim()?.takeUnless { it.isNullOrBlank() }
+                ?: srtFile?.let { queryDisplayName(contentResolver, it.uri) }
 
             books += FolderBookCandidate(
                 folderName = folderName,
                 audioUri = audioFile.uri,
                 audioName = audioName,
-                srtUri = srtFile.uri,
+                srtUri = srtFile?.uri,
                 srtName = srtName
             )
         }
@@ -2934,16 +2941,18 @@ private fun queryTreeDisplayName(
     return queryDisplayName(contentResolver, treeUri)
 }
 
-private fun buildBookTitle(audioName: String, srtName: String): String {
+private fun buildBookTitle(audioName: String, srtName: String?): String {
     val audioBase = audioName.substringBeforeLast('.').trim().ifBlank { audioName.trim() }
     if (audioBase.isNotBlank()) return audioBase
-    val srtBase = srtName.substringBeforeLast('.').trim().ifBlank { srtName.trim() }
+    val srtBase = srtName?.let { name ->
+        name.substringBeforeLast('.').trim().ifBlank { name.trim() }
+    }.orEmpty()
     if (srtBase.isNotBlank()) return srtBase
     return "Untitled Book"
 }
 
 private fun buildReaderBookPlaybackKeyMain(book: ReaderBook): String {
-    val raw = "title=${book.title}|audio=${book.audioUri}|srt=${book.srtUri}"
+    val raw = "title=${book.title}|audio=${book.audioUri}|srt=${book.srtUri?.toString().orEmpty()}"
     return buildDictionaryCacheKey(raw, book.title.ifBlank { "book" })
 }
 

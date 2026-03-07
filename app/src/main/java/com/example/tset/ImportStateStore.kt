@@ -15,8 +15,8 @@ internal data class PersistedReaderBook(
     val title: String,
     val audioUri: String,
     val audioName: String,
-    val srtUri: String,
-    val srtName: String
+    val srtUri: String?,
+    val srtName: String?
 )
 
 internal data class PersistedImports(
@@ -77,13 +77,13 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         val item = booksArray.optJSONObject(i) ?: continue
         val id = item.optString("id").trim()
         val audioUri = item.optString("audioUri").trim()
-        val srtUri = item.optString("srtUri").trim()
-        if (audioUri.isBlank() || srtUri.isBlank()) continue
+        val srtUri = item.optString("srtUri").trim().ifBlank { null }
+        if (audioUri.isBlank()) continue
         val audioName = item.optString("audioName").trim().ifBlank { "Unknown audio" }
-        val srtName = item.optString("srtName").trim().ifBlank { "Unknown.srt" }
+        val srtName = item.optString("srtName").trim().ifBlank { null }
         val title = item.optString("title").trim().ifBlank { audioName.substringBeforeLast('.') }
         books += PersistedReaderBook(
-            id = id.ifBlank { "$audioUri|$srtUri" },
+            id = id.ifBlank { "$audioUri|${srtUri.orEmpty()}" },
             title = title.ifBlank { "Untitled Book" },
             audioUri = audioUri,
             audioName = audioName,
@@ -122,8 +122,8 @@ internal fun savePersistedImports(context: Context, state: PersistedImports) {
                         put("title", book.title)
                         put("audioUri", book.audioUri)
                         put("audioName", book.audioName)
-                        put("srtUri", book.srtUri)
-                        put("srtName", book.srtName)
+                        put("srtUri", book.srtUri ?: "")
+                        put("srtName", book.srtName ?: "")
                     })
                 }
             }
