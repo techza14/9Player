@@ -49,7 +49,7 @@ SRT 可参考：
   <img src="https://github.com/user-attachments/assets/97a6d64a-4004-407c-b178-2935ef046a71" width="260" alt="Anki设置1" />
   <img src="https://github.com/user-attachments/assets/00299aa3-0e81-4917-85d4-8833ffd0ceec" width="260" alt="Anki设置2" />
 </p>
-{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}
+```cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}```
 
 ## 待改善
 点击查词
