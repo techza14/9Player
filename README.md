@@ -52,6 +52,7 @@ SRT 可参考：
 
 ```cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}```
 
+Anki模板:[Lapis](https://github.com/donkuri/lapis)
 ## 待改善
 点击查词
 
