@@ -249,7 +249,12 @@ private fun ReaderSyncScreen() {
     var pendingCollectionStopMs by remember { mutableStateOf<Long?>(null) }
     var collectionPlayRequestNonce by remember { mutableStateOf(0L) }
 
-    val player = remember(context) { ExoPlayer.Builder(context).build() }
+    val player = remember(context) {
+        ExoPlayer.Builder(context)
+            .setSeekBackIncrementMs(10_000L)
+            .setSeekForwardIncrementMs(10_000L)
+            .build()
+    }
     DisposableEffect(player) {
         onDispose { player.release() }
     }

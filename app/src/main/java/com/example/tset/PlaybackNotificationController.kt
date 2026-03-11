@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.Build
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaSession
@@ -31,7 +32,34 @@ internal class PlaybackNotificationController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var progressJob: Job? = null
 
-    private val mediaSession = MediaSession.Builder(appContext, player).build()
+    private val routedPlayer = object : ForwardingPlayer(player) {
+        override fun getAvailableCommands(): Player.Commands {
+            return super.getAvailableCommands()
+                .buildUpon()
+                .add(Player.COMMAND_SEEK_TO_NEXT)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                .build()
+        }
+
+        override fun seekToNextMediaItem() {
+            seekBy(DEFAULT_NOTIFICATION_SEEK_MS)
+        }
+
+        override fun seekToPreviousMediaItem() {
+            seekBy(-DEFAULT_NOTIFICATION_SEEK_MS)
+        }
+
+        override fun seekToNext() {
+            seekBy(DEFAULT_NOTIFICATION_SEEK_MS)
+        }
+
+        override fun seekToPrevious() {
+            seekBy(-DEFAULT_NOTIFICATION_SEEK_MS)
+        }
+    }
+    private val mediaSession = MediaSession.Builder(appContext, routedPlayer).build()
     private val notificationManager = PlayerNotificationManager.Builder(
         appContext,
         NOTIFICATION_ID,
@@ -101,11 +129,11 @@ internal class PlaybackNotificationController(
     init {
         ensureNotificationChannel(appContext)
         notificationManager.setMediaSessionToken(mediaSession.sessionCompatToken)
-        notificationManager.setUseNextAction(false)
-        notificationManager.setUsePreviousAction(false)
-        notificationManager.setUseFastForwardAction(true)
-        notificationManager.setUseRewindAction(true)
-        notificationManager.setPlayer(player)
+        notificationManager.setUseNextAction(true)
+        notificationManager.setUsePreviousAction(true)
+        notificationManager.setUseFastForwardAction(false)
+        notificationManager.setUseRewindAction(false)
+        notificationManager.setPlayer(routedPlayer)
         player.addListener(playerListener)
         syncProgressLoop()
         notificationManager.invalidate()
@@ -155,10 +183,22 @@ internal class PlaybackNotificationController(
         notificationService.createNotificationChannel(channel)
     }
 
+    private fun seekBy(deltaMs: Long) {
+        val durationMs = player.duration.takeIf { it > 0L }
+        val target = if (durationMs != null) {
+            (player.currentPosition + deltaMs).coerceIn(0L, durationMs)
+        } else {
+            (player.currentPosition + deltaMs).coerceAtLeast(0L)
+        }
+        player.seekTo(target)
+        notificationManager.invalidate()
+    }
+
     companion object {
         private const val CHANNEL_ID = "book_playback"
         private const val NOTIFICATION_ID = 31_001
         private const val PROGRESS_REFRESH_INTERVAL_MS = 1_000L
+        private const val DEFAULT_NOTIFICATION_SEEK_MS = 10_000L
 
         private fun formatTime(ms: Long): String {
             val totalSeconds = (ms.coerceAtLeast(0L) / 1000L)

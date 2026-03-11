@@ -66,6 +66,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -137,6 +138,19 @@ class BookReaderActivity : ComponentActivity() {
                     onBack = { finish() }
                 )
             }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        stopAudiobookFloatingOverlayService(this)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        val settings = loadAudiobookSettingsConfig(this)
+        if (settings.floatingOverlayEnabled && BookReaderFloatingBridge.isPlaying()) {
+            startAudiobookFloatingOverlayService(this)
         }
     }
 
@@ -367,7 +381,12 @@ private fun BookReaderScreen(
         buildBookReaderPlaybackKey(title, audioUri, srtUri)
     }
     val scope = rememberCoroutineScope()
-    val player = remember(context) { ExoPlayer.Builder(context).build() }
+    val player = remember(context) {
+        ExoPlayer.Builder(context)
+            .setSeekBackIncrementMs(10_000L)
+            .setSeekForwardIncrementMs(10_000L)
+            .build()
+    }
     val notificationController = remember(context, player, title, audioUri, srtUri) {
         PlaybackNotificationController(
             context = context,
@@ -570,6 +589,10 @@ private fun BookReaderScreen(
 
     LaunchedEffect(playbackSpeed) {
         player.playbackParameters = PlaybackParameters(playbackSpeed)
+    }
+
+    LaunchedEffect(isPlaying) {
+        BookReaderFloatingBridge.notifyPlaybackState(isPlaying)
     }
 
     val sliderMax = if (durationMs > 0L) durationMs.toFloat() else 1f
@@ -1127,6 +1150,46 @@ private fun BookReaderScreen(
         controlTargetCueIndex = null
         controlModeEnabled = false
         controlModeStatus = "已退出控制模式。"
+    }
+
+    val latestIsPlaying by rememberUpdatedState(isPlaying)
+    val latestTogglePlayPause by rememberUpdatedState<() -> Unit>({
+        if (player.isPlaying) player.pause() else player.play()
+    })
+    val latestSeekPrevious by rememberUpdatedState<() -> Unit>({
+        jumpToAdjacentCue(-1)
+    })
+    val latestSeekNext by rememberUpdatedState<() -> Unit>({
+        jumpToAdjacentCue(1)
+    })
+    val latestToggleFavorite by rememberUpdatedState<() -> Unit>({
+        toggleFavoriteCue()
+    })
+
+    DisposableEffect(Unit) {
+        val controller = object : BookReaderFloatingBridge.Controller {
+            override fun isPlaying(): Boolean = latestIsPlaying
+
+            override fun togglePlayPause() {
+                latestTogglePlayPause()
+            }
+
+            override fun seekPrevious() {
+                latestSeekPrevious()
+            }
+
+            override fun seekNext() {
+                latestSeekNext()
+            }
+
+            override fun toggleFavorite() {
+                latestToggleFavorite()
+            }
+        }
+        BookReaderFloatingBridge.attach(controller)
+        onDispose {
+            BookReaderFloatingBridge.detach(controller)
+        }
     }
 
     DisposableEffect(Unit) {
