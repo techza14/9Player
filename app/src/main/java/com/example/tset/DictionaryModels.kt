@@ -30,6 +30,7 @@ internal data class MinedCard(
     val word: String,
     val popupSelectionText: String? = null,
     val sentence: String,
+    val bookTitle: String? = null,
     val reading: String?,
     val definitions: List<String>,
     val dictionaryName: String?,

@@ -40,6 +40,12 @@
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
+            android:name=".AudiobookSettingsActivity"
+            android:exported="false"
+            android:label="有声书"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Tset" />
+        <activity
             android:name=".ControllerSettingsActivity"
             android:exported="false"
             android:label="Controller"
@@ -90,3 +96,4 @@
     </application>
 
 </manifest>
+

@@ -67,6 +67,7 @@ private val ANKI_FIELD_VARIABLE_CHOICES = listOf(
     "{dictionary}",
     "{dictionary-alias}",
     "{document-title}",
+    "{book-title}",
     "{expression}",
     "{frequencies}",
     "{frequency-harmonic-occurrence}",

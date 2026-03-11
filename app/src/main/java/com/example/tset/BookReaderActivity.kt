@@ -14,6 +14,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.text.Html
 import android.app.Activity
+import android.widget.Toast
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -36,6 +37,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -46,7 +48,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -82,6 +85,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.tekuza.p9player.ui.theme.TsetTheme
@@ -98,6 +102,9 @@ import kotlin.math.abs
 
 private const val BOOK_READER_PERMISSION_REQUEST_CODE = 21_001
 private const val BOOK_READER_PENDING_INTENT_REQUEST_CODE = 21_002
+private const val BOOK_READER_SLEEP_OPTIONS_PREFS = "book_reader_sleep_options_prefs"
+private const val BOOK_READER_SLEEP_EXIT_CONTROL_KEY = "sleep_exit_control"
+private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
 
 class BookReaderActivity : ComponentActivity() {
     private var gamepadKeyHandler: ((KeyEvent) -> Boolean)? = null
@@ -296,6 +303,11 @@ private data class ReaderAudioChapter(
     val title: String
 )
 
+private enum class AdjacentJumpMode {
+    CUE,
+    DURATION
+}
+
 @Composable
 private fun BookReaderScreen(
     title: String,
@@ -327,11 +339,16 @@ private fun BookReaderScreen(
     var controlModeStatus by remember { mutableStateOf<String?>(null) }
     var controlTargetCueIndex by remember { mutableStateOf<Int?>(null) }
     var bottomControlsVisible by remember { mutableStateOf(true) }
+    var topActionsExpanded by remember { mutableStateOf(false) }
+    var speedMenuExpanded by remember { mutableStateOf(false) }
     var sleepTimerDeadlineMs by remember { mutableStateOf<Long?>(null) }
     var sleepTimerOptionsVisible by remember { mutableStateOf(false) }
     var sleepCustomMinutesInput by remember { mutableStateOf("") }
     var sleepExitControlModeWhenDone by remember { mutableStateOf(false) }
     var sleepDisconnectControllerBluetoothWhenDone by remember { mutableStateOf(false) }
+    var sleepOptionsReady by remember { mutableStateOf(false) }
+    var adjacentJumpMode by remember { mutableStateOf(AdjacentJumpMode.CUE) }
+    var playbackSpeed by remember { mutableStateOf(1.0f) }
     var chapterOptionsVisible by remember { mutableStateOf(false) }
     var lastOverlayTapAtMs by remember { mutableStateOf(0L) }
     var lastGamepadCollectTapAtMs by remember { mutableStateOf(0L) }
@@ -506,6 +523,9 @@ private fun BookReaderScreen(
     }
 
     val playbackCueIndex = remember(positionMs, cues) { findBookCueIndexAtTime(cues, positionMs) }
+    val effectiveAdjacentJumpMode = remember(cues, adjacentJumpMode) {
+        if (cues.isEmpty()) AdjacentJumpMode.DURATION else adjacentJumpMode
+    }
     val previewPositionMs = remember(positionMs, dragPreviewPositionMs) {
         dragPreviewPositionMs ?: positionMs
     }
@@ -519,6 +539,37 @@ private fun BookReaderScreen(
 
     LaunchedEffect(activeCue?.text) {
         selectedLookupRange = null
+    }
+
+    LaunchedEffect(controlModeStatus) {
+        val message = controlModeStatus?.trim().orEmpty()
+        if (message.isNotEmpty()) {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(context) {
+        val options = loadBookReaderSleepOptions(context)
+        sleepExitControlModeWhenDone = options.exitControlModeWhenDone
+        sleepDisconnectControllerBluetoothWhenDone = options.disconnectBluetoothWhenDone
+        sleepOptionsReady = true
+    }
+
+    LaunchedEffect(
+        sleepExitControlModeWhenDone,
+        sleepDisconnectControllerBluetoothWhenDone,
+        sleepOptionsReady
+    ) {
+        if (!sleepOptionsReady) return@LaunchedEffect
+        saveBookReaderSleepOptions(
+            context = context,
+            exitControlModeWhenDone = sleepExitControlModeWhenDone,
+            disconnectBluetoothWhenDone = sleepDisconnectControllerBluetoothWhenDone
+        )
+    }
+
+    LaunchedEffect(playbackSpeed) {
+        player.playbackParameters = PlaybackParameters(playbackSpeed)
     }
 
     val sliderMax = if (durationMs > 0L) durationMs.toFloat() else 1f
@@ -805,6 +856,13 @@ private fun BookReaderScreen(
     }
 
     fun jumpToAdjacentCue(step: Int) {
+        if (effectiveAdjacentJumpMode == AdjacentJumpMode.DURATION) {
+            val stepMillis = loadAudiobookSettingsConfig(context).seekStepMillis
+            val delta = if (step < 0) -stepMillis else stepMillis
+            seekToManual(positionMs + delta)
+            player.play()
+            return
+        }
         if (cues.isEmpty()) return
         val lastIndex = cues.lastIndex
         val targetIndex = if (step < 0) {
@@ -1079,27 +1137,6 @@ private fun BookReaderScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
-            floatingActionButton = {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    horizontalAlignment = Alignment.End
-                ) {
-                    FloatingActionButton(onClick = { bottomControlsVisible = !bottomControlsVisible }) {
-                        Text(if (bottomControlsVisible) "隐藏" else "显示")
-                    }
-                    FloatingActionButton(onClick = { controlModeEnabled = !controlModeEnabled }) {
-                        Text(if (controlModeEnabled) "控制中" else "控制")
-                    }
-                    FloatingActionButton(onClick = { lyricsMode = !lyricsMode }) {
-                        Text(if (lyricsMode) "单句" else "字幕")
-                    }
-                    FloatingActionButton(
-                        onClick = { if (favoriteCue != null) toggleFavoriteCue() }
-                    ) {
-                        Text(if (favoriteCueCollected) "★" else "☆")
-                    }
-                }
-            },
             bottomBar = {
                 if (bottomControlsVisible) {
                     Surface(tonalElevation = 4.dp) {
@@ -1198,7 +1235,6 @@ private fun BookReaderScreen(
                                 )
                                 Text(formatBookTime(durationMs))
                             }
-                            Text("进度：$progressPercent%")
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceEvenly,
@@ -1212,85 +1248,27 @@ private fun BookReaderScreen(
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Text("进度：$progressPercent%")
+                                val stepSeconds = (loadAudiobookSettingsConfig(context).seekStepMillis / 1000L)
                                 OutlinedButton(
-                                    onClick = { sleepTimerOptionsVisible = !sleepTimerOptionsVisible }
-                                ) {
-                                    Text(if (sleepTimerOptionsVisible) "计时 ▲" else "计时 ▼")
-                                }
-                                if (sleepRemainingLabel != null) {
-                                    Text("剩余：$sleepRemainingLabel")
-                                }
-                            }
-                            if (sleepTimerOptionsVisible) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    OutlinedButton(onClick = { setSleepTimer(15) }) { Text("15m") }
-                                    OutlinedButton(onClick = { setSleepTimer(30) }) { Text("30m") }
-                                    OutlinedButton(onClick = { setSleepTimer(60) }) { Text("60m") }
-                                    TextButton(onClick = { setSleepTimer(0) }) { Text("关闭") }
-                                }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    OutlinedTextField(
-                                        value = sleepCustomMinutesInput,
-                                        onValueChange = { value ->
-                                            sleepCustomMinutesInput = value.filter { it.isDigit() }.take(4)
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        label = { Text("自定义分钟") },
-                                        singleLine = true
-                                    )
-                                    Button(onClick = { applyCustomSleepTimer() }) {
-                                        Text("设置")
+                                    enabled = cues.isNotEmpty(),
+                                    onClick = {
+                                        adjacentJumpMode = if (adjacentJumpMode == AdjacentJumpMode.CUE) {
+                                            AdjacentJumpMode.DURATION
+                                        } else {
+                                            AdjacentJumpMode.CUE
+                                        }
                                     }
-                                }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("计时完关闭控制模式")
-                                    Switch(
-                                        checked = sleepExitControlModeWhenDone,
-                                        onCheckedChange = { checked ->
-                                            sleepExitControlModeWhenDone = checked
-                                        }
-                                    )
+                                    val label = when (effectiveAdjacentJumpMode) {
+                                        AdjacentJumpMode.CUE -> "按台词"
+                                        AdjacentJumpMode.DURATION -> "按时长(${stepSeconds}秒)"
+                                    }
+                                    Text(label)
                                 }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("计时完断开手柄蓝牙(Shizuku)")
-                                    Switch(
-                                        checked = sleepDisconnectControllerBluetoothWhenDone,
-                                        onCheckedChange = { checked ->
-                                            sleepDisconnectControllerBluetoothWhenDone = checked
-                                        }
-                                    )
-                                }
-                                val targetControllerAddress = latestControllerAddressProvider()
-                                Text(
-                                    "目标手柄：${
-                                        targetControllerAddress?.ifBlank { null } ?: "暂无"
-                                    }"
-                                )
-                            }
-                            if (controlModeEnabled) {
-                                Text("控制模式下屏幕常亮，可开启“计时完关闭控制模式”，计时结束会自动退出该模式。")
-                            }
-                            if (controlModeStatus != null) {
-                                Text(controlModeStatus!!)
                             }
                         }
                     }
@@ -1313,6 +1291,77 @@ private fun BookReaderScreen(
                         Text("< 返回")
                     }
                     Text(title, style = MaterialTheme.typography.titleLarge)
+                    Spacer(modifier = Modifier.weight(1f))
+                    TextButton(
+                        onClick = { if (favoriteCue != null) toggleFavoriteCue() },
+                        enabled = favoriteCue != null
+                    ) {
+                        Text(if (favoriteCueCollected) "★" else "☆")
+                    }
+                    TextButton(onClick = { sleepTimerOptionsVisible = !sleepTimerOptionsVisible }) {
+                        Text(
+                            if (sleepRemainingLabel != null) {
+                                "计时 ${sleepRemainingLabel}"
+                            } else {
+                                "计时"
+                            }
+                        )
+                    }
+                    Box {
+                        TextButton(onClick = { speedMenuExpanded = true }) {
+                            Text("${playbackSpeed}x")
+                        }
+                        DropdownMenu(
+                            expanded = speedMenuExpanded,
+                            onDismissRequest = { speedMenuExpanded = false }
+                        ) {
+                            listOf(0.8f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { speed ->
+                                val isCurrent = abs(speed - playbackSpeed) < 0.001f
+                                DropdownMenuItem(
+                                    text = { Text((if (isCurrent) "✓ " else "") + "${speed}x") },
+                                    onClick = {
+                                        playbackSpeed = speed
+                                        speedMenuExpanded = false
+                                        controlModeStatus = "播放速度：${speed}x"
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    Box {
+                        TextButton(onClick = { topActionsExpanded = true }) {
+                            Text("...")
+                        }
+                        DropdownMenu(
+                            expanded = topActionsExpanded,
+                            onDismissRequest = { topActionsExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(if (bottomControlsVisible) "隐藏控制条" else "显示控制条") },
+                                onClick = {
+                                    bottomControlsVisible = !bottomControlsVisible
+                                    topActionsExpanded = false
+                                    controlModeStatus = if (bottomControlsVisible) "已显示控制条。" else "已隐藏控制条。"
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (controlModeEnabled) "退出控制模式" else "进入控制模式") },
+                                onClick = {
+                                    controlModeEnabled = !controlModeEnabled
+                                    topActionsExpanded = false
+                                    controlModeStatus = if (controlModeEnabled) "已进入控制模式。" else "已退出控制模式。"
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (lyricsMode) "切换到字幕模式" else "切换到单句模式") },
+                                onClick = {
+                                    lyricsMode = !lyricsMode
+                                    topActionsExpanded = false
+                                    controlModeStatus = if (lyricsMode) "已切换到单句模式。" else "已切换到字幕模式。"
+                                }
+                            )
+                        }
+                    }
                 }
 
                 Surface(
@@ -1376,6 +1425,90 @@ private fun BookReaderScreen(
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        if (sleepTimerOptionsVisible) {
+            Popup(
+                alignment = Alignment.TopEnd,
+                offset = IntOffset(-16, 84),
+                onDismissRequest = { sleepTimerOptionsVisible = false },
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnBackPress = true,
+                    dismissOnClickOutside = true
+                )
+            ) {
+                Card {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (sleepRemainingLabel != null) {
+                            Text("计时剩余：$sleepRemainingLabel")
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(onClick = { setSleepTimer(15) }) { Text("15m") }
+                            OutlinedButton(onClick = { setSleepTimer(30) }) { Text("30m") }
+                            OutlinedButton(onClick = { setSleepTimer(60) }) { Text("60m") }
+                            TextButton(onClick = { setSleepTimer(0) }) { Text("关闭") }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = sleepCustomMinutesInput,
+                                onValueChange = { value ->
+                                    sleepCustomMinutesInput = value.filter { it.isDigit() }.take(4)
+                                },
+                                modifier = Modifier.weight(1f),
+                                label = { Text("自定义分钟") },
+                                singleLine = true
+                            )
+                            Button(onClick = { applyCustomSleepTimer() }) {
+                                Text("设置")
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("计时完关闭控制模式")
+                            Switch(
+                                checked = sleepExitControlModeWhenDone,
+                                onCheckedChange = { checked ->
+                                    sleepExitControlModeWhenDone = checked
+                                }
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("计时完断开手柄蓝牙(Shizuku)")
+                            Switch(
+                                checked = sleepDisconnectControllerBluetoothWhenDone,
+                                onCheckedChange = { checked ->
+                                    sleepDisconnectControllerBluetoothWhenDone = checked
+                                }
+                            )
+                        }
+                        val targetControllerAddress = latestControllerAddressProvider()
+                        Text(
+                            "目标手柄：${
+                                targetControllerAddress?.ifBlank { null } ?: "暂无"
+                            }"
+                        )
                     }
                 }
             }
@@ -1930,6 +2063,31 @@ private fun findCueIndexAtOrAfterTime(cues: List<ReaderSubtitleCue>, timeMs: Lon
         }
     }
     return candidate
+}
+
+private data class BookReaderSleepOptions(
+    val exitControlModeWhenDone: Boolean,
+    val disconnectBluetoothWhenDone: Boolean
+)
+
+private fun loadBookReaderSleepOptions(context: Context): BookReaderSleepOptions {
+    val prefs = context.getSharedPreferences(BOOK_READER_SLEEP_OPTIONS_PREFS, Context.MODE_PRIVATE)
+    return BookReaderSleepOptions(
+        exitControlModeWhenDone = prefs.getBoolean(BOOK_READER_SLEEP_EXIT_CONTROL_KEY, false),
+        disconnectBluetoothWhenDone = prefs.getBoolean(BOOK_READER_SLEEP_DISCONNECT_BT_KEY, false)
+    )
+}
+
+private fun saveBookReaderSleepOptions(
+    context: Context,
+    exitControlModeWhenDone: Boolean,
+    disconnectBluetoothWhenDone: Boolean
+) {
+    context.getSharedPreferences(BOOK_READER_SLEEP_OPTIONS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(BOOK_READER_SLEEP_EXIT_CONTROL_KEY, exitControlModeWhenDone)
+        .putBoolean(BOOK_READER_SLEEP_DISCONNECT_BT_KEY, disconnectBluetoothWhenDone)
+        .apply()
 }
 
 private fun cueCollectionKey(startMs: Long, endMs: Long, text: String): String {

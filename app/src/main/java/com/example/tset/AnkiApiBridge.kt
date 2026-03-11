@@ -104,6 +104,7 @@ internal fun defaultFieldTemplate(fieldName: String): String {
     return when {
         lowered.contains("sentence") && (lowered.contains("furigana") || lowered.contains("kana")) -> "{sentence-furigana}"
         lowered.contains("sentence") -> "{sentence}"
+        lowered.contains("book") || lowered.contains("title") -> "{book-title}"
         lowered.contains("word") || lowered.contains("term") || lowered.contains("expression") -> "{expression}"
         lowered.contains("reading") || lowered.contains("kana") || lowered.contains("furigana") -> "{reading}"
         lowered.contains("meaning") || lowered.contains("definition") || lowered.contains("gloss") -> "{glossary}"
@@ -294,6 +295,7 @@ private fun buildAnkiVariables(
     val expressionFurigana = buildExpressionFurigana(card.word, card.reading)
     val sentenceFurigana = ""
     val singleFrequency = card.frequency.orEmpty()
+    val resolvedBookTitle = card.bookTitle.orEmpty()
 
     return mapOf(
         "word" to card.word,
@@ -353,7 +355,8 @@ private fun buildAnkiVariables(
         "screenshot" to "",
         "tags" to "",
         "url" to "",
-        "document-title" to "",
+        "document-title" to resolvedBookTitle,
+        "book-title" to resolvedBookTitle,
         "book-cover" to ""
     )
 }

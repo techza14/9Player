@@ -44,6 +44,7 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -145,6 +146,7 @@ private val FIELD_VARIABLE_CHOICES = listOf(
     "{pitch-accent-positions}",
     "{pitch-accent-categories}",
     "{document-title}",
+    "{book-title}",
     "{book-cover}",
     "{search-query}"
 )
@@ -1316,6 +1318,7 @@ private fun ReaderSyncScreen() {
                         context = context,
                         cue = cue,
                         audioUri = mainLookupPopupAudioUri,
+                        bookTitle = readerBooks.firstOrNull { it.audioUri == mainLookupPopupAudioUri }?.title,
                         entry = dictionaryGroup.entry,
                         definition = primaryDefinition.ifBlank { groupedResult.term },
                         dictionaryCss = null,
@@ -1979,15 +1982,24 @@ private fun ReaderSyncScreen() {
             }
 
             if (activeSection == MiningSection.SETTINGS) {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("设置", style = MaterialTheme.typography.titleMedium)
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    tonalElevation = 1.dp,
+                    shape = MaterialTheme.shapes.medium
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "设置",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                        )
                         SettingsListItem(
                             title = "Anki",
                             onClick = { context.startActivity(Intent(context, AnkiSettingsActivity::class.java)) }
+                        )
+                        SettingsListItem(
+                            title = "有声书",
+                            onClick = { context.startActivity(Intent(context, AudiobookSettingsActivity::class.java)) }
                         )
                         SettingsListItem(
                             title = "控制模式",
@@ -1999,11 +2011,12 @@ private fun ReaderSyncScreen() {
                         )
                         SettingsListItem(
                             title = "手柄蓝牙",
-                            onClick = { context.startActivity(Intent(context, ControllerBluetoothSettingsActivity::class.java)) }
+                            onClick = { context.startActivity(Intent(context, ControllerBluetoothSettingsActivity::class.java)) },
+                            showDivider = false
                         )
                     }
                 }
-        }
+            }
         }
 
         if (clearCollectionsConfirmVisible) {
@@ -2303,14 +2316,13 @@ private fun ReaderSyncScreen() {
 @Composable
 private fun SettingsListItem(
     title: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    showDivider: Boolean = true
 ) {
-    Surface(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() },
-        tonalElevation = 1.dp,
-        shape = MaterialTheme.shapes.medium
+            .clickable { onClick() }
     ) {
         Row(
             modifier = Modifier
@@ -2321,6 +2333,9 @@ private fun SettingsListItem(
         ) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
             Text(">")
+        }
+        if (showDivider) {
+            HorizontalDivider(modifier = Modifier.padding(start = 12.dp))
         }
     }
 }
@@ -3059,6 +3074,7 @@ private fun addLookupDefinitionToAnkiMain(
     context: Context,
     cue: SubtitleCue,
     audioUri: Uri?,
+    bookTitle: String?,
     entry: DictionaryEntry,
     definition: String,
     dictionaryCss: String?,
@@ -3111,6 +3127,7 @@ private fun addLookupDefinitionToAnkiMain(
         word = entry.term,
         popupSelectionText = popupSelectionText,
         sentence = cue.text,
+        bookTitle = bookTitle,
         reading = entry.reading,
         definitions = cardDefinitions,
         dictionaryName = cardDictionaryName,
@@ -3203,6 +3220,7 @@ private fun formatTime(ms: Long): String {
         String.format(Locale.US, "%02d:%02d", minutes, seconds)
     }
 }
+
 
 
 
