@@ -46,8 +46,8 @@ SRT 可参考：
 不保证其他变量可用 可参考以下设置：
 
 <p>
-  <img src="./docs/images/anki-settings-2.jpg" width="260" alt="Anki设置1" />
-  <img src="./docs/images/anki-settings-1.jpg" width="260" alt="Anki设置2" />
+  <img src="./docs/images/anki-settings-1.jpg" width="260" alt="Anki设置1" />
+  <img src="./docs/images/anki-settings-2.jpg" width="260" alt="Anki设置2" />
 </p>
 
 ```cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}```
