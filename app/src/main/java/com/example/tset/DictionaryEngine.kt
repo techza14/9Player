@@ -269,53 +269,6 @@ internal fun extractLookupCandidates(text: String): List<String> {
         )
 }
 
-internal fun extractLookupCandidatesAt(text: String, charOffset: Int): List<String> {
-    val spans = buildLookupTokenSpans(text)
-    if (spans.isEmpty()) return emptyList()
-
-    val maxIndex = (text.length - 1).coerceAtLeast(0)
-    val offset = charOffset.coerceIn(0, maxIndex)
-
-    var centerIndex = spans.indexOfFirst { offset in it.start until it.endExclusive }
-    if (centerIndex < 0) {
-        centerIndex = spans.indices.minByOrNull { index ->
-            val span = spans[index]
-            when {
-                offset < span.start -> span.start - offset
-                offset >= span.endExclusive -> offset - span.endExclusive + 1
-                else -> 0
-            }
-        } ?: return emptyList()
-    }
-
-    val center = spans[centerIndex]
-    val prev = spans.getOrNull(centerIndex - 1)
-    val next = spans.getOrNull(centerIndex + 1)
-    val candidates = linkedSetOf(center.token)
-
-    if (center.type == LookupTokenType.KANJI && next?.type == LookupTokenType.HIRAGANA) {
-        candidates += center.token + next.token
-    }
-    if (center.type == LookupTokenType.HIRAGANA && prev?.type == LookupTokenType.KANJI) {
-        candidates += prev.token + center.token
-    }
-    if (center.type == LookupTokenType.HIRAGANA &&
-        prev?.type == LookupTokenType.KANJI &&
-        next?.type == LookupTokenType.HIRAGANA
-    ) {
-        candidates += prev.token + center.token + next.token
-    }
-    if (center.type == LookupTokenType.KANJI && prev?.type == LookupTokenType.KANJI) {
-        candidates += prev.token + center.token
-    }
-    if (center.type == LookupTokenType.KANJI && next?.type == LookupTokenType.KANJI) {
-        candidates += center.token + next.token
-    }
-
-    candidates += extractLookupCandidates(center.token)
-    return candidates.map { it.trim() }.filter { it.isNotBlank() }.distinct()
-}
-
 internal fun tokenizeLookupTerms(text: String): List<String> {
     return buildLookupTokenSpans(text).map { it.token }.distinct()
 }

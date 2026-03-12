@@ -75,6 +75,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -85,6 +86,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
@@ -332,6 +335,8 @@ private fun BookReaderScreen(
     latestControllerAddressProvider: () -> String?,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
+    val view = LocalView.current
     var cues by remember { mutableStateOf<List<ReaderSubtitleCue>>(emptyList()) }
     var audioChapters by remember { mutableStateOf<List<ReaderAudioChapter>>(emptyList()) }
     var srtLoading by remember { mutableStateOf(false) }
@@ -347,6 +352,8 @@ private fun BookReaderScreen(
     var lookupPopupCue by remember { mutableStateOf<ReaderSubtitleCue?>(null) }
     var selectedLookupRange by remember { mutableStateOf<IntRange?>(null) }
     var ankiActionStatus by remember { mutableStateOf<String?>(null) }
+    var resumePlaybackAfterLookupDismiss by remember { mutableStateOf(false) }
+    var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
 
     var lyricsMode by remember { mutableStateOf(true) }
     var controlModeEnabled by remember { mutableStateOf(false) }
@@ -375,8 +382,6 @@ private fun BookReaderScreen(
     var isPlaying by remember { mutableStateOf(false) }
     var dragPreviewPositionMs by remember { mutableStateOf<Long?>(null) }
 
-    val context = LocalContext.current
-    val view = LocalView.current
     val playbackPositionKey = remember(title, audioUri, srtUri) {
         buildBookReaderPlaybackKey(title, audioUri, srtUri)
     }
@@ -539,6 +544,27 @@ private fun BookReaderScreen(
             dictionaryCssByName = dictionaryCssByName,
             dictionaryPriorityByName = dictionaryPriorityByName
         ).take(10)
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val lyricsFollowTopPaddingPx = with(LocalDensity.current) { 72.dp.toPx() }
+    val lookupPopupOffsetY = with(LocalDensity.current) {
+        if (audiobookSettings.activeCueDisplayAtTop) {
+            -(120.dp.roundToPx())
+        } else {
+            0
+        }
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = object : DefaultLifecycleObserver {
+            override fun onResume(owner: LifecycleOwner) {
+                audiobookSettings = loadAudiobookSettingsConfig(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     val playbackCueIndex = remember(positionMs, cues) { findBookCueIndexAtTime(cues, positionMs) }
@@ -830,7 +856,7 @@ private fun BookReaderScreen(
         }
     }
 
-    LaunchedEffect(activeCueIndex, lyricsMode, cues.size, dragPreviewPositionMs) {
+    LaunchedEffect(activeCueIndex, lyricsMode, cues.size, dragPreviewPositionMs, audiobookSettings.activeCueDisplayAtTop) {
         if (!lyricsMode || activeCueIndex < 0 || cues.isEmpty()) return@LaunchedEffect
         if (dragPreviewPositionMs != null) return@LaunchedEffect
         if (lyricsListState.isScrollInProgress) return@LaunchedEffect
@@ -840,9 +866,13 @@ private fun BookReaderScreen(
         val activeItem = lyricsListState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == activeCueIndex }
             ?: return@LaunchedEffect
         val layoutInfo = lyricsListState.layoutInfo
-        val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2f
         val itemCenter = activeItem.offset + (activeItem.size / 2f)
-        val delta = itemCenter - viewportCenter
+        val targetCenter = if (audiobookSettings.activeCueDisplayAtTop) {
+            layoutInfo.viewportStartOffset + lyricsFollowTopPaddingPx + (activeItem.size / 2f)
+        } else {
+            (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2f
+        }
+        val delta = itemCenter - targetCenter
         if (abs(delta) > 1f) {
             lyricsListState.scrollBy(delta)
         }
@@ -852,6 +882,7 @@ private fun BookReaderScreen(
         val cue = cues.getOrNull(index) ?: return
         selectedLookupRange = null
         lookupPopupVisible = false
+        resumePlaybackAfterLookupDismiss = false
         player.seekTo(cue.startMs)
         player.play()
         controlTargetCueIndex = if (controlModeEnabled) index else null
@@ -872,6 +903,7 @@ private fun BookReaderScreen(
         controlTargetCueIndex = null
         selectedLookupRange = null
         lookupPopupVisible = false
+        resumePlaybackAfterLookupDismiss = false
         player.seekTo(target)
         if (controlModeEnabled) {
             controlModeStatus = "手动拖动进度。"
@@ -1034,17 +1066,9 @@ private fun BookReaderScreen(
 
         val selection = findLookupSelection(cue.text, offset)
         val selectionRange = selection?.range
-        selectedLookupRange = selectionRange
+        selectedLookupRange = null
         val selectedToken = selection?.text?.trim()?.takeIf { it.isNotBlank() }
-
-        val candidates = buildList {
-            selectedToken?.let { add(it) }
-            selectedToken?.let { addAll(extractLookupCandidates(it)) }
-        }
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .distinct()
-            .take(16)
+        val candidates = listOfNotNull(selectedToken)
 
         if (candidates.isEmpty()) {
             lookupPopupVisible = true
@@ -1063,6 +1087,13 @@ private fun BookReaderScreen(
         lookupPopupTitle = candidates.firstOrNull() ?: selectedToken.orEmpty()
         lookupPopupCue = cue
         ankiActionStatus = null
+
+        if (audiobookSettings.pausePlaybackOnLookup && player.isPlaying) {
+            player.pause()
+            resumePlaybackAfterLookupDismiss = true
+        } else {
+            resumePlaybackAfterLookupDismiss = false
+        }
 
         scope.launch {
             val result = withContext(Dispatchers.Default) {
@@ -1092,6 +1123,14 @@ private fun BookReaderScreen(
             }
             lookupPopupLoading = false
         }
+    }
+
+    fun closeLookupPopup(resumePlayback: Boolean = true) {
+        lookupPopupVisible = false
+        if (resumePlayback && resumePlaybackAfterLookupDismiss) {
+            player.play()
+        }
+        resumePlaybackAfterLookupDismiss = false
     }
 
     fun addLookupGroupToAnki(groupedResult: GroupedLookupResult) {
@@ -1165,6 +1204,9 @@ private fun BookReaderScreen(
     val latestToggleFavorite by rememberUpdatedState<() -> Unit>({
         toggleFavoriteCue()
     })
+    val latestHandleGamepadKeyEvent by rememberUpdatedState<(KeyEvent) -> Boolean>({ event ->
+        handleGamepadKeyEvent(event)
+    })
 
     DisposableEffect(Unit) {
         val controller = object : BookReaderFloatingBridge.Controller {
@@ -1193,7 +1235,7 @@ private fun BookReaderScreen(
     }
 
     DisposableEffect(Unit) {
-        registerGamepadKeyHandler { event -> handleGamepadKeyEvent(event) }
+        registerGamepadKeyHandler { event -> latestHandleGamepadKeyEvent(event) }
         onDispose { registerGamepadKeyHandler(null) }
     }
 
@@ -1659,11 +1701,10 @@ private fun BookReaderScreen(
     }
 
     if (lookupPopupVisible) {
-        val popupOffsetY = with(LocalDensity.current) { 180.dp.roundToPx() }
         Popup(
-            alignment = Alignment.Center,
-            offset = IntOffset(0, popupOffsetY),
-            onDismissRequest = { lookupPopupVisible = false },
+            alignment = Alignment.BottomCenter,
+            offset = IntOffset(0, lookupPopupOffsetY),
+            onDismissRequest = { closeLookupPopup() },
             properties = PopupProperties(
                 focusable = true,
                 dismissOnBackPress = true,
@@ -1674,7 +1715,7 @@ private fun BookReaderScreen(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth(0.96f)
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = 8.dp, vertical = 12.dp),
                 shape = MaterialTheme.shapes.large,
                 tonalElevation = 8.dp
             ) {
@@ -1689,7 +1730,7 @@ private fun BookReaderScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 520.dp)
+                            .heightIn(max = 380.dp)
                             .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -1754,7 +1795,7 @@ private fun BookReaderScreen(
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { lookupPopupVisible = false }) {
+                        TextButton(onClick = { closeLookupPopup() }) {
                             Text("关闭")
                         }
                     }
@@ -1791,62 +1832,17 @@ private fun computeBookLookupResults(
     candidates: List<String>
 ): List<DictionarySearchResult> {
     if (dictionaries.isEmpty() || candidates.isEmpty()) return emptyList()
-    val prioritizedCandidates = candidates
+    val query = candidates
         .map { it.trim() }
-        .filter { it.isNotBlank() }
-        .distinct()
-        .take(16)
-    if (prioritizedCandidates.isEmpty()) return emptyList()
-
-    val merged = linkedMapOf<String, DictionarySearchResult>()
-    val candidateOrder = prioritizedCandidates.withIndex().associate { it.value to it.index }
-
-    fun mergeProfileHits(
-        profile: DictionaryQueryProfile,
-        sourceCandidates: List<String>,
-        perCandidateLimit: Int
-    ) {
-        sourceCandidates.forEach { candidate ->
-            val index = candidateOrder[candidate] ?: return@forEach
-            val candidateBoost = (prioritizedCandidates.size - index).coerceAtLeast(1) * 2
-            searchDictionarySql(
-                context = context,
-                dictionaries = dictionaries,
-                query = candidate,
-                maxResults = perCandidateLimit,
-                profile = profile
-            ).forEach { hit ->
-                val key = entryStableKey(hit.entry)
-                val boosted = hit.copy(score = hit.score + candidateBoost)
-                val existing = merged[key]
-                if (existing == null || boosted.score > existing.score) {
-                    merged[key] = boosted
-                }
-            }
-        }
-    }
-
-    mergeProfileHits(
-        profile = DictionaryQueryProfile.FAST,
-        sourceCandidates = prioritizedCandidates.take(8),
-        perCandidateLimit = (MAX_LOOKUP_RESULTS / 2).coerceAtLeast(12)
+        .firstOrNull { it.isNotBlank() }
+        ?: return emptyList()
+    return searchDictionarySql(
+        context = context,
+        dictionaries = dictionaries,
+        query = query,
+        maxResults = MAX_LOOKUP_RESULTS,
+        profile = DictionaryQueryProfile.FULL
     )
-
-    if (merged.size < 8) {
-        mergeProfileHits(
-            profile = DictionaryQueryProfile.FULL,
-            sourceCandidates = prioritizedCandidates.take(6),
-            perCandidateLimit = MAX_LOOKUP_RESULTS
-        )
-    }
-
-    return merged.values
-        .sortedWith(
-            compareByDescending<DictionarySearchResult> { it.score }
-                .thenBy { it.entry.term.length }
-                .thenBy { it.entry.term }
-        )
-        .take(MAX_LOOKUP_RESULTS)
 }
 
 private fun addLookupDefinitionToAnki(

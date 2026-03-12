@@ -1063,29 +1063,11 @@ private fun ReaderSyncScreen() {
     }
 
     fun normalizeLookupCandidates(rawCandidates: List<String>): List<String> {
-        val direct = rawCandidates
+        return rawCandidates
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .distinct()
-            .take(16)
-        if (direct.isEmpty()) return emptyList()
-        if (direct.size >= 16) return direct
-
-        val expanded = linkedSetOf<String>()
-        direct.forEach(expanded::add)
-        direct
-            .asSequence()
-            .take(4)
-            .filter { it.length <= 40 }
-            .forEach { candidate ->
-                extractLookupCandidates(candidate)
-                    .asSequence()
-                    .map { it.trim() }
-                    .filter { it.isNotBlank() }
-                    .take(6)
-                    .forEach { expanded += it }
-            }
-        return expanded.take(16)
+            .take(1)
     }
 
     fun computeLookupResults(
@@ -1093,62 +1075,17 @@ private fun ReaderSyncScreen() {
         candidates: List<String>
     ): List<DictionarySearchResult> {
         if (dictionaries.isEmpty() || candidates.isEmpty()) return emptyList()
-        val prioritizedCandidates = candidates
+        val query = candidates
             .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .distinct()
-            .take(16)
-        if (prioritizedCandidates.isEmpty()) return emptyList()
-
-        val merged = linkedMapOf<String, DictionarySearchResult>()
-        val candidateOrder = prioritizedCandidates.withIndex().associate { it.value to it.index }
-
-        fun mergeProfileHits(
-            profile: DictionaryQueryProfile,
-            sourceCandidates: List<String>,
-            perCandidateLimit: Int
-        ) {
-            sourceCandidates.forEach { candidate ->
-                val index = candidateOrder[candidate] ?: return@forEach
-                val candidateBoost = (prioritizedCandidates.size - index).coerceAtLeast(1) * 2
-                searchDictionarySql(
-                    context = context,
-                    dictionaries = dictionaries,
-                    query = candidate,
-                    maxResults = perCandidateLimit,
-                    profile = profile
-                ).forEach { hit ->
-                    val key = entryStableKey(hit.entry)
-                    val boosted = hit.copy(score = hit.score + candidateBoost)
-                    val existing = merged[key]
-                    if (existing == null || boosted.score > existing.score) {
-                        merged[key] = boosted
-                    }
-                }
-            }
-        }
-
-        mergeProfileHits(
-            profile = DictionaryQueryProfile.FAST,
-            sourceCandidates = prioritizedCandidates.take(8),
-            perCandidateLimit = (MAX_LOOKUP_RESULTS / 2).coerceAtLeast(12)
+            .firstOrNull { it.isNotBlank() }
+            ?: return emptyList()
+        return searchDictionarySql(
+            context = context,
+            dictionaries = dictionaries,
+            query = query,
+            maxResults = MAX_LOOKUP_RESULTS,
+            profile = DictionaryQueryProfile.FULL
         )
-
-        if (merged.size < 8) {
-            mergeProfileHits(
-                profile = DictionaryQueryProfile.FULL,
-                sourceCandidates = prioritizedCandidates.take(6),
-                perCandidateLimit = MAX_LOOKUP_RESULTS
-            )
-        }
-
-        return merged.values
-            .sortedWith(
-                compareByDescending<DictionarySearchResult> { it.score }
-                    .thenBy { it.entry.term.length }
-                    .thenBy { it.entry.term }
-            )
-            .take(MAX_LOOKUP_RESULTS)
     }
 
     fun triggerLookupCandidates(
@@ -1196,19 +1133,11 @@ private fun ReaderSyncScreen() {
 
         val selection = findMainLookupSelection(cue.text, offset)
         val selectionRange = selection?.range
-        mainLookupPopupSelectedRange = selectionRange
+        mainLookupPopupSelectedRange = null
         mainLookupPopupCue = cue
 
         val selectedToken = selection?.text?.trim()?.takeIf { it.isNotBlank() }
-
-        val candidates = buildList {
-            selectedToken?.let { add(it) }
-            selectedToken?.let { addAll(extractLookupCandidates(it)) }
-        }
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .distinct()
-            .take(16)
+        val candidates = listOfNotNull(selectedToken)
 
         if (candidates.isEmpty()) {
             mainLookupPopupVisible = true

@@ -76,13 +76,13 @@ internal fun tryDisconnectTargetControllerThenDisableBluetooth(
 
     if (!allowDisableBluetoothFallback) {
         val reason = if (address.isNullOrBlank()) {
-            "Controller not found"
+            "未找到手柄"
         } else {
-            "Disconnect command failed for $address"
+            "断开手柄失败：$address"
         }
         return SleepBluetoothActionResult(
             outcome = SleepBluetoothOutcome.FAILED,
-            detail = "$reason; bluetooth fallback disabled by setting"
+            detail = "$reason；已按设置跳过关闭蓝牙"
         )
     }
 
@@ -102,7 +102,7 @@ internal fun tryDisconnectTargetControllerThenDisableBluetooth(
 
     return SleepBluetoothActionResult(
         outcome = SleepBluetoothOutcome.FAILED,
-        detail = "Disconnect and disable failed"
+        detail = "断开手柄并关闭蓝牙失败"
     )
 }
 

@@ -1,14 +1,8 @@
-package com.tekuza.p9player
+﻿package com.tekuza.p9player
 
-private const val HOSHI_LOOKUP_SCAN_MAX_LENGTH = 16
-
-private val HOSHI_LOOKUP_SCAN_DELIMITERS = setOf(
-    '。', '、', '！', '？', '…', '‥', '「', '」', '『', '』',
-    '（', '）', '(', ')', '【', '】', '[', ']', '〈', '〉',
-    '《', '》', '〔', '〕', '｛', '｝', '{', '}', '：', ':',
-    '；', ';', '，', ',', '．', '.', '・', '／', '/', '＼', '\\',
-    '〜', '～', 'ー', '―', '—'
-)
+internal const val HOSHI_LOOKUP_SCAN_MAX_LENGTH = 16
+private const val HOSHI_LOOKUP_SCAN_DELIMITERS =
+    "。、「」『』【】〔〕（）()［］[]｛｝{}〈〉《》＜＞…？！!?：:；;，,．。/\\\n\r"
 
 internal data class LookupScanSelection(
     val text: String,
@@ -20,26 +14,23 @@ internal fun selectLookupScanText(
     charOffset: Int,
     maxLength: Int = HOSHI_LOOKUP_SCAN_MAX_LENGTH
 ): LookupScanSelection? {
-    if (text.isBlank()) return null
-    if (maxLength <= 0) return null
+    if (text.isBlank() || maxLength <= 0) return null
 
     val maxIndex = (text.length - 1).coerceAtLeast(0)
-    val start = charOffset.coerceIn(0, maxIndex)
-    if (isLookupScanBoundary(text[start])) return null
+    val anchor = charOffset.coerceIn(0, maxIndex)
+    if (isLookupScanBoundary(text[anchor])) return null
 
-    var endExclusive = start
-    var remaining = maxLength
-    while (endExclusive < text.length && remaining > 0) {
+    var endExclusive = anchor
+    while (endExclusive < text.length && (endExclusive - anchor) < maxLength) {
         val ch = text[endExclusive]
         if (isLookupScanBoundary(ch)) break
         endExclusive += 1
-        remaining -= 1
     }
-    if (endExclusive <= start) return null
+    if (endExclusive <= anchor) return null
 
     return LookupScanSelection(
-        text = text.substring(start, endExclusive),
-        range = start until endExclusive
+        text = text.substring(anchor, endExclusive),
+        range = anchor until endExclusive
     )
 }
 
@@ -59,4 +50,3 @@ internal fun trimSelectionRangeByMatchedLength(
 private fun isLookupScanBoundary(ch: Char): Boolean {
     return ch.isWhitespace() || HOSHI_LOOKUP_SCAN_DELIMITERS.contains(ch)
 }
-

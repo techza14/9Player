@@ -1,4 +1,4 @@
-package com.tekuza.p9player
+﻿package com.tekuza.p9player
 
 import android.content.Intent
 import android.net.Uri
@@ -131,6 +131,62 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                Text("查词", style = MaterialTheme.typography.titleMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("点击查词时停止播放")
+                    Switch(
+                        checked = config.pausePlaybackOnLookup,
+                        onCheckedChange = { checked ->
+                            saveAudiobookPausePlaybackOnLookup(context, checked)
+                            refreshConfig()
+                            statusText = if (checked) {
+                                "已开启：点击查词时停止播放。"
+                            } else {
+                                "已关闭：点击查词时停止播放。"
+                            }
+                        }
+                    )
+                }
+                Text("正在播放的词显示位置")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            saveAudiobookActiveCueDisplayAtTop(context, false)
+                            refreshConfig()
+                            statusText = "已设置：正在播放的词显示在中间。"
+                        }
+                    ) {
+                        Text("中间")
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            saveAudiobookActiveCueDisplayAtTop(context, true)
+                            refreshConfig()
+                            statusText = "已设置：正在播放的词显示在上方。"
+                        }
+                    ) {
+                        Text("上方")
+                    }
+                }
+                Text(
+                    if (config.activeCueDisplayAtTop) {
+                        "当前：上方"
+                    } else {
+                        "当前：中间"
+                    }
+                )
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Text("悬浮窗", style = MaterialTheme.typography.titleMedium)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -143,16 +199,20 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                         onCheckedChange = { checked ->
                             saveAudiobookFloatingOverlayEnabled(context, checked)
                             refreshConfig()
-                            statusText = if (checked) "已开启悬浮窗功能。" else "已关闭悬浮窗功能。"
+                            statusText = if (checked) {
+                                "已开启悬浮窗功能。"
+                            } else {
+                                "已关闭悬浮窗功能。"
+                            }
                         }
                     )
                 }
                 if (config.floatingOverlayEnabled) {
                     Text(
                         if (overlayGranted) {
-                            "悬浮窗权限：已授权"
+                            "悬浮窗权限：已授予"
                         } else {
-                            "悬浮窗权限：未授权"
+                            "悬浮窗权限：未授予"
                         }
                     )
                     if (!overlayGranted) {
@@ -173,8 +233,8 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
             }
         }
 
-        if (statusText != null) {
-            Text(statusText!!)
+        statusText?.let {
+            Text(it)
         }
     }
 }
@@ -182,4 +242,3 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
 private fun canDrawOverlaysCompat(context: android.content.Context): Boolean {
     return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
 }
-
