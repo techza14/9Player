@@ -23,6 +23,8 @@ struct LookupContext {
       : dictionary_paths(std::move(dictionary_paths)), lookup(query, deconjugator) {
     for (const auto& path : this->dictionary_paths) {
       query.add_term_dict(path);
+      query.add_freq_dict(path);
+      query.add_pitch_dict(path);
     }
   }
 
@@ -163,7 +165,19 @@ std::string frequency_for_dictionary(const TermResult& term, const std::string& 
       return join_frequency_display(entry.frequencies);
     }
   }
-  return {};
+  if (term.frequencies.empty()) return {};
+  if (term.frequencies.size() == 1) {
+    return join_frequency_display(term.frequencies.front().frequencies);
+  }
+  std::ostringstream out;
+  for (size_t i = 0; i < term.frequencies.size(); ++i) {
+    if (i > 0) out << " ; ";
+    if (!term.frequencies[i].dict_name.empty()) {
+      out << term.frequencies[i].dict_name << ": ";
+    }
+    out << join_frequency_display(term.frequencies[i].frequencies);
+  }
+  return out.str();
 }
 
 std::string pitch_for_dictionary(const TermResult& term, const std::string& dictionary_name) {
@@ -172,7 +186,19 @@ std::string pitch_for_dictionary(const TermResult& term, const std::string& dict
       return join_ints(entry.pitch_positions);
     }
   }
-  return {};
+  if (term.pitches.empty()) return {};
+  if (term.pitches.size() == 1) {
+    return join_ints(term.pitches.front().pitch_positions);
+  }
+  std::ostringstream out;
+  for (size_t i = 0; i < term.pitches.size(); ++i) {
+    if (i > 0) out << " ; ";
+    if (!term.pitches[i].dict_name.empty()) {
+      out << term.pitches[i].dict_name << ": ";
+    }
+    out << join_ints(term.pitches[i].pitch_positions);
+  }
+  return out.str();
 }
 
 int utf8_length(std::string_view value) {
