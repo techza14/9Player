@@ -654,7 +654,12 @@ internal fun importDictionaryToSqlite(
     onProgress: ((DictionaryImportProgress) -> Unit)? = null
 ): LoadedDictionary {
     val lower = displayName.lowercase(Locale.US)
-    check(lower.endsWith(".zip")) { "仅支持 ZIP 辞典（hoshidicts）" }
+    val mimeType = contentResolver.getType(uri)?.lowercase(Locale.US).orEmpty()
+    val uriLower = uri.toString().lowercase(Locale.US)
+    val looksLikeZip = lower.endsWith(".zip") ||
+        mimeType.contains("zip") ||
+        uriLower.contains(".zip")
+    check(looksLikeZip) { "仅支持 ZIP 辞典（hoshidicts）" }
     val imported = importDictionaryZipWithHoshi(
         context = context,
         contentResolver = contentResolver,
@@ -1619,6 +1624,3 @@ private fun isTermBankFileSql(path: String): Boolean {
     val name = path.substringAfterLast('/').lowercase(Locale.US)
     return TERM_BANK_FILE_REGEX.matches(name)
 }
-
-
-
