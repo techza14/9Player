@@ -33,25 +33,6 @@ jobs:
             echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Collect APK assets
-        id: assets
-        shell: bash
-        run: |
-          shopt -s nullglob globstar
-          files=(release/*.apk app/build/outputs/**/*.apk)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No APK files found in release/ or app/build/outputs/."
-            exit 1
-          fi
-          {
-            echo "files<<EOF"
-            for f in "${files[@]}"; do
-              echo "$f"
-            done
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-          printf 'Will upload:\n%s\n' "${files[@]}"
-
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -59,4 +40,4 @@ jobs:
           name: ${{ steps.tag.outputs.value }}
           draft: false
           prerelease: false
-          files: ${{ steps.assets.outputs.files }}
+          files: release/9player-${{ steps.tag.outputs.value }}.apk
