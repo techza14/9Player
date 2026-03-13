@@ -47,6 +47,10 @@ android {
         compose = true
     }
 
+    lint {
+        disable += setOf("DirectSystemCurrentTimeMillisUsage")
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
