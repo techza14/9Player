@@ -18,14 +18,14 @@ internal fun loadPersistedAnkiConfig(context: Context): PersistedAnkiConfig {
     val raw = prefs.getString(ANKI_KEY_STATE, null) ?: return PersistedAnkiConfig(
         deckName = "Default",
         modelName = "",
-        tags = "tset",
+        tags = "",
         fieldTemplates = emptyMap()
     )
 
     val obj = runCatching { JSONObject(raw) }.getOrNull() ?: return PersistedAnkiConfig(
         deckName = "Default",
         modelName = "",
-        tags = "tset",
+        tags = "",
         fieldTemplates = emptyMap()
     )
 
@@ -41,7 +41,7 @@ internal fun loadPersistedAnkiConfig(context: Context): PersistedAnkiConfig {
     return PersistedAnkiConfig(
         deckName = obj.optString("deckName").trim().ifBlank { "Default" },
         modelName = obj.optString("modelName").trim(),
-        tags = obj.optString("tags").trim().ifBlank { "tset" },
+        tags = obj.optString("tags").trim(),
         fieldTemplates = templates
     )
 }

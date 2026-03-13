@@ -214,7 +214,7 @@ private fun ReaderSyncScreen() {
     var ankiPermissionGranted by remember { mutableStateOf(hasAnkiReadWritePermission(context)) }
     var ankiDeckName by remember { mutableStateOf("Default") }
     var ankiModelName by remember { mutableStateOf("") }
-    var ankiTagsInput by remember { mutableStateOf("tset") }
+    var ankiTagsInput by remember { mutableStateOf("") }
     var ankiDecks by remember { mutableStateOf<List<String>>(emptyList()) }
     var ankiModels by remember { mutableStateOf<List<AnkiModelTemplate>>(emptyList()) }
     var ankiModelFields by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -576,7 +576,7 @@ private fun ReaderSyncScreen() {
     fun openReaderBook(book: ReaderBook, persist: Boolean = true) {
         activateReaderBook(book, persist = persist)
         val intent = Intent(context, BookReaderActivity::class.java).apply {
-            putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, book.title)
+            putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, buildBookTitle(book.audioName, book.srtName))
             putExtra(BookReaderActivity.EXTRA_AUDIO_URI, book.audioUri.toString())
             book.srtUri?.let { putExtra(BookReaderActivity.EXTRA_SRT_URI, it.toString()) }
         }
@@ -747,7 +747,7 @@ private fun ReaderSyncScreen() {
                                 srtDisplayName = candidate.srtName,
                                 cues = cues
                             )
-                            rebuilt.copy(title = candidate.folderName)
+                            rebuilt
                         }.onSuccess { refreshedBooks += it }
                             .onFailure {
                                 parseFailed += candidate.folderName
@@ -890,8 +890,7 @@ private fun ReaderSyncScreen() {
                                 srtDisplayName = savedBook.srtName,
                                 cues = cues
                             )
-                            val restoredTitle = savedBook.title.trim().ifBlank { rebuilt.title }
-                            rebuilt.copy(title = restoredTitle)
+                            rebuilt
                         }.onSuccess { restoredBooks += it }
                             .onFailure {
                                 failedBooks += savedBook.title.ifBlank { savedBook.audioName }

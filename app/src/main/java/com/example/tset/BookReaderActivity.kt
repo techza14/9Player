@@ -1,6 +1,7 @@
 ﻿package com.tekuza.p9player
 
 import android.Manifest
+import android.app.ActivityManager
 import android.app.PendingIntent
 import android.content.ContentResolver
 import android.content.Context
@@ -14,7 +15,6 @@ import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.text.Html
 import android.app.Activity
-import android.widget.Toast
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -39,10 +39,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -70,7 +72,12 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
@@ -80,6 +87,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
@@ -88,6 +96,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
@@ -115,6 +124,7 @@ class BookReaderActivity : ComponentActivity() {
     private var lastMotionHorizontalKeyCode: Int? = null
     private var lastMotionVerticalKeyCode: Int? = null
     private var lastControllerBluetoothAddress: String? = null
+    private var floatingOverlayStartJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -146,15 +156,33 @@ class BookReaderActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        floatingOverlayStartJob?.cancel()
+        floatingOverlayStartJob = null
         stopAudiobookFloatingOverlayService(this)
     }
 
     override fun onStop() {
         super.onStop()
         val settings = loadAudiobookSettingsConfig(this)
-        if (settings.floatingOverlayEnabled && BookReaderFloatingBridge.isPlaying()) {
-            startAudiobookFloatingOverlayService(this)
+        floatingOverlayStartJob?.cancel()
+        if (isChangingConfigurations || !settings.floatingOverlayEnabled || !BookReaderFloatingBridge.isPlaying()) return
+
+        floatingOverlayStartJob = lifecycleScope.launch {
+            delay(150L)
+            if (
+                !isAppProcessInForeground(this@BookReaderActivity) &&
+                loadAudiobookSettingsConfig(this@BookReaderActivity).floatingOverlayEnabled &&
+                BookReaderFloatingBridge.isPlaying()
+            ) {
+                startAudiobookFloatingOverlayService(this@BookReaderActivity)
+            }
         }
+    }
+
+    override fun onDestroy() {
+        floatingOverlayStartJob?.cancel()
+        floatingOverlayStartJob = null
+        super.onDestroy()
     }
 
     private fun maybeRequestPostNotificationsPermission() {
@@ -351,6 +379,7 @@ private fun BookReaderScreen(
     var lookupPopupResults by remember { mutableStateOf<List<DictionarySearchResult>>(emptyList()) }
     var lookupPopupCue by remember { mutableStateOf<ReaderSubtitleCue?>(null) }
     var selectedLookupRange by remember { mutableStateOf<IntRange?>(null) }
+    var lookupPopupSelectionText by remember { mutableStateOf<String?>(null) }
     var ankiActionStatus by remember { mutableStateOf<String?>(null) }
     var resumePlaybackAfterLookupDismiss by remember { mutableStateOf(false) }
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
@@ -586,13 +615,6 @@ private fun BookReaderScreen(
         selectedLookupRange = null
     }
 
-    LaunchedEffect(controlModeStatus) {
-        val message = controlModeStatus?.trim().orEmpty()
-        if (message.isNotEmpty()) {
-            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-        }
-    }
-
     LaunchedEffect(context) {
         val options = loadBookReaderSleepOptions(context)
         sleepExitControlModeWhenDone = options.exitControlModeWhenDone
@@ -656,6 +678,9 @@ private fun BookReaderScreen(
     }
     val favoriteCueCollected = remember(favoriteCueKey, collectedCueUiVersion) {
         favoriteCueKey?.let { collectedCueKeys.contains(it) } == true
+    }
+    LaunchedEffect(favoriteCueCollected) {
+        BookReaderFloatingBridge.notifyFavoriteState(favoriteCueCollected)
     }
 
     LaunchedEffect(audioChapters.size) {
@@ -972,6 +997,7 @@ private fun BookReaderScreen(
     fun jumpToChapter(chapter: ReaderAudioChapter) {
         seekToManual(chapter.startMs)
         player.play()
+        chapterOptionsVisible = false
         controlModeStatus = "已跳转章节：${chapter.title}"
     }
 
@@ -1061,6 +1087,7 @@ private fun BookReaderScreen(
             lookupPopupTitle = ""
             lookupPopupError = "未加载辞典，请先在主页导入辞典。"
             lookupPopupCue = cue
+            lookupPopupSelectionText = null
             return
         }
 
@@ -1077,6 +1104,7 @@ private fun BookReaderScreen(
             lookupPopupTitle = selectedToken.orEmpty()
             lookupPopupError = "当前位置没有可查询词。"
             lookupPopupCue = cue
+            lookupPopupSelectionText = null
             return
         }
 
@@ -1086,6 +1114,7 @@ private fun BookReaderScreen(
         lookupPopupError = null
         lookupPopupTitle = candidates.firstOrNull() ?: selectedToken.orEmpty()
         lookupPopupCue = cue
+        lookupPopupSelectionText = selectedToken
         ankiActionStatus = null
 
         if (audiobookSettings.pausePlaybackOnLookup && player.isPlaying) {
@@ -1110,16 +1139,23 @@ private fun BookReaderScreen(
                 if (hits.isEmpty()) {
                     lookupPopupError = "无查询结果。"
                     selectedLookupRange = null
+                    lookupPopupSelectionText = selectedToken
                 } else {
                     selectedLookupRange = trimSelectionRangeByMatchedLength(
                         selectionRange,
                         hits.first().matchedLength
                     )
+                    lookupPopupSelectionText = selectedLookupRange?.let { range ->
+                        val start = range.first.coerceIn(0, cue.text.length)
+                        val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
+                        if (endExclusive > start) cue.text.substring(start, endExclusive) else ""
+                    }?.trim()?.takeIf { it.isNotBlank() } ?: selectedToken
                 }
             }.onFailure {
                 lookupPopupResults = emptyList()
                 lookupPopupError = it.message ?: "查询失败"
                 selectedLookupRange = null
+                lookupPopupSelectionText = selectedToken
             }
             lookupPopupLoading = false
         }
@@ -1127,6 +1163,7 @@ private fun BookReaderScreen(
 
     fun closeLookupPopup(resumePlayback: Boolean = true) {
         lookupPopupVisible = false
+        lookupPopupSelectionText = null
         if (resumePlayback && resumePlaybackAfterLookupDismiss) {
             player.play()
         }
@@ -1139,11 +1176,7 @@ private fun BookReaderScreen(
             return
         }
         val cue = lookupPopupCue ?: return
-        val popupSelectionText = selectedLookupRange?.let { range ->
-            val start = range.first.coerceIn(0, cue.text.length)
-            val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
-            if (endExclusive > start) cue.text.substring(start, endExclusive) else ""
-        }?.trim()?.takeIf { it.isNotBlank() }
+        val popupSelectionText = lookupPopupSelectionText?.trim()?.takeIf { it.isNotBlank() }
         val glossarySections = buildGroupedGlossarySections(groupedResult)
         val primaryDefinition = dictionaryGroup.definitions
             .firstOrNull { it.isNotBlank() }
@@ -1157,6 +1190,7 @@ private fun BookReaderScreen(
                         context = context,
                         cue = cue,
                         audioUri = audioUri,
+                        bookTitle = title,
                         entry = dictionaryGroup.entry,
                         definition = primaryDefinition.ifBlank { groupedResult.term },
                         dictionaryCss = null,
@@ -1211,6 +1245,7 @@ private fun BookReaderScreen(
     DisposableEffect(Unit) {
         val controller = object : BookReaderFloatingBridge.Controller {
             override fun isPlaying(): Boolean = latestIsPlaying
+            override fun isFavorite(): Boolean = favoriteCueCollected
 
             override fun togglePlayPause() {
                 latestTogglePlayPause()
@@ -1395,7 +1430,6 @@ private fun BookReaderScreen(
                     TextButton(onClick = onBack) {
                         Text("< 返回")
                     }
-                    Text(title, style = MaterialTheme.typography.titleLarge)
                     Spacer(modifier = Modifier.weight(1f))
                     TextButton(
                         onClick = { if (favoriteCue != null) toggleFavoriteCue() },
@@ -1519,8 +1553,16 @@ private fun BookReaderScreen(
                             activeCue == null -> Text("等待播放进入字幕范围...")
                             else -> {
                                 Box(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentAlignment = Alignment.Center
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(
+                                            top = if (audiobookSettings.activeCueDisplayAtTop) 36.dp else 0.dp
+                                        ),
+                                    contentAlignment = if (audiobookSettings.activeCueDisplayAtTop) {
+                                        Alignment.TopCenter
+                                    } else {
+                                        Alignment.Center
+                                    }
                                 ) {
                                     ClickableText(
                                         text = buildHighlightedText(activeCue.text, selectedLookupRange),
@@ -1674,13 +1716,13 @@ private fun BookReaderScreen(
                                     }
                                     val moved = event.changes.any { change ->
                                         val delta = change.positionChange()
-                                        abs(delta.x) > 10f || abs(delta.y) > 10f
+                                        abs(delta.x) > 24f || abs(delta.y) > 24f
                                     }
                                     if (moved) {
                                         cancelled = true
                                         break
                                     }
-                                    if (System.currentTimeMillis() - startAt >= 650L) {
+                                    if (System.currentTimeMillis() - startAt >= 450L) {
                                         exitControlModeByTwoFingerLongPress()
                                         break
                                     }
@@ -1693,7 +1735,7 @@ private fun BookReaderScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    "控制模式\n屏幕常亮\n可开启计时结束自动退出\n单击：重播当前句并收藏\n重播中双击：播放上一句并收藏\n左滑：上一句\n右滑：下一句\n双指长按：退出",
+                    "控制模式\n屏幕常亮\n可开启计时结束自动退出\n单击：重播当前句并收藏\n重播中双击：播放上一句并收藏\n左滑：上一句\n右滑：下一句\n双指短长按：退出",
                     color = Color.White
                 )
             }
@@ -1849,6 +1891,7 @@ private fun addLookupDefinitionToAnki(
     context: Context,
     cue: ReaderSubtitleCue,
     audioUri: Uri?,
+    bookTitle: String?,
     entry: DictionaryEntry,
     definition: String,
     dictionaryCss: String?,
@@ -1905,6 +1948,7 @@ private fun addLookupDefinitionToAnki(
         word = entry.term,
         popupSelectionText = popupSelectionText,
         sentence = cue.text,
+        bookTitle = bookTitle,
         reading = entry.reading,
         definitions = cardDefinitions,
         dictionaryName = cardDictionaryName,
@@ -2040,6 +2084,13 @@ private fun openReaderInputStream(contentResolver: ContentResolver, uri: Uri): I
     if (direct != null) return direct
     val pfd = runCatching { contentResolver.openFileDescriptor(uri, "r") }.getOrNull() ?: return null
     return ParcelFileDescriptor.AutoCloseInputStream(pfd)
+}
+
+private fun isAppProcessInForeground(context: Context): Boolean {
+    val processInfo = ActivityManager.RunningAppProcessInfo()
+    ActivityManager.getMyMemoryState(processInfo)
+    return processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+        processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
 }
 
 private fun parseBookSrtTimestamp(raw: String): Long? {

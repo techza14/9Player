@@ -281,6 +281,7 @@ private fun ControllerBluetoothSettingsScreen(onBack: () -> Unit) {
                 if (status != null) {
                     Text(status!!)
                 }
+                Text("目前很有可能无法只断开手柄蓝牙。")
             }
         }
     }

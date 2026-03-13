@@ -3,6 +3,7 @@ package com.tekuza.p9player
 object BookReaderFloatingBridge {
     interface Controller {
         fun isPlaying(): Boolean
+        fun isFavorite(): Boolean
         fun togglePlayPause()
         fun seekPrevious()
         fun seekNext()
@@ -13,18 +14,27 @@ object BookReaderFloatingBridge {
         fun onPlaybackStateChanged(isPlaying: Boolean)
     }
 
+    interface FavoriteStateListener {
+        fun onFavoriteStateChanged(isFavorite: Boolean)
+    }
+
     @Volatile
     private var controller: Controller? = null
     private val listeners = linkedSetOf<PlaybackStateListener>()
+    private val favoriteListeners = linkedSetOf<FavoriteStateListener>()
     @Volatile
     private var playingSnapshot: Boolean = false
+    @Volatile
+    private var favoriteSnapshot: Boolean = false
 
     fun attach(controller: Controller) {
         synchronized(this) {
             this.controller = controller
             playingSnapshot = controller.isPlaying()
+            favoriteSnapshot = controller.isFavorite()
         }
         notifyPlaybackState(playingSnapshot)
+        notifyFavoriteState(favoriteSnapshot)
     }
 
     fun detach(controller: Controller) {
@@ -32,9 +42,11 @@ object BookReaderFloatingBridge {
             if (this.controller === controller) {
                 this.controller = null
                 playingSnapshot = false
+                favoriteSnapshot = false
             }
         }
         notifyPlaybackState(playingSnapshot)
+        notifyFavoriteState(favoriteSnapshot)
     }
 
     fun addPlaybackStateListener(listener: PlaybackStateListener) {
@@ -50,6 +62,19 @@ object BookReaderFloatingBridge {
         }
     }
 
+    fun addFavoriteStateListener(listener: FavoriteStateListener) {
+        synchronized(this) {
+            favoriteListeners += listener
+        }
+        listener.onFavoriteStateChanged(favoriteSnapshot)
+    }
+
+    fun removeFavoriteStateListener(listener: FavoriteStateListener) {
+        synchronized(this) {
+            favoriteListeners -= listener
+        }
+    }
+
     fun notifyPlaybackState(isPlaying: Boolean) {
         val snapshot: List<PlaybackStateListener>
         synchronized(this) {
@@ -60,6 +85,16 @@ object BookReaderFloatingBridge {
     }
 
     fun isPlaying(): Boolean = playingSnapshot
+    fun isFavorite(): Boolean = favoriteSnapshot
+
+    fun notifyFavoriteState(isFavorite: Boolean) {
+        val snapshot: List<FavoriteStateListener>
+        synchronized(this) {
+            favoriteSnapshot = isFavorite
+            snapshot = favoriteListeners.toList()
+        }
+        snapshot.forEach { it.onFavoriteStateChanged(isFavorite) }
+    }
 
     fun togglePlayPause() {
         controller?.togglePlayPause()

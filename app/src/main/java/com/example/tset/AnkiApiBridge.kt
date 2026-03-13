@@ -182,7 +182,7 @@ internal fun exportToAnkiDroidApi(
         error("All rendered field values are empty. Check your field variables in Settings > Anki.")
     }
 
-    val tags = if (config.tags.isEmpty()) setOf("tset") else config.tags
+    val tags = config.tags
     val noteId = runCatching {
         api.addNote(model.id, deckId, fieldValues, tags)
     }.getOrElse { throwable ->
@@ -295,7 +295,7 @@ private fun buildAnkiVariables(
     val expressionFurigana = buildExpressionFurigana(card.word, card.reading)
     val sentenceFurigana = ""
     val singleFrequency = card.frequency.orEmpty()
-    val resolvedBookTitle = card.bookTitle.orEmpty()
+    val resolvedBookTitle = resolveBookTitle(context, card)
 
     return mapOf(
         "word" to card.word,
@@ -359,6 +359,37 @@ private fun buildAnkiVariables(
         "book-title" to resolvedBookTitle,
         "book-cover" to ""
     )
+}
+
+private fun resolveBookTitle(context: Context, card: MinedCard): String {
+    val audioName = resolveAudioDisplayName(context, card.audioUri)
+    val preferred = audioName?.trim().orEmpty().ifBlank { card.bookTitle.orEmpty().trim() }
+    if (preferred.isBlank()) return ""
+    return preferred.substringBeforeLast('.', preferred)
+}
+
+private fun resolveAudioDisplayName(context: Context, uri: Uri?): String? {
+    val target = uri ?: return null
+    if (target.scheme.equals("file", ignoreCase = true)) {
+        return File(target.path.orEmpty()).name.takeIf { it.isNotBlank() }
+    }
+    val fromQuery = runCatching {
+        context.contentResolver.query(
+            target,
+            arrayOf(OpenableColumns.DISPLAY_NAME),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (index >= 0 && cursor.moveToFirst()) {
+                cursor.getString(index)
+            } else {
+                null
+            }
+        }
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+    return fromQuery ?: target.lastPathSegment?.substringAfterLast('/')
 }
 
 private fun buildStyledGlossary(

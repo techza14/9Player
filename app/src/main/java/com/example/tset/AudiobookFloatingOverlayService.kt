@@ -49,6 +49,7 @@ class AudiobookFloatingOverlayService : Service() {
     private var windowManager: WindowManager? = null
     private var rootView: LinearLayout? = null
     private var bubbleButton: ImageButton? = null
+    private var favoriteButton: ImageButton? = null
     private var panelView: LinearLayout? = null
     private var windowLayoutParams: WindowManager.LayoutParams? = null
     private var controlsExpanded: Boolean = false
@@ -59,11 +60,17 @@ class AudiobookFloatingOverlayService : Service() {
             updateBubbleIcon(isPlaying)
         }
     }
+    private val favoriteListener = object : BookReaderFloatingBridge.FavoriteStateListener {
+        override fun onFavoriteStateChanged(isFavorite: Boolean) {
+            updateFavoriteIcon(isFavorite)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as? WindowManager
         BookReaderFloatingBridge.addPlaybackStateListener(playbackListener)
+        BookReaderFloatingBridge.addFavoriteStateListener(favoriteListener)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -82,6 +89,7 @@ class AudiobookFloatingOverlayService : Service() {
 
     override fun onDestroy() {
         BookReaderFloatingBridge.removePlaybackStateListener(playbackListener)
+        BookReaderFloatingBridge.removeFavoriteStateListener(favoriteListener)
         removeOverlay()
         super.onDestroy()
     }
@@ -95,6 +103,7 @@ class AudiobookFloatingOverlayService : Service() {
         }
         if (rootView != null) {
             updateBubbleIcon(BookReaderFloatingBridge.isPlaying())
+            updateFavoriteIcon(BookReaderFloatingBridge.isFavorite())
             return
         }
 
@@ -263,8 +272,10 @@ class AudiobookFloatingOverlayService : Service() {
         wm.addView(container, params)
         rootView = container
         bubbleButton = bubble
+        this.favoriteButton = favoriteButton
         panelView = controlsContainer
         updateBubbleIcon(BookReaderFloatingBridge.isPlaying())
+        updateFavoriteIcon(BookReaderFloatingBridge.isFavorite())
     }
 
     private fun removeOverlay() {
@@ -275,6 +286,7 @@ class AudiobookFloatingOverlayService : Service() {
         }
         rootView = null
         bubbleButton = null
+        favoriteButton = null
         panelView = null
     }
 
@@ -282,6 +294,12 @@ class AudiobookFloatingOverlayService : Service() {
         val bubble = bubbleButton ?: return
         bubble.setImageResource(
             if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+        )
+    }
+
+    private fun updateFavoriteIcon(isFavorite: Boolean) {
+        favoriteButton?.setColorFilter(
+            if (isFavorite) 0xFFFFD54F.toInt() else 0xFFFFFFFF.toInt()
         )
     }
 
