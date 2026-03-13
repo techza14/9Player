@@ -562,13 +562,7 @@ private fun searchDictionaryWithHoshi(
 
     val merged = linkedMapOf<String, DictionarySearchResult>()
     hits.forEachIndexed { index, hit ->
-        val fallbackDefinition = buildHoshiMetaFallbackDefinition(
-            pitch = hit.pitch?.ifBlank { null },
-            frequency = hit.frequency?.ifBlank { null }
-        )
-        val definition = glossaryRawToDefinitionHtmlSql(hit.glossaryRaw).ifBlank {
-            fallbackDefinition
-        }.ifBlank { return@forEachIndexed }
+        val definition = glossaryRawToDefinitionHtmlSql(hit.glossaryRaw).ifBlank { return@forEachIndexed }
         val dictionaryName = hit.dictionary.ifBlank { dictionaries.firstOrNull()?.name.orEmpty() }
         val entry = DictionaryEntry(
             term = hit.term,
@@ -599,13 +593,6 @@ private fun searchDictionaryWithHoshi(
                 .thenBy { it.entry.term }
         )
         .take(maxResults)
-}
-
-private fun buildHoshiMetaFallbackDefinition(pitch: String?, frequency: String?): String {
-    val parts = mutableListOf<String>()
-    pitch?.takeIf { it.isNotBlank() }?.let { parts += "音调: $it" }
-    frequency?.takeIf { it.isNotBlank() }?.let { parts += "词频: $it" }
-    return parts.joinToString("<br>")
 }
 
 internal fun loadDictionaryFromSqlite(context: Context, cacheKey: String): LoadedDictionary? {
