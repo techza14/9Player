@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -1423,6 +1424,10 @@ private fun ReaderSyncScreen() {
         keepReadPermission(context, uri)
         val displayName = queryDisplayName(contentResolver, uri)
         val uriValue = uri.toString()
+        if (dictionaryRefs.any { it.uri == uriValue }) {
+            dictionaryError = "该辞典已导入，请勿重复导入。"
+            return@rememberLauncherForActivityResult
+        }
         val cacheKey = buildDictionaryCacheKey(uriValue, displayName)
 
         scope.launch {
@@ -1447,6 +1452,22 @@ private fun ReaderSyncScreen() {
             dictionaryLoading = false
             val parsedDictionary = parseResult.getOrNull()
             if (parsedDictionary != null) {
+                val duplicateByName = loadedDictionaries.any {
+                    it.name.equals(parsedDictionary.name, ignoreCase = true) &&
+                        it.entryCount > 0 &&
+                        parsedDictionary.entryCount > 0 &&
+                        it.entryCount == parsedDictionary.entryCount
+                }
+                if (duplicateByName) {
+                    parsedDictionary.cacheKey
+                        .takeIf { it.isNotBlank() }
+                        ?.let { key ->
+                            scope.launch(Dispatchers.IO) { deleteDictionaryFromSqlite(context, key) }
+                        }
+                    dictionaryError = "检测到重复辞典：${parsedDictionary.name}"
+                    clearDictionaryProgress()
+                    return@launch
+                }
                 loadedDictionaries = loadedDictionaries + parsedDictionary
                 dictionaryRefs = (dictionaryRefs + PersistedDictionaryRef(
                     uri = uriValue,
@@ -1912,8 +1933,20 @@ private fun ReaderSyncScreen() {
                                                 modifier = Modifier.padding(8.dp),
                                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
-                                                if (!dictionaryGroup.pitch.isNullOrBlank()) Text("音调：${dictionaryGroup.pitch}")
-                                                if (!dictionaryGroup.frequency.isNullOrBlank()) Text("词频：${dictionaryGroup.frequency}")
+                                                val pitchBadges = parseMetaBadges(dictionaryGroup.pitch, "音调")
+                                                if (pitchBadges.isNotEmpty()) {
+                                                    MetaBadgeRow(
+                                                        badges = pitchBadges,
+                                                        labelColor = Color(0xFF6A3EC5)
+                                                    )
+                                                }
+                                                val frequencyBadges = parseMetaBadges(dictionaryGroup.frequency, "词频")
+                                                if (frequencyBadges.isNotEmpty()) {
+                                                    MetaBadgeRow(
+                                                        badges = frequencyBadges,
+                                                        labelColor = Color(0xFF4CAF50)
+                                                    )
+                                                }
 
                                                 dictionaryGroup.definitions.forEach { definition ->
                                                     Card(modifier = Modifier.fillMaxWidth()) {
@@ -2318,8 +2351,20 @@ private fun ReaderSyncScreen() {
                                                     modifier = Modifier.padding(8.dp),
                                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                                 ) {
-                                                    if (!dictionaryGroup.pitch.isNullOrBlank()) Text("音调：${dictionaryGroup.pitch}")
-                                                    if (!dictionaryGroup.frequency.isNullOrBlank()) Text("词频：${dictionaryGroup.frequency}")
+                                                    val pitchBadges = parseMetaBadges(dictionaryGroup.pitch, "音调")
+                                                    if (pitchBadges.isNotEmpty()) {
+                                                        MetaBadgeRow(
+                                                            badges = pitchBadges,
+                                                            labelColor = Color(0xFF6A3EC5)
+                                                        )
+                                                    }
+                                                    val frequencyBadges = parseMetaBadges(dictionaryGroup.frequency, "词频")
+                                                    if (frequencyBadges.isNotEmpty()) {
+                                                        MetaBadgeRow(
+                                                            badges = frequencyBadges,
+                                                            labelColor = Color(0xFF4CAF50)
+                                                        )
+                                                    }
 
                                                     dictionaryGroup.definitions.forEach { definition ->
                                                         Card(modifier = Modifier.fillMaxWidth()) {
@@ -3301,6 +3346,70 @@ private fun formatCollectedCueMeta(item: BookReaderCollectedCue): String {
         append(startLabel)
         append(" - ")
         append(endLabel)
+    }
+}
+
+private data class MetaBadge(val label: String, val value: String)
+
+private fun parseMetaBadges(raw: String?, defaultLabel: String): List<MetaBadge> {
+    val text = raw?.trim().orEmpty()
+    if (text.isBlank()) return emptyList()
+    return text
+        .split(';')
+        .mapNotNull { segment ->
+            val part = segment.trim()
+            if (part.isBlank()) return@mapNotNull null
+            val separator = part.indexOf(':')
+            if (separator > 0 && separator < part.lastIndex) {
+                val label = part.substring(0, separator).trim()
+                val value = part.substring(separator + 1).trim()
+                if (label.isBlank() || value.isBlank()) {
+                    MetaBadge(defaultLabel, part)
+                } else {
+                    MetaBadge(label, value)
+                }
+            } else {
+                MetaBadge(defaultLabel, part)
+            }
+        }
+}
+
+@Composable
+private fun MetaBadgeRow(
+    badges: List<MetaBadge>,
+    labelColor: Color
+) {
+    if (badges.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        badges.forEach { badge ->
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                Surface(
+                    color = labelColor,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = badge.label,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+                Surface(
+                    color = Color(0xFFF5F5F5),
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = badge.value,
+                        color = Color.Black,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+        }
     }
 }
 

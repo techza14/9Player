@@ -167,7 +167,12 @@ std::string frequency_for_dictionary(const TermResult& term, const std::string& 
   }
   if (term.frequencies.empty()) return {};
   if (term.frequencies.size() == 1) {
-    return join_frequency_display(term.frequencies.front().frequencies);
+    const auto& single = term.frequencies.front();
+    const std::string value = join_frequency_display(single.frequencies);
+    if (!single.dict_name.empty() && !value.empty()) {
+      return single.dict_name + ": " + value;
+    }
+    return value;
   }
   std::ostringstream out;
   for (size_t i = 0; i < term.frequencies.size(); ++i) {
@@ -188,7 +193,12 @@ std::string pitch_for_dictionary(const TermResult& term, const std::string& dict
   }
   if (term.pitches.empty()) return {};
   if (term.pitches.size() == 1) {
-    return join_ints(term.pitches.front().pitch_positions);
+    const auto& single = term.pitches.front();
+    const std::string value = join_ints(single.pitch_positions);
+    if (!single.dict_name.empty() && !value.empty()) {
+      return single.dict_name + ": " + value;
+    }
+    return value;
   }
   std::ostringstream out;
   for (size_t i = 0; i < term.pitches.size(); ++i) {
