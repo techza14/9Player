@@ -49,6 +49,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -2068,8 +2070,22 @@ private fun BookReaderScreen(
                                                 modifier = Modifier.padding(8.dp),
                                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
-                                                if (!dictionaryGroup.pitch.isNullOrBlank()) Text("音调：${dictionaryGroup.pitch}")
-                                                if (!dictionaryGroup.frequency.isNullOrBlank()) Text("词频：${dictionaryGroup.frequency}")
+                                                val pitchBadges = parseMetaBadgesBook(dictionaryGroup.pitch, "音调")
+                                                if (pitchBadges.isNotEmpty()) {
+                                                    MetaBadgeRowBook(
+                                                        badges = pitchBadges,
+                                                        labelColor = Color(0xFFE7DDF8),
+                                                        labelTextColor = Color(0xFF4E3A74)
+                                                    )
+                                                }
+                                                val frequencyBadges = parseMetaBadgesBook(dictionaryGroup.frequency, "词频")
+                                                if (frequencyBadges.isNotEmpty()) {
+                                                    MetaBadgeRowBook(
+                                                        badges = frequencyBadges,
+                                                        labelColor = Color(0xFFDDF0DD),
+                                                        labelTextColor = Color(0xFF305E33)
+                                                    )
+                                                }
 
                                                 dictionaryGroup.definitions.forEach { definition ->
                                                     Card(modifier = Modifier.fillMaxWidth()) {
@@ -2112,6 +2128,73 @@ private fun buildHighlightedText(text: String, selectedRange: IntRange?): Annota
         val endExclusive = (range.last + 1).coerceIn(start, text.length)
         if (endExclusive <= start) return@buildAnnotatedString
         addStyle(SpanStyle(background = Color(0x66A0A0A0)), start, endExclusive)
+    }
+}
+
+private data class MetaBadgeBook(val label: String, val value: String)
+
+private fun parseMetaBadgesBook(raw: String?, defaultLabel: String): List<MetaBadgeBook> {
+    val text = raw?.trim().orEmpty()
+    if (text.isBlank()) return emptyList()
+    return text
+        .split(';')
+        .mapNotNull { segment ->
+            val part = segment.trim()
+            if (part.isBlank()) return@mapNotNull null
+            val separator = part.indexOf(':')
+            if (separator > 0 && separator < part.lastIndex) {
+                val label = part.substring(0, separator).trim()
+                val value = part.substring(separator + 1).trim()
+                if (label.isBlank() || value.isBlank()) {
+                    MetaBadgeBook(defaultLabel, part)
+                } else {
+                    MetaBadgeBook(label, value)
+                }
+            } else {
+                MetaBadgeBook(defaultLabel, part)
+            }
+        }
+}
+
+@Composable
+private fun MetaBadgeRowBook(
+    badges: List<MetaBadgeBook>,
+    labelColor: Color,
+    labelTextColor: Color
+) {
+    if (badges.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        badges.forEach { badge ->
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                Surface(
+                    color = labelColor,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = badge.label,
+                        color = labelTextColor,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+                Surface(
+                    color = Color(0xFFF2F2F2),
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = badge.value,
+                        color = Color.Black,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
     }
 }
 

@@ -1937,14 +1937,16 @@ private fun ReaderSyncScreen() {
                                                 if (pitchBadges.isNotEmpty()) {
                                                     MetaBadgeRow(
                                                         badges = pitchBadges,
-                                                        labelColor = Color(0xFF6A3EC5)
+                                                        labelColor = Color(0xFFE7DDF8),
+                                                        labelTextColor = Color(0xFF4E3A74)
                                                     )
                                                 }
                                                 val frequencyBadges = parseMetaBadges(dictionaryGroup.frequency, "词频")
                                                 if (frequencyBadges.isNotEmpty()) {
                                                     MetaBadgeRow(
                                                         badges = frequencyBadges,
-                                                        labelColor = Color(0xFF4CAF50)
+                                                        labelColor = Color(0xFFDDF0DD),
+                                                        labelTextColor = Color(0xFF305E33)
                                                     )
                                                 }
 
@@ -2355,14 +2357,16 @@ private fun ReaderSyncScreen() {
                                                     if (pitchBadges.isNotEmpty()) {
                                                         MetaBadgeRow(
                                                             badges = pitchBadges,
-                                                            labelColor = Color(0xFF6A3EC5)
+                                                            labelColor = Color(0xFFE7DDF8),
+                                                            labelTextColor = Color(0xFF4E3A74)
                                                         )
                                                     }
                                                     val frequencyBadges = parseMetaBadges(dictionaryGroup.frequency, "词频")
                                                     if (frequencyBadges.isNotEmpty()) {
                                                         MetaBadgeRow(
                                                             badges = frequencyBadges,
-                                                            labelColor = Color(0xFF4CAF50)
+                                                            labelColor = Color(0xFFDDF0DD),
+                                                            labelTextColor = Color(0xFF305E33)
                                                         )
                                                     }
 
@@ -3377,7 +3381,8 @@ private fun parseMetaBadges(raw: String?, defaultLabel: String): List<MetaBadge>
 @Composable
 private fun MetaBadgeRow(
     badges: List<MetaBadge>,
-    labelColor: Color
+    labelColor: Color,
+    labelTextColor: Color
 ) {
     if (badges.isEmpty()) return
     Row(
@@ -3394,18 +3399,20 @@ private fun MetaBadgeRow(
                 ) {
                     Text(
                         text = badge.label,
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        color = labelTextColor,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                     )
                 }
                 Surface(
-                    color = Color(0xFFF5F5F5),
+                    color = Color(0xFFF2F2F2),
                     shape = RoundedCornerShape(4.dp)
                 ) {
                     Text(
                         text = badge.value,
                         color = Color.Black,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                     )
                 }
             }
