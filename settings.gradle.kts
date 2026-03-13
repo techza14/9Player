@@ -20,6 +20,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "tset"
+rootProject.name = "9player"
 include(":app")
  
