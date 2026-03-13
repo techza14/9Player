@@ -3476,12 +3476,15 @@ private fun PitchBadgeRow(
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
             )
         }
-        group.values.forEach { number ->
+        group.values.forEachIndexed { index, number ->
             Surface(
                 color = Color(0xFFF2F2F2),
                 shape = RoundedCornerShape(4.dp)
             ) {
-                PitchValueChipContent(reading = group.reading, number = number)
+                PitchValueChipContent(
+                    reading = if (index == 0) group.reading else null,
+                    number = number
+                )
             }
         }
     }
@@ -3491,6 +3494,7 @@ private fun PitchBadgeRow(
 private fun PitchValueChipContent(reading: String?, number: String) {
     val normalized = number.trim()
     val pitchPart = if (normalized.startsWith("[") && normalized.endsWith("]")) normalized else "[$normalized]"
+    val accent = normalized.trim('[', ']').toIntOrNull()
     Row(
         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -3498,20 +3502,7 @@ private fun PitchValueChipContent(reading: String?, number: String) {
     ) {
         val kana = reading?.trim().orEmpty()
         if (kana.isNotBlank()) {
-            Text(
-                text = kana,
-                color = Color.Black,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.drawBehind {
-                    val y = 1.dp.toPx()
-                    drawLine(
-                        color = Color.Black.copy(alpha = 0.7f),
-                        start = androidx.compose.ui.geometry.Offset(0f, y),
-                        end = androidx.compose.ui.geometry.Offset(size.width, y),
-                        strokeWidth = 1.dp.toPx()
-                    )
-                }
-            )
+            PitchReadingWithAccent(reading = kana, accent = accent)
         }
         Text(
             text = pitchPart,
@@ -3519,6 +3510,95 @@ private fun PitchValueChipContent(reading: String?, number: String) {
             style = MaterialTheme.typography.labelSmall
         )
     }
+}
+
+@Composable
+private fun PitchReadingWithAccent(reading: String, accent: Int?) {
+    val moras = remember(reading) { splitIntoMoras(reading) }
+    if (moras.isEmpty() || accent == null) {
+        Text(
+            text = reading,
+            color = Color.Black,
+            style = MaterialTheme.typography.labelSmall
+        )
+        return
+    }
+
+    val moraCount = moras.size
+    Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+        moras.forEachIndexed { index, mora ->
+            val moraIndex = index + 1
+            val high = isHighMora(moraIndex = moraIndex, moraCount = moraCount, accent = accent)
+            val dropAfter = isDropAfterMora(moraIndex = moraIndex, moraCount = moraCount, accent = accent)
+            Text(
+                text = mora,
+                color = Color.Black,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .drawBehind {
+                        if (!high) return@drawBehind
+                        val stroke = 1.dp.toPx()
+                        val y = 1.dp.toPx()
+                        drawLine(
+                            color = Color.Black.copy(alpha = 0.8f),
+                            start = androidx.compose.ui.geometry.Offset(0f, y),
+                            end = androidx.compose.ui.geometry.Offset(size.width, y),
+                            strokeWidth = stroke
+                        )
+                        if (dropAfter) {
+                            val x = size.width - stroke / 2f
+                            drawLine(
+                                color = Color.Black.copy(alpha = 0.8f),
+                                start = androidx.compose.ui.geometry.Offset(x, y),
+                                end = androidx.compose.ui.geometry.Offset(x, size.height * 0.72f),
+                                strokeWidth = stroke
+                            )
+                        }
+                    }
+            )
+        }
+    }
+}
+
+private fun splitIntoMoras(reading: String): List<String> {
+    if (reading.isBlank()) return emptyList()
+    val smallKana = setOf(
+        'ゃ', 'ゅ', 'ょ', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'ゎ', 'ゕ', 'ゖ',
+        'ャ', 'ュ', 'ョ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ヮ', 'ヵ', 'ヶ'
+    )
+    val out = mutableListOf<String>()
+    reading.forEach { ch ->
+        when {
+            ch == '\u3099' || ch == '\u309A' -> {
+                if (out.isNotEmpty()) {
+                    out[out.lastIndex] = out.last() + ch
+                } else {
+                    out += ch.toString()
+                }
+            }
+            ch in smallKana && out.isNotEmpty() -> {
+                out[out.lastIndex] = out.last() + ch
+            }
+            else -> out += ch.toString()
+        }
+    }
+    return out
+}
+
+private fun isHighMora(moraIndex: Int, moraCount: Int, accent: Int): Boolean {
+    if (moraIndex !in 1..moraCount) return false
+    return when {
+        accent <= 0 -> moraIndex >= 2
+        accent == 1 -> moraIndex == 1
+        accent <= moraCount -> moraIndex in 2..accent
+        else -> moraIndex >= 2
+    }
+}
+
+private fun isDropAfterMora(moraIndex: Int, moraCount: Int, accent: Int): Boolean {
+    if (accent <= 0) return false
+    return accent < moraCount && moraIndex == accent
 }
 
 
