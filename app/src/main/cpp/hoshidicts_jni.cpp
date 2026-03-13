@@ -261,7 +261,7 @@ jstring to_jstring(JNIEnv* env, const std::string& value) { return env->NewStrin
 }  // namespace
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_tekuza_p9player_HoshiNativeBridge_nativeImportZip(JNIEnv* env,
+Java_moe_tekuza_m9player_HoshiNativeBridge_nativeImportZip(JNIEnv* env,
                                                             jclass,
                                                             jstring j_zip_path,
                                                             jstring j_output_dir,
@@ -282,7 +282,7 @@ Java_com_tekuza_p9player_HoshiNativeBridge_nativeImportZip(JNIEnv* env,
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_tekuza_p9player_HoshiNativeBridge_nativeLookup(JNIEnv* env,
+Java_moe_tekuza_m9player_HoshiNativeBridge_nativeLookup(JNIEnv* env,
                                                          jclass,
                                                          jobjectArray j_dictionary_paths,
                                                          jstring j_query,
@@ -316,7 +316,7 @@ Java_com_tekuza_p9player_HoshiNativeBridge_nativeLookup(JNIEnv* env,
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_tekuza_p9player_HoshiNativeBridge_nativeClearLookupCache(JNIEnv*,
+Java_moe_tekuza_m9player_HoshiNativeBridge_nativeClearLookupCache(JNIEnv*,
                                                                    jclass) {
   std::lock_guard<std::mutex> lock(g_context_cache_mutex);
   g_context_cache.clear();
