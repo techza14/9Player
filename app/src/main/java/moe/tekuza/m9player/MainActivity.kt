@@ -70,6 +70,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -1941,17 +1942,19 @@ private fun ReaderSyncScreen() {
                                                         labelTextColor = Color(0xFF305E33)
                                                     )
                                                 }
-                                                val pitchBadges = parsePitchBadges(
+                                                val pitchBadges = parsePitchBadgeGroups(
                                                     raw = dictionaryGroup.pitch,
                                                     reading = groupedResult.reading,
                                                     defaultLabel = "音调"
                                                 )
                                                 if (pitchBadges.isNotEmpty()) {
-                                                    MetaBadgeRow(
-                                                        badges = pitchBadges,
-                                                        labelColor = Color(0xFFE7DDF8),
-                                                        labelTextColor = Color(0xFF4E3A74)
-                                                    )
+                                                    pitchBadges.forEach { group ->
+                                                        PitchBadgeRow(
+                                                            group = group,
+                                                            labelColor = Color(0xFFE7DDF8),
+                                                            labelTextColor = Color(0xFF4E3A74)
+                                                        )
+                                                    }
                                                 }
 
                                                 dictionaryGroup.definitions.forEach { definition ->
@@ -2365,17 +2368,19 @@ private fun ReaderSyncScreen() {
                                                             labelTextColor = Color(0xFF305E33)
                                                         )
                                                     }
-                                                    val pitchBadges = parsePitchBadges(
+                                                    val pitchBadges = parsePitchBadgeGroups(
                                                         raw = dictionaryGroup.pitch,
                                                         reading = groupedResult.reading,
                                                         defaultLabel = "音调"
                                                     )
                                                     if (pitchBadges.isNotEmpty()) {
-                                                        MetaBadgeRow(
-                                                            badges = pitchBadges,
-                                                            labelColor = Color(0xFFE7DDF8),
-                                                            labelTextColor = Color(0xFF4E3A74)
-                                                        )
+                                                        pitchBadges.forEach { group ->
+                                                            PitchBadgeRow(
+                                                                group = group,
+                                                                labelColor = Color(0xFFE7DDF8),
+                                                                labelTextColor = Color(0xFF4E3A74)
+                                                            )
+                                                        }
                                                     }
 
                                                     dictionaryGroup.definitions.forEach { definition ->
@@ -3362,6 +3367,7 @@ private fun formatCollectedCueMeta(item: BookReaderCollectedCue): String {
 }
 
 private data class MetaBadge(val label: String, val value: String)
+private data class PitchBadgeGroup(val label: String, val reading: String?, val values: List<String>)
 
 private fun parseMetaBadges(raw: String?, defaultLabel: String): List<MetaBadge> {
     val text = raw?.trim().orEmpty()
@@ -3386,27 +3392,16 @@ private fun parseMetaBadges(raw: String?, defaultLabel: String): List<MetaBadge>
         }
 }
 
-private fun parsePitchBadges(raw: String?, reading: String?, defaultLabel: String): List<MetaBadge> {
-    return parseMetaBadges(raw, defaultLabel).flatMap { badge ->
+private fun parsePitchBadgeGroups(raw: String?, reading: String?, defaultLabel: String): List<PitchBadgeGroup> {
+    return parseMetaBadges(raw, defaultLabel).mapNotNull { badge ->
         val values = extractPitchNumbers(badge.value)
-        if (values.isEmpty()) {
-            listOf(badge.copy(value = formatPitchBadgeValue(badge.value, reading)))
-        } else {
-            values.map { number -> badge.copy(value = formatPitchBadgeValue(number, reading)) }
-        }
+        if (values.isEmpty()) return@mapNotNull null
+        PitchBadgeGroup(
+            label = badge.label,
+            reading = reading?.takeIf { it.isNotBlank() },
+            values = values
+        )
     }
-}
-
-private fun formatPitchBadgeValue(value: String, reading: String?): String {
-    val trimmed = value.trim()
-    if (trimmed.isBlank()) return trimmed
-    val hasBracket = trimmed.contains('[') || trimmed.contains(']')
-    val core = if (hasBracket) trimmed else "[$trimmed]"
-    val readingDisplay = reading
-        ?.takeIf { it.isNotBlank() }
-        ?.let(::formatPitchReadingWithOverline)
-        .orEmpty()
-    return if (readingDisplay.isNotBlank()) "$readingDisplay $core" else core
 }
 
 private fun extractPitchNumbers(raw: String): List<String> {
@@ -3414,19 +3409,6 @@ private fun extractPitchNumbers(raw: String): List<String> {
         .findAll(raw)
         .map { it.value }
         .toList()
-}
-
-private fun formatPitchReadingWithOverline(reading: String): String {
-    val source = reading.trim()
-    if (source.isBlank()) return source
-    return buildString(source.length * 2) {
-        source.forEach { ch ->
-            append(ch)
-            if (!ch.isWhitespace()) {
-                append('\u0305')
-            }
-        }
-    }
 }
 
 @Composable
@@ -3468,6 +3450,74 @@ private fun MetaBadgeRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PitchBadgeRow(
+    group: PitchBadgeGroup,
+    labelColor: Color,
+    labelTextColor: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Surface(
+            color = labelColor,
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Text(
+                text = group.label,
+                color = labelTextColor,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            )
+        }
+        group.values.forEach { number ->
+            Surface(
+                color = Color(0xFFF2F2F2),
+                shape = RoundedCornerShape(4.dp)
+            ) {
+                PitchValueChipContent(reading = group.reading, number = number)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PitchValueChipContent(reading: String?, number: String) {
+    val normalized = number.trim()
+    val pitchPart = if (normalized.startsWith("[") && normalized.endsWith("]")) normalized else "[$normalized]"
+    Row(
+        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        val kana = reading?.trim().orEmpty()
+        if (kana.isNotBlank()) {
+            Text(
+                text = kana,
+                color = Color.Black,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.drawBehind {
+                    val y = 1.dp.toPx()
+                    drawLine(
+                        color = Color.Black.copy(alpha = 0.7f),
+                        start = androidx.compose.ui.geometry.Offset(0f, y),
+                        end = androidx.compose.ui.geometry.Offset(size.width, y),
+                        strokeWidth = 1.dp.toPx()
+                    )
+                }
+            )
+        }
+        Text(
+            text = pitchPart,
+            color = Color.Black,
+            style = MaterialTheme.typography.labelSmall
+        )
     }
 }
 
