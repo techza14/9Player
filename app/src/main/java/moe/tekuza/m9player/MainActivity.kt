@@ -3387,8 +3387,13 @@ private fun parseMetaBadges(raw: String?, defaultLabel: String): List<MetaBadge>
 }
 
 private fun parsePitchBadges(raw: String?, reading: String?, defaultLabel: String): List<MetaBadge> {
-    return parseMetaBadges(raw, defaultLabel).map { badge ->
-        badge.copy(value = formatPitchBadgeValue(badge.value, reading))
+    return parseMetaBadges(raw, defaultLabel).flatMap { badge ->
+        val values = extractPitchNumbers(badge.value)
+        if (values.isEmpty()) {
+            listOf(badge.copy(value = formatPitchBadgeValue(badge.value, reading)))
+        } else {
+            values.map { number -> badge.copy(value = formatPitchBadgeValue(number, reading)) }
+        }
     }
 }
 
@@ -3396,11 +3401,32 @@ private fun formatPitchBadgeValue(value: String, reading: String?): String {
     val trimmed = value.trim()
     if (trimmed.isBlank()) return trimmed
     val hasBracket = trimmed.contains('[') || trimmed.contains(']')
-    if (hasBracket) {
-        return if (!reading.isNullOrBlank() && !trimmed.contains(reading)) "$reading $trimmed" else trimmed
+    val core = if (hasBracket) trimmed else "[$trimmed]"
+    val readingDisplay = reading
+        ?.takeIf { it.isNotBlank() }
+        ?.let(::formatPitchReadingWithOverline)
+        .orEmpty()
+    return if (readingDisplay.isNotBlank()) "$readingDisplay $core" else core
+}
+
+private fun extractPitchNumbers(raw: String): List<String> {
+    return Regex("-?\\d+")
+        .findAll(raw)
+        .map { it.value }
+        .toList()
+}
+
+private fun formatPitchReadingWithOverline(reading: String): String {
+    val source = reading.trim()
+    if (source.isBlank()) return source
+    return buildString(source.length * 2) {
+        source.forEach { ch ->
+            append(ch)
+            if (!ch.isWhitespace()) {
+                append('\u0305')
+            }
+        }
     }
-    val core = "[$trimmed]"
-    return if (!reading.isNullOrBlank()) "$reading $core" else core
 }
 
 @Composable

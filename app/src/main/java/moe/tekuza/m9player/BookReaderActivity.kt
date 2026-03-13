@@ -2161,8 +2161,13 @@ private fun parseMetaBadgesBook(raw: String?, defaultLabel: String): List<MetaBa
 }
 
 private fun parsePitchBadgesBook(raw: String?, reading: String?, defaultLabel: String): List<MetaBadgeBook> {
-    return parseMetaBadgesBook(raw, defaultLabel).map { badge ->
-        badge.copy(value = formatPitchBadgeValueBook(badge.value, reading))
+    return parseMetaBadgesBook(raw, defaultLabel).flatMap { badge ->
+        val values = extractPitchNumbersBook(badge.value)
+        if (values.isEmpty()) {
+            listOf(badge.copy(value = formatPitchBadgeValueBook(badge.value, reading)))
+        } else {
+            values.map { number -> badge.copy(value = formatPitchBadgeValueBook(number, reading)) }
+        }
     }
 }
 
@@ -2170,11 +2175,32 @@ private fun formatPitchBadgeValueBook(value: String, reading: String?): String {
     val trimmed = value.trim()
     if (trimmed.isBlank()) return trimmed
     val hasBracket = trimmed.contains('[') || trimmed.contains(']')
-    if (hasBracket) {
-        return if (!reading.isNullOrBlank() && !trimmed.contains(reading)) "$reading $trimmed" else trimmed
+    val core = if (hasBracket) trimmed else "[$trimmed]"
+    val readingDisplay = reading
+        ?.takeIf { it.isNotBlank() }
+        ?.let(::formatPitchReadingWithOverlineBook)
+        .orEmpty()
+    return if (readingDisplay.isNotBlank()) "$readingDisplay $core" else core
+}
+
+private fun extractPitchNumbersBook(raw: String): List<String> {
+    return Regex("-?\\d+")
+        .findAll(raw)
+        .map { it.value }
+        .toList()
+}
+
+private fun formatPitchReadingWithOverlineBook(reading: String): String {
+    val source = reading.trim()
+    if (source.isBlank()) return source
+    return buildString(source.length * 2) {
+        source.forEach { ch ->
+            append(ch)
+            if (!ch.isWhitespace()) {
+                append('\u0305')
+            }
+        }
     }
-    val core = "[$trimmed]"
-    return if (!reading.isNullOrBlank()) "$reading $core" else core
 }
 
 @Composable
