@@ -35,10 +35,16 @@ SRT 可参考：
 2. 进入 设置 -> 手柄蓝牙
 3. 点击请求 Shizuku 权限
 
+！！单独断开手柄蓝牙功能可能不生效
+
 ## 控制模式
 
 处于控制模式时，屏幕不会自然熄屏。
 
+## 悬浮球
+
+悬浮球 设置 -> 有声书 可开启
+播放有声书时 回到桌面/切换app 即可显示
 ## Anki
 
 目前不支持音调、词频等辞典。
@@ -51,10 +57,12 @@ SRT 可参考：
 </p>
 
 ```cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}```
+{cut-audio} 句子音频
+{bookt-title} 音频文件标题
 
 Anki模板:[Lapis](https://github.com/donkuri/lapis)
 ## 待改善
-点击查词
+断开手柄蓝牙不生效
 
 ##  特别感谢
 [hoshidicts](https://github.com/Manhhao/hoshidicts)
