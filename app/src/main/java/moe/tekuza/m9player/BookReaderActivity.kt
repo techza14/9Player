@@ -2070,20 +2070,24 @@ private fun BookReaderScreen(
                                                 modifier = Modifier.padding(8.dp),
                                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
-                                                val pitchBadges = parseMetaBadgesBook(dictionaryGroup.pitch, "音调")
-                                                if (pitchBadges.isNotEmpty()) {
-                                                    MetaBadgeRowBook(
-                                                        badges = pitchBadges,
-                                                        labelColor = Color(0xFFE7DDF8),
-                                                        labelTextColor = Color(0xFF4E3A74)
-                                                    )
-                                                }
                                                 val frequencyBadges = parseMetaBadgesBook(dictionaryGroup.frequency, "词频")
                                                 if (frequencyBadges.isNotEmpty()) {
                                                     MetaBadgeRowBook(
                                                         badges = frequencyBadges,
                                                         labelColor = Color(0xFFDDF0DD),
                                                         labelTextColor = Color(0xFF305E33)
+                                                    )
+                                                }
+                                                val pitchBadges = parsePitchBadgesBook(
+                                                    raw = dictionaryGroup.pitch,
+                                                    reading = groupedResult.reading,
+                                                    defaultLabel = "音调"
+                                                )
+                                                if (pitchBadges.isNotEmpty()) {
+                                                    MetaBadgeRowBook(
+                                                        badges = pitchBadges,
+                                                        labelColor = Color(0xFFE7DDF8),
+                                                        labelTextColor = Color(0xFF4E3A74)
                                                     )
                                                 }
 
@@ -2154,6 +2158,23 @@ private fun parseMetaBadgesBook(raw: String?, defaultLabel: String): List<MetaBa
                 MetaBadgeBook(defaultLabel, part)
             }
         }
+}
+
+private fun parsePitchBadgesBook(raw: String?, reading: String?, defaultLabel: String): List<MetaBadgeBook> {
+    return parseMetaBadgesBook(raw, defaultLabel).map { badge ->
+        badge.copy(value = formatPitchBadgeValueBook(badge.value, reading))
+    }
+}
+
+private fun formatPitchBadgeValueBook(value: String, reading: String?): String {
+    val trimmed = value.trim()
+    if (trimmed.isBlank()) return trimmed
+    val hasBracket = trimmed.contains('[') || trimmed.contains(']')
+    if (hasBracket) {
+        return if (!reading.isNullOrBlank() && !trimmed.contains(reading)) "$reading $trimmed" else trimmed
+    }
+    val core = "[$trimmed]"
+    return if (!reading.isNullOrBlank()) "$reading $core" else core
 }
 
 @Composable

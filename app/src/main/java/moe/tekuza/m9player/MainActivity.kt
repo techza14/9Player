@@ -1933,20 +1933,24 @@ private fun ReaderSyncScreen() {
                                                 modifier = Modifier.padding(8.dp),
                                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
-                                                val pitchBadges = parseMetaBadges(dictionaryGroup.pitch, "音调")
-                                                if (pitchBadges.isNotEmpty()) {
-                                                    MetaBadgeRow(
-                                                        badges = pitchBadges,
-                                                        labelColor = Color(0xFFE7DDF8),
-                                                        labelTextColor = Color(0xFF4E3A74)
-                                                    )
-                                                }
                                                 val frequencyBadges = parseMetaBadges(dictionaryGroup.frequency, "词频")
                                                 if (frequencyBadges.isNotEmpty()) {
                                                     MetaBadgeRow(
                                                         badges = frequencyBadges,
                                                         labelColor = Color(0xFFDDF0DD),
                                                         labelTextColor = Color(0xFF305E33)
+                                                    )
+                                                }
+                                                val pitchBadges = parsePitchBadges(
+                                                    raw = dictionaryGroup.pitch,
+                                                    reading = groupedResult.reading,
+                                                    defaultLabel = "音调"
+                                                )
+                                                if (pitchBadges.isNotEmpty()) {
+                                                    MetaBadgeRow(
+                                                        badges = pitchBadges,
+                                                        labelColor = Color(0xFFE7DDF8),
+                                                        labelTextColor = Color(0xFF4E3A74)
                                                     )
                                                 }
 
@@ -2353,20 +2357,24 @@ private fun ReaderSyncScreen() {
                                                     modifier = Modifier.padding(8.dp),
                                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                                 ) {
-                                                    val pitchBadges = parseMetaBadges(dictionaryGroup.pitch, "音调")
-                                                    if (pitchBadges.isNotEmpty()) {
-                                                        MetaBadgeRow(
-                                                            badges = pitchBadges,
-                                                            labelColor = Color(0xFFE7DDF8),
-                                                            labelTextColor = Color(0xFF4E3A74)
-                                                        )
-                                                    }
                                                     val frequencyBadges = parseMetaBadges(dictionaryGroup.frequency, "词频")
                                                     if (frequencyBadges.isNotEmpty()) {
                                                         MetaBadgeRow(
                                                             badges = frequencyBadges,
                                                             labelColor = Color(0xFFDDF0DD),
                                                             labelTextColor = Color(0xFF305E33)
+                                                        )
+                                                    }
+                                                    val pitchBadges = parsePitchBadges(
+                                                        raw = dictionaryGroup.pitch,
+                                                        reading = groupedResult.reading,
+                                                        defaultLabel = "音调"
+                                                    )
+                                                    if (pitchBadges.isNotEmpty()) {
+                                                        MetaBadgeRow(
+                                                            badges = pitchBadges,
+                                                            labelColor = Color(0xFFE7DDF8),
+                                                            labelTextColor = Color(0xFF4E3A74)
                                                         )
                                                     }
 
@@ -3376,6 +3384,23 @@ private fun parseMetaBadges(raw: String?, defaultLabel: String): List<MetaBadge>
                 MetaBadge(defaultLabel, part)
             }
         }
+}
+
+private fun parsePitchBadges(raw: String?, reading: String?, defaultLabel: String): List<MetaBadge> {
+    return parseMetaBadges(raw, defaultLabel).map { badge ->
+        badge.copy(value = formatPitchBadgeValue(badge.value, reading))
+    }
+}
+
+private fun formatPitchBadgeValue(value: String, reading: String?): String {
+    val trimmed = value.trim()
+    if (trimmed.isBlank()) return trimmed
+    val hasBracket = trimmed.contains('[') || trimmed.contains(']')
+    if (hasBracket) {
+        return if (!reading.isNullOrBlank() && !trimmed.contains(reading)) "$reading $trimmed" else trimmed
+    }
+    val core = "[$trimmed]"
+    return if (!reading.isNullOrBlank()) "$reading $core" else core
 }
 
 @Composable
