@@ -7,7 +7,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -297,77 +296,26 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
                     Text("Anki 错误：$ankiError", color = MaterialTheme.colorScheme.error)
                 }
 
-                OutlinedTextField(
+                AnkiListSelector(
+                    label = "牌组",
                     value = ankiDeckName,
-                    onValueChange = {
-                        ankiDeckName = it
+                    options = ankiDecks,
+                    placeholder = "请选择牌组",
+                    onValueChange = { selectedDeck ->
+                        ankiDeckName = selectedDeck
                         persistAnkiConfig()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("牌组") },
-                    singleLine = true
-                )
-                if (ankiDecks.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        ankiDecks.take(20).forEach { deck ->
-                            OutlinedButton(
-                                onClick = {
-                                    ankiDeckName = deck
-                                    persistAnkiConfig()
-                                }
-                            ) {
-                                Text(deck)
-                            }
-                        }
                     }
-                }
+                )
 
-                OutlinedTextField(
+                AnkiListSelector(
+                    label = "笔记类型/模板",
                     value = ankiModelName,
-                    onValueChange = {
-                        val typedModel = it
-                        val previousModelName = ankiModelName.trim()
-                        if (previousModelName.isNotBlank() && previousModelName != typedModel.trim()) {
-                            ankiModelTemplateSnapshots[previousModelName] = ankiFieldTemplates.toMap()
-                        }
-                        ankiModelName = typedModel
-                        val model = ankiModels.firstOrNull { candidate -> candidate.name == typedModel.trim() }
-                        if (model != null) {
-                            val restoredTemplates = ankiModelTemplateSnapshots[typedModel.trim()].orEmpty()
-                            syncTemplatesWithModelFields(
-                                fields = model.fields,
-                                modelTemplates = restoredTemplates
-                            )
-                        } else {
-                            ankiModelFields = emptyList()
-                        }
-                        persistAnkiConfig()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("笔记类型/模板") },
-                    singleLine = true
-                )
-                if (ankiModels.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        ankiModels.take(20).forEach { model ->
-                            OutlinedButton(
-                                onClick = { selectAnkiModel(model.name) }
-                            ) {
-                                Text(model.name)
-                            }
-                        }
+                    options = ankiModels.map { it.name },
+                    placeholder = "请选择模板",
+                    onValueChange = { selectedModel ->
+                        selectAnkiModel(selectedModel)
                     }
-                }
+                )
 
                 OutlinedTextField(
                     value = ankiTagsInput,
@@ -454,6 +402,67 @@ private fun saveAnkiModelTemplateSnapshots(
         .edit()
         .putString(ANKI_MODEL_TEMPLATE_SNAPSHOTS_KEY, root.toString())
         .apply()
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AnkiListSelector(
+    label: String,
+    value: String,
+    options: List<String>,
+    placeholder: String,
+    onValueChange: (String) -> Unit
+) {
+    val distinctOptions = remember(options) {
+        options
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+    }
+    var expanded by remember(label) { mutableStateOf(false) }
+
+    if (distinctOptions.isEmpty()) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(label) },
+            singleLine = true
+        )
+        return
+    }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded }
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            readOnly = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(type = MenuAnchorType.PrimaryNotEditable),
+            label = { Text(label) },
+            placeholder = { Text(placeholder) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            singleLine = true
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            distinctOptions.forEach { choice ->
+                DropdownMenuItem(
+                    text = { Text(choice) },
+                    onClick = {
+                        expanded = false
+                        onValueChange(choice)
+                    }
+                )
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
