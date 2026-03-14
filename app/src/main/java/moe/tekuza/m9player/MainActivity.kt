@@ -1,5 +1,6 @@
 ﻿package moe.tekuza.m9player
 
+import android.app.Activity
 import android.app.ActivityManager
 import android.content.ContentResolver
 import android.content.Context
@@ -15,6 +16,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ImageView
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -207,6 +209,7 @@ private data class ReaderBook(
 @OptIn(ExperimentalFoundationApi::class)
 private fun ReaderSyncScreen() {
     val context = LocalContext.current
+    val activity = context as? Activity
     val lifecycleOwner = LocalLifecycleOwner.current
     val view = LocalView.current
     val contentResolver = context.contentResolver
@@ -289,6 +292,19 @@ private fun ReaderSyncScreen() {
     var pendingCollectionPlayMs by remember { mutableStateOf<Long?>(null) }
     var pendingCollectionStopMs by remember { mutableStateOf<Long?>(null) }
     var collectionPlayRequestNonce by remember { mutableStateOf(0L) }
+
+    BackHandler {
+        when {
+            mainLookupPopupVisible -> mainLookupPopupVisible = false
+            addBookDialogVisible -> addBookDialogVisible = false
+            importGuideVisible -> importGuideVisible = false
+            clearCollectionsConfirmVisible -> clearCollectionsConfirmVisible = false
+            deleteBooksConfirmVisible -> deleteBooksConfirmVisible = false
+            activeSection != MiningSection.MAIN -> activeSection = MiningSection.MAIN
+            BookReaderFloatingBridge.currentAudioUri() != null -> activity?.moveTaskToBack(true)
+            else -> activity?.finish()
+        }
+    }
 
     val player = remember(context) {
         ExoPlayer.Builder(context)
@@ -3476,13 +3492,13 @@ private fun PitchBadgeRow(
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
             )
         }
-        group.values.forEachIndexed { index, number ->
+        group.values.forEach { number ->
             Surface(
                 color = Color(0xFFF2F2F2),
                 shape = RoundedCornerShape(4.dp)
             ) {
                 PitchValueChipContent(
-                    reading = if (index == 0) group.reading else null,
+                    reading = group.reading,
                     number = number
                 )
             }
@@ -3551,7 +3567,7 @@ private fun PitchReadingWithAccent(reading: String, accent: Int?) {
                             drawLine(
                                 color = Color.Black.copy(alpha = 0.8f),
                                 start = androidx.compose.ui.geometry.Offset(x, y),
-                                end = androidx.compose.ui.geometry.Offset(x, size.height * 0.72f),
+                                end = androidx.compose.ui.geometry.Offset(x, size.height * 0.36f),
                                 strokeWidth = stroke
                             )
                         }

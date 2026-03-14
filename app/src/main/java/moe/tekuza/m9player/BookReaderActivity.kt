@@ -2248,13 +2248,13 @@ private fun PitchBadgeRowBook(
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
             )
         }
-        group.values.forEachIndexed { index, number ->
+        group.values.forEach { number ->
             Surface(
                 color = Color(0xFFF2F2F2),
                 shape = RoundedCornerShape(4.dp)
             ) {
                 PitchValueChipContentBook(
-                    reading = if (index == 0) group.reading else null,
+                    reading = group.reading,
                     number = number
                 )
             }
@@ -2323,7 +2323,7 @@ private fun PitchReadingWithAccentBook(reading: String, accent: Int?) {
                             drawLine(
                                 color = Color.Black.copy(alpha = 0.8f),
                                 start = androidx.compose.ui.geometry.Offset(x, y),
-                                end = androidx.compose.ui.geometry.Offset(x, size.height * 0.72f),
+                                end = androidx.compose.ui.geometry.Offset(x, size.height * 0.36f),
                                 strokeWidth = stroke
                             )
                         }

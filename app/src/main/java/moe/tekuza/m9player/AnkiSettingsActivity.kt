@@ -465,7 +465,19 @@ private fun AnkiFieldVariableInput(
     onValueChange: (String) -> Unit
 ) {
     var expanded by remember(fieldName) { mutableStateOf(false) }
-    val filteredOptions = remember(options) { options.distinct() }
+    val filteredOptions = remember(options, value) {
+        val distinctOptions = options.distinct()
+        val query = value.trim()
+        if (query.isBlank()) {
+            distinctOptions
+        } else {
+            val startsWithMatches = distinctOptions.filter { it.startsWith(query, ignoreCase = true) }
+            val containsMatches = distinctOptions.filter {
+                !it.startsWith(query, ignoreCase = true) && it.contains(query, ignoreCase = true)
+            }
+            startsWithMatches + containsMatches
+        }
+    }
 
     ExposedDropdownMenuBox(
         expanded = expanded && filteredOptions.isNotEmpty(),
