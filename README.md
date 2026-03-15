@@ -27,25 +27,6 @@
 SRT 可参考：
 [SubPlz](https://github.com/kanjieater/SubPlz)
 
-
-## 手柄
-
-如果要使用“断开手柄蓝牙”功能：
-
-1. 先安装并配置 Shizuku
-2. 进入 设置 -> 手柄蓝牙
-3. 点击请求 Shizuku 权限
-
-！！单独断开手柄蓝牙功能可能不生效
-
-## 控制模式
-
-处于控制模式时，屏幕不会自然熄屏。
-
-## 悬浮球
-
-悬浮球 设置 -> 有声书 可开启
-播放有声书时 回到桌面/切换app 即可显示
 ## Anki
 
 支持Yomitan词汇，音调，词频辞典。
@@ -62,6 +43,29 @@ SRT 可参考：
 {bookt-title} 音频文件名字
 
 Anki模板:[Lapis](https://github.com/donkuri/lapis)
+## 手柄
+
+如果要使用“断开手柄蓝牙”功能：
+
+1. 先安装并配置 Shizuku
+2. 进入 设置 -> 手柄蓝牙
+3. 点击请求 Shizuku 权限
+
+！！单独断开手柄蓝牙功能可能不生效
+
+
+## 音频
+可使用本地tts or 导入 [android.db](https://github.com/KamWithK/AnkiconnectAndroid?tab=readme-ov-file#additional-instructions-local-audio)
+
+## 控制模式
+
+处于控制模式时，屏幕不会自然熄屏。
+
+## 悬浮球
+
+悬浮球 设置 -> 有声书 可开启
+播放有声书时 回到桌面/切换app 即可显示
+
 ## 待改善
 
 断开手柄蓝牙不生效

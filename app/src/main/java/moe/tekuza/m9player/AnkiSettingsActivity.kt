@@ -58,6 +58,7 @@ class AnkiSettingsActivity : ComponentActivity() {
 
 private val ANKI_FIELD_VARIABLE_CHOICES = listOf(
     "",
+    "{audio}",
     "{cut-audio}",
     "{cloze-body}",
     "{cloze-body-kana}",
@@ -336,7 +337,7 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
                         Text("清空字段变量")
                     }
                     Text(
-                        "{cut-audio} 用于导出剪切音频，也可以直接输入自定义文本。"
+                        "{audio} 用于导出查词发音，{cut-audio} 用于导出剪切音频。"
                     )
                     ankiModelFields.forEach { field ->
                         val selectedValue = ankiFieldTemplates[field].orEmpty()

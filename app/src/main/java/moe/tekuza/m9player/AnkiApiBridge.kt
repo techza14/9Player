@@ -110,7 +110,9 @@ internal fun defaultFieldTemplate(fieldName: String): String {
         lowered.contains("meaning") || lowered.contains("definition") || lowered.contains("gloss") -> "{glossary}"
         lowered.contains("pitch") -> "{pitch-accent-positions}"
         lowered.contains("freq") || lowered.contains("frequency") -> "{frequencies}"
-        lowered.contains("audio") || lowered.contains("sound") -> "{cut-audio}"
+        lowered.contains("audio") || lowered.contains("sound") -> {
+            if (lowered.contains("cut") || lowered.contains("clip")) "{cut-audio}" else "{audio}"
+        }
         else -> ""
     }
 }
@@ -157,13 +159,17 @@ internal fun exportToAnkiDroidApi(
         error("All field variables are empty. Configure at least one marker in Settings > Anki.")
     }
     val requiresCutAudio = templatesByField.values.any { templateUsesVariable(it, "cut-audio") }
+    val requiresLookupAudio = templatesByField.values.any {
+        templateUsesVariable(it, "audio") || templateUsesVariable(it, "audioTag")
+    }
 
     val variables = runCatching {
         buildAnkiVariables(
             context = context,
             api = api,
             card = card,
-            includeCutAudio = requiresCutAudio
+            includeCutAudio = requiresCutAudio,
+            includeLookupAudio = requiresLookupAudio
         )
     }.getOrElse { throwable ->
         error("Anki variable build failed. ${throwableDetail(throwable)}")
@@ -263,7 +269,8 @@ private fun buildAnkiVariables(
     context: Context,
     api: AddContentApi,
     card: MinedCard,
-    includeCutAudio: Boolean
+    includeCutAudio: Boolean,
+    includeLookupAudio: Boolean
 ): Map<String, String> {
     val dictionaryName = card.dictionaryName.orEmpty()
     val glossaryHtml = buildStyledGlossary(
@@ -285,6 +292,11 @@ private fun buildAnkiVariables(
     }
     val cutAudio = if (includeCutAudio) {
         attachAudio(api, context, card).orEmpty()
+    } else {
+        ""
+    }
+    val lookupAudio = if (includeLookupAudio) {
+        attachLookupAudio(api, context, card.lookupAudioUri).orEmpty()
     } else {
         ""
     }
@@ -349,8 +361,8 @@ private fun buildAnkiVariables(
         "frequency-harmonic-occurrence" to frequencyNumber,
         "frequency-average-rank" to frequencyNumber,
         "frequency-average-occurrence" to frequencyNumber,
-        "audio" to "",
-        "audioTag" to "",
+        "audio" to lookupAudio,
+        "audioTag" to lookupAudio,
         "cut-audio" to cutAudio,
         "screenshot" to "",
         "tags" to "",
@@ -603,6 +615,111 @@ private fun attachAudio(
     } finally {
         clipFile?.delete()
     }
+}
+
+private fun attachLookupAudio(
+    api: AddContentApi,
+    context: Context,
+    lookupAudioUri: Uri?
+): String? {
+    val sourceUri = lookupAudioUri ?: return null
+    val sourceExtension = resolveAudioExtension(context, sourceUri, fallback = "wav")
+    val preferredName = "lookup-${System.currentTimeMillis()}"
+    val failures = mutableListOf<String>()
+    failures += "source-scheme=${sourceUri.scheme.orEmpty()}"
+
+    fun attemptWithUri(
+        label: String,
+        uri: Uri,
+        grantReadPermission: Boolean
+    ): String? {
+        if (grantReadPermission && uri.scheme.equals("content", ignoreCase = true)) {
+            runCatching {
+                context.grantUriPermission(
+                    ANKI_PACKAGE_NAME,
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }.onFailure {
+                failures += "$label grant-failed(${uri.scheme.orEmpty()}): ${it.message ?: it.javaClass.simpleName}"
+            }
+        }
+        return try {
+            addMediaAsAudioTag(
+                api = api,
+                uri = uri,
+                preferredName = preferredName
+            ) { reason ->
+                failures += "$label $reason"
+            }
+        } finally {
+            if (grantReadPermission && uri.scheme.equals("content", ignoreCase = true)) {
+                runCatching {
+                    context.revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            }
+        }
+    }
+
+    attemptWithUri(
+        label = "lookup-direct",
+        uri = sourceUri,
+        grantReadPermission = true
+    )?.let { return it }
+
+    val copiedSource = copyUriToTempAudioFile(
+        context = context,
+        sourceUri = sourceUri,
+        extension = sourceExtension,
+        prefix = "lookup"
+    )
+    if (copiedSource != null) {
+        try {
+            val copiedProviderUri = runCatching {
+                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", copiedSource)
+            }.onFailure {
+                failures += "lookup fileprovider-uri-failed: ${it.message ?: it.javaClass.simpleName}"
+            }.getOrNull()
+            if (copiedProviderUri != null) {
+                attemptWithUri(
+                    label = "lookup-fileprovider",
+                    uri = copiedProviderUri,
+                    grantReadPermission = true
+                )?.let { return it }
+            }
+            attemptWithUri(
+                label = "lookup-file",
+                uri = Uri.fromFile(copiedSource),
+                grantReadPermission = false
+            )?.let { return it }
+        } finally {
+            runCatching { copiedSource.delete() }
+        }
+    } else {
+        failures += "lookup-copy-failed"
+    }
+
+    val stagedSource = stageAudioInMediaStore(
+        context = context,
+        sourceUri = sourceUri,
+        extension = sourceExtension
+    )
+    if (stagedSource != null) {
+        try {
+            attemptWithUri(
+                label = "lookup-mediastore",
+                uri = stagedSource.uri,
+                grantReadPermission = true
+            )?.let { return it }
+        } finally {
+            runCatching { stagedSource.cleanup() }
+        }
+    } else {
+        failures += "lookup-mediastore stage-failed"
+    }
+
+    val detail = failures.distinct().joinToString(" | ").take(900)
+    error("Failed to attach lookup audio to Anki media. $detail")
 }
 
 private fun addMediaAsAudioTag(

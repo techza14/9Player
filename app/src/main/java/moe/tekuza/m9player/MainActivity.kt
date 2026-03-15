@@ -5,8 +5,11 @@ import android.app.ActivityManager
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
+import android.graphics.ImageDecoder
+import android.graphics.drawable.AnimatedImageDrawable
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
@@ -15,6 +18,7 @@ import android.text.Html
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ImageView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -27,6 +31,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,6 +39,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -75,12 +81,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
@@ -160,6 +169,7 @@ private enum class HomeLibraryView {
 
 private val FIELD_VARIABLE_CHOICES = listOf(
     "",
+    "{audio}",
     "{cut-audio}",
     "{expression}",
     "{word}",
@@ -252,6 +262,7 @@ private fun ReaderSyncScreen() {
     var lookupResults by remember { mutableStateOf<List<DictionarySearchResult>>(emptyList()) }
     var lookupLoading by remember { mutableStateOf(false) }
     var selectedEntryKey by remember { mutableStateOf<String?>(null) }
+    var dictionaryLookupAutoPlayedKey by remember { mutableStateOf<String?>(null) }
 
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var pendingAnkiCard by remember { mutableStateOf<MinedCard?>(null) }
@@ -284,6 +295,11 @@ private fun ReaderSyncScreen() {
     var mainLookupPopupSelectedRange by remember { mutableStateOf<IntRange?>(null) }
     var mainLookupPopupAudioUri by remember { mutableStateOf<Uri?>(null) }
     var mainLookupAnkiStatus by remember { mutableStateOf<String?>(null) }
+    var mainLookupAutoPlayNonce by remember { mutableStateOf(0L) }
+    var mainLookupAutoPlayedKey by remember { mutableStateOf<String?>(null) }
+    var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
+    var versionTapCount by remember { mutableStateOf(0) }
+    var showVersionEasterGif by remember { mutableStateOf(false) }
 
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
@@ -333,6 +349,7 @@ private fun ReaderSyncScreen() {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                audiobookSettings = loadAudiobookSettingsConfig(context)
                 scope.launch {
                     readerBookPlaybackSnapshots = loadReaderBookPlaybackSnapshotsForBooks(
                         context = context,
@@ -1253,6 +1270,8 @@ private fun ReaderSyncScreen() {
         val candidates = listOfNotNull(selectedToken)
 
         if (candidates.isEmpty()) {
+            mainLookupAutoPlayNonce += 1L
+            mainLookupAutoPlayedKey = null
             mainLookupPopupVisible = true
             mainLookupPopupTitle = selectedToken.orEmpty()
             mainLookupPopupResults = emptyList()
@@ -1263,6 +1282,8 @@ private fun ReaderSyncScreen() {
         }
 
         mainLookupPopupVisible = true
+        mainLookupAutoPlayNonce += 1L
+        mainLookupAutoPlayedKey = null
         mainLookupPopupTitle = candidates.firstOrNull() ?: selectedToken.orEmpty()
         mainLookupPopupResults = emptyList()
         mainLookupPopupSelectedKey = null
@@ -1306,6 +1327,8 @@ private fun ReaderSyncScreen() {
         if (candidates.isEmpty()) return
 
         mainLookupPopupVisible = true
+        mainLookupAutoPlayNonce += 1L
+        mainLookupAutoPlayedKey = null
         mainLookupPopupTitle = candidates.first()
         mainLookupPopupResults = emptyList()
         mainLookupPopupSelectedKey = null
@@ -1357,21 +1380,33 @@ private fun ReaderSyncScreen() {
             .firstOrNull { it.isNotBlank() }
             ?.trim()
             .orEmpty()
+        val settingsSnapshot = audiobookSettings
         scope.launch {
             mainLookupAnkiStatus = "Adding to Anki..."
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    addLookupDefinitionToAnkiMain(
+                    val preparedLookupAudio = prepareLookupAudioForAnkiExport(
                         context = context,
-                        cue = cue,
-                        audioUri = mainLookupPopupAudioUri,
-                        bookTitle = readerBooks.firstOrNull { it.audioUri == mainLookupPopupAudioUri }?.title,
-                        entry = dictionaryGroup.entry,
-                        definition = primaryDefinition.ifBlank { groupedResult.term },
-                        dictionaryCss = null,
-                        glossarySections = glossarySections,
-                        popupSelectionText = popupSelectionText
+                        term = groupedResult.term,
+                        reading = groupedResult.reading,
+                        settings = settingsSnapshot
                     )
+                    try {
+                        addLookupDefinitionToAnkiMain(
+                            context = context,
+                            cue = cue,
+                            audioUri = mainLookupPopupAudioUri,
+                            lookupAudioUri = preparedLookupAudio?.uri,
+                            bookTitle = readerBooks.firstOrNull { it.audioUri == mainLookupPopupAudioUri }?.title,
+                            entry = dictionaryGroup.entry,
+                            definition = primaryDefinition.ifBlank { groupedResult.term },
+                            dictionaryCss = null,
+                            glossarySections = glossarySections,
+                            popupSelectionText = popupSelectionText
+                        )
+                    } finally {
+                        preparedLookupAudio?.cleanup?.invoke()
+                    }
                 }
             }
             val status = result.fold(
@@ -1380,6 +1415,23 @@ private fun ReaderSyncScreen() {
             )
             mainLookupAnkiStatus = status
             exportStatus = status
+        }
+    }
+
+    fun playLookupGroupAudio(groupedResult: GroupedLookupResult, updatePopupStatus: Boolean) {
+        val started = playLookupAudioForTerm(
+            context = context,
+            term = groupedResult.term,
+            reading = groupedResult.reading,
+            settings = audiobookSettings
+        ) { error ->
+            exportStatus = error
+            if (updatePopupStatus) {
+                mainLookupAnkiStatus = error
+            }
+        }
+        if (started && updatePopupStatus) {
+            mainLookupAnkiStatus = null
         }
     }
 
@@ -1541,12 +1593,54 @@ private fun ReaderSyncScreen() {
             dictionaryPriorityByName = dictionaryPriorityByName
         )
     }
+    LaunchedEffect(
+        activeSection,
+        lookupLoading,
+        lookupQuery,
+        groupedLookupResults,
+        audiobookSettings.lookupPlaybackAudioEnabled,
+        audiobookSettings.lookupPlaybackAudioAutoPlay
+    ) {
+        if (activeSection != MiningSection.DICTIONARY || lookupLoading) return@LaunchedEffect
+        if (!audiobookSettings.lookupPlaybackAudioEnabled || !audiobookSettings.lookupPlaybackAudioAutoPlay) {
+            return@LaunchedEffect
+        }
+        val normalizedQuery = lookupQuery.trim()
+        if (normalizedQuery.isBlank()) {
+            dictionaryLookupAutoPlayedKey = null
+            return@LaunchedEffect
+        }
+        val target = groupedLookupResults.firstOrNull() ?: return@LaunchedEffect
+        val key = "$normalizedQuery|${target.term}|${target.reading.orEmpty()}"
+        if (dictionaryLookupAutoPlayedKey == key) return@LaunchedEffect
+        dictionaryLookupAutoPlayedKey = key
+        playLookupGroupAudio(target, updatePopupStatus = false)
+    }
     val groupedMainLookupPopupResults = remember(mainLookupPopupResults, dictionaryCssByName, dictionaryPriorityByName) {
         groupLookupResultsByTerm(
             results = mainLookupPopupResults,
             dictionaryCssByName = dictionaryCssByName,
             dictionaryPriorityByName = dictionaryPriorityByName
         ).take(10)
+    }
+    LaunchedEffect(
+        mainLookupPopupVisible,
+        mainLookupPopupLoading,
+        mainLookupPopupError,
+        groupedMainLookupPopupResults,
+        audiobookSettings.lookupPlaybackAudioEnabled,
+        audiobookSettings.lookupPlaybackAudioAutoPlay,
+        mainLookupAutoPlayNonce
+    ) {
+        if (!mainLookupPopupVisible || mainLookupPopupLoading || mainLookupPopupError != null) return@LaunchedEffect
+        if (!audiobookSettings.lookupPlaybackAudioEnabled || !audiobookSettings.lookupPlaybackAudioAutoPlay) {
+            return@LaunchedEffect
+        }
+        val target = groupedMainLookupPopupResults.firstOrNull() ?: return@LaunchedEffect
+        val key = "${mainLookupAutoPlayNonce}|${target.term}|${target.reading.orEmpty()}"
+        if (mainLookupAutoPlayedKey == key) return@LaunchedEffect
+        mainLookupAutoPlayedKey = key
+        playLookupGroupAudio(target, updatePopupStatus = true)
     }
     val dictionarySpecificVariableChoices = remember(loadedDictionaries) {
         loadedDictionaries.map { "{single-glossary-${it.name}}" }.distinct()
@@ -1605,38 +1699,39 @@ private fun ReaderSyncScreen() {
                 NavigationBarItem(
                     selected = activeSection == MiningSection.MAIN,
                     onClick = { activeSection = MiningSection.MAIN },
-                    icon = { Text("主") },
+                    icon = { Text("本") },
                     label = { Text("主页") }
                 )
                 NavigationBarItem(
                     selected = activeSection == MiningSection.DICTIONARY,
                     onClick = { activeSection = MiningSection.DICTIONARY },
-                    icon = { Text("词") },
+                    icon = { Text("辞") },
                     label = { Text("辞典查询") }
                 )
                 NavigationBarItem(
                     selected = activeSection == MiningSection.COLLECTIONS,
                     onClick = { activeSection = MiningSection.COLLECTIONS },
-                    icon = { Text("藏") },
+                    icon = { Text("蔵") },
                     label = { Text("收藏") }
                 )
                 NavigationBarItem(
                     selected = activeSection == MiningSection.SETTINGS,
                     onClick = { activeSection = MiningSection.SETTINGS },
-                    icon = { Text("设") },
+                    icon = { Text("設") },
                     label = { Text("设置") }
                 )
             }
         }
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(16.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
             Text("⑨Player", style = MaterialTheme.typography.titleLarge)
 
             if (activeSection == MiningSection.MAIN) {
@@ -1828,7 +1923,6 @@ private fun ReaderSyncScreen() {
                     ) {
                         Text("辞典与查询", style = MaterialTheme.typography.titleMedium)
                         Text("辞典：$dictionaryCount（共 $totalDictionaryEntries 条）")
-                        Text("查词器：hoshidicts")
                         if (dictionaryLoading) {
                             Text(dictionaryProgressText ?: "正在导入辞典...")
                             if (dictionaryProgressValue != null) {
@@ -1942,18 +2036,27 @@ private fun ReaderSyncScreen() {
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text("${groupedResult.term}$readingText")
-                                        OutlinedButton(
-                                            onClick = {
-                                                val primary = groupedResult.dictionaries.firstOrNull() ?: return@OutlinedButton
-                                                selectedEntryKey = entryStableKey(primary.entry)
-                                                exportLookupGroupToAnki(
-                                                    groupedResult = groupedResult,
-                                                    sourceCue = null,
-                                                    lookupTitle = lookupQuery
-                                                )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            if (audiobookSettings.lookupPlaybackAudioEnabled) {
+                                                OutlinedButton(
+                                                    onClick = { playLookupGroupAudio(groupedResult, updatePopupStatus = false) }
+                                                ) {
+                                                    Text("音")
+                                                }
                                             }
-                                        ) {
-                                            Text("+")
+                                            OutlinedButton(
+                                                onClick = {
+                                                    val primary = groupedResult.dictionaries.firstOrNull() ?: return@OutlinedButton
+                                                    selectedEntryKey = entryStableKey(primary.entry)
+                                                    exportLookupGroupToAnki(
+                                                        groupedResult = groupedResult,
+                                                        sourceCue = null,
+                                                        lookupTitle = lookupQuery
+                                                    )
+                                                }
+                                            ) {
+                                                Text("+")
+                                            }
                                         }
                                     }
                                     groupedResult.dictionaries.forEach { dictionaryGroup ->
@@ -2100,6 +2203,30 @@ private fun ReaderSyncScreen() {
                         SettingsListItem(
                             title = "手柄蓝牙",
                             onClick = { context.startActivity(Intent(context, ControllerBluetoothSettingsActivity::class.java)) },
+                            showDivider = true
+                        )
+                        SettingsListItem(
+                            title = "使用说明",
+                            onClick = {
+                                val intent = Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse("https://github.com/techza14/9Player")
+                                )
+                                runCatching { context.startActivity(intent) }
+                                    .onFailure { Toast.makeText(context, "无法打开链接。", Toast.LENGTH_SHORT).show() }
+                            }
+                        )
+                        SettingsListItem(
+                            title = "当前版本",
+                            onClick = {
+                                val version = resolveAppVersionName(context)
+                                Toast.makeText(context, "当前版本：$version", Toast.LENGTH_SHORT).show()
+                                versionTapCount += 1
+                                if (versionTapCount >= 5) {
+                                    versionTapCount = 0
+                                    showVersionEasterGif = true
+                                }
+                            },
                             showDivider = false
                         )
                     }
@@ -2367,19 +2494,28 @@ private fun ReaderSyncScreen() {
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text("${groupedResult.term}$reading")
-                                            OutlinedButton(
-                                                onClick = {
-                                                    val primary = groupedResult.dictionaries.firstOrNull() ?: return@OutlinedButton
-                                                    selectedEntryKey = entryStableKey(primary.entry)
-                                                    mainLookupPopupSelectedKey = selectedEntryKey
-                                                    exportLookupGroupToAnki(
-                                                        groupedResult = groupedResult,
-                                                        sourceCue = popupCue,
-                                                        lookupTitle = mainLookupPopupTitle
-                                                    )
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                if (audiobookSettings.lookupPlaybackAudioEnabled) {
+                                                    OutlinedButton(
+                                                        onClick = { playLookupGroupAudio(groupedResult, updatePopupStatus = true) }
+                                                    ) {
+                                                        Text("音")
+                                                    }
                                                 }
-                                            ) {
-                                                Text("+")
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        val primary = groupedResult.dictionaries.firstOrNull() ?: return@OutlinedButton
+                                                        selectedEntryKey = entryStableKey(primary.entry)
+                                                        mainLookupPopupSelectedKey = selectedEntryKey
+                                                        exportLookupGroupToAnki(
+                                                            groupedResult = groupedResult,
+                                                            sourceCue = popupCue,
+                                                            lookupTitle = mainLookupPopupTitle
+                                                        )
+                                                    }
+                                                ) {
+                                                    Text("+")
+                                                }
                                             }
                                         }
                                         groupedResult.dictionaries.forEach { dictionaryGroup ->
@@ -2449,6 +2585,13 @@ private fun ReaderSyncScreen() {
                     }
                 }
             }
+            }
+
+            VersionEasterGifPopup(
+                visible = showVersionEasterGif && activeSection == MiningSection.SETTINGS,
+                bottomPadding = innerPadding.calculateBottomPadding(),
+                onDismiss = { showVersionEasterGif = false }
+            )
         }
     }
 }
@@ -2478,6 +2621,73 @@ private fun SettingsListItem(
             HorizontalDivider(modifier = Modifier.padding(start = 12.dp))
         }
     }
+}
+
+@Composable
+private fun VersionEasterGifPopup(
+    visible: Boolean,
+    bottomPadding: Dp,
+    onDismiss: () -> Unit
+) {
+    if (!visible) return
+    val density = LocalDensity.current
+    val horizontalOffsetPx = with(density) { (-14).dp.roundToPx() }
+    val verticalOffsetPx = with(density) { -(bottomPadding + 8.dp).roundToPx() }
+    Popup(
+        alignment = Alignment.BottomEnd,
+        offset = IntOffset(horizontalOffsetPx, verticalOffsetPx),
+        properties = PopupProperties(
+            focusable = false,
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            clippingEnabled = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .size(90.dp)
+                .clickable { onDismiss() }
+        ) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { popupContext ->
+                    ImageView(popupContext).apply {
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        adjustViewBounds = true
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            val animated = runCatching {
+                                ImageDecoder.decodeDrawable(
+                                    ImageDecoder.createSource(resources, R.raw.easter_chibi)
+                                )
+                            }.getOrNull()
+                            if (animated != null) {
+                                setImageDrawable(animated)
+                                (animated as? AnimatedImageDrawable)?.apply {
+                                    repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+                                    start()
+                                }
+                            } else {
+                                setImageResource(R.mipmap.ic_launcher_foreground)
+                            }
+                        } else {
+                            setImageResource(R.mipmap.ic_launcher_foreground)
+                        }
+                    }
+                }
+            )
+        }
+    }
+}
+
+private fun resolveAppVersionName(context: Context): String {
+    return runCatching {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0)
+            .versionName
+            ?.trim()
+            .orEmpty()
+            .ifBlank { "unknown" }
+    }.getOrDefault("unknown")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -3290,6 +3500,7 @@ private fun addLookupDefinitionToAnkiMain(
     context: Context,
     cue: SubtitleCue,
     audioUri: Uri?,
+    lookupAudioUri: Uri?,
     bookTitle: String?,
     entry: DictionaryEntry,
     definition: String,
@@ -3319,6 +3530,12 @@ private fun addLookupDefinitionToAnkiMain(
     }
     if (audioUri != null && !templates.values.any { templateUsesVariableMain(it, "cut-audio") }) {
         error("Current model templates do not include {cut-audio}. Set audio field to {cut-audio} in 设置 > Anki.")
+    }
+    val requiresLookupAudio = templates.values.any {
+        templateUsesVariableMain(it, "audio") || templateUsesVariableMain(it, "audioTag")
+    }
+    if (requiresLookupAudio && lookupAudioUri == null) {
+        error("Current model templates include {audio}, but lookup audio is unavailable. Configure it in 设置 > 有声书.")
     }
 
     val normalizedGlossarySections = glossarySections
@@ -3353,6 +3570,7 @@ private fun addLookupDefinitionToAnkiMain(
         cueStartMs = cue.startMs,
         cueEndMs = cue.endMs,
         audioUri = audioUri,
+        lookupAudioUri = lookupAudioUri,
         audioTagOnly = true,
         requireCueAudioClip = audioUri != null
     )
@@ -3662,6 +3880,7 @@ private fun PitchReadingWithAccent(reading: String, accent: Int?) {
                     }
             )
         }
+
     }
 }
 

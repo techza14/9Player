@@ -40,6 +40,7 @@ internal data class MinedCard(
     val cueStartMs: Long,
     val cueEndMs: Long,
     val audioUri: Uri?,
+    val lookupAudioUri: Uri? = null,
     val audioTagOnly: Boolean = false,
     val requireCueAudioClip: Boolean = false
 )

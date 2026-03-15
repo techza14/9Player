@@ -424,6 +424,8 @@ private fun BookReaderScreen(
     var selectedLookupRange by remember { mutableStateOf<IntRange?>(null) }
     var lookupPopupSelectionText by remember { mutableStateOf<String?>(null) }
     var ankiActionStatus by remember { mutableStateOf<String?>(null) }
+    var lookupPopupAutoPlayNonce by remember { mutableStateOf(0L) }
+    var lookupPopupAutoPlayedKey by remember { mutableStateOf<String?>(null) }
     var resumePlaybackAfterLookupDismiss by remember { mutableStateOf(false) }
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
 
@@ -1195,6 +1197,8 @@ private fun BookReaderScreen(
     fun triggerPopupLookup(cue: ReaderSubtitleCue, offset: Int) {
         val dictionariesSnapshot = loadedDictionaries
         if (dictionariesSnapshot.isEmpty()) {
+            lookupPopupAutoPlayNonce += 1L
+            lookupPopupAutoPlayedKey = null
             lookupPopupVisible = true
             lookupPopupLoading = false
             lookupPopupResults = emptyList()
@@ -1212,6 +1216,8 @@ private fun BookReaderScreen(
         val candidates = listOfNotNull(selectedToken)
 
         if (candidates.isEmpty()) {
+            lookupPopupAutoPlayNonce += 1L
+            lookupPopupAutoPlayedKey = null
             lookupPopupVisible = true
             lookupPopupLoading = false
             lookupPopupResults = emptyList()
@@ -1223,6 +1229,8 @@ private fun BookReaderScreen(
         }
 
         lookupPopupVisible = true
+        lookupPopupAutoPlayNonce += 1L
+        lookupPopupAutoPlayedKey = null
         lookupPopupLoading = true
         lookupPopupResults = emptyList()
         lookupPopupError = null
@@ -1296,21 +1304,33 @@ private fun BookReaderScreen(
             .firstOrNull { it.isNotBlank() }
             ?.trim()
             .orEmpty()
+        val settingsSnapshot = audiobookSettings
         scope.launch {
             ankiActionStatus = "正在添加到 Anki..."
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    addLookupDefinitionToAnki(
+                    val preparedLookupAudio = prepareLookupAudioForAnkiExport(
                         context = context,
-                        cue = cue,
-                        audioUri = audioUri,
-                        bookTitle = title,
-                        entry = dictionaryGroup.entry,
-                        definition = primaryDefinition.ifBlank { groupedResult.term },
-                        dictionaryCss = null,
-                        glossarySections = glossarySections,
-                        popupSelectionText = popupSelectionText
+                        term = groupedResult.term,
+                        reading = groupedResult.reading,
+                        settings = settingsSnapshot
                     )
+                    try {
+                        addLookupDefinitionToAnki(
+                            context = context,
+                            cue = cue,
+                            audioUri = audioUri,
+                            lookupAudioUri = preparedLookupAudio?.uri,
+                            bookTitle = title,
+                            entry = dictionaryGroup.entry,
+                            definition = primaryDefinition.ifBlank { groupedResult.term },
+                            dictionaryCss = null,
+                            glossarySections = glossarySections,
+                            popupSelectionText = popupSelectionText
+                        )
+                    } finally {
+                        preparedLookupAudio?.cleanup?.invoke()
+                    }
                 }
             }
             ankiActionStatus = result.fold(
@@ -1318,6 +1338,37 @@ private fun BookReaderScreen(
                 onFailure = { formatAnkiFailure(it) }
             )
         }
+    }
+
+    fun playLookupGroupAudio(groupedResult: GroupedLookupResult) {
+        playLookupAudioForTerm(
+            context = context,
+            term = groupedResult.term,
+            reading = groupedResult.reading,
+            settings = audiobookSettings
+        ) { error ->
+            ankiActionStatus = error
+        }
+    }
+
+    LaunchedEffect(
+        lookupPopupVisible,
+        lookupPopupLoading,
+        lookupPopupError,
+        groupedLookupPopupResults,
+        audiobookSettings.lookupPlaybackAudioEnabled,
+        audiobookSettings.lookupPlaybackAudioAutoPlay,
+        lookupPopupAutoPlayNonce
+    ) {
+        if (!lookupPopupVisible || lookupPopupLoading || lookupPopupError != null) return@LaunchedEffect
+        if (!audiobookSettings.lookupPlaybackAudioEnabled || !audiobookSettings.lookupPlaybackAudioAutoPlay) {
+            return@LaunchedEffect
+        }
+        val target = groupedLookupPopupResults.firstOrNull() ?: return@LaunchedEffect
+        val key = "${lookupPopupAutoPlayNonce}|${target.term}|${target.reading.orEmpty()}"
+        if (lookupPopupAutoPlayedKey == key) return@LaunchedEffect
+        lookupPopupAutoPlayedKey = key
+        playLookupGroupAudio(target)
     }
 
     fun handleControlOverlaySwipe(step: Int) {
@@ -2058,10 +2109,19 @@ private fun BookReaderScreen(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text("${groupedResult.term}$reading")
-                                        OutlinedButton(
-                                            onClick = { addLookupGroupToAnki(groupedResult) }
-                                        ) {
-                                            Text("+")
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            if (audiobookSettings.lookupPlaybackAudioEnabled) {
+                                                OutlinedButton(
+                                                    onClick = { playLookupGroupAudio(groupedResult) }
+                                                ) {
+                                                    Text("音")
+                                                }
+                                            }
+                                            OutlinedButton(
+                                                onClick = { addLookupGroupToAnki(groupedResult) }
+                                            ) {
+                                                Text("+")
+                                            }
                                         }
                                     }
 
@@ -2406,6 +2466,7 @@ private fun addLookupDefinitionToAnki(
     context: Context,
     cue: ReaderSubtitleCue,
     audioUri: Uri?,
+    lookupAudioUri: Uri?,
     bookTitle: String?,
     entry: DictionaryEntry,
     definition: String,
@@ -2440,6 +2501,12 @@ private fun addLookupDefinitionToAnki(
     if (audioUri != null && !templates.values.any { templateUsesVariable(it, "cut-audio") }) {
         error("Current model templates do not include {cut-audio}. Set audio field to {cut-audio} in 设置 > Anki.")
     }
+    val requiresLookupAudio = templates.values.any {
+        templateUsesVariable(it, "audio") || templateUsesVariable(it, "audioTag")
+    }
+    if (requiresLookupAudio && lookupAudioUri == null) {
+        error("Current model templates include {audio}, but lookup audio is unavailable. Configure it in 设置 > 有声书.")
+    }
 
     val normalizedGlossarySections = glossarySections
         .map { it.trim() }
@@ -2473,6 +2540,7 @@ private fun addLookupDefinitionToAnki(
         cueStartMs = cue.startMs,
         cueEndMs = cue.endMs,
         audioUri = audioUri,
+        lookupAudioUri = lookupAudioUri,
         audioTagOnly = true,
         requireCueAudioClip = true
     )
