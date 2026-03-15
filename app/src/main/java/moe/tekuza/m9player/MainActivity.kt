@@ -682,9 +682,17 @@ private fun ReaderSyncScreen() {
     fun deleteSelectedBooks(removeIds: Set<String>) {
         if (removeIds.isEmpty()) return
         val deletingBooks = readerBooks.filter { it.id in removeIds }
-        val failedFolderDeletes = deletingBooks.filterNot { book ->
-            deleteBookStorageFolder(context, book)
+        val deleteResults = deletingBooks.map { book ->
+            deleteBookStorage(
+                context = context,
+                contentResolver = contentResolver,
+                book = book,
+                audiobookFolderUri = addBookFolderUri
+            )
         }
+        val folderDeleteFailures = deleteResults.count { it.folderDeleteAttempted && !it.folderDeleteSucceeded }
+        val fileDeleteFailures = deleteResults.sumOf { it.fileDeleteFailures }
+        val deletedFolders = deleteResults.count { it.folderDeleteSucceeded }
         val remaining = readerBooks.filterNot { it.id in removeIds }
         readerBooks = remaining
         if (selectedBookId in removeIds) {
@@ -702,10 +710,14 @@ private fun ReaderSyncScreen() {
         }
         persistImportState()
         clearBookSelection()
-        exportStatus = if (failedFolderDeletes.isEmpty()) {
-            "已删除 ${removeIds.size} 本书（含文件夹）。"
+        exportStatus = if (folderDeleteFailures == 0 && fileDeleteFailures == 0) {
+            if (deletedFolders > 0) {
+                "已删除 ${removeIds.size} 本书；有声书文件夹内的条目已删除对应文件夹。"
+            } else {
+                "已删除 ${removeIds.size} 本书（仅删除所选文件）。"
+            }
         } else {
-            "已删书 ${removeIds.size} 本；${failedFolderDeletes.size} 个文件夹删除失败。"
+            "已删书 ${removeIds.size} 本；$fileDeleteFailures 个文件删除失败，$folderDeleteFailures 个文件夹删除失败。"
         }
     }
 
@@ -2157,7 +2169,7 @@ private fun ReaderSyncScreen() {
                 title = { Text("删除书籍") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("确认删除所选书籍，并删除对应文件夹吗？")
+                        Text("确认删除所选书籍，并删除对应文件夹吗？\n（如果文件夹处于有声书文件夹）")
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -3017,8 +3029,84 @@ private fun saveSkipDeleteBookConfirm(context: Context, skip: Boolean) {
         .apply()
 }
 
-private fun deleteBookStorageFolder(context: Context, book: ReaderBook): Boolean {
-    return deleteAudParentFolder(context, book.audioUri)
+private data class DeleteBookStorageResult(
+    val folderDeleteAttempted: Boolean,
+    val folderDeleteSucceeded: Boolean,
+    val fileDeleteFailures: Int
+)
+
+private fun deleteBookStorage(
+    context: Context,
+    contentResolver: ContentResolver,
+    book: ReaderBook,
+    audiobookFolderUri: Uri?
+): DeleteBookStorageResult {
+    val isInsideAudiobookFolder = isUriInsideAudiobookFolder(
+        context = context,
+        fileUri = book.audioUri,
+        audiobookFolderUri = audiobookFolderUri
+    )
+
+    if (isInsideAudiobookFolder) {
+        val folderDeleted = deleteAudParentFolder(context, book.audioUri)
+        if (folderDeleted) {
+            return DeleteBookStorageResult(
+                folderDeleteAttempted = true,
+                folderDeleteSucceeded = true,
+                fileDeleteFailures = 0
+            )
+        }
+    }
+
+    var fileDeleteFailures = 0
+    if (!deleteSourceUri(context, contentResolver, book.audioUri)) {
+        fileDeleteFailures += 1
+    }
+    val srt = book.srtUri
+    if (srt != null && !deleteSourceUri(context, contentResolver, srt)) {
+        fileDeleteFailures += 1
+    }
+
+    return DeleteBookStorageResult(
+        folderDeleteAttempted = isInsideAudiobookFolder,
+        folderDeleteSucceeded = false,
+        fileDeleteFailures = fileDeleteFailures
+    )
+}
+
+private fun isUriInsideAudiobookFolder(
+    context: Context,
+    fileUri: Uri,
+    audiobookFolderUri: Uri?
+): Boolean {
+    val rootUri = audiobookFolderUri ?: return false
+    if (fileUri.scheme.equals("file", ignoreCase = true) && rootUri.scheme.equals("file", ignoreCase = true)) {
+        val filePath = runCatching { File(fileUri.path ?: return false).canonicalPath }.getOrNull() ?: return false
+        val rootPath = runCatching { File(rootUri.path ?: return false).canonicalPath }.getOrNull() ?: return false
+        if (filePath == rootPath) return true
+        return filePath.startsWith("$rootPath${File.separator}")
+    }
+
+    if (!fileUri.scheme.equals("content", ignoreCase = true) || !rootUri.scheme.equals("content", ignoreCase = true)) {
+        return false
+    }
+
+    val rootDocumentId = runCatching { DocumentsContract.getTreeDocumentId(rootUri) }
+        .getOrElse {
+            if (DocumentsContract.isDocumentUri(context, rootUri)) {
+                runCatching { DocumentsContract.getDocumentId(rootUri) }.getOrNull()
+            } else {
+                null
+            }
+        } ?: return false
+
+    val fileDocumentId = if (DocumentsContract.isDocumentUri(context, fileUri)) {
+        runCatching { DocumentsContract.getDocumentId(fileUri) }.getOrNull()
+    } else {
+        runCatching { DocumentsContract.getTreeDocumentId(fileUri) }.getOrNull()
+    } ?: return false
+
+    return fileDocumentId == rootDocumentId || fileDocumentId.startsWith("$rootDocumentId/")
 }
 
 private fun deleteAudParentFolder(context: Context, fileUri: Uri): Boolean {

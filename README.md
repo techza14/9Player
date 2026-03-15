@@ -1,6 +1,6 @@
-﻿# ⑨Player
+# ⑨Player
 
-有声书播放器 支持anki 半成品凑合用
+有声书播放器 支持anki 
 
 ## 有声书
 
@@ -8,12 +8,13 @@
 
 1. 选择有声书文件夹
 2. 选择音频和 SRT
-3. App 会自动：
+3. 如果选择自动移动到有声书文件夹 
+   App 会自动：
    - 在有声书文件夹下新建一个 AudX 文件夹
    - 把音频和 SRT 移动到该文件夹
 ```
 目录示例：
-text
+
 有声书文件夹/
 ├── Aud1/
 │   ├── 1.mp3
@@ -47,7 +48,7 @@ SRT 可参考：
 播放有声书时 回到桌面/切换app 即可显示
 ## Anki
 
-目前不支持音调、词频等辞典。
+支持Yomitan词汇，音调，词频辞典。
 
 不保证其他变量可用 可参考以下设置：
 
@@ -58,16 +59,18 @@ SRT 可参考：
 
 ```cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}```
 {cut-audio} 句子音频
-{bookt-title} 音频文件标题
+{bookt-title} 音频文件名字
 
 Anki模板:[Lapis](https://github.com/donkuri/lapis)
 ## 待改善
+
 断开手柄蓝牙不生效
 
 ##  特别感谢
+
 [hoshidicts](https://github.com/Manhhao/hoshidicts)
 
 ## License
 
-本项目采用 `GNU General Public License v3.0`（`GPL-3.0-only`）开源。
+本项目采用 `GPLv3.0开源。
 完整协议见 [LICENSE](LICENSE)。
