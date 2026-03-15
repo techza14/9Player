@@ -19,3 +19,10 @@ local.properties
 .tmp_shz/
 classes-shizuku-provider.jar
 /keystore/
+
+# Local temporary/work directories
+/.codex_tmp/
+/third_party/
+
+# Android signature sidecar generated alongside APK
+/release/*.idsig

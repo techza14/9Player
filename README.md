@@ -1,6 +1,6 @@
 # ⑨Player
 
-有声书播放器 支持anki 
+有声书播放器 支持Anki 
 
 ## 有声书
 
@@ -38,9 +38,9 @@ SRT 可参考：
   <img src="./docs/images/anki-settings-2.jpg" width="260" alt="Anki设置2" />
 </p>
 
-```cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}```
+```{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}```
 {cut-audio} 句子音频
-{bookt-title} 音频文件名字
+{book-title} 音频文件名字
 
 Anki模板:[Lapis](https://github.com/donkuri/lapis)
 ## 手柄
@@ -73,6 +73,8 @@ Anki模板:[Lapis](https://github.com/donkuri/lapis)
 ##  特别感谢
 
 [hoshidicts](https://github.com/Manhhao/hoshidicts)
+[Ankiconnect Android](https://github.com/KamWithK/AnkiconnectAndroid)本地音频
+[Yomitan](https://github.com/yomidevs/yomitan)
 
 ## License
 
