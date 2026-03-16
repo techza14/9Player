@@ -1677,38 +1677,38 @@ private fun BookReaderScreen(
                             onDismissRequest = { topActionsExpanded = false }
                         ) {
                             DropdownMenuItem(
-                                text = { Text(if (bottomControlsVisible) "隐藏控制条" else "显示控制条") },
+                                text = { Text(if (bottomControlsVisible) "隐藏播放条" else "显示播放条") },
                                 onClick = {
                                     bottomControlsVisible = !bottomControlsVisible
                                     topActionsExpanded = false
-                                    controlModeStatus = if (bottomControlsVisible) "已显示控制条。" else "已隐藏控制条。"
+                                    controlModeStatus = if (bottomControlsVisible) "已显示播放条。" else "已隐藏播放条。"
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text(if (controlModeEnabled) "退出控制模式" else "进入控制模式") },
+                                text = { Text("控制模式") },
                                 onClick = {
-                                    controlModeEnabled = !controlModeEnabled
+                                    controlModeEnabled = true
                                     topActionsExpanded = false
-                                    controlModeStatus = if (controlModeEnabled) "已进入控制模式。" else "已退出控制模式。"
+                                    controlModeStatus = "已进入控制模式。"
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text(if (lyricsMode) "切换到字幕模式" else "切换到单句模式") },
+                                text = { Text(if (lyricsMode) "字幕-列表显示" else "字幕-单句显示") },
                                 onClick = {
                                     lyricsMode = !lyricsMode
                                     topActionsExpanded = false
-                                    controlModeStatus = if (lyricsMode) "已切换到单句模式。" else "已切换到字幕模式。"
+                                    controlModeStatus = if (lyricsMode) "已切换到字幕-列表显示。" else "已切换到字幕-单句显示。"
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text(if (coverModeEnabled) "切换到字幕模式" else "切换到封面模式") },
+                                text = { Text(if (coverModeEnabled) "切换到字幕" else "切换到封面") },
                                 onClick = {
                                     coverModeEnabled = !coverModeEnabled
                                     topActionsExpanded = false
                                     controlModeStatus = if (coverModeEnabled) {
-                                        "已切换到封面模式。"
+                                        "已切换到封面。"
                                     } else {
-                                        "已切换到字幕模式。"
+                                        "已切换到字幕。"
                                     }
                                 }
                             )
