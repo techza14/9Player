@@ -29,7 +29,7 @@ SRT 可参考：
 
 ## Anki
 
-支持Yomitan词汇，音调，词频辞典。
+支持Yomitan词汇，音调，词频辞典
 
 不保证其他变量可用 可参考以下设置：
 
@@ -63,7 +63,7 @@ Anki模板:[Lapis](https://github.com/donkuri/lapis)
 
 ## 悬浮球
 
-悬浮球 设置 -> 有声书 可开启
+悬浮球 设置 -> 有声书 可开启  
 播放有声书时 回到桌面/切换app 即可显示
 
 ## 待改善
@@ -72,9 +72,9 @@ Anki模板:[Lapis](https://github.com/donkuri/lapis)
 
 ##  特别感谢
 
-[hoshidicts](https://github.com/Manhhao/hoshidicts)
-[Ankiconnect Android](https://github.com/KamWithK/AnkiconnectAndroid)本地音频
-[Yomitan](https://github.com/yomidevs/yomitan)
+- [hoshidicts](https://github.com/Manhhao/hoshidicts)
+- [Ankiconnect Android](https://github.com/KamWithK/AnkiconnectAndroid)本地音频
+- [Yomitan](https://github.com/yomidevs/yomitan)
 
 ## License
 
