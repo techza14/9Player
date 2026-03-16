@@ -29,7 +29,15 @@ SRT 可参考：
 
 ## Anki
 
-支持Yomitan词汇，音调，词频辞典
+支持Yomitan词汇，音调，词频辞典  
+
+辞典链接
+- [明镜日汉双解辞典](https://forum.freemdict.com/t/topic/38630)
+- [小学馆日中辞典第三版](https://github.com/DgnFBJkH5k/Golden-Parcel)
+Collection
+- [marv](https://github.com/MarvNC/yomitan-dictionaries?tab=readme-ov-file#dictionary-collection)
+- [uchagikun](https://github.com/SalwynnJP/yomitan-dictionaries)
+- [Shoui](https://learnjapanese.moe/yomichan/#acquiring-dictionaries)
 
 不保证其他变量可用 可参考以下设置：
 
