@@ -1750,28 +1750,30 @@ private fun ReaderSyncScreen() {
                                 Text("取消选择")
                             }
                         }
-                        OutlinedButton(
-                            onClick = { activeSection = MiningSection.SETTINGS }
-                        ) {
-                            Text("设置")
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                homeLibraryView = if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
-                                    HomeLibraryView.LIST
-                                } else {
-                                    HomeLibraryView.BOOKSHELF
-                                }
-                                persistImportState()
+                        if (selectedBookIds.isEmpty()) {
+                            OutlinedButton(
+                                onClick = { activeSection = MiningSection.SETTINGS }
+                            ) {
+                                Text("设置")
                             }
-                        ) {
-                            Text(
-                                if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
-                                    "切换到列表"
-                                } else {
-                                    "切换到书架"
+                            OutlinedButton(
+                                onClick = {
+                                    homeLibraryView = if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
+                                        HomeLibraryView.LIST
+                                    } else {
+                                        HomeLibraryView.BOOKSHELF
+                                    }
+                                    persistImportState()
                                 }
-                            )
+                            ) {
+                                Text(
+                                    if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
+                                        "切换到列表"
+                                    } else {
+                                        "切换到书架"
+                                    }
+                                )
+                            }
                         }
                     }
                 }
