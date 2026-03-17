@@ -43,8 +43,12 @@ class ControlModeSettingsActivity : ComponentActivity() {
 @Composable
 private fun ControlModeSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val config = remember { loadGamepadControlConfig(context) }
     var dimScreenInControlMode by remember {
-        mutableStateOf(loadGamepadControlConfig(context).dimScreenInControlMode)
+        mutableStateOf(config.dimScreenInControlMode)
+    }
+    var singleTapCollectOnlyInControlMode by remember {
+        mutableStateOf(config.singleTapCollectOnlyInControlMode)
     }
 
     Column(
@@ -83,6 +87,29 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
                     )
                 }
                 Text("启用后，控制模式激活时会降低屏幕亮度。")
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("单击直接收藏当句")
+                    Switch(
+                        checked = singleTapCollectOnlyInControlMode,
+                        onCheckedChange = { checked ->
+                            singleTapCollectOnlyInControlMode = checked
+                            saveSingleTapCollectOnlyInControlMode(context, checked)
+                        }
+                    )
+                }
+                Text("启用后，控制模式单击会直接收藏当前句，不再先重播。")
             }
         }
     }

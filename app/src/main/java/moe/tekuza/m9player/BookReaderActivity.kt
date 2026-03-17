@@ -1117,9 +1117,52 @@ private fun BookReaderScreen(
         controlModeStatus = "已跳转章节：${chapter.title}"
     }
 
+    fun collectFavoriteCue() {
+        val cue = favoriteCue ?: return
+        val key = cueCollectionKey(cue.startMs, cue.endMs, cue.text)
+        val cueIndexLabel = when {
+            playbackCueIndex in cues.indices -> "${playbackCueIndex + 1}/${cues.size}"
+            activeCueIndex in cues.indices -> "${activeCueIndex + 1}/${cues.size}"
+            else -> null
+        }
+        if (collectedCueKeys.contains(key)) {
+            controlModeStatus = cueIndexLabel?.let { "第 $it 句已在收藏中。" } ?: "该句已在收藏中。"
+            return
+        }
+        scope.launch {
+            val added = withContext(Dispatchers.IO) {
+                val chapterMeta = buildCollectedCueChapterMeta(audioChapters, cue.startMs, cue.endMs)
+                appendBookReaderCollectedCue(
+                    context,
+                    BookReaderCollectedCue(
+                        id = "${System.currentTimeMillis()}-${cue.startMs}-${cue.endMs}-${cue.text.hashCode()}",
+                        bookTitle = title,
+                        text = cue.text,
+                        startMs = cue.startMs,
+                        endMs = cue.endMs,
+                        savedAtMs = System.currentTimeMillis(),
+                        chapterIndex = chapterMeta?.chapterIndex,
+                        chapterTitle = chapterMeta?.chapterTitle,
+                        chapterStartMs = chapterMeta?.chapterStartMs,
+                        chapterStartOffsetMs = chapterMeta?.startOffsetMs,
+                        chapterEndOffsetMs = chapterMeta?.endOffsetMs
+                    )
+                )
+            }
+            collectedCueKeys.add(key)
+            collectedCueUiVersion += 1
+            controlModeStatus = if (added) {
+                cueIndexLabel?.let { "已收藏第 $it 句。" } ?: "已收藏。"
+            } else {
+                cueIndexLabel?.let { "第 $it 句已在收藏中。" } ?: "该句已在收藏中。"
+            }
+        }
+    }
+
     fun handleControlOverlayTap() {
         val currentIndex = playbackCueIndex.takeIf { it >= 0 } ?: return
         val currentCue = cues.getOrNull(currentIndex) ?: return
+        val controlConfig = loadGamepadControlConfig(context)
         val now = System.currentTimeMillis()
         val doubleTapWindowMs = 280L
         val isDoubleTap = pendingSingleTapBaseCueIndex == currentIndex &&
@@ -1141,8 +1184,13 @@ private fun BookReaderScreen(
             delay(doubleTapWindowMs)
             if (pendingSingleTapBaseCueIndex == currentIndex) {
                 pendingSingleTapBaseCueIndex = null
-                playCueForControl(currentIndex)
-                controlModeStatus = "单击：重播当前句并收藏。"
+                if (controlConfig.singleTapCollectOnlyInControlMode) {
+                    collectFavoriteCue()
+                    controlModeStatus = "单击：直接收藏当前句。"
+                } else {
+                    playCueForControl(currentIndex)
+                    controlModeStatus = "单击：重播当前句并收藏。"
+                }
             }
         }
     }
@@ -1406,6 +1454,20 @@ private fun BookReaderScreen(
     val latestHandleGamepadKeyEvent by rememberUpdatedState<(KeyEvent) -> Boolean>({ event ->
         handleGamepadKeyEvent(event)
     })
+    val controlModeHintText = remember(controlModeEnabled, context) {
+        val config = loadGamepadControlConfig(context)
+        buildString {
+            append("控制模式\n屏幕常亮\n可开启计时结束自动退出\n")
+            append(
+                if (config.singleTapCollectOnlyInControlMode) {
+                    "单击：直接收藏当前句"
+                } else {
+                    "单击：重播当前句并收藏"
+                }
+            )
+            append("\n重播中双击：播放上一句并收藏\n左滑：上一句\n右滑：下一句\n双指短长按：退出")
+        }
+    }
 
     DisposableEffect(Unit) {
         val controller = object : BookReaderFloatingBridge.Controller {
@@ -2046,7 +2108,7 @@ private fun BookReaderScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    "控制模式\n屏幕常亮\n可开启计时结束自动退出\n单击：重播当前句并收藏\n重播中双击：播放上一句并收藏\n左滑：上一句\n右滑：下一句\n双指短长按：退出",
+                    controlModeHintText,
                     color = Color.White
                 )
             }
