@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -83,6 +84,14 @@ private fun ControllerBluetoothSettingsScreen(onBack: () -> Unit) {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
         status = "已打开 Shizuku。"
+    }
+
+    fun openBluetoothSettings() {
+        val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+        status = "已打开系统蓝牙界面。"
     }
 
     val btPermissionLauncher =
@@ -266,6 +275,9 @@ private fun ControllerBluetoothSettingsScreen(onBack: () -> Unit) {
                     OutlinedButton(onClick = { openShizukuApp() }) {
                         Text("打开 Shizuku")
                     }
+                    OutlinedButton(onClick = { openBluetoothSettings() }) {
+                        Text("打开蓝牙")
+                    }
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -281,7 +293,6 @@ private fun ControllerBluetoothSettingsScreen(onBack: () -> Unit) {
                 if (status != null) {
                     Text(status!!)
                 }
-                Text("目前很有可能无法只断开手柄蓝牙。")
             }
         }
     }

@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.text.Html
 import android.app.Activity
 import android.view.InputDevice
@@ -2023,12 +2024,17 @@ private fun BookReaderScreen(
                                 }
                             )
                         }
-                        val targetControllerAddress = latestControllerAddressProvider()
-                        Text(
-                            "目标手柄：${
-                                targetControllerAddress?.ifBlank { null } ?: "暂无"
-                            }"
-                        )
+                        TextButton(
+                            onClick = {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                )
+                            }
+                        ) {
+                            Text("打开手机蓝牙界面")
+                        }
                     }
                 }
             }

@@ -60,9 +60,6 @@ Anki模板:[Lapis](https://github.com/donkuri/lapis)
 2. 进入 设置 -> 手柄蓝牙
 3. 点击请求 Shizuku 权限
 
-！！单独断开手柄蓝牙功能可能不生效
-
-
 ## 音频
 可使用本地tts or 导入 [android.db](https://github.com/KamWithK/AnkiconnectAndroid?tab=readme-ov-file#additional-instructions-local-audio)
 
@@ -76,8 +73,7 @@ Anki模板:[Lapis](https://github.com/donkuri/lapis)
 播放有声书时 回到桌面/切换app 即可显示
 
 ## 待改善
-
-断开手柄蓝牙不生效
+优化
 
 ##  特别感谢
 

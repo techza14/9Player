@@ -1,9 +1,17 @@
 package moe.tekuza.m9player
 
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.content.pm.PackageManager
+import android.util.Log
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuProvider
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+
+private const val SHIZUKU_BT_TAG = "ShizukuBluetooth"
 
 internal enum class SleepBluetoothOutcome {
     TARGET_DISCONNECTED,
@@ -25,8 +33,13 @@ internal fun tryDisconnectTargetControllerThenDisableBluetooth(
         ?.trim()
         ?.uppercase()
         ?.takeIf { isBluetoothAddress(it) }
+    Log.d(
+        SHIZUKU_BT_TAG,
+        "disconnect request address=$address allowDisableBluetoothFallback=$allowDisableBluetoothFallback"
+    )
 
     if (!Shizuku.pingBinder()) {
+        Log.d(SHIZUKU_BT_TAG, "Shizuku binder not ready, requesting provider binder")
         runCatching { ShizukuProvider.requestBinderForNonProviderProcess(context) }
         val start = System.currentTimeMillis()
         while (!Shizuku.pingBinder() && System.currentTimeMillis() - start < 2_000L) {
@@ -38,51 +51,81 @@ internal fun tryDisconnectTargetControllerThenDisableBluetooth(
         }
     }
 
-    if (!Shizuku.pingBinder()) {
-        return SleepBluetoothActionResult(
-            outcome = SleepBluetoothOutcome.FAILED,
-            detail = "Shizuku not running"
-        )
-    }
-    if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
-        return SleepBluetoothActionResult(
-            outcome = SleepBluetoothOutcome.FAILED,
-            detail = "Shizuku permission denied"
-        )
-    }
-
-    var disconnectSucceeded = false
     if (!address.isNullOrBlank()) {
+        val profilesToTry = listOf(
+            4,
+            BluetoothProfile.A2DP,
+            BluetoothProfile.HEADSET,
+            BluetoothProfile.GATT,
+            BluetoothProfile.GATT_SERVER
+        )
+        for (profile in profilesToTry) {
+            Log.d(SHIZUKU_BT_TAG, "trying profile disconnect profile=$profile address=$address")
+            if (disconnectDeviceViaProfile(context, address, profile)) {
+                Log.d(SHIZUKU_BT_TAG, "profile disconnect succeeded profile=$profile address=$address")
+                return SleepBluetoothActionResult(
+                    outcome = SleepBluetoothOutcome.TARGET_DISCONNECTED,
+                    detail = "Disconnected controller $address via profile $profile"
+                )
+            }
+        }
+
         val disconnectCommands = listOf(
             "cmd bluetooth_manager disconnect $address",
             "cmd bluetooth_manager disconnect --address $address",
             "cmd bluetooth_manager disconnect-device $address"
         )
         for (command in disconnectCommands) {
+            Log.d(SHIZUKU_BT_TAG, "trying shell disconnect command=$command")
             val result = runShizukuShell(command)
             if (result.exitCode == 0) {
-                disconnectSucceeded = true
-                break
+                Log.d(SHIZUKU_BT_TAG, "shell disconnect succeeded command=$command")
+                return SleepBluetoothActionResult(
+                    outcome = SleepBluetoothOutcome.TARGET_DISCONNECTED,
+                    detail = "Disconnected controller $address"
+                )
             }
+            Log.w(
+                SHIZUKU_BT_TAG,
+                "shell disconnect failed command=$command exit=${result.exitCode} stderr=${result.stderr}"
+            )
         }
-    }
 
-    if (disconnectSucceeded) {
-        return SleepBluetoothActionResult(
-            outcome = SleepBluetoothOutcome.TARGET_DISCONNECTED,
-            detail = "Disconnected controller $address"
-        )
+        Log.d(SHIZUKU_BT_TAG, "trying removeBond fallback address=$address")
+        if (unpairDevice(context, address)) {
+            Log.d(SHIZUKU_BT_TAG, "removeBond succeeded address=$address")
+            return SleepBluetoothActionResult(
+                outcome = SleepBluetoothOutcome.TARGET_DISCONNECTED,
+                detail = "Unpaired controller $address to force disconnect"
+            )
+        }
+        Log.w(SHIZUKU_BT_TAG, "all targeted disconnect strategies failed address=$address")
     }
 
     if (!allowDisableBluetoothFallback) {
         val reason = if (address.isNullOrBlank()) {
             "未找到手柄"
         } else {
-            "断开手柄失败：$address"
+            "所有断开方式均失败：$address"
         }
         return SleepBluetoothActionResult(
             outcome = SleepBluetoothOutcome.FAILED,
             detail = "$reason；已按设置跳过关闭蓝牙"
+        )
+    }
+
+    if (!Shizuku.pingBinder()) {
+        Log.w(SHIZUKU_BT_TAG, "fallback bluetooth disable skipped because Shizuku is not running")
+        return SleepBluetoothActionResult(
+            outcome = SleepBluetoothOutcome.FAILED,
+            detail = "Shizuku not running"
+        )
+    }
+    if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+        Log.w(SHIZUKU_BT_TAG, "fallback bluetooth disable skipped because Shizuku permission denied")
+        return SleepBluetoothActionResult(
+            outcome = SleepBluetoothOutcome.FAILED,
+            detail = "Shizuku permission denied"
         )
     }
 
@@ -91,19 +134,77 @@ internal fun tryDisconnectTargetControllerThenDisableBluetooth(
         "svc bluetooth disable"
     )
     disableCommands.forEach { command ->
+        Log.d(SHIZUKU_BT_TAG, "trying bluetooth disable fallback command=$command")
         val result = runShizukuShell(command)
         if (result.exitCode == 0) {
+            Log.d(SHIZUKU_BT_TAG, "bluetooth disable fallback succeeded command=$command")
             return SleepBluetoothActionResult(
                 outcome = SleepBluetoothOutcome.BLUETOOTH_DISABLED,
                 detail = "Bluetooth disabled"
             )
         }
+        Log.w(
+            SHIZUKU_BT_TAG,
+            "bluetooth disable fallback failed command=$command exit=${result.exitCode} stderr=${result.stderr}"
+        )
     }
 
+    Log.w(SHIZUKU_BT_TAG, "disconnect flow failed for address=$address")
     return SleepBluetoothActionResult(
         outcome = SleepBluetoothOutcome.FAILED,
         detail = "断开手柄并关闭蓝牙失败"
     )
+}
+
+private fun disconnectDeviceViaProfile(
+    context: Context,
+    address: String,
+    profile: Int
+): Boolean {
+    val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter ?: return false
+    val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return false
+    var disconnected = false
+    val latch = CountDownLatch(1)
+    val listener = object : BluetoothProfile.ServiceListener {
+        override fun onServiceConnected(profileId: Int, proxy: BluetoothProfile) {
+            try {
+                val disconnectMethod = proxy.javaClass.getMethod("disconnect", BluetoothDevice::class.java)
+                disconnectMethod.isAccessible = true
+                disconnected = (disconnectMethod.invoke(proxy, device) as? Boolean) == true
+            } catch (_: Exception) {
+                disconnected = false
+                Log.w(SHIZUKU_BT_TAG, "profile disconnect reflection failed profile=$profile address=$address")
+            } finally {
+                runCatching { adapter.closeProfileProxy(profileId, proxy) }
+                latch.countDown()
+            }
+        }
+
+        override fun onServiceDisconnected(profileId: Int) {
+            latch.countDown()
+        }
+    }
+
+    val bound = runCatching { adapter.getProfileProxy(context, listener, profile) }.getOrDefault(false)
+    if (bound) {
+        latch.await(3, TimeUnit.SECONDS)
+    } else {
+        Log.w(SHIZUKU_BT_TAG, "getProfileProxy failed profile=$profile address=$address")
+    }
+    return disconnected
+}
+
+private fun unpairDevice(context: Context, address: String): Boolean {
+    val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter ?: return false
+    val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return false
+    return try {
+        val removeBondMethod = device.javaClass.getMethod("removeBond")
+        removeBondMethod.isAccessible = true
+        (removeBondMethod.invoke(device) as? Boolean) == true
+    } catch (_: Exception) {
+        Log.w(SHIZUKU_BT_TAG, "removeBond failed address=$address")
+        false
+    }
 }
 
 private data class ShizukuShellResult(
