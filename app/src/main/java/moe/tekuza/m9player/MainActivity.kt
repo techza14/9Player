@@ -14,7 +14,6 @@ import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
-import android.text.Html
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ImageView
@@ -172,7 +171,6 @@ private val FIELD_VARIABLE_CHOICES = listOf(
     "{audio}",
     "{cut-audio}",
     "{expression}",
-    "{word}",
     "{reading}",
     "{furigana-plain}",
     "{glossary}",
@@ -181,8 +179,6 @@ private val FIELD_VARIABLE_CHOICES = listOf(
     "{definitions}",
     "{popup-selection-text}",
     "{sentence}",
-    "{sentence-furigana}",
-    "{sentence-furigana-plain}",
     "{cloze-prefix}",
     "{cloze-body}",
     "{cloze-body-kana}",
@@ -195,9 +191,7 @@ private val FIELD_VARIABLE_CHOICES = listOf(
     "{pitch-accents}",
     "{pitch-accent-positions}",
     "{pitch-accent-categories}",
-    "{document-title}",
     "{book-title}",
-    "{book-cover}",
     "{search-query}"
 )
 
@@ -211,7 +205,6 @@ private data class ReaderBook(
     val audioName: String,
     val srtUri: Uri?,
     val srtName: String?,
-    val cues: List<SubtitleCue>,
     val coverUri: Uri?
 )
 
@@ -606,8 +599,7 @@ private fun ReaderSyncScreen() {
         audio: Uri,
         audioDisplayName: String?,
         srt: Uri?,
-        srtDisplayName: String?,
-        cues: List<SubtitleCue>
+        srtDisplayName: String?
     ): ReaderBook {
         val resolvedAudioName = audioDisplayName?.takeIf { it.isNotBlank() }
             ?: queryDisplayName(contentResolver, audio)
@@ -634,7 +626,6 @@ private fun ReaderSyncScreen() {
             audioName = resolvedAudioName,
             srtUri = srt,
             srtName = resolvedSrtName,
-            cues = cues,
             coverUri = coverUri
         )
     }
@@ -645,7 +636,7 @@ private fun ReaderSyncScreen() {
         audioName = book.audioName
         srtUri = book.srtUri
         srtName = book.srtName
-        srtCues = book.cues
+        srtCues = emptyList()
         srtError = null
         pendingCollectionPlayMs = null
         pendingCollectionStopMs = null
@@ -792,24 +783,20 @@ private fun ReaderSyncScreen() {
                             srtSourceUri = pickedSrt,
                             srtSourceName = pickedSrtName
                         )
-                        val cues = relocated.srtUri?.let { parseSrt(contentResolver, it) } ?: emptyList()
                         val book = buildReaderBook(
                             audio = relocated.audioUri,
                             audioDisplayName = relocated.audioName,
                             srt = relocated.srtUri,
-                            srtDisplayName = relocated.srtName,
-                            cues = cues
+                            srtDisplayName = relocated.srtName
                         )
                         val warning = relocated.moveWarnings.takeIf { it.isNotEmpty() }?.joinToString(" ")
                         Triple(book, relocated.folderName, warning)
                     } else {
-                        val cues = pickedSrt?.let { parseSrt(contentResolver, it) } ?: emptyList()
                         val book = buildReaderBook(
                             audio = pickedAudio,
                             audioDisplayName = pickedAudioName,
                             srt = pickedSrt,
-                            srtDisplayName = pickedSrtName,
-                            cues = cues
+                            srtDisplayName = pickedSrtName
                         )
                         Triple(book, null, null)
                     }
@@ -860,28 +847,21 @@ private fun ReaderSyncScreen() {
                         rootFolderUri = selectedFolder
                     )
                     val refreshedBooks = mutableListOf<ReaderBook>()
-                    val parseFailed = mutableListOf<String>()
                     scanResult.books.forEach { candidate ->
                         runCatching {
-                            val cues = candidate.srtUri?.let { parseSrt(contentResolver, it) } ?: emptyList()
-                            val rebuilt = buildReaderBook(
+                            buildReaderBook(
                                 audio = candidate.audioUri,
                                 audioDisplayName = candidate.audioName,
                                 srt = candidate.srtUri,
-                                srtDisplayName = candidate.srtName,
-                                cues = cues
+                                srtDisplayName = candidate.srtName
                             )
-                            rebuilt
                         }.onSuccess { refreshedBooks += it }
-                            .onFailure {
-                                parseFailed += candidate.folderName
-                            }
                     }
-                    Triple(refreshedBooks, scanResult.skippedFolders, parseFailed)
+                    refreshedBooks to scanResult.skippedFolders
                 }
             }
             srtLoading = false
-            refreshResult.onSuccess { (books, skippedFolders, parseFailed) ->
+            refreshResult.onSuccess { (books, skippedFolders) ->
                 if (books.isEmpty()) {
                     srtError = "未找到可导入书籍。"
                     exportStatus = "刷新完成：0 本。"
@@ -898,9 +878,6 @@ private fun ReaderSyncScreen() {
                     append("刷新完成：${books.size} 本。")
                     if (skippedFolders.isNotEmpty()) {
                         append(" 跳过 ${skippedFolders.size} 个文件夹（缺少音频）。")
-                    }
-                    if (parseFailed.isNotEmpty()) {
-                        append(" 失败 ${parseFailed.size} 个文件夹（SRT无效）。")
                     }
                 }
             }.onFailure { error ->
@@ -1013,13 +990,11 @@ private fun ReaderSyncScreen() {
                             return@forEach
                         }
                         runCatching {
-                            val cues = srt?.let { parseSrt(contentResolver, it) } ?: emptyList()
                             val rebuilt = buildReaderBook(
                                 audio = audio,
                                 audioDisplayName = savedBook.audioName,
                                 srt = srt,
-                                srtDisplayName = savedBook.srtName,
-                                cues = cues
+                                srtDisplayName = savedBook.srtName
                             )
                             rebuilt
                         }.onSuccess { restoredBooks += it }
@@ -1080,25 +1055,23 @@ private fun ReaderSyncScreen() {
                             persisted.srtName?.ifBlank { null }
                                 ?: queryDisplayName(contentResolver, it)
                         }
-                        val cues = restoredSrtRaw?.let { parseSrt(contentResolver, it) } ?: emptyList()
-                        Triple(restoredAudioRaw, restoredAudioName, Pair(restoredSrtRaw, restoredSrtName)) to cues
+                        Triple(restoredAudioRaw, restoredAudioName, Pair(restoredSrtRaw, restoredSrtName))
                     }
                 }
                 srtLoading = false
-                restoreResult.onSuccess { (restored, cues) ->
+                restoreResult.onSuccess { restored ->
                     val (audio, audioDisplay, srtPair) = restored
                     val (srt, srtDisplay) = srtPair
                     audioUri = audio
                     audioName = audioDisplay
                     srtUri = srt
                     srtName = srtDisplay
-                    srtCues = cues
+                    srtCues = emptyList()
                     val restoredBook = buildReaderBook(
                         audio = audio,
                         audioDisplayName = audioDisplay,
                         srt = srt,
-                        srtDisplayName = srtDisplay,
-                        cues = cues
+                        srtDisplayName = srtDisplay
                     )
                     readerBooks = listOf(restoredBook)
                     selectedBookId = restoredBook.id
@@ -1829,7 +1802,7 @@ private fun ReaderSyncScreen() {
                                         }
                                         Text(book.title, style = MaterialTheme.typography.titleSmall)
                                         Text(book.audioName, maxLines = 1)
-                                        Text("${book.cues.size} 条字幕")
+                                        Text(if (book.srtUri != null) "有字幕" else "无字幕")
                                         Text("$playbackPercent%")
                                         if (multiSelected) {
                                             Text("已选中", color = MaterialTheme.colorScheme.primary)
@@ -1887,7 +1860,7 @@ private fun ReaderSyncScreen() {
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Text(book.title, style = MaterialTheme.typography.titleSmall)
-                                    Text("${book.cues.size} 条字幕")
+                                    Text(if (book.srtUri != null) "有字幕" else "无字幕")
                                     Text("$playbackPercent%")
                                     if (multiSelected) {
                                         Text("已选中", color = MaterialTheme.colorScheme.primary)
@@ -3407,76 +3380,9 @@ private suspend fun loadReaderBookPlaybackSnapshotsForBooks(
         books.associate { book ->
             val playbackKey = buildReaderBookPlaybackKeyMain(book)
             val stored = loadBookReaderPlaybackSnapshot(context, playbackKey)
-            val normalized = if (stored.durationMs > 0L) {
-                stored
-            } else {
-                val fallbackDuration = book.cues.lastOrNull()?.endMs?.coerceAtLeast(0L) ?: 0L
-                if (fallbackDuration > 0L) {
-                    stored.copy(durationMs = fallbackDuration)
-                } else {
-                    stored
-                }
-            }
-            book.id to normalized
+            book.id to stored
         }
     }
-}
-
-private fun parseSrt(contentResolver: ContentResolver, uri: Uri): List<SubtitleCue> {
-    val rawText = openBookInputStream(contentResolver, uri)?.use { input ->
-        input.bufferedReader(Charsets.UTF_8).readText()
-    } ?: error("Unable to read SRT file")
-
-    val normalizedText = rawText
-        .removePrefix("\uFEFF")
-        .replace("\r\n", "\n")
-        .replace('\r', '\n')
-
-    val blocks = normalizedText.split(Regex("\n\\s*\n"))
-    val cues = mutableListOf<SubtitleCue>()
-
-    blocks.forEach { block ->
-        val lines = block.lines().map { it.trimEnd() }.filter { it.isNotBlank() }
-        if (lines.isEmpty()) return@forEach
-
-        val timingLineIndex = if (lines.first().all { it.isDigit() } && lines.size >= 2) 1 else 0
-        val timingLine = lines.getOrNull(timingLineIndex) ?: return@forEach
-        if (!timingLine.contains("-->")) return@forEach
-
-        val parts = timingLine.split("-->")
-        if (parts.size < 2) return@forEach
-
-        val start = parseSrtTimestamp(parts[0].trim()) ?: return@forEach
-        val endToken = parts[1].trim().substringBefore(' ')
-        val end = parseSrtTimestamp(endToken) ?: return@forEach
-
-        val cueTextRaw = lines.drop(timingLineIndex + 1).joinToString("\n").trim()
-        val cueText = Html.fromHtml(cueTextRaw, Html.FROM_HTML_MODE_LEGACY).toString().trim()
-        if (cueText.isBlank()) return@forEach
-
-        cues += SubtitleCue(startMs = start, endMs = end, text = cueText)
-    }
-
-    if (cues.isEmpty()) error("No valid subtitle cues found in SRT")
-    return cues.sortedBy { it.startMs }
-}
-
-private fun parseSrtTimestamp(raw: String): Long? {
-    val normalized = raw.trim().replace(',', '.')
-    val parts = normalized.split(':')
-    if (parts.size != 3) return null
-
-    val hour = parts[0].toLongOrNull() ?: return null
-    val minute = parts[1].toLongOrNull() ?: return null
-
-    val secParts = parts[2].split('.')
-    if (secParts.isEmpty()) return null
-
-    val second = secParts[0].toLongOrNull() ?: return null
-    val millisecondPart = secParts.getOrNull(1) ?: "0"
-    val millisecond = millisecondPart.padEnd(3, '0').take(3).toLongOrNull() ?: return null
-
-    return (((hour * 60 + minute) * 60) + second) * 1000 + millisecond
 }
 
 private fun findCueAtTime(cues: List<SubtitleCue>, timeMs: Long): SubtitleCue? {
@@ -3534,7 +3440,7 @@ private fun addLookupDefinitionToAnkiMain(
         error("Current model templates do not include {cut-audio}. Set audio field to {cut-audio} in 设置 > Anki.")
     }
     val requiresLookupAudio = templates.values.any {
-        templateUsesVariableMain(it, "audio") || templateUsesVariableMain(it, "audioTag")
+        templateUsesVariableMain(it, "audio")
     }
     if (requiresLookupAudio && lookupAudioUri == null) {
         error("Current model templates include {audio}, but lookup audio is unavailable. Configure it in 设置 > 有声书.")

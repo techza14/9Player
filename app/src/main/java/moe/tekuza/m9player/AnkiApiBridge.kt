@@ -160,7 +160,7 @@ internal fun exportToAnkiDroidApi(
     }
     val requiresCutAudio = templatesByField.values.any { templateUsesVariable(it, "cut-audio") }
     val requiresLookupAudio = templatesByField.values.any {
-        templateUsesVariable(it, "audio") || templateUsesVariable(it, "audioTag")
+        templateUsesVariable(it, "audio")
     }
 
     val variables = runCatching {
@@ -305,12 +305,10 @@ private fun buildAnkiVariables(
     val (clozePrefix, clozeBody, clozeSuffix) = splitCloze(card.sentence, clozeTarget)
     val frequencyNumber = extractFirstNumber(card.frequency)
     val expressionFurigana = buildExpressionFurigana(card.word, card.reading)
-    val sentenceFurigana = ""
     val singleFrequency = card.frequency.orEmpty()
     val resolvedBookTitle = resolveBookTitle(context, card)
 
     return mapOf(
-        "word" to card.word,
         "expression" to card.word,
         "dictionary-name" to dictionaryName,
         "dictionary" to dictionaryName,
@@ -318,10 +316,6 @@ private fun buildAnkiVariables(
         "popup-selection-text" to popupSelectionText.ifBlank { card.word },
         "search-query" to card.word,
         "sentence" to card.sentence,
-        "sentence-furigana" to sentenceFurigana,
-        "sentence-furigana-plain" to sentenceFurigana,
-        "sentencefurigana" to sentenceFurigana,
-        "sentencefuriganaplain" to sentenceFurigana,
         "cloze-prefix" to clozePrefix,
         "cloze-body" to clozeBody,
         "cloze-body-kana" to (card.reading ?: clozeBody),
@@ -330,9 +324,6 @@ private fun buildAnkiVariables(
         "furigana" to expressionFurigana,
         "furigana-plain" to expressionFurigana,
         "expression-furigana" to expressionFurigana,
-        "conjugation" to "",
-        "part-of-speech" to "",
-        "phonetic-transcriptions" to "",
         "definitions" to glossaryHtml,
         "definition" to glossaryHtml,
         "glossary" to glossaryHtml,
@@ -351,8 +342,6 @@ private fun buildAnkiVariables(
         "pitch-accents" to card.pitch.orEmpty(),
         "pitch-accent-positions" to card.pitch.orEmpty(),
         "pitch-accent-categories" to card.pitch.orEmpty(),
-        "pitch-accent-graphs" to "",
-        "pitch-accent-graphs-jj" to "",
         "frequency" to card.frequency.orEmpty(),
         "frequencies" to card.frequency.orEmpty(),
         "single-frequency" to singleFrequency,
@@ -362,14 +351,8 @@ private fun buildAnkiVariables(
         "frequency-average-rank" to frequencyNumber,
         "frequency-average-occurrence" to frequencyNumber,
         "audio" to lookupAudio,
-        "audioTag" to lookupAudio,
         "cut-audio" to cutAudio,
-        "screenshot" to "",
-        "tags" to "",
-        "url" to "",
-        "document-title" to resolvedBookTitle,
-        "book-title" to resolvedBookTitle,
-        "book-cover" to ""
+        "book-title" to resolvedBookTitle
     )
 }
 

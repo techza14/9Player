@@ -16,6 +16,7 @@ private const val GAMEPAD_CUSTOM_COLLECT_KEY = "custom_collect_key"
 private const val GAMEPAD_CUSTOM_DOUBLE_PREVIOUS_KEY = "custom_double_previous"
 private const val GAMEPAD_DIM_SCREEN_IN_CONTROL_MODE_KEY = "dim_screen_in_control_mode"
 private const val GAMEPAD_SINGLE_TAP_COLLECT_ONLY_IN_CONTROL_MODE_KEY = "single_tap_collect_only_in_control_mode"
+private const val GAMEPAD_POWER_SAVE_BLACK_SCREEN_IN_CONTROL_MODE_KEY = "power_save_black_screen_in_control_mode"
 
 internal data class GamepadControlConfig(
     val scheme: GamepadControlScheme,
@@ -24,7 +25,8 @@ internal data class GamepadControlConfig(
     val collectKeyCode: Int,
     val doubleTapCollectPrevious: Boolean,
     val dimScreenInControlMode: Boolean,
-    val singleTapCollectOnlyInControlMode: Boolean
+    val singleTapCollectOnlyInControlMode: Boolean,
+    val powerSaveBlackScreenInControlMode: Boolean
 )
 
 internal fun loadGamepadControlScheme(context: Context): GamepadControlScheme {
@@ -48,6 +50,10 @@ internal fun loadGamepadControlConfig(context: Context): GamepadControlConfig {
         GAMEPAD_SINGLE_TAP_COLLECT_ONLY_IN_CONTROL_MODE_KEY,
         true
     )
+    val powerSaveBlackScreenInControlMode = prefs.getBoolean(
+        GAMEPAD_POWER_SAVE_BLACK_SCREEN_IN_CONTROL_MODE_KEY,
+        false
+    )
     return when (scheme) {
         GamepadControlScheme.SCHEME_1 -> GamepadControlConfig(
             scheme = scheme,
@@ -56,7 +62,8 @@ internal fun loadGamepadControlConfig(context: Context): GamepadControlConfig {
             collectKeyCode = android.view.KeyEvent.KEYCODE_BUTTON_X,
             doubleTapCollectPrevious = true,
             dimScreenInControlMode = dimScreenInControlMode,
-            singleTapCollectOnlyInControlMode = singleTapCollectOnlyInControlMode
+            singleTapCollectOnlyInControlMode = singleTapCollectOnlyInControlMode,
+            powerSaveBlackScreenInControlMode = powerSaveBlackScreenInControlMode
         )
 
         GamepadControlScheme.SCHEME_2 -> GamepadControlConfig(
@@ -66,7 +73,8 @@ internal fun loadGamepadControlConfig(context: Context): GamepadControlConfig {
             collectKeyCode = android.view.KeyEvent.KEYCODE_BUTTON_L1,
             doubleTapCollectPrevious = true,
             dimScreenInControlMode = dimScreenInControlMode,
-            singleTapCollectOnlyInControlMode = singleTapCollectOnlyInControlMode
+            singleTapCollectOnlyInControlMode = singleTapCollectOnlyInControlMode,
+            powerSaveBlackScreenInControlMode = powerSaveBlackScreenInControlMode
         )
 
         GamepadControlScheme.CUSTOM -> GamepadControlConfig(
@@ -76,7 +84,8 @@ internal fun loadGamepadControlConfig(context: Context): GamepadControlConfig {
             collectKeyCode = prefs.getInt(GAMEPAD_CUSTOM_COLLECT_KEY, android.view.KeyEvent.KEYCODE_BUTTON_X),
             doubleTapCollectPrevious = prefs.getBoolean(GAMEPAD_CUSTOM_DOUBLE_PREVIOUS_KEY, true),
             dimScreenInControlMode = dimScreenInControlMode,
-            singleTapCollectOnlyInControlMode = singleTapCollectOnlyInControlMode
+            singleTapCollectOnlyInControlMode = singleTapCollectOnlyInControlMode,
+            powerSaveBlackScreenInControlMode = powerSaveBlackScreenInControlMode
         )
     }
 }
@@ -92,6 +101,13 @@ internal fun saveSingleTapCollectOnlyInControlMode(context: Context, enabled: Bo
     context.getSharedPreferences(GAMEPAD_PREFS, Context.MODE_PRIVATE)
         .edit()
         .putBoolean(GAMEPAD_SINGLE_TAP_COLLECT_ONLY_IN_CONTROL_MODE_KEY, enabled)
+        .apply()
+}
+
+internal fun savePowerSaveBlackScreenInControlMode(context: Context, enabled: Boolean) {
+    context.getSharedPreferences(GAMEPAD_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(GAMEPAD_POWER_SAVE_BLACK_SCREEN_IN_CONTROL_MODE_KEY, enabled)
         .apply()
 }
 

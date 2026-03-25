@@ -64,10 +64,8 @@ private val ANKI_FIELD_VARIABLE_CHOICES = listOf(
     "{cloze-body-kana}",
     "{cloze-prefix}",
     "{cloze-suffix}",
-    "{conjugation}",
     "{dictionary}",
     "{dictionary-alias}",
-    "{document-title}",
     "{book-title}",
     "{expression}",
     "{frequencies}",
@@ -75,11 +73,7 @@ private val ANKI_FIELD_VARIABLE_CHOICES = listOf(
     "{frequency-harmonic-rank}",
     "{frequency-average-occurrence}",
     "{frequency-average-rank}",
-    "{part-of-speech}",
-    "{phonetic-transcriptions}",
     "{pitch-accents}",
-    "{pitch-accent-graphs}",
-    "{pitch-accent-graphs-jj}",
     "{pitch-accent-positions}",
     "{pitch-accent-categories}",
     "{reading}",
@@ -99,13 +93,8 @@ private val ANKI_FIELD_VARIABLE_CHOICES = listOf(
     "{single-glossary-DICT-NAME-brief}",
     "{single-glossary-DICT-NAME-no-dictionary}",
     "{popup-selection-text}",
-    "{screenshot}",
     "{search-query}",
-    "{sentence}",
-    "{sentence-furigana}",
-    "{sentence-furigana-plain}",
-    "{tags}",
-    "{url}"
+    "{sentence}"
 )
 
 private const val ANKI_MODEL_TEMPLATE_SNAPSHOTS_KEY = "anki_model_template_snapshots_json"
