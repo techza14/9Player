@@ -25,7 +25,7 @@ import android.view.WindowManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ImageView
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -94,6 +94,7 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -131,7 +132,7 @@ private const val BOOK_READER_SLEEP_OPTIONS_PREFS = "book_reader_sleep_options_p
 private const val BOOK_READER_SLEEP_EXIT_CONTROL_KEY = "sleep_exit_control"
 private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
 
-class BookReaderActivity : ComponentActivity() {
+class BookReaderActivity : AppCompatActivity() {
     private var gamepadKeyHandler: ((KeyEvent) -> Boolean)? = null
     private var lastMotionHorizontalKeyCode: Int? = null
     private var lastMotionVerticalKeyCode: Int? = null
@@ -888,25 +889,25 @@ private fun BookReaderScreen(
                     }
                     when (bluetoothResult.outcome) {
                         SleepBluetoothOutcome.TARGET_DISCONNECTED -> {
-                            statusParts += "手柄已断开"
+                            statusParts += context.getString(R.string.status_controller_disconnected)
                         }
                         SleepBluetoothOutcome.BLUETOOTH_DISABLED -> {
-                            statusParts += "兜底：已关闭蓝牙"
+                            statusParts += context.getString(R.string.status_bluetooth_disabled_fallback)
                         }
                         SleepBluetoothOutcome.FAILED -> {
-                            statusParts += "蓝牙操作失败（${bluetoothResult.detail}）"
+                            statusParts += context.getString(R.string.status_bluetooth_failed, bluetoothResult.detail)
                         }
                     }
                 }
                 if (sleepExitControlModeWhenDone) {
                     controlModeEnabled = false
                     view.keepScreenOn = false
-                    statusParts += "已退出控制模式"
+                    statusParts += context.getString(R.string.status_control_mode_exited)
                 }
                 if (statusParts.isEmpty()) {
-                    controlModeStatus = "计时结束。"
+                    controlModeStatus = context.getString(R.string.status_timer_finished)
                 } else {
-                    controlModeStatus = "计时结束：${statusParts.joinToString("，")}"
+                    controlModeStatus = context.getString(R.string.status_timer_finished_with_parts, statusParts.joinToString("，"))
                 }
                 break
             }
@@ -945,10 +946,10 @@ private fun BookReaderScreen(
                     )
                 }
                 if (added) {
-                    controlModeStatus = "已收藏第 ${targetIndex + 1}/${cues.size} 句，继续播放。"
+                    controlModeStatus = context.getString(R.string.status_bookmarked_continue, targetIndex + 1, cues.size)
                 }
             } else {
-                controlModeStatus = "第 ${targetIndex + 1}/${cues.size} 句已收藏，继续播放。"
+                controlModeStatus = context.getString(R.string.status_already_bookmarked_continue, targetIndex + 1, cues.size)
             }
         }
     }
@@ -979,9 +980,10 @@ private fun BookReaderScreen(
                 if (removed) {
                     collectedCueKeys.remove(key)
                     collectedCueUiVersion += 1
-                    controlModeStatus = cueIndexLabel?.let { "已取消收藏第 $it 句。" } ?: "已取消收藏。"
+                    controlModeStatus = cueIndexLabel?.let { context.getString(R.string.status_unbookmarked_cue, it) }
+                        ?: context.getString(R.string.status_unbookmarked)
                 } else {
-                    controlModeStatus = "未找到该收藏记录。"
+                    controlModeStatus = context.getString(R.string.status_bookmark_not_found)
                 }
             } else {
                 val added = withContext(Dispatchers.IO) {
@@ -1006,9 +1008,10 @@ private fun BookReaderScreen(
                 if (added) {
                     collectedCueKeys.add(key)
                     collectedCueUiVersion += 1
-                    controlModeStatus = cueIndexLabel?.let { "已收藏第 $it 句。" } ?: "已收藏。"
+                    controlModeStatus = cueIndexLabel?.let { context.getString(R.string.status_bookmarked_cue, it) }
+                        ?: context.getString(R.string.status_bookmarked)
                 } else {
-                    controlModeStatus = "该句已在收藏中。"
+                    controlModeStatus = context.getString(R.string.status_already_bookmarked)
                     collectedCueKeys.add(key)
                     collectedCueUiVersion += 1
                 }
@@ -1047,7 +1050,7 @@ private fun BookReaderScreen(
         player.play()
         controlTargetCueIndex = if (controlModeEnabled) index else null
         if (showStatus) {
-            controlModeStatus = "已跳转到第 ${index + 1}/${cues.size} 句"
+            controlModeStatus = context.getString(R.string.status_jump_to_cue, index + 1, cues.size)
         }
     }
 
@@ -1066,7 +1069,7 @@ private fun BookReaderScreen(
         resumePlaybackAfterLookupDismiss = false
         player.seekTo(target)
         if (controlModeEnabled) {
-            controlModeStatus = "手动拖动进度。"
+            controlModeStatus = context.getString(R.string.status_manual_seek)
         }
     }
 
@@ -1109,13 +1112,17 @@ private fun BookReaderScreen(
             System.currentTimeMillis() + (minutes * 60_000L)
         }
         sleepTimerOptionsVisible = false
-        controlModeStatus = if (minutes <= 0) "计时已清除。" else "已设置计时：${minutes} 分钟"
+        controlModeStatus = if (minutes <= 0) {
+            context.getString(R.string.status_timer_cleared)
+        } else {
+            context.getString(R.string.status_timer_set, minutes)
+        }
     }
 
     fun applyCustomSleepTimer() {
         val minutes = sleepCustomMinutesInput.trim().toIntOrNull()
         if (minutes == null || minutes <= 0) {
-            controlModeStatus = "自定义分钟无效。"
+            controlModeStatus = context.getString(R.string.status_custom_minutes_invalid)
             return
         }
         setSleepTimer(minutes)
@@ -1126,14 +1133,14 @@ private fun BookReaderScreen(
         player.seekTo(cue.startMs)
         player.play()
         controlTargetCueIndex = index
-        controlModeStatus = "播放第 ${index + 1}/${cues.size} 句"
+        controlModeStatus = context.getString(R.string.status_play_cue, index + 1, cues.size)
     }
 
     fun jumpToChapter(chapter: ReaderAudioChapter) {
         seekToManual(chapter.startMs)
         player.play()
         chapterOptionsVisible = false
-        controlModeStatus = "已跳转章节：${chapter.title}"
+        controlModeStatus = context.getString(R.string.status_jump_chapter, chapter.title)
     }
 
     fun collectFavoriteCue() {
@@ -1145,7 +1152,8 @@ private fun BookReaderScreen(
             else -> null
         }
         if (collectedCueKeys.contains(key)) {
-            controlModeStatus = cueIndexLabel?.let { "第 $it 句已在收藏中。" } ?: "该句已在收藏中。"
+            controlModeStatus = cueIndexLabel?.let { context.getString(R.string.status_already_bookmarked_cue, it) }
+                ?: context.getString(R.string.status_already_bookmarked)
             return
         }
         scope.launch {
@@ -1171,9 +1179,11 @@ private fun BookReaderScreen(
             collectedCueKeys.add(key)
             collectedCueUiVersion += 1
             controlModeStatus = if (added) {
-                cueIndexLabel?.let { "已收藏第 $it 句。" } ?: "已收藏。"
+                cueIndexLabel?.let { context.getString(R.string.status_bookmarked_cue, it) }
+                    ?: context.getString(R.string.status_bookmarked)
             } else {
-                cueIndexLabel?.let { "第 $it 句已在收藏中。" } ?: "该句已在收藏中。"
+                cueIndexLabel?.let { context.getString(R.string.status_already_bookmarked_cue, it) }
+                    ?: context.getString(R.string.status_already_bookmarked)
             }
         }
     }
@@ -1192,7 +1202,7 @@ private fun BookReaderScreen(
             pendingSingleTapJob = null
             pendingSingleTapBaseCueIndex = null
             playCueForControl((currentIndex - 1).coerceAtLeast(0))
-            controlModeStatus = "重播中双击：播放上一句并收藏。"
+            controlModeStatus = context.getString(R.string.status_double_tap_replay_prev)
             return
         }
 
@@ -1205,10 +1215,10 @@ private fun BookReaderScreen(
                 pendingSingleTapBaseCueIndex = null
                 if (controlConfig.singleTapCollectOnlyInControlMode) {
                     collectFavoriteCue()
-                    controlModeStatus = "单击：直接收藏当前句。"
+                    controlModeStatus = context.getString(R.string.status_single_tap_bookmark_direct)
                 } else {
                     playCueForControl(currentIndex)
-                    controlModeStatus = "单击：重播当前句并收藏。"
+                    controlModeStatus = context.getString(R.string.status_single_tap_replay_bookmark)
                 }
             }
         }
@@ -1233,9 +1243,9 @@ private fun BookReaderScreen(
         lastGamepadCollectTapAtMs = now
         playCueForControl(targetIndex)
         controlModeStatus = if (isDoubleTap) {
-            "手柄：收藏上一句。"
+            context.getString(R.string.status_gamepad_bookmark_prev)
         } else {
-            "手柄：收藏当前句。"
+            context.getString(R.string.status_gamepad_bookmark_current)
         }
     }
 
@@ -1270,7 +1280,7 @@ private fun BookReaderScreen(
             lookupPopupLoading = false
             lookupPopupResults = emptyList()
             lookupPopupTitle = ""
-            lookupPopupError = "未加载辞典，请先在主页导入辞典。"
+            lookupPopupError = context.getString(R.string.bookreader_lookup_no_dict)
             lookupPopupCue = cue
             lookupPopupSelectionText = null
             return
@@ -1289,7 +1299,7 @@ private fun BookReaderScreen(
             lookupPopupLoading = false
             lookupPopupResults = emptyList()
             lookupPopupTitle = selectedToken.orEmpty()
-            lookupPopupError = "当前位置没有可查询词。"
+            lookupPopupError = context.getString(R.string.bookreader_lookup_no_term)
             lookupPopupCue = cue
             lookupPopupSelectionText = null
             return
@@ -1326,7 +1336,7 @@ private fun BookReaderScreen(
             result.onSuccess { hits ->
                 lookupPopupResults = hits
                 if (hits.isEmpty()) {
-                    lookupPopupError = "无查询结果。"
+                    lookupPopupError = context.getString(R.string.common_no_results)
                     selectedLookupRange = null
                     lookupPopupSelectionText = selectedToken
                 } else {
@@ -1342,7 +1352,7 @@ private fun BookReaderScreen(
                 }
             }.onFailure {
                 lookupPopupResults = emptyList()
-                lookupPopupError = it.message ?: "查询失败"
+                lookupPopupError = it.message ?: context.getString(R.string.bookreader_lookup_failed)
                 selectedLookupRange = null
                 lookupPopupSelectionText = selectedToken
             }
@@ -1361,7 +1371,7 @@ private fun BookReaderScreen(
 
     fun addLookupGroupToAnki(groupedResult: GroupedLookupResult) {
         val dictionaryGroup = groupedResult.dictionaries.firstOrNull() ?: run {
-            ankiActionStatus = "没有可导出的辞典内容。"
+            ankiActionStatus = context.getString(R.string.bookreader_anki_no_content)
             return
         }
         val cue = lookupPopupCue ?: return
@@ -1373,7 +1383,7 @@ private fun BookReaderScreen(
             .orEmpty()
         val settingsSnapshot = audiobookSettings
         scope.launch {
-            ankiActionStatus = "正在添加到 Anki..."
+        ankiActionStatus = context.getString(R.string.bookreader_anki_exporting)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val preparedLookupAudio = prepareLookupAudioForAnkiExport(
@@ -1401,7 +1411,7 @@ private fun BookReaderScreen(
                 }
             }
             ankiActionStatus = result.fold(
-                onSuccess = { "已添加到 Anki。" },
+            onSuccess = { context.getString(R.string.bookreader_anki_exported) },
                 onFailure = { formatAnkiFailure(it) }
             )
         }
@@ -1441,10 +1451,10 @@ private fun BookReaderScreen(
     fun handleControlOverlaySwipe(step: Int) {
         if (step < 0) {
             jumpToAdjacentCue(-1)
-            controlModeStatus = "左滑：上一句。"
+            controlModeStatus = context.getString(R.string.status_swipe_prev)
         } else {
             jumpToAdjacentCue(1)
-            controlModeStatus = "右滑：下一句。"
+            controlModeStatus = context.getString(R.string.status_swipe_next)
         }
     }
 
@@ -1454,7 +1464,7 @@ private fun BookReaderScreen(
         pendingSingleTapBaseCueIndex = null
         controlTargetCueIndex = null
         controlModeEnabled = false
-        controlModeStatus = "已退出控制模式。"
+        controlModeStatus = context.getString(R.string.status_control_mode_exited_full)
     }
 
     val latestIsPlaying by rememberUpdatedState(isPlaying)
@@ -1477,15 +1487,15 @@ private fun BookReaderScreen(
     val controlModePowerSaveEnabled = controlModeEnabled && controlModeConfig.powerSaveBlackScreenInControlMode
     val controlModeHintText = remember(controlModeEnabled, controlModeConfig) {
         buildString {
-            append("控制模式\n屏幕常亮\n可开启计时结束自动退出\n")
+            append(context.getString(R.string.status_control_hint_intro))
             append(
                 if (controlModeConfig.singleTapCollectOnlyInControlMode) {
-                    "单击：直接收藏当前句"
+                    context.getString(R.string.status_control_hint_direct_bookmark)
                 } else {
-                    "单击：重播当前句并收藏"
+                    context.getString(R.string.status_control_hint_replay_bookmark)
                 }
             )
-            append("\n重播中双击：播放上一句并收藏\n左滑：上一句\n右滑：下一句\n双指短长按：退出")
+            append(context.getString(R.string.status_control_hint_footer))
         }
     }
 
@@ -1558,7 +1568,13 @@ private fun BookReaderScreen(
                                     OutlinedButton(
                                         onClick = { chapterOptionsVisible = !chapterOptionsVisible }
                                     ) {
-                                    Text(if (chapterOptionsVisible) "章节 ▲" else "章节 ▼")
+                                    Text(
+                                        if (chapterOptionsVisible) {
+                                            stringResource(R.string.bookreader_chapters_expanded)
+                                        } else {
+                                            stringResource(R.string.bookreader_chapters_collapsed)
+                                        }
+                                    )
                                     }
                                     if (activeChapterTitle != null) {
                                         Text(
@@ -1670,9 +1686,9 @@ private fun BookReaderScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 val progressLabel = when {
-                                    useChapterTimeline && showOverallProgress -> "总进度：$totalProgressPercent%"
-                                    useChapterTimeline -> "章节进度：$progressPercent%"
-                                    else -> "进度：$progressPercent%"
+                                    useChapterTimeline && showOverallProgress -> stringResource(R.string.bookreader_progress_total, totalProgressPercent)
+                                    useChapterTimeline -> stringResource(R.string.bookreader_progress_chapter, progressPercent)
+                                    else -> stringResource(R.string.bookreader_progress_plain, progressPercent)
                                 }
                                 Text(
                                     text = progressLabel,
@@ -1694,8 +1710,8 @@ private fun BookReaderScreen(
                                     }
                                 ) {
                                     val label = when (effectiveAdjacentJumpMode) {
-                                        AdjacentJumpMode.CUE -> "按台词"
-                                        AdjacentJumpMode.DURATION -> "按时长(${stepSeconds}秒)"
+                                        AdjacentJumpMode.CUE -> stringResource(R.string.bookreader_jump_by_cue)
+                                        AdjacentJumpMode.DURATION -> stringResource(R.string.bookreader_jump_by_duration, stepSeconds.toInt())
                                     }
                                     Text(label)
                                 }
@@ -1718,7 +1734,7 @@ private fun BookReaderScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(onClick = backToMain) {
-                        Text("< 返回")
+                        Text(stringResource(R.string.bookreader_back))
                     }
                     Spacer(modifier = Modifier.weight(1f))
                     TextButton(
@@ -1730,9 +1746,9 @@ private fun BookReaderScreen(
                     TextButton(onClick = { sleepTimerOptionsVisible = !sleepTimerOptionsVisible }) {
                         Text(
                             if (sleepRemainingLabel != null) {
-                                "计时 ${sleepRemainingLabel}"
+                                stringResource(R.string.bookreader_sleep_timer_running, sleepRemainingLabel)
                             } else {
-                                "计时"
+                                stringResource(R.string.bookreader_sleep_timer)
                             }
                         )
                     }
@@ -1751,7 +1767,7 @@ private fun BookReaderScreen(
                                     onClick = {
                                         playbackSpeed = speed
                                         speedMenuExpanded = false
-                                        controlModeStatus = "播放速度：${speed}x"
+                                        controlModeStatus = context.getString(R.string.status_playback_speed, speed.toString())
                                     }
                                 )
                             }
@@ -1766,38 +1782,70 @@ private fun BookReaderScreen(
                             onDismissRequest = { topActionsExpanded = false }
                         ) {
                             DropdownMenuItem(
-                                text = { Text(if (bottomControlsVisible) "隐藏播放条" else "显示播放条") },
+                                text = {
+                                    Text(
+                                        if (bottomControlsVisible) {
+                                            stringResource(R.string.bookreader_hide_controls)
+                                        } else {
+                                            stringResource(R.string.bookreader_show_controls)
+                                        }
+                                    )
+                                },
                                 onClick = {
                                     bottomControlsVisible = !bottomControlsVisible
                                     topActionsExpanded = false
-                                    controlModeStatus = if (bottomControlsVisible) "已显示播放条。" else "已隐藏播放条。"
+                                    controlModeStatus = if (bottomControlsVisible) {
+                                        context.getString(R.string.bookreader_controls_shown)
+                                    } else {
+                                        context.getString(R.string.bookreader_controls_hidden)
+                                    }
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("控制模式") },
+                                text = { Text(stringResource(R.string.bookreader_control_mode)) },
                                 onClick = {
                                     controlModeEnabled = true
                                     topActionsExpanded = false
-                                    controlModeStatus = "已进入控制模式。"
+                                    controlModeStatus = context.getString(R.string.bookreader_control_mode_entered)
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text(if (lyricsMode) "字幕-列表显示" else "字幕-单句显示") },
+                                text = {
+                                    Text(
+                                        if (lyricsMode) {
+                                            stringResource(R.string.bookreader_subtitle_list)
+                                        } else {
+                                            stringResource(R.string.bookreader_subtitle_single)
+                                        }
+                                    )
+                                },
                                 onClick = {
                                     lyricsMode = !lyricsMode
                                     topActionsExpanded = false
-                                    controlModeStatus = if (lyricsMode) "已切换到字幕-列表显示。" else "已切换到字幕-单句显示。"
+                                    controlModeStatus = if (lyricsMode) {
+                                        context.getString(R.string.bookreader_subtitle_list_enabled)
+                                    } else {
+                                        context.getString(R.string.bookreader_subtitle_single_enabled)
+                                    }
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text(if (coverModeEnabled) "切换到字幕" else "切换到封面") },
+                                text = {
+                                    Text(
+                                        if (coverModeEnabled) {
+                                            stringResource(R.string.bookreader_switch_to_subtitle)
+                                        } else {
+                                            stringResource(R.string.bookreader_switch_to_cover)
+                                        }
+                                    )
+                                },
                                 onClick = {
                                     coverModeEnabled = !coverModeEnabled
                                     topActionsExpanded = false
                                     controlModeStatus = if (coverModeEnabled) {
-                                        "已切换到封面。"
+                                        context.getString(R.string.bookreader_switched_to_cover)
                                     } else {
-                                        "已切换到字幕。"
+                                        context.getString(R.string.bookreader_switched_to_subtitle)
                                     }
                                 }
                             )
@@ -1822,8 +1870,11 @@ private fun BookReaderScreen(
                             .padding(if (coverModeEnabled) 0.dp else 16.dp)
                     ) {
                         when {
-                            srtLoading -> Text("正在解析 SRT...")
-                            srtError != null -> Text("SRT 错误：$srtError", color = MaterialTheme.colorScheme.error)
+                                srtLoading -> Text(stringResource(R.string.bookreader_parsing_srt))
+                                srtError != null -> Text(
+                                    stringResource(R.string.bookreader_srt_error, srtError.orEmpty()),
+                                    color = MaterialTheme.colorScheme.error
+                                )
                             coverModeEnabled -> {
                                 Column(modifier = Modifier.fillMaxSize()) {
                                     if (coverUri != null) {
@@ -1859,7 +1910,7 @@ private fun BookReaderScreen(
                                     }
                                 } 
                             }
-                            cues.isEmpty() -> Text("没有可用字幕。")
+                                cues.isEmpty() -> Text(stringResource(R.string.bookreader_no_subtitles))
                             lyricsMode -> {
                                 LazyColumn(
                                     modifier = Modifier.fillMaxSize(),
@@ -1891,7 +1942,7 @@ private fun BookReaderScreen(
                                     }
                                 }
                             }
-                            activeCue == null -> Text("等待播放进入字幕范围...")
+                                activeCue == null -> Text(stringResource(R.string.bookreader_waiting_for_subtitle))
                             else -> {
                                 Box(
                                     modifier = Modifier
@@ -1925,7 +1976,13 @@ private fun BookReaderScreen(
                     timeEditError = null
                 },
                 title = {
-                    Text(if (useChapterTimeline && !showOverallDuration) "编辑章节时间" else "编辑播放时间")
+                    Text(
+                        if (useChapterTimeline && !showOverallDuration) {
+                            stringResource(R.string.bookreader_edit_chapter_time)
+                        } else {
+                            stringResource(R.string.bookreader_edit_playback_time)
+                        }
+                    )
                 },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1936,7 +1993,7 @@ private fun BookReaderScreen(
                                 timeEditError = null
                             },
                             singleLine = true,
-                            label = { Text("格式: mm:ss 或 hh:mm:ss") }
+                            label = { Text(stringResource(R.string.bookreader_time_format_hint)) }
                         )
                         if (!timeEditError.isNullOrBlank()) {
                             Text(timeEditError!!, color = MaterialTheme.colorScheme.error)
@@ -1950,7 +2007,7 @@ private fun BookReaderScreen(
                             timeEditError = null
                         }
                     ) {
-                        Text("取消")
+                        Text(stringResource(R.string.common_cancel))
                     }
                 },
                 confirmButton = {
@@ -1958,7 +2015,7 @@ private fun BookReaderScreen(
                         onClick = {
                             val targetOffsetMs = parseEditableTimeInputToMillis(timeEditInput)
                             if (targetOffsetMs == null) {
-                                timeEditError = "时间格式无效"
+                                timeEditError = context.getString(R.string.bookreader_time_invalid)
                                 return@Button
                             }
                             val absoluteTarget = if (useChapterTimeline && !showOverallDuration) {
@@ -1971,7 +2028,7 @@ private fun BookReaderScreen(
                             timeEditError = null
                         }
                     ) {
-                        Text("跳转")
+                        Text(stringResource(R.string.bookreader_jump))
                     }
                 }
             )
@@ -1994,7 +2051,7 @@ private fun BookReaderScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         if (sleepRemainingLabel != null) {
-                            Text("计时剩余：$sleepRemainingLabel")
+                            Text(stringResource(R.string.bookreader_sleep_remaining, sleepRemainingLabel))
                         }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -2004,7 +2061,7 @@ private fun BookReaderScreen(
                             OutlinedButton(onClick = { setSleepTimer(15) }) { Text("15m") }
                             OutlinedButton(onClick = { setSleepTimer(30) }) { Text("30m") }
                             OutlinedButton(onClick = { setSleepTimer(60) }) { Text("60m") }
-                            TextButton(onClick = { setSleepTimer(0) }) { Text("关闭") }
+                            TextButton(onClick = { setSleepTimer(0) }) { Text(stringResource(R.string.common_close)) }
                         }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -2017,11 +2074,11 @@ private fun BookReaderScreen(
                                     sleepCustomMinutesInput = value.filter { it.isDigit() }.take(4)
                                 },
                                 modifier = Modifier.weight(1f),
-                                label = { Text("自定义分钟") },
+                                label = { Text(stringResource(R.string.bookreader_custom_minutes)) },
                                 singleLine = true
                             )
                             Button(onClick = { applyCustomSleepTimer() }) {
-                                Text("设置")
+                                Text(stringResource(R.string.bookreader_set))
                             }
                         }
                         Row(
@@ -2029,7 +2086,7 @@ private fun BookReaderScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("计时完关闭控制模式")
+                            Text(stringResource(R.string.bookreader_sleep_exit_control))
                             Switch(
                                 checked = sleepExitControlModeWhenDone,
                                 onCheckedChange = { checked ->
@@ -2042,7 +2099,7 @@ private fun BookReaderScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("计时完断开手柄蓝牙(Shizuku)")
+                            Text(stringResource(R.string.bookreader_sleep_disconnect_bluetooth))
                             Switch(
                                 checked = sleepDisconnectControllerBluetoothWhenDone,
                                 onCheckedChange = { checked ->
@@ -2059,7 +2116,7 @@ private fun BookReaderScreen(
                                 )
                             }
                         ) {
-                            Text("打开手机蓝牙界面")
+                            Text(stringResource(R.string.bookreader_open_bluetooth))
                         }
                     }
                 }
@@ -2141,7 +2198,7 @@ private fun BookReaderScreen(
             ) {
                 Text(
                     if (controlModePowerSaveEnabled) {
-                        "省电模式\n黑屏中\n双指短长按：退出"
+                        stringResource(R.string.control_mode_overlay_hint)
                     } else {
                         controlModeHintText
                     },
@@ -2186,13 +2243,13 @@ private fun BookReaderScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         if (lookupPopupLoading) {
-                            Text("查询中...")
+                            Text(stringResource(R.string.common_querying))
                         }
                         if (lookupPopupError != null) {
                             Text(lookupPopupError!!, color = MaterialTheme.colorScheme.error)
                         }
                         if (!lookupPopupLoading && groupedLookupPopupResults.isEmpty() && lookupPopupError == null) {
-                            Text("无查询结果。")
+                            Text(stringResource(R.string.common_no_results))
                         }
                         groupedLookupPopupResults.forEach { groupedResult ->
                             val reading = groupedResult.reading?.takeIf { it.isNotBlank() }?.let { " [$it]" } ?: ""
@@ -2212,7 +2269,7 @@ private fun BookReaderScreen(
                                                 OutlinedButton(
                                                     onClick = { playLookupGroupAudio(groupedResult) }
                                                 ) {
-                                                    Text("音")
+                                                        Text(stringResource(R.string.common_audio))
                                                 }
                                             }
                                             OutlinedButton(
@@ -2229,22 +2286,25 @@ private fun BookReaderScreen(
                                                 modifier = Modifier.padding(8.dp),
                                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
-                                                val frequencyBadges = parseMetaBadgesBook(dictionaryGroup.frequency, "词频")
+                                                val frequencyBadges = parseMetaBadges(
+                                                    dictionaryGroup.frequency,
+                                                    stringResource(R.string.bookreader_meta_frequency)
+                                                )
                                                 if (frequencyBadges.isNotEmpty()) {
-                                                    MetaBadgeRowBook(
+                                                    MetaBadgeRow(
                                                         badges = frequencyBadges,
                                                         labelColor = Color(0xFFDDF0DD),
                                                         labelTextColor = Color(0xFF305E33)
                                                     )
                                                 }
-                                                val pitchBadges = parsePitchBadgeGroupsBook(
+                                                val pitchBadges = parsePitchBadgeGroups(
                                                     raw = dictionaryGroup.pitch,
                                                     reading = groupedResult.reading,
-                                                    defaultLabel = "音调"
+                                                    defaultLabel = stringResource(R.string.bookreader_meta_pitch)
                                                 )
                                                 if (pitchBadges.isNotEmpty()) {
                                                     pitchBadges.forEach { group ->
-                                                        PitchBadgeRowBook(
+                                                        PitchBadgeRow(
                                                             group = group,
                                                             labelColor = Color(0xFFE7DDF8),
                                                             labelTextColor = Color(0xFF4E3A74)
@@ -2258,11 +2318,11 @@ private fun BookReaderScreen(
                                                             modifier = Modifier.padding(8.dp),
                                                             verticalArrangement = Arrangement.spacedBy(6.dp)
                                                         ) {
-                                                            RichDefinitionViewBook(
-                                                                definition = definition,
-                                                                dictionaryName = null,
-                                                                dictionaryCss = dictionaryGroup.css
-                                                            )
+                                                                RichDefinitionView(
+                                                                    definition = definition,
+                                                                    dictionaryName = null,
+                                                                    dictionaryCss = dictionaryGroup.css
+                                                                )
                                                         }
                                                     }
                                                 }
@@ -2276,7 +2336,7 @@ private fun BookReaderScreen(
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { closeLookupPopup() }) {
-                            Text("关闭")
+                            Text(stringResource(R.string.common_close))
                         }
                     }
                 }
@@ -2294,241 +2354,6 @@ private fun buildHighlightedText(text: String, selectedRange: IntRange?): Annota
         if (endExclusive <= start) return@buildAnnotatedString
         addStyle(SpanStyle(background = Color(0x66A0A0A0)), start, endExclusive)
     }
-}
-
-private data class MetaBadgeBook(val label: String, val value: String)
-private data class PitchBadgeGroupBook(val label: String, val reading: String?, val values: List<String>)
-
-private fun parseMetaBadgesBook(raw: String?, defaultLabel: String): List<MetaBadgeBook> {
-    val text = raw?.trim().orEmpty()
-    if (text.isBlank()) return emptyList()
-    return text
-        .split(';')
-        .mapNotNull { segment ->
-            val part = segment.trim()
-            if (part.isBlank()) return@mapNotNull null
-            val separator = part.indexOf(':')
-            if (separator > 0 && separator < part.lastIndex) {
-                val label = part.substring(0, separator).trim()
-                val value = part.substring(separator + 1).trim()
-                if (label.isBlank() || value.isBlank()) {
-                    MetaBadgeBook(defaultLabel, part)
-                } else {
-                    MetaBadgeBook(label, value)
-                }
-            } else {
-                MetaBadgeBook(defaultLabel, part)
-            }
-        }
-}
-
-private fun parsePitchBadgeGroupsBook(raw: String?, reading: String?, defaultLabel: String): List<PitchBadgeGroupBook> {
-    return parseMetaBadgesBook(raw, defaultLabel).mapNotNull { badge ->
-        val values = extractPitchNumbersBook(badge.value)
-        if (values.isEmpty()) return@mapNotNull null
-        PitchBadgeGroupBook(
-            label = badge.label,
-            reading = reading?.takeIf { it.isNotBlank() },
-            values = values
-        )
-    }
-}
-
-private fun extractPitchNumbersBook(raw: String): List<String> {
-    return Regex("-?\\d+")
-        .findAll(raw)
-        .map { it.value }
-        .toList()
-}
-
-@Composable
-private fun MetaBadgeRowBook(
-    badges: List<MetaBadgeBook>,
-    labelColor: Color,
-    labelTextColor: Color
-) {
-    if (badges.isEmpty()) return
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        badges.forEach { badge ->
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                Surface(
-                    color = labelColor,
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text(
-                        text = badge.label,
-                        color = labelTextColor,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-                Surface(
-                    color = Color(0xFFF2F2F2),
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text(
-                        text = badge.value,
-                        color = Color.Black,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PitchBadgeRowBook(
-    group: PitchBadgeGroupBook,
-    labelColor: Color,
-    labelTextColor: Color
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Surface(
-            color = labelColor,
-            shape = RoundedCornerShape(4.dp)
-        ) {
-            Text(
-                text = group.label,
-                color = labelTextColor,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-            )
-        }
-        group.values.forEach { number ->
-            Surface(
-                color = Color(0xFFF2F2F2),
-                shape = RoundedCornerShape(4.dp)
-            ) {
-                PitchValueChipContentBook(
-                    reading = group.reading,
-                    number = number
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PitchValueChipContentBook(reading: String?, number: String) {
-    val normalized = number.trim()
-    val pitchPart = if (normalized.startsWith("[") && normalized.endsWith("]")) normalized else "[$normalized]"
-    val accent = normalized.trim('[', ']').toIntOrNull()
-    Row(
-        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        val kana = reading?.trim().orEmpty()
-        if (kana.isNotBlank()) {
-            PitchReadingWithAccentBook(reading = kana, accent = accent)
-        }
-        Text(
-            text = pitchPart,
-            color = Color.Black,
-            style = MaterialTheme.typography.labelSmall
-        )
-    }
-}
-
-@Composable
-private fun PitchReadingWithAccentBook(reading: String, accent: Int?) {
-    val moras = remember(reading) { splitIntoMorasBook(reading) }
-    if (moras.isEmpty() || accent == null) {
-        Text(
-            text = reading,
-            color = Color.Black,
-            style = MaterialTheme.typography.labelSmall
-        )
-        return
-    }
-
-    val moraCount = moras.size
-    Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
-        moras.forEachIndexed { index, mora ->
-            val moraIndex = index + 1
-            val high = isHighMoraBook(moraIndex = moraIndex, moraCount = moraCount, accent = accent)
-            val dropAfter = isDropAfterMoraBook(moraIndex = moraIndex, moraCount = moraCount, accent = accent)
-            Text(
-                text = mora,
-                color = Color.Black,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier
-                    .padding(top = 2.dp)
-                    .drawBehind {
-                        if (!high) return@drawBehind
-                        val stroke = 1.dp.toPx()
-                        val y = 1.dp.toPx()
-                        drawLine(
-                            color = Color.Black.copy(alpha = 0.8f),
-                            start = androidx.compose.ui.geometry.Offset(0f, y),
-                            end = androidx.compose.ui.geometry.Offset(size.width, y),
-                            strokeWidth = stroke
-                        )
-                        if (dropAfter) {
-                            val x = size.width - stroke / 2f
-                            drawLine(
-                                color = Color.Black.copy(alpha = 0.8f),
-                                start = androidx.compose.ui.geometry.Offset(x, y),
-                                end = androidx.compose.ui.geometry.Offset(x, size.height * 0.36f),
-                                strokeWidth = stroke
-                            )
-                        }
-                    }
-            )
-        }
-    }
-}
-
-private fun splitIntoMorasBook(reading: String): List<String> {
-    if (reading.isBlank()) return emptyList()
-    val smallKana = setOf(
-        'ゃ', 'ゅ', 'ょ', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'ゎ', 'ゕ', 'ゖ',
-        'ャ', 'ュ', 'ョ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ヮ', 'ヵ', 'ヶ'
-    )
-    val out = mutableListOf<String>()
-    reading.forEach { ch ->
-        when {
-            ch == '\u3099' || ch == '\u309A' -> {
-                if (out.isNotEmpty()) {
-                    out[out.lastIndex] = out.last() + ch
-                } else {
-                    out += ch.toString()
-                }
-            }
-            ch in smallKana && out.isNotEmpty() -> {
-                out[out.lastIndex] = out.last() + ch
-            }
-            else -> out += ch.toString()
-        }
-    }
-    return out
-}
-
-private fun isHighMoraBook(moraIndex: Int, moraCount: Int, accent: Int): Boolean {
-    if (moraIndex !in 1..moraCount) return false
-    return when {
-        accent <= 0 -> moraIndex >= 2
-        accent == 1 -> moraIndex == 1
-        accent <= moraCount -> moraIndex in 2..accent
-        else -> moraIndex >= 2
-    }
-}
-
-private fun isDropAfterMoraBook(moraIndex: Int, moraCount: Int, accent: Int): Boolean {
-    if (accent <= 0) return false
-    return accent < moraCount && moraIndex == accent
 }
 
 private fun findLookupSelection(
@@ -2572,38 +2397,16 @@ private fun addLookupDefinitionToAnki(
     glossarySections: List<String> = emptyList(),
     popupSelectionText: String? = null
 ) {
-    if (!isAnkiInstalled(context)) error("AnkiDroid is not installed.")
-    if (!hasAnkiReadWritePermission(context)) {
-        error("Anki permission not granted. Authorize in 设置 > Anki first.")
-    }
-
     val persistedConfig = withAnkiStep("load-config") {
         loadPersistedAnkiConfig(context)
     }
-    if (persistedConfig.modelName.isBlank()) {
-        error("No Anki model configured. Set model in 设置 > Anki.")
-    }
-
-    val catalog = withAnkiStep("load-catalog") {
-        loadAnkiCatalog(context)
-    }
-    val model = catalog.models.firstOrNull { it.name == persistedConfig.modelName }
-        ?: error("Configured model not found: ${persistedConfig.modelName}")
-
-    val templates = model.fields.associateWith { field ->
-        persistedConfig.fieldTemplates[field].orEmpty()
-    }
-    if (!hasAnyAnkiFieldTemplate(templates)) {
-        error("All field variables are empty. Configure at least one marker in 设置 > Anki.")
-    }
-    if (audioUri != null && !templates.values.any { templateUsesVariable(it, "cut-audio") }) {
-        error("Current model templates do not include {cut-audio}. Set audio field to {cut-audio} in 设置 > Anki.")
-    }
-    val requiresLookupAudio = templates.values.any {
-        templateUsesVariable(it, "audio")
-    }
-    if (requiresLookupAudio && lookupAudioUri == null) {
-        error("Current model templates include {audio}, but lookup audio is unavailable. Configure it in 设置 > 有声书.")
+    val preparedExport = withAnkiStep("prepare-export") {
+        prepareAnkiExport(
+            context = context,
+            persistedConfig = persistedConfig,
+            audioUri = audioUri,
+            lookupAudioUri = lookupAudioUri
+        )
     }
 
     val normalizedGlossarySections = glossarySections
@@ -2616,13 +2419,6 @@ private fun addLookupDefinitionToAnki(
     }
     val cardDictionaryName = if (normalizedGlossarySections.isNotEmpty()) null else entry.dictionary
     val cardDictionaryCss = dictionaryCss
-
-    val config = AnkiExportConfig(
-        deckName = persistedConfig.deckName.ifBlank { "Default" },
-        modelName = model.name,
-        fieldTemplates = templates,
-        tags = parseAnkiTags(persistedConfig.tags)
-    )
 
     val card = MinedCard(
         word = entry.term,
@@ -2644,7 +2440,7 @@ private fun addLookupDefinitionToAnki(
     )
 
     withAnkiStep("export-note") {
-        exportToAnkiDroidApi(context, card, config)
+        exportToAnkiDroidApi(context, card, preparedExport.config)
     }
 }
 
@@ -2670,7 +2466,7 @@ private fun parseBookSrtWithCache(
         return cached
     }
 
-    val parsed = parseBookSrt(contentResolver, uri)
+            val parsed = parseBookSrt(context, contentResolver, uri)
     writeBookSrtCache(cacheFile, sourceStamp, parsed)
     return parsed
 }
@@ -2764,7 +2560,7 @@ private fun cleanupBookReaderSrtCache(context: Context) {
     remaining.drop(BOOK_READER_SRT_CACHE_MAX_FILES).forEach { it.delete() }
 }
 
-private fun parseBookSrt(contentResolver: ContentResolver, uri: Uri): List<ReaderSubtitleCue> {
+private fun parseBookSrt(context: Context, contentResolver: ContentResolver, uri: Uri): List<ReaderSubtitleCue> {
     val cues = mutableListOf<ReaderSubtitleCue>()
     val blockLines = mutableListOf<String>()
 
@@ -2787,11 +2583,11 @@ private fun parseBookSrt(contentResolver: ContentResolver, uri: Uri): List<Reade
                 }
             }
         }
-    } ?: error("Unable to read SRT file")
+    } ?: error(context.getString(R.string.error_srt_unreadable))
 
     appendParsedSrtBlock(blockLines, cues)
 
-    if (cues.isEmpty()) error("No valid subtitle cues found in SRT")
+    if (cues.isEmpty()) error(context.getString(R.string.error_srt_no_valid_cues))
     return cues.sortedBy { it.startMs }
 }
 
@@ -2818,26 +2614,6 @@ private fun appendParsedSrtBlock(
     if (cueText.isBlank()) return
 
     out += ReaderSubtitleCue(startMs = start, endMs = end, text = cueText)
-}
-
-private fun templateUsesVariable(template: String, variableName: String): Boolean {
-    if (template.isBlank()) return false
-    val target = variableName
-        .trim()
-        .lowercase(Locale.ROOT)
-        .replace(Regex("[^a-z0-9]"), "")
-    if (target.isBlank()) return false
-
-    return Regex("\\{([^{}]+)\\}")
-        .findAll(template)
-        .any { match ->
-            match.groupValues
-                .getOrNull(1)
-                .orEmpty()
-                .trim()
-                .lowercase(Locale.ROOT)
-                .replace(Regex("[^a-z0-9]"), "") == target
-        }
 }
 
 private fun formatAnkiFailure(error: Throwable): String {
@@ -3170,94 +2946,6 @@ private fun queryBookDisplayName(contentResolver: ContentResolver, uri: Uri): St
     } ?: fallback
 }
 
-@Composable
-private fun RichDefinitionViewBook(
-    definition: String,
-    dictionaryName: String? = null,
-    dictionaryCss: String? = null
-) {
-    val trimmed = definition.trim()
-    if (trimmed.isBlank()) return
-
-    if (looksLikeHtmlDefinitionBook(trimmed)) {
-        val html = buildDefinitionHtmlBook(
-            definitionHtml = trimmed,
-            dictionaryName = dictionaryName,
-            dictionaryCss = dictionaryCss
-        )
-        AndroidView(
-            modifier = Modifier.fillMaxWidth(),
-            factory = { context ->
-                WebView(context).apply {
-                    setBackgroundColor(0x00000000)
-                    settings.javaScriptEnabled = false
-                    settings.domStorageEnabled = false
-                    settings.loadsImagesAutomatically = true
-                    webViewClient = WebViewClient()
-                }
-            },
-            update = { webView ->
-                webView.loadDataWithBaseURL(
-                    null,
-                    html,
-                    "text/html",
-                    "utf-8",
-                    null
-                )
-            }
-        )
-    } else {
-        Text(trimmed)
-    }
-}
-
-private fun buildDefinitionHtmlBook(
-    definitionHtml: String,
-    dictionaryName: String?,
-    dictionaryCss: String?
-): String {
-    val dictionaryLabel = dictionaryName?.trim().orEmpty()
-    val wrappedBody = if (dictionaryLabel.isBlank()) {
-        definitionHtml
-    } else {
-        val safeDictionaryLabel = escapeHtmlTextBook(dictionaryLabel)
-        val safeDictionaryAttr = escapeHtmlAttributeBook(dictionaryLabel)
-        """
-        <div class="yomitan-glossary">
-            <ol>
-                <li data-dictionary="$safeDictionaryAttr">
-                    <i>($safeDictionaryLabel)</i> $definitionHtml
-                </li>
-            </ol>
-        </div>
-        """.trimIndent()
-    }
-
-    val customCss = buildScopedDictionaryCssBook(
-        rawCss = dictionaryCss.orEmpty(),
-        dictionaryName = dictionaryLabel
-    )
-
-    return """
-        <html>
-        <head>
-            <meta charset="utf-8"/>
-            <style>
-                body { margin: 0; padding: 0; font-size: 14px; line-height: 1.4; color: #1f1f1f; }
-                img { max-width: 100%; height: auto; }
-                .yomitan-glossary { text-align: left; }
-                .yomitan-glossary ol { margin: 0; padding-left: 1.1em; }
-                .yomitan-glossary li { margin: 0; }
-                $customCss
-            </style>
-        </head>
-        <body>
-            $wrappedBody
-        </body>
-        </html>
-    """.trimIndent()
-}
-
 private fun applyControlModeScreenBrightness(context: Context, dimToMinimum: Boolean) {
     val activity = context.findHostActivity() ?: return
     val window = activity.window ?: return
@@ -3281,54 +2969,6 @@ private tailrec fun Context.findHostActivity(): Activity? {
     }
 }
 
-private fun looksLikeHtmlDefinitionBook(text: String): Boolean {
-    return Regex("<\\s*/?\\s*[a-zA-Z][^>]*>").containsMatchIn(text)
-}
-
-private fun escapeHtmlTextBook(value: String): String {
-    return value
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-}
-
-private fun escapeHtmlAttributeBook(value: String): String {
-    return escapeHtmlTextBook(value).replace("\"", "&quot;")
-}
-
-private fun escapeCssStringBook(value: String): String {
-    return value
-        .replace("\\", "\\\\")
-        .replace("\"", "\\\"")
-}
-
-private fun buildScopedDictionaryCssBook(rawCss: String, dictionaryName: String): String {
-    val trimmed = rawCss.trim()
-    if (trimmed.isBlank()) return ""
-    if (dictionaryName.isBlank()) return trimmed
-
-    val dictionaryAttr = escapeCssStringBook(dictionaryName)
-    val prefix = ".yomitan-glossary [data-dictionary=\"$dictionaryAttr\"]"
-    val ruleRegex = Regex("([^{}]+)\\{([^}]*)\\}")
-    val scoped = ruleRegex.replace(trimmed) { match ->
-        val selectors = match.groupValues[1]
-        val body = match.groupValues[2]
-        if (selectors.trim().startsWith("@")) return@replace match.value
-        val prefixed = selectors
-            .split(',')
-            .map { selector ->
-                val s = selector.trim()
-                if (s.isBlank()) s else "$prefix $s"
-            }
-            .joinToString(", ")
-        "$prefixed {$body}"
-    }
-
-    return buildString {
-        appendLine(scoped)
-        appendLine(trimmed)
-    }.trim()
-}
 
 
 

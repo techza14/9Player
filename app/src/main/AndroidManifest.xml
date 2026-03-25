@@ -29,12 +29,6 @@
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
-            android:name=".InfoActivity"
-            android:exported="false"
-            android:label="Info"
-            android:screenOrientation="portrait"
-            android:theme="@style/Theme.Tset" />
-        <activity
             android:name=".AnkiSettingsActivity"
             android:exported="false"
             android:label="Anki"
@@ -60,12 +54,6 @@
             android:name=".ControlModeSettingsActivity"
             android:exported="false"
             android:label="Control Mode"
-            android:screenOrientation="portrait"
-            android:theme="@style/Theme.Tset" />
-        <activity
-            android:name=".ControllerBluetoothSettingsActivity"
-            android:exported="false"
-            android:label="Controller Bluetooth"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity

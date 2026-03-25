@@ -53,12 +53,12 @@ internal fun playLookupAudioForTerm(
     onError: (String) -> Unit = {}
 ): Boolean {
     if (!settings.lookupPlaybackAudioEnabled) {
-        postLookupAudioError(onError, "请先在设置 > 有声书开启查词播放音频。")
+        postLookupAudioError(onError, context.getString(R.string.lookup_audio_enable_first))
         return false
     }
     val normalizedTerm = term.trim()
     if (normalizedTerm.isBlank()) {
-        postLookupAudioError(onError, "当前词条为空，无法播放。")
+        postLookupAudioError(onError, context.getString(R.string.lookup_audio_empty_term))
         return false
     }
 
@@ -72,7 +72,7 @@ internal fun playLookupAudioForTerm(
         LookupAudioMode.LOCAL_AUDIO -> {
             val dbUri = settings.lookupLocalAudioUri
             if (dbUri == null) {
-                postLookupAudioError(onError, "未导入 android.db。")
+                postLookupAudioError(onError, context.getString(R.string.lookup_audio_android_db_missing))
                 false
             } else {
                 val prepared = runCatching {
@@ -84,7 +84,7 @@ internal fun playLookupAudioForTerm(
                     )
                 }.getOrNull()
                 if (prepared == null) {
-                    postLookupAudioError(onError, "android.db 中未找到该词音频。")
+                    postLookupAudioError(onError, context.getString(R.string.lookup_audio_android_db_term_missing))
                     false
                 } else {
                     playLookupAudioFromUri(
@@ -181,7 +181,7 @@ private fun playLookupAudioFromUri(
             }
             runCatching { failed.release() }
             runCatching { errorCleanup?.invoke() }
-            postLookupAudioError(onError, "查词音频播放失败。")
+            postLookupAudioError(onError, context.getString(R.string.lookup_audio_playback_failed))
             true
         }
         player.prepareAsync()
@@ -198,7 +198,7 @@ private fun playLookupAudioFromUri(
         }
         runCatching { player.release() }
         runCatching { startupCleanup?.invoke() }
-        postLookupAudioError(onError, "无法打开查词音频。")
+        postLookupAudioError(onError, context.getString(R.string.lookup_audio_open_failed))
     }.isSuccess
 }
 
@@ -214,7 +214,7 @@ private fun playLookupAudioWithTts(
         val current = ttsRef ?: return@TextToSpeech
         if (initStatus != TextToSpeech.SUCCESS) {
             clearLookupTts(current)
-            postLookupAudioError(onError, "本地 TTS 初始化失败。")
+            postLookupAudioError(onError, context.getString(R.string.lookup_audio_tts_init_failed))
             return@TextToSpeech
         }
 
@@ -235,12 +235,12 @@ private fun playLookupAudioWithTts(
 
                 override fun onError(utteranceId: String?) {
                     clearLookupTts(current)
-                    postLookupAudioError(onError, "本地 TTS 播放失败。")
+                    postLookupAudioError(onError, context.getString(R.string.lookup_audio_tts_play_failed))
                 }
 
                 override fun onError(utteranceId: String?, errorCode: Int) {
                     clearLookupTts(current)
-                    postLookupAudioError(onError, "本地 TTS 播放失败。")
+                    postLookupAudioError(onError, context.getString(R.string.lookup_audio_tts_play_failed))
                 }
             }
         )
@@ -248,7 +248,7 @@ private fun playLookupAudioWithTts(
         val speakResult = current.speak(term, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
         if (speakResult == TextToSpeech.ERROR) {
             clearLookupTts(current)
-            postLookupAudioError(onError, "本地 TTS 播放失败。")
+            postLookupAudioError(onError, context.getString(R.string.lookup_audio_tts_play_failed))
         }
     }
     ttsRef = tts

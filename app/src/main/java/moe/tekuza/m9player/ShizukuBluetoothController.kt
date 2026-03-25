@@ -104,13 +104,13 @@ internal fun tryDisconnectTargetControllerThenDisableBluetooth(
 
     if (!allowDisableBluetoothFallback) {
         val reason = if (address.isNullOrBlank()) {
-            "未找到手柄"
+            context.getString(R.string.shizuku_bluetooth_controller_not_found)
         } else {
-            "所有断开方式均失败：$address"
+            context.getString(R.string.shizuku_bluetooth_disconnect_all_failed, address)
         }
         return SleepBluetoothActionResult(
             outcome = SleepBluetoothOutcome.FAILED,
-            detail = "$reason；已按设置跳过关闭蓝牙"
+            detail = context.getString(R.string.shizuku_bluetooth_skip_disable_with_reason, reason)
         )
     }
 
@@ -152,7 +152,7 @@ internal fun tryDisconnectTargetControllerThenDisableBluetooth(
     Log.w(SHIZUKU_BT_TAG, "disconnect flow failed for address=$address")
     return SleepBluetoothActionResult(
         outcome = SleepBluetoothOutcome.FAILED,
-        detail = "断开手柄并关闭蓝牙失败"
+        detail = context.getString(R.string.shizuku_bluetooth_disconnect_and_disable_failed)
     )
 }
 

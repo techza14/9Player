@@ -1,6 +1,7 @@
 package moe.tekuza.m9player
 
 import android.content.Context
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import org.json.JSONObject
 
 internal data class PersistedAnkiConfig(
@@ -8,6 +9,17 @@ internal data class PersistedAnkiConfig(
     val modelName: String,
     val tags: String,
     val fieldTemplates: Map<String, String>
+)
+
+internal data class ResolvedAnkiCatalogSelection(
+    val deckName: String,
+    val modelName: String
+)
+
+internal data class ResolvedAnkiCatalogData(
+    val decks: List<String>,
+    val models: List<AnkiModelTemplate>,
+    val selection: ResolvedAnkiCatalogSelection
 )
 
 private const val ANKI_PREFS_NAME = "anki_export_config"
@@ -64,5 +76,101 @@ internal fun savePersistedAnkiConfig(context: Context, config: PersistedAnkiConf
         .edit()
         .putString(ANKI_KEY_STATE, obj.toString())
         .apply()
+}
+
+internal fun buildPersistedAnkiConfig(
+    deckName: String,
+    modelName: String,
+    tags: String,
+    fieldTemplates: Map<String, String>
+): PersistedAnkiConfig {
+    return PersistedAnkiConfig(
+        deckName = deckName,
+        modelName = modelName,
+        tags = tags,
+        fieldTemplates = fieldTemplates
+    )
+}
+
+internal fun syncAnkiFieldTemplates(
+    target: SnapshotStateMap<String, String>,
+    fields: List<String>,
+    clearExisting: Boolean = false,
+    modelTemplates: Map<String, String> = emptyMap()
+) {
+    if (clearExisting) {
+        target.clear()
+    }
+    val keep = fields.toSet()
+    target.keys
+        .filter { it !in keep }
+        .forEach { target.remove(it) }
+    fields.forEach { field ->
+        target[field] = if (clearExisting || !target.containsKey(field)) {
+            modelTemplates[field].orEmpty()
+        } else {
+            target[field].orEmpty()
+        }
+    }
+}
+
+internal fun resolveAnkiCatalogSelection(
+    currentDeckName: String,
+    currentModelName: String,
+    catalog: AnkiCatalog,
+    defaultDeckName: String
+): ResolvedAnkiCatalogSelection {
+    val resolvedDeckName = currentDeckName.ifBlank {
+        catalog.decks.firstOrNull() ?: defaultDeckName
+    }
+    val resolvedModelName = when {
+        currentModelName.isNotBlank() && catalog.models.any { it.name == currentModelName } -> currentModelName
+        catalog.models.isNotEmpty() -> catalog.models.first().name
+        else -> ""
+    }
+    return ResolvedAnkiCatalogSelection(
+        deckName = resolvedDeckName,
+        modelName = resolvedModelName
+    )
+}
+
+internal fun loadResolvedAnkiCatalog(
+    context: Context,
+    currentDeckName: String,
+    currentModelName: String,
+    defaultDeckName: String
+): ResolvedAnkiCatalogData {
+    val catalog = loadAnkiCatalog(context)
+    return ResolvedAnkiCatalogData(
+        decks = catalog.decks,
+        models = catalog.models,
+        selection = resolveAnkiCatalogSelection(
+            currentDeckName = currentDeckName,
+            currentModelName = currentModelName,
+            catalog = catalog,
+            defaultDeckName = defaultDeckName
+        )
+    )
+}
+
+internal fun buildCurrentAnkiExportConfigOrNull(
+    deckName: String,
+    modelName: String,
+    tags: String,
+    models: List<AnkiModelTemplate>,
+    fieldTemplates: Map<String, String>,
+    defaultDeckName: String = "Default"
+): AnkiExportConfig? {
+    if (modelName.isBlank()) return null
+    val model = models.firstOrNull { it.name == modelName } ?: return null
+    val templates = model.fields.associateWith { field ->
+        fieldTemplates[field].orEmpty()
+    }
+    return AnkiExportConfig(
+        deckName = deckName.ifBlank { defaultDeckName },
+        modelName = model.name,
+        fieldTemplates = templates,
+        tags = parseAnkiTags(tags)
+    )
 }
 

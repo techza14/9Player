@@ -1,7 +1,7 @@
 package moe.tekuza.m9player
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
@@ -25,10 +25,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import moe.tekuza.m9player.ui.theme.TsetTheme
 
-class ControlModeSettingsActivity : ComponentActivity() {
+class ControlModeSettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -66,8 +67,8 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(onClick = onBack) { Text("< 返回") }
-            Text("控制模式", style = MaterialTheme.typography.titleLarge)
+            TextButton(onClick = onBack) { Text(stringResource(R.string.common_back)) }
+            Text(stringResource(R.string.control_mode_title), style = MaterialTheme.typography.titleLarge)
         }
 
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -80,7 +81,7 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("控制模式下调暗屏幕")
+                    Text(stringResource(R.string.control_mode_dim_screen))
                     Switch(
                         checked = dimScreenInControlMode,
                         onCheckedChange = { checked ->
@@ -89,7 +90,7 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
                         }
                     )
                 }
-                Text("启用后，控制模式激活时会降低屏幕亮度。")
+                Text(stringResource(R.string.control_mode_dim_screen_help))
             }
         }
 
@@ -103,7 +104,7 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("单击直接收藏当句")
+                    Text(stringResource(R.string.control_mode_single_tap_collect))
                     Switch(
                         checked = singleTapCollectOnlyInControlMode,
                         onCheckedChange = { checked ->
@@ -112,7 +113,7 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
                         }
                     )
                 }
-                Text("启用后，控制模式单击会直接收藏当前句，不再先重播。")
+                Text(stringResource(R.string.control_mode_single_tap_collect_help))
             }
         }
 
@@ -126,7 +127,7 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("省电模式（黑屏）")
+                    Text(stringResource(R.string.control_mode_black_screen))
                     Switch(
                         checked = powerSaveBlackScreenInControlMode,
                         onCheckedChange = { checked ->
@@ -135,8 +136,9 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
                         }
                     )
                 }
-                Text("启用后，控制模式使用纯黑遮罩并停止视觉变化显示。")
+                Text(stringResource(R.string.control_mode_black_screen_help))
             }
         }
     }
 }
+

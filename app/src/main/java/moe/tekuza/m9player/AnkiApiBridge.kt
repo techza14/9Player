@@ -49,6 +49,11 @@ internal data class AnkiExportConfig(
     val tags: Set<String>
 )
 
+internal data class PreparedAnkiExport(
+    val config: AnkiExportConfig,
+    val requiresLookupAudio: Boolean
+)
+
 private data class StagedAnkiAudio(
     val uri: Uri,
     val extension: String,
@@ -131,6 +136,47 @@ internal fun parseAnkiTags(raw: String): Set<String> {
         .map { it.trim() }
         .filter { it.isNotBlank() }
         .toSet()
+}
+
+internal fun prepareAnkiExport(
+    context: Context,
+    persistedConfig: PersistedAnkiConfig,
+    audioUri: Uri?,
+    lookupAudioUri: Uri?
+): PreparedAnkiExport {
+    if (!isAnkiInstalled(context)) error(context.getString(R.string.error_anki_not_installed))
+    if (!hasAnkiReadWritePermission(context)) error(context.getString(R.string.error_anki_permission_required))
+    if (persistedConfig.modelName.isBlank()) error(context.getString(R.string.error_anki_model_missing))
+
+    val catalog = loadAnkiCatalog(context)
+    val model = catalog.models.firstOrNull { it.name == persistedConfig.modelName }
+        ?: error(context.getString(R.string.error_anki_model_not_found, persistedConfig.modelName))
+
+    val templates = model.fields.associateWith { field ->
+        persistedConfig.fieldTemplates[field].orEmpty()
+    }
+    if (!hasAnyAnkiFieldTemplate(templates)) {
+        error(context.getString(R.string.error_anki_fields_empty))
+    }
+    if (audioUri != null && !templates.values.any { templateUsesVariable(it, "cut-audio") }) {
+        error(context.getString(R.string.error_anki_cut_audio_missing))
+    }
+    val requiresLookupAudio = templates.values.any {
+        templateUsesVariable(it, "audio")
+    }
+    if (requiresLookupAudio && lookupAudioUri == null) {
+        error(context.getString(R.string.error_anki_lookup_audio_missing))
+    }
+
+    return PreparedAnkiExport(
+        config = AnkiExportConfig(
+            deckName = persistedConfig.deckName.ifBlank { "Default" },
+            modelName = model.name,
+            fieldTemplates = templates,
+            tags = parseAnkiTags(persistedConfig.tags)
+        ),
+        requiresLookupAudio = requiresLookupAudio
+    )
 }
 
 internal fun exportToAnkiDroidApi(

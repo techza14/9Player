@@ -8,7 +8,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
 import android.widget.Toast
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -47,7 +48,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.tekuza.m9player.ui.theme.TsetTheme
 
-class AudiobookSettingsActivity : ComponentActivity() {
+class AudiobookSettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -68,7 +69,7 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
     var statusText by remember { mutableStateOf<String?>(null) }
     var importGuideVisible by remember { mutableStateOf(!importState.importOnboardingCompleted) }
     var lookupAudioImporting by remember { mutableStateOf(false) }
-    var lookupAudioImportStage by remember { mutableStateOf("准备中...") }
+    var lookupAudioImportStage by remember { mutableStateOf(context.getString(R.string.audiobook_import_stage_preparing)) }
     var lookupAudioImportCopiedBytes by remember { mutableStateOf(0L) }
     var lookupAudioImportTotalBytes by remember { mutableStateOf<Long?>(null) }
     val scope = rememberCoroutineScope()
@@ -84,16 +85,16 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
     val pickLookupAudioLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             if (uri == null) {
-                statusText = "未选择文件。"
-                Toast.makeText(context, "未选择文件", Toast.LENGTH_SHORT).show()
+                statusText = context.getString(R.string.common_not_selected)
+                Toast.makeText(context, context.getString(R.string.common_not_selected), Toast.LENGTH_SHORT).show()
                 return@rememberLauncherForActivityResult
             }
             persistLookupAudioReadPermission(context, uri)
-            statusText = "正在导入 android.db..."
-            Toast.makeText(context, "正在导入 android.db...", Toast.LENGTH_SHORT).show()
+            statusText = context.getString(R.string.audiobook_lookup_audio_importing)
+            Toast.makeText(context, context.getString(R.string.audiobook_lookup_audio_importing), Toast.LENGTH_SHORT).show()
             scope.launch {
                 lookupAudioImporting = true
-                lookupAudioImportStage = "准备导入..."
+                lookupAudioImportStage = context.getString(R.string.audiobook_lookup_audio_prepare)
                 lookupAudioImportCopiedBytes = 0L
                 lookupAudioImportTotalBytes = null
                 try {
@@ -118,13 +119,13 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                         saveLookupLocalAudioUri(context, imported)
                         refreshConfig()
                         val selectedName = queryLookupAudioDisplayName(context, imported)
-                        statusText = "已导入 android.db：$selectedName"
-                        Toast.makeText(context, "已导入 android.db", Toast.LENGTH_SHORT).show()
+                        statusText = context.getString(R.string.audiobook_lookup_audio_imported, selectedName)
+                        Toast.makeText(context, context.getString(R.string.audiobook_lookup_audio_imported_short), Toast.LENGTH_SHORT).show()
                     } else {
-                        statusText = "导入失败：请导入有效的 android.db（含 entries/android 表）"
+                        statusText = context.getString(R.string.audiobook_lookup_audio_import_failed)
                         Toast.makeText(
                             context,
-                            "导入失败：请确认文件是有效 android.db",
+                            context.getString(R.string.audiobook_lookup_audio_import_failed_toast),
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -138,7 +139,7 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
         val millis = seconds.coerceIn(1, 300) * 1000L
         saveAudiobookSeekStepMillis(context, millis)
         refreshConfig()
-        statusText = "已保存：${config.seekStepMillis / 1000L} 秒"
+        statusText = context.getString(R.string.audiobook_seek_saved, seconds)
     }
     fun updateAutoMove(enabled: Boolean) {
         savePersistedImports(
@@ -150,18 +151,18 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
         )
         refreshConfig()
         statusText = if (enabled) {
-            "已设置：自动移动到有声书文件夹"
+            context.getString(R.string.audiobook_import_saved_auto)
         } else {
-            "已设置：保留原文件位置"
+            context.getString(R.string.audiobook_import_saved_keep)
         }
     }
 
     if (importGuideVisible) {
         AlertDialog(
             onDismissRequest = {},
-            title = { Text("导入方式") },
+            title = { Text(stringResource(R.string.import_mode_title)) },
             text = {
-                Text("首次使用：是否自动将书籍移动到有声书文件夹？之后可在此页随时修改。")
+                Text(stringResource(R.string.audiobook_import_onboarding_message))
             },
             confirmButton = {
                 Button(
@@ -170,7 +171,7 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                         importGuideVisible = false
                     }
                 ) {
-                    Text("自动移动")
+                    Text(stringResource(R.string.import_mode_auto_move))
                 }
             },
             dismissButton = {
@@ -180,7 +181,7 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                         importGuideVisible = false
                     }
                 ) {
-                    Text("不自动移动")
+                    Text(stringResource(R.string.import_mode_keep_original))
                 }
             }
         )
@@ -189,7 +190,7 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
     if (lookupAudioImporting) {
         AlertDialog(
             onDismissRequest = {},
-            title = { Text("导入 android.db") },
+            title = { Text(stringResource(R.string.audiobook_lookup_audio_import_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(lookupAudioImportStage)
@@ -224,8 +225,8 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(onClick = onBack) { Text("< 返回") }
-            Text("有声书", style = MaterialTheme.typography.titleLarge)
+            TextButton(onClick = onBack) { Text(stringResource(R.string.common_back)) }
+            Text(stringResource(R.string.audiobook_settings_title), style = MaterialTheme.typography.titleLarge)
         }
 
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -233,8 +234,8 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("前进后退时长", style = MaterialTheme.typography.titleMedium)
-                Text("当前：${config.seekStepMillis / 1000L} 秒")
+                Text(stringResource(R.string.audiobook_seek_title), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.audiobook_seek_current, (config.seekStepMillis / 1000L).toInt()))
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(5, 10, 15, 30).forEach { seconds ->
@@ -250,7 +251,7 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                         inputSeconds = value.filter { it.isDigit() }.take(3)
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("自定义秒数") },
+                    label = { Text(stringResource(R.string.audiobook_seek_custom_label)) },
                     singleLine = true
                 )
 
@@ -258,13 +259,13 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                     onClick = {
                         val seconds = inputSeconds.toIntOrNull()
                         if (seconds == null || seconds <= 0) {
-                            statusText = "请输入 1 到 300 的秒数。"
+                            statusText = context.getString(R.string.audiobook_seek_invalid)
                         } else {
                             updateStep(seconds)
                         }
                     }
                 ) {
-                    Text("保存")
+                    Text(stringResource(R.string.common_save))
                 }
             }
         }
@@ -274,20 +275,20 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("导入模式", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.audiobook_import_mode_title), style = MaterialTheme.typography.titleMedium)
                 Text(
                     if (importState.autoMoveToAudiobookFolder) {
-                        "当前：自动移动到有声书文件夹"
+                        stringResource(R.string.audiobook_import_current_auto)
                     } else {
-                        "当前：保留原文件位置"
+                        stringResource(R.string.audiobook_import_current_keep)
                     }
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { updateAutoMove(true) }) {
-                        Text("自动移动")
+                        Text(stringResource(R.string.import_mode_auto_move))
                     }
                     OutlinedButton(onClick = { updateAutoMove(false) }) {
-                        Text("不自动移动")
+                        Text(stringResource(R.string.import_mode_keep_original))
                     }
                 }
             }
@@ -298,22 +299,22 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("查词", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.audiobook_lookup_title), style = MaterialTheme.typography.titleMedium)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("点击查词时停止播放")
+                    Text(stringResource(R.string.audiobook_pause_on_lookup))
                     Switch(
                         checked = config.pausePlaybackOnLookup,
                         onCheckedChange = { checked ->
                             saveAudiobookPausePlaybackOnLookup(context, checked)
                             refreshConfig()
                             statusText = if (checked) {
-                                "已开启：点击查词时停止播放。"
+                                context.getString(R.string.audiobook_pause_on_lookup_enabled)
                             } else {
-                                "已关闭：点击查词时停止播放。"
+                                context.getString(R.string.audiobook_pause_on_lookup_disabled)
                             }
                         }
                     )
@@ -323,16 +324,16 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("播放音频")
+                    Text(stringResource(R.string.audiobook_play_audio))
                     Switch(
                         checked = config.lookupPlaybackAudioEnabled,
                         onCheckedChange = { checked ->
                             saveLookupPlaybackAudioEnabled(context, checked)
                             refreshConfig()
                             statusText = if (checked) {
-                                "已开启：查词时可播放音频。"
+                                context.getString(R.string.audiobook_play_audio_enabled)
                             } else {
-                                "已关闭：查词时播放音频。"
+                                context.getString(R.string.audiobook_play_audio_disabled)
                             }
                         }
                     )
@@ -343,46 +344,46 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("查词结果自动播放")
+                        Text(stringResource(R.string.audiobook_autoplay_lookup_audio))
                         Switch(
                             checked = config.lookupPlaybackAudioAutoPlay,
                             onCheckedChange = { checked ->
                                 saveLookupPlaybackAudioAutoPlay(context, checked)
                                 refreshConfig()
                                 statusText = if (checked) {
-                                    "已开启：查词结果自动播放。"
+                                    context.getString(R.string.audiobook_autoplay_lookup_audio_enabled)
                                 } else {
-                                    "已关闭：查词结果自动播放。"
+                                    context.getString(R.string.audiobook_autoplay_lookup_audio_disabled)
                                 }
                             }
                         )
                     }
-                    Text("查词音频来源")
+                    Text(stringResource(R.string.audiobook_lookup_audio_source))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = {
                                 saveLookupAudioMode(context, LookupAudioMode.LOCAL_TTS)
                                 refreshConfig()
-                                statusText = "已切换：本地 TTS。"
+                                statusText = context.getString(R.string.audiobook_lookup_audio_switched_tts)
                             }
                         ) {
-                            Text("本地 TTS")
+                            Text(stringResource(R.string.audiobook_lookup_audio_source_tts))
                         }
                         OutlinedButton(
                             onClick = {
                                 saveLookupAudioMode(context, LookupAudioMode.LOCAL_AUDIO)
                                 refreshConfig()
-                                statusText = "已切换：本地音频。"
+                                statusText = context.getString(R.string.audiobook_lookup_audio_switched_local)
                             }
                         ) {
-                            Text("本地音频")
+                            Text(stringResource(R.string.audiobook_lookup_audio_source_local))
                         }
                     }
                     Text(
                     if (config.lookupAudioMode == LookupAudioMode.LOCAL_TTS) {
-                        "当前：本地 TTS"
+                        stringResource(R.string.audiobook_lookup_audio_current_tts)
                     } else {
-                        "当前：android.db"
+                        stringResource(R.string.audiobook_lookup_audio_current_db)
                     }
                 )
                 if (config.lookupAudioMode == LookupAudioMode.LOCAL_AUDIO) {
@@ -393,54 +394,55 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                             },
                             enabled = !lookupAudioImporting
                         ) {
-                            Text("导入 android.db")
+                            Text(stringResource(R.string.audiobook_lookup_audio_import_title))
                         }
                             OutlinedButton(
                                 onClick = {
                                     deleteImportedLookupAudioDatabaseIfAny(context, config.lookupLocalAudioUri)
                                     saveLookupLocalAudioUri(context, null)
                                     refreshConfig()
-                                    statusText = "已清除 android.db。"
+                                    statusText = context.getString(R.string.audiobook_lookup_audio_cleared)
                             },
                                 enabled = !lookupAudioImporting
                         ) {
-                            Text("清除")
+                            Text(stringResource(R.string.common_clear))
                         }
                     }
                         val selectedLookupAudioName = config.lookupLocalAudioUri?.let { uri ->
                             queryLookupAudioDisplayName(context, uri)
                         }
                         Text(
-                            selectedLookupAudioName?.let { "当前数据库：$it" } ?: "当前数据库：未选择"
+                            selectedLookupAudioName?.let { context.getString(R.string.audiobook_lookup_audio_database_current, it) }
+                                ?: stringResource(R.string.audiobook_lookup_audio_database_none)
                         )
                     }
                 }
-                Text("正在播放的词显示位置")
+                Text(stringResource(R.string.audiobook_active_cue_position))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = {
                             saveAudiobookActiveCueDisplayAtTop(context, false)
                             refreshConfig()
-                            statusText = "已设置：正在播放的词显示在中间。"
+                            statusText = context.getString(R.string.audiobook_active_cue_saved_middle)
                         }
                     ) {
-                        Text("中间")
+                        Text(stringResource(R.string.audiobook_active_cue_middle))
                     }
                     OutlinedButton(
                         onClick = {
                             saveAudiobookActiveCueDisplayAtTop(context, true)
                             refreshConfig()
-                            statusText = "已设置：正在播放的词显示在上方。"
+                            statusText = context.getString(R.string.audiobook_active_cue_saved_top)
                         }
                     ) {
-                        Text("上方")
+                        Text(stringResource(R.string.audiobook_active_cue_top))
                     }
                 }
                 Text(
                     if (config.activeCueDisplayAtTop) {
-                        "当前：上方"
+                        stringResource(R.string.audiobook_active_cue_current_top)
                     } else {
-                        "当前：中间"
+                        stringResource(R.string.audiobook_active_cue_current_middle)
                     }
                 )
             }
@@ -451,22 +453,22 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("悬浮窗", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.audiobook_overlay_title), style = MaterialTheme.typography.titleMedium)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("退出 App 后显示播放悬浮球")
+                    Text(stringResource(R.string.audiobook_overlay_enable))
                     Switch(
                         checked = config.floatingOverlayEnabled,
                         onCheckedChange = { checked ->
                             saveAudiobookFloatingOverlayEnabled(context, checked)
                             refreshConfig()
                             statusText = if (checked) {
-                                "已开启悬浮窗功能。"
+                                context.getString(R.string.audiobook_overlay_enabled)
                             } else {
-                                "已关闭悬浮窗功能。"
+                                context.getString(R.string.audiobook_overlay_disabled)
                             }
                         }
                     )
@@ -474,9 +476,9 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                 if (config.floatingOverlayEnabled) {
                     Text(
                         if (overlayGranted) {
-                            "悬浮窗权限：已授予"
+                            stringResource(R.string.audiobook_overlay_permission_granted)
                         } else {
-                            "悬浮窗权限：未授予"
+                            stringResource(R.string.audiobook_overlay_permission_denied)
                         }
                     )
                     if (!overlayGranted) {
@@ -489,10 +491,10 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                                 context.startActivity(intent)
                             }
                         ) {
-                            Text("授予悬浮窗权限")
+                            Text(stringResource(R.string.audiobook_overlay_permission_button))
                         }
                     }
-                    Text("悬浮球：单击播放/暂停，双击展开前进/后退/收藏。")
+                    Text(stringResource(R.string.audiobook_overlay_help))
                 }
             }
         }
@@ -544,7 +546,9 @@ private fun queryLookupAudioDisplayName(context: android.content.Context, uri: U
             }
         }
     }.getOrNull()?.takeIf { it.isNotBlank() }
-    return fromQuery ?: uri.lastPathSegment?.substringAfterLast('/').orEmpty().ifBlank { "未知文件" }
+    return fromQuery ?: uri.lastPathSegment?.substringAfterLast('/').orEmpty().ifBlank {
+        context.getString(R.string.audiobook_unknown_file)
+    }
 }
 
 private fun importLookupAudioDatabase(
@@ -562,7 +566,7 @@ private fun importLookupAudioDatabase(
     val totalBytes = queryLookupAudioSourceSize(context, sourceUri)
 
     val copied = runCatching {
-        onStageChanged?.invoke("复制文件...")
+        onStageChanged?.invoke(context.getString(R.string.audiobook_import_stage_copy))
         var copiedBytes = 0L
         var lastProgressEmitAt = 0L
         onCopyProgress?.invoke(0L, totalBytes)
@@ -592,7 +596,7 @@ private fun importLookupAudioDatabase(
     }.getOrDefault(false)
     if (!copied) return null
 
-    onStageChanged?.invoke("校验数据库...")
+    onStageChanged?.invoke(context.getString(R.string.audiobook_import_stage_validate))
     val valid = runCatching {
         SQLiteDatabase.openDatabase(temp.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
             var hasEntries = false
@@ -617,7 +621,7 @@ private fun importLookupAudioDatabase(
         return null
     }
 
-    onStageChanged?.invoke("写入目标文件...")
+    onStageChanged?.invoke(context.getString(R.string.audiobook_import_stage_write))
     runCatching { if (target.exists()) target.delete() }
     val moved = runCatching { temp.renameTo(target) }.getOrDefault(false)
     if (!moved) {
@@ -635,7 +639,7 @@ private fun importLookupAudioDatabase(
             return null
         }
     }
-    onStageChanged?.invoke("导入完成")
+    onStageChanged?.invoke(context.getString(R.string.audiobook_import_stage_done))
     return Uri.fromFile(target)
 }
 
@@ -687,3 +691,4 @@ private fun deleteImportedLookupAudioDatabaseIfAny(context: android.content.Cont
     if (!path.startsWith(importedDir, ignoreCase = true)) return
     runCatching { File(path).delete() }
 }
+

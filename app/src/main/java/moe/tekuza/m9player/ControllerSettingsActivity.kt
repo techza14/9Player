@@ -2,7 +2,7 @@ package moe.tekuza.m9player
 
 import android.os.Bundle
 import android.view.KeyEvent
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import moe.tekuza.m9player.ui.theme.TsetTheme
 
@@ -43,7 +44,7 @@ private enum class CaptureAction {
     COLLECT
 }
 
-class ControllerSettingsActivity : ComponentActivity() {
+class ControllerSettingsActivity : AppCompatActivity() {
     private var captureKeyHandler: ((KeyEvent) -> Boolean)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -153,8 +154,8 @@ private fun ControllerSettingsScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = onBack) { Text("< 返回") }
-                Text("手柄", style = MaterialTheme.typography.titleLarge)
+                TextButton(onClick = onBack) { Text(stringResource(R.string.common_back)) }
+                Text(stringResource(R.string.controller_title), style = MaterialTheme.typography.titleLarge)
             }
 
             Card(
@@ -170,9 +171,9 @@ private fun ControllerSettingsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("方案 1", style = MaterialTheme.typography.titleMedium)
-                        Text("上一条使用左方向，下一条使用右方向。")
-                        Text("X 键收藏当前句，双击 X 回到上一条。")
+                        Text(stringResource(R.string.controller_scheme_1_title), style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.controller_scheme_1_desc_1))
+                        Text(stringResource(R.string.controller_scheme_1_desc_2))
                     }
                     RadioButton(
                         selected = config.scheme == GamepadControlScheme.SCHEME_1,
@@ -194,9 +195,9 @@ private fun ControllerSettingsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("方案 2", style = MaterialTheme.typography.titleMedium)
-                        Text("上一条使用左方向，下一条使用右方向。")
-                        Text("L2 键收藏当前句，双击 L2 回到上一条。")
+                        Text(stringResource(R.string.controller_scheme_2_title), style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.controller_scheme_2_desc_1))
+                        Text(stringResource(R.string.controller_scheme_2_desc_2))
                     }
                     RadioButton(
                         selected = config.scheme == GamepadControlScheme.SCHEME_2,
@@ -218,8 +219,8 @@ private fun ControllerSettingsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("自定义", style = MaterialTheme.typography.titleMedium)
-                        Text("选择你自己的按键映射。")
+                        Text(stringResource(R.string.controller_custom_title), style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.controller_custom_desc))
                     }
                     RadioButton(
                         selected = config.scheme == GamepadControlScheme.CUSTOM,
@@ -234,22 +235,22 @@ private fun ControllerSettingsScreen(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("自定义映射", style = MaterialTheme.typography.titleMedium)
-                        Text("点“更改”后按下手柄按键完成绑定。")
+                        Text(stringResource(R.string.controller_custom_mapping_title), style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.controller_custom_mapping_help))
 
                         SettingRow(
-                            label = "上一条",
-                            keyLabel = formatGamepadKeyLabel(config.previousKeyCode),
+                            label = stringResource(R.string.controller_previous),
+                            keyLabel = formatGamepadKeyLabel(context, config.previousKeyCode),
                             onChange = { openCaptureDialog(CaptureAction.PREVIOUS) }
                         )
                         SettingRow(
-                            label = "下一条",
-                            keyLabel = formatGamepadKeyLabel(config.nextKeyCode),
+                            label = stringResource(R.string.controller_next),
+                            keyLabel = formatGamepadKeyLabel(context, config.nextKeyCode),
                             onChange = { openCaptureDialog(CaptureAction.NEXT) }
                         )
                         SettingRow(
-                            label = "收藏",
-                            keyLabel = formatGamepadKeyLabel(config.collectKeyCode),
+                            label = stringResource(R.string.controller_collect),
+                            keyLabel = formatGamepadKeyLabel(context, config.collectKeyCode),
                             onChange = { openCaptureDialog(CaptureAction.COLLECT) }
                         )
 
@@ -258,7 +259,7 @@ private fun ControllerSettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("双击收藏键 = 上一条")
+                            Text(stringResource(R.string.controller_double_tap_collect_previous))
                             Switch(
                                 checked = config.doubleTapCollectPrevious,
                                 onCheckedChange = { checked -> updateCustom(doubleTapCollectPrevious = checked) }
@@ -267,14 +268,16 @@ private fun ControllerSettingsScreen(
                     }
                 }
             }
+
+                    ControllerBluetoothSection()
         }
 
         val action = captureAction
         if (action != null) {
             val title = when (action) {
-                CaptureAction.PREVIOUS -> "录入“上一条”按键"
-                CaptureAction.NEXT -> "录入“下一条”按键"
-                CaptureAction.COLLECT -> "录入“收藏”按键"
+                CaptureAction.PREVIOUS -> context.getString(R.string.controller_capture_previous)
+                CaptureAction.NEXT -> context.getString(R.string.controller_capture_next)
+                CaptureAction.COLLECT -> context.getString(R.string.controller_capture_collect)
             }
 
             Box(
@@ -295,18 +298,24 @@ private fun ControllerSettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(title, style = MaterialTheme.typography.titleMedium)
-                        Text("请现在按下手柄按键。按返回可取消。")
-                        Text("已录入：${capturedKeyCode?.let(::formatGamepadKeyLabel) ?: "等待中..."}")
+                        Text(stringResource(R.string.controller_capture_help))
+                        Text(
+                            stringResource(
+                                R.string.controller_capture_result,
+                                capturedKeyCode?.let { formatGamepadKeyLabel(context, it) }
+                                    ?: stringResource(R.string.controller_capture_waiting)
+                            )
+                        )
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End
                         ) {
-                            TextButton(onClick = { closeCaptureDialog() }) { Text("取消") }
+                            TextButton(onClick = { closeCaptureDialog() }) { Text(stringResource(R.string.common_cancel)) }
                             TextButton(
                                 onClick = { confirmCapturedKey() },
                                 enabled = capturedKeyCode != null
-                            ) { Text("保存") }
+                            ) { Text(stringResource(R.string.common_save)) }
                         }
                     }
                 }
@@ -327,16 +336,16 @@ private fun SettingRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text("$label: $keyLabel")
-        OutlinedButton(onClick = onChange) { Text("更改") }
+        OutlinedButton(onClick = onChange) { Text(stringResource(R.string.common_change)) }
     }
 }
 
-private fun formatGamepadKeyLabel(keyCode: Int): String {
+private fun formatGamepadKeyLabel(context: android.content.Context, keyCode: Int): String {
     return when (keyCode) {
-        KeyEvent.KEYCODE_DPAD_LEFT -> "左"
-        KeyEvent.KEYCODE_DPAD_RIGHT -> "右"
-        KeyEvent.KEYCODE_DPAD_UP -> "上"
-        KeyEvent.KEYCODE_DPAD_DOWN -> "下"
+        KeyEvent.KEYCODE_DPAD_LEFT -> context.getString(R.string.controller_key_left)
+        KeyEvent.KEYCODE_DPAD_RIGHT -> context.getString(R.string.controller_key_right)
+        KeyEvent.KEYCODE_DPAD_UP -> context.getString(R.string.controller_key_up)
+        KeyEvent.KEYCODE_DPAD_DOWN -> context.getString(R.string.controller_key_down)
         KeyEvent.KEYCODE_BUTTON_A -> "A"
         KeyEvent.KEYCODE_BUTTON_B -> "B"
         KeyEvent.KEYCODE_BUTTON_X -> "X"
@@ -359,3 +368,4 @@ private fun formatGamepadKeyLabel(keyCode: Int): String {
         }
     }
 }
+

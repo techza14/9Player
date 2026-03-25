@@ -1,4 +1,4 @@
-﻿package moe.tekuza.m9player
+package moe.tekuza.m9player
 
 import android.app.Activity
 import android.app.ActivityManager
@@ -18,12 +18,13 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ImageView
 import android.widget.Toast
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -53,7 +54,6 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -74,6 +74,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
@@ -83,6 +85,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -109,10 +112,11 @@ import java.io.File
 import java.io.InputStream
 import java.util.Locale
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
     private var floatingOverlayStartJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        applySavedAppLanguage(this)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
@@ -166,6 +170,11 @@ private enum class HomeLibraryView {
     LIST
 }
 
+private val miningSectionSaver = Saver<MiningSection, String>(
+    save = { it.name },
+    restore = { runCatching { MiningSection.valueOf(it) }.getOrDefault(MiningSection.MAIN) }
+)
+
 private val FIELD_VARIABLE_CHOICES = listOf(
     "",
     "{audio}",
@@ -195,10 +204,7 @@ private val FIELD_VARIABLE_CHOICES = listOf(
     "{search-query}"
 )
 
-private const val BOOK_DELETE_PREFS = "book_delete_prefs"
-private const val KEY_SKIP_DELETE_CONFIRM = "skip_delete_confirm"
-
-private data class ReaderBook(
+internal data class ReaderBook(
     val id: String,
     val title: String,
     val audioUri: Uri,
@@ -271,7 +277,11 @@ private fun ReaderSyncScreen() {
     var ankiError by remember { mutableStateOf<String?>(null) }
 
     var showDictionaryManager by remember { mutableStateOf(false) }
-    var activeSection by remember { mutableStateOf(MiningSection.MAIN) }
+    var activeSection by rememberSaveable(stateSaver = miningSectionSaver) {
+        mutableStateOf(MiningSection.MAIN)
+    }
+    var languageDialogVisible by remember { mutableStateOf(false) }
+    var selectedAppLanguage by remember { mutableStateOf(loadAppLanguageOption(context)) }
     var collectedCues by remember { mutableStateOf<List<BookReaderCollectedCue>>(emptyList()) }
     var clearCollectionsConfirmVisible by remember { mutableStateOf(false) }
     var deleteBooksConfirmVisible by remember { mutableStateOf(false) }
@@ -473,7 +483,7 @@ private fun ReaderSyncScreen() {
     fun persistAnkiConfig() {
         savePersistedAnkiConfig(
             context = context,
-            config = PersistedAnkiConfig(
+            config = buildPersistedAnkiConfig(
                 deckName = ankiDeckName,
                 modelName = ankiModelName,
                 tags = ankiTagsInput,
@@ -483,19 +493,12 @@ private fun ReaderSyncScreen() {
     }
 
     fun syncTemplatesWithModelFields(fields: List<String>, clearExisting: Boolean = false) {
-        if (clearExisting) {
-            ankiFieldTemplates.clear()
-        }
         ankiModelFields = fields
-        val keep = fields.toSet()
-        ankiFieldTemplates.keys
-            .filter { it !in keep }
-            .forEach { ankiFieldTemplates.remove(it) }
-        fields.forEach { field ->
-            if (!ankiFieldTemplates.containsKey(field)) {
-                ankiFieldTemplates[field] = ""
-            }
-        }
+        syncAnkiFieldTemplates(
+            target = ankiFieldTemplates,
+            fields = fields,
+            clearExisting = clearExisting
+        )
     }
 
     fun selectAnkiModel(modelName: String) {
@@ -527,24 +530,22 @@ private fun ReaderSyncScreen() {
             ankiLoading = true
             ankiError = null
             val result = withContext(Dispatchers.IO) {
-                runCatching { loadAnkiCatalog(context) }
+                runCatching {
+                    loadResolvedAnkiCatalog(
+                        context = context,
+                        currentDeckName = ankiDeckName,
+                        currentModelName = ankiModelName,
+                        defaultDeckName = "Default"
+                    )
+                }
             }
             ankiLoading = false
 
-            result.onSuccess { catalog ->
-                ankiDecks = catalog.decks
-                ankiModels = catalog.models
-
-                if (ankiDeckName.isBlank()) {
-                    ankiDeckName = catalog.decks.firstOrNull() ?: "Default"
-                }
-
-                val resolvedModelName = when {
-                    ankiModelName.isNotBlank() && catalog.models.any { it.name == ankiModelName } -> ankiModelName
-                    catalog.models.isNotEmpty() -> catalog.models.first().name
-                    else -> ""
-                }
-                selectAnkiModel(resolvedModelName)
+            result.onSuccess { resolvedCatalog ->
+                ankiDecks = resolvedCatalog.decks
+                ankiModels = resolvedCatalog.models
+                ankiDeckName = resolvedCatalog.selection.deckName
+                selectAnkiModel(resolvedCatalog.selection.modelName)
                 persistAnkiConfig()
             }.onFailure { error ->
                 ankiError = error.message ?: "Failed to load Anki decks/models"
@@ -553,16 +554,12 @@ private fun ReaderSyncScreen() {
     }
 
     fun currentAnkiExportConfigOrNull(): AnkiExportConfig? {
-        if (ankiModelName.isBlank()) return null
-        val model = ankiModels.firstOrNull { it.name == ankiModelName } ?: return null
-        val templates = model.fields.associateWith { field ->
-            ankiFieldTemplates[field].orEmpty()
-        }
-        return AnkiExportConfig(
-            deckName = ankiDeckName.ifBlank { "Default" },
-            modelName = model.name,
-            fieldTemplates = templates,
-            tags = parseAnkiTags(ankiTagsInput)
+        return buildCurrentAnkiExportConfigOrNull(
+            deckName = ankiDeckName,
+            modelName = ankiModelName,
+            tags = ankiTagsInput,
+            models = ankiModels,
+            fieldTemplates = ankiFieldTemplates
         )
     }
 
@@ -720,12 +717,17 @@ private fun ReaderSyncScreen() {
         clearBookSelection()
         exportStatus = if (folderDeleteFailures == 0 && fileDeleteFailures == 0) {
             if (deletedFolders > 0) {
-                "已删除 ${removeIds.size} 本书；有声书文件夹内的条目已删除对应文件夹。"
+                context.getString(R.string.status_books_deleted_with_folder, removeIds.size)
             } else {
-                "已删除 ${removeIds.size} 本书（仅删除所选文件）。"
+                context.getString(R.string.status_books_deleted_files_only, removeIds.size)
             }
         } else {
-            "已删书 ${removeIds.size} 本；$fileDeleteFailures 个文件删除失败，$folderDeleteFailures 个文件夹删除失败。"
+            context.getString(
+                R.string.status_books_deleted_with_failures,
+                removeIds.size,
+                fileDeleteFailures,
+                folderDeleteFailures
+            )
         }
     }
 
@@ -744,7 +746,7 @@ private fun ReaderSyncScreen() {
     fun playCollectedCue(item: BookReaderCollectedCue) {
         val targetBook = readerBooks.firstOrNull { it.title == item.bookTitle }
         if (targetBook == null) {
-            exportStatus = "No matched book audio for this collection item."
+            exportStatus = context.getString(R.string.collection_play_missing_book)
             return
         }
         activateReaderBook(targetBook, persist = true)
@@ -757,12 +759,12 @@ private fun ReaderSyncScreen() {
         val selectedFolder = addBookFolderUri
         val shouldAutoMove = autoMoveToAudiobookFolder
         if (shouldAutoMove && selectedFolder == null) {
-            exportStatus = "请先选择有声书文件夹。"
+            exportStatus = context.getString(R.string.status_pick_audiobook_folder_first)
             return
         }
         val pickedAudio = addBookAudioUri
         if (pickedAudio == null) {
-            exportStatus = "请选择音频文件。"
+            exportStatus = context.getString(R.string.status_pick_audio_first)
             return
         }
         val pickedSrt = addBookSrtUri
@@ -777,7 +779,7 @@ private fun ReaderSyncScreen() {
                         val relocated = relocateSelectedBookFilesToAudFolder(
                             context = context,
                             contentResolver = contentResolver,
-                            rootFolderUri = selectedFolder ?: error("Audiobook folder is required"),
+                            rootFolderUri = selectedFolder ?: error(context.getString(R.string.error_audiobook_folder_required)),
                             audioSourceUri = pickedAudio,
                             audioSourceName = pickedAudioName,
                             srtSourceUri = pickedSrt,
@@ -811,11 +813,13 @@ private fun ReaderSyncScreen() {
                 addBookSrtUri = null
                 addBookSrtName = null
                 exportStatus = buildString {
-                    append("已添加书籍：${book.title}。")
+                    append(context.getString(R.string.status_book_added, book.title))
                     if (!folderName.isNullOrBlank()) {
-                        append(" 已存入：$folderName。")
+                        append(' ')
+                        append(context.getString(R.string.status_book_saved_to, folderName))
                     } else {
-                        append(" 保留原文件位置。")
+                        append(' ')
+                        append(context.getString(R.string.status_book_keep_original))
                     }
                     if (!warning.isNullOrBlank()) {
                         append(' ')
@@ -823,8 +827,8 @@ private fun ReaderSyncScreen() {
                     }
                 }
             }.onFailure { error ->
-                srtError = error.message ?: "添加书籍失败"
-                exportStatus = "添加书籍失败。"
+                srtError = error.message ?: context.getString(R.string.status_add_book_failed)
+                exportStatus = context.getString(R.string.status_add_book_failed_short)
             }
         }
     }
@@ -832,7 +836,7 @@ private fun ReaderSyncScreen() {
     fun refreshBookshelfFromFolder() {
         val selectedFolder = addBookFolderUri
         if (selectedFolder == null) {
-            exportStatus = "请先选择有声书文件夹。"
+            exportStatus = context.getString(R.string.status_pick_audiobook_folder_first)
             return
         }
         val previousSelectedId = selectedBookId
@@ -863,8 +867,8 @@ private fun ReaderSyncScreen() {
             srtLoading = false
             refreshResult.onSuccess { (books, skippedFolders) ->
                 if (books.isEmpty()) {
-                    srtError = "未找到可导入书籍。"
-                    exportStatus = "刷新完成：0 本。"
+                    srtError = context.getString(R.string.status_no_books_found_to_import)
+                    exportStatus = context.getString(R.string.status_refresh_done_zero)
                     return@onSuccess
                 }
                 readerBooks = books
@@ -875,14 +879,15 @@ private fun ReaderSyncScreen() {
                 persistImportState()
 
                 exportStatus = buildString {
-                    append("刷新完成：${books.size} 本。")
+                    append(context.getString(R.string.status_refresh_done, books.size))
                     if (skippedFolders.isNotEmpty()) {
-                        append(" 跳过 ${skippedFolders.size} 个文件夹（缺少音频）。")
+                        append(' ')
+                        append(context.getString(R.string.status_refresh_skipped_missing_audio, skippedFolders.size))
                     }
                 }
             }.onFailure { error ->
-                srtError = error.message ?: "刷新书架失败"
-                exportStatus = "刷新书架失败。"
+                srtError = error.message ?: context.getString(R.string.status_refresh_failed)
+                exportStatus = context.getString(R.string.status_refresh_failed_short)
             }
         }
     }
@@ -912,7 +917,7 @@ private fun ReaderSyncScreen() {
             return
         }
         if (!hasAnyAnkiFieldTemplate(config.fieldTemplates)) {
-            exportStatus = "All field variables are empty. Configure at least one marker in 设置 > Anki."
+            exportStatus = context.getString(R.string.status_anki_fields_empty)
             return
         }
         val exportResult = runCatching {
@@ -1022,7 +1027,7 @@ private fun ReaderSyncScreen() {
                     srtCues = emptyList()
                 }
                 if (failedBooks.isNotEmpty()) {
-                    exportStatus = "恢复书籍时有 ${failedBooks.size} 本失败。"
+                    exportStatus = context.getString(R.string.status_restore_books_failed_count, failedBooks.size)
                 }
             }.onFailure { error ->
                 readerBooks = emptyList()
@@ -1032,8 +1037,8 @@ private fun ReaderSyncScreen() {
                 srtUri = null
                 srtName = null
                 srtCues = emptyList()
-                srtError = "恢复书籍失败：${error.message ?: "unknown error"}"
-                exportStatus = "恢复书架失败。"
+                srtError = context.getString(R.string.status_restore_book_failed, error.message ?: "unknown error")
+                exportStatus = context.getString(R.string.status_restore_bookshelf_failed)
             }
         } else {
             // Backward compatibility with older single-book persistence format.
@@ -1479,7 +1484,7 @@ private fun ReaderSyncScreen() {
         val displayName = queryDisplayName(contentResolver, uri)
         val uriValue = uri.toString()
         if (dictionaryRefs.any { it.uri == uriValue }) {
-            dictionaryError = "该辞典已导入，请勿重复导入。"
+            dictionaryError = context.getString(R.string.status_duplicate_dictionary)
             return@rememberLauncherForActivityResult
         }
         val cacheKey = buildDictionaryCacheKey(uriValue, displayName)
@@ -1518,7 +1523,7 @@ private fun ReaderSyncScreen() {
                         ?.let { key ->
                             scope.launch(Dispatchers.IO) { deleteDictionaryFromSqlite(context, key) }
                         }
-                    dictionaryError = "检测到重复辞典：${parsedDictionary.name}"
+            dictionaryError = context.getString(R.string.status_duplicate_dictionary_detected, parsedDictionary.name)
                     clearDictionaryProgress()
                     return@launch
                 }
@@ -1646,14 +1651,14 @@ private fun ReaderSyncScreen() {
                             onClick = { refreshBookshelfFromFolder() },
                             containerColor = MaterialTheme.colorScheme.secondaryContainer
                         ) {
-                            Text("刷新")
+                            Text(stringResource(R.string.home_refresh))
                         }
                         FloatingActionButton(
                             onClick = {
                                 addBookDialogVisible = true
                             }
                         ) {
-                            Text("+书籍")
+                            Text(stringResource(R.string.home_add_book))
                         }
                     }
                 }
@@ -1662,7 +1667,7 @@ private fun ReaderSyncScreen() {
                     FloatingActionButton(
                         onClick = { clearCollectionsConfirmVisible = true }
                     ) {
-                        Text("清空")
+                        Text(stringResource(R.string.home_clear))
                     }
                 }
             }
@@ -1673,25 +1678,25 @@ private fun ReaderSyncScreen() {
                     selected = activeSection == MiningSection.MAIN,
                     onClick = { activeSection = MiningSection.MAIN },
                     icon = { Text("本") },
-                    label = { Text("主页") }
+                    label = { Text(stringResource(R.string.nav_home)) }
                 )
                 NavigationBarItem(
                     selected = activeSection == MiningSection.DICTIONARY,
                     onClick = { activeSection = MiningSection.DICTIONARY },
                     icon = { Text("辞") },
-                    label = { Text("辞典查询") }
+                    label = { Text(stringResource(R.string.nav_dictionary)) }
                 )
                 NavigationBarItem(
                     selected = activeSection == MiningSection.COLLECTIONS,
                     onClick = { activeSection = MiningSection.COLLECTIONS },
                     icon = { Text("蔵") },
-                    label = { Text("收藏") }
+                    label = { Text(stringResource(R.string.collections_title)) }
                 )
                 NavigationBarItem(
                     selected = activeSection == MiningSection.SETTINGS,
                     onClick = { activeSection = MiningSection.SETTINGS },
                     icon = { Text("設") },
-                    label = { Text("设置") }
+                    label = { Text(stringResource(R.string.nav_settings)) }
                 )
             }
         }
@@ -1701,7 +1706,12 @@ private fun ReaderSyncScreen() {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-                    .padding(16.dp)
+                    .padding(
+                        start = if (activeSection == MiningSection.SETTINGS) 0.dp else 16.dp,
+                        end = if (activeSection == MiningSection.SETTINGS) 0.dp else 16.dp,
+                        top = 16.dp,
+                        bottom = 16.dp
+                    )
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -1713,21 +1723,21 @@ private fun ReaderSyncScreen() {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("我的书架", style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.home_bookshelf_title), style = MaterialTheme.typography.titleMedium)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (selectedBookIds.isNotEmpty()) {
                             OutlinedButton(onClick = { requestDeleteSelectedBooks() }) {
-                                Text("删除(${selectedBookIds.size})")
+                                Text(stringResource(R.string.home_delete_selected, selectedBookIds.size))
                             }
                             OutlinedButton(onClick = { clearBookSelection() }) {
-                                Text("取消选择")
+                                Text(stringResource(R.string.home_cancel_selection))
                             }
                         }
                         if (selectedBookIds.isEmpty()) {
                             OutlinedButton(
                                 onClick = { activeSection = MiningSection.SETTINGS }
                             ) {
-                                Text("设置")
+                                Text(stringResource(R.string.nav_settings))
                             }
                             OutlinedButton(
                                 onClick = {
@@ -1741,9 +1751,9 @@ private fun ReaderSyncScreen() {
                             ) {
                                 Text(
                                     if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
-                                        "切换到列表"
+                                        stringResource(R.string.home_switch_to_list)
                                     } else {
-                                        "切换到书架"
+                                        stringResource(R.string.home_switch_to_shelf)
                                     }
                                 )
                             }
@@ -1757,8 +1767,8 @@ private fun ReaderSyncScreen() {
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Text("还没有书籍。")
-                            Text("点击 +书籍，先选择有声书文件夹，再选择音频/m4b（SRT可选）。")
+                            Text(stringResource(R.string.home_no_books))
+                            Text(stringResource(R.string.home_no_books_hint))
                         }
                     }
                 } else if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
@@ -1802,13 +1812,13 @@ private fun ReaderSyncScreen() {
                                         }
                                         Text(book.title, style = MaterialTheme.typography.titleSmall)
                                         Text(book.audioName, maxLines = 1)
-                                        Text(if (book.srtUri != null) "有字幕" else "无字幕")
+                                        Text(if (book.srtUri != null) stringResource(R.string.home_has_subtitle) else stringResource(R.string.home_no_subtitle))
                                         Text("$playbackPercent%")
                                         if (multiSelected) {
-                                            Text("已选中", color = MaterialTheme.colorScheme.primary)
+                                            Text(stringResource(R.string.home_selected), color = MaterialTheme.colorScheme.primary)
                                         }
                                         if (selected) {
-                                            Text("已打开", color = MaterialTheme.colorScheme.primary)
+                                            Text(stringResource(R.string.home_opened), color = MaterialTheme.colorScheme.primary)
                                         }
                                     }
                                 }
@@ -1860,15 +1870,15 @@ private fun ReaderSyncScreen() {
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Text(book.title, style = MaterialTheme.typography.titleSmall)
-                                    Text(if (book.srtUri != null) "有字幕" else "无字幕")
+                                    Text(if (book.srtUri != null) stringResource(R.string.home_has_subtitle) else stringResource(R.string.home_no_subtitle))
                                     Text("$playbackPercent%")
                                     if (multiSelected) {
-                                        Text("已选中", color = MaterialTheme.colorScheme.primary)
+                                        Text(stringResource(R.string.home_selected), color = MaterialTheme.colorScheme.primary)
                                     }
                                 }
                                 if (selectedBookIds.isEmpty()) {
                                     OutlinedButton(onClick = { openReaderBook(book, persist = true) }) {
-                                        Text(if (selected) "已打开" else "打开")
+                                        Text(if (selected) stringResource(R.string.home_opened) else stringResource(R.string.common_open))
                                     }
                                 }
                             }
@@ -1882,7 +1892,7 @@ private fun ReaderSyncScreen() {
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            if (srtLoading) Text("正在解析 SRT...")
+                            if (srtLoading) Text(stringResource(R.string.bookreader_parsing_srt))
                             if (srtError != null) Text("SRT error: $srtError", color = MaterialTheme.colorScheme.error)
                             if (exportStatus != null) Text(exportStatus!!)
                         }
@@ -1896,10 +1906,10 @@ private fun ReaderSyncScreen() {
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("辞典与查询", style = MaterialTheme.typography.titleMedium)
-                        Text("辞典：$dictionaryCount（共 $totalDictionaryEntries 条）")
+                        Text(stringResource(R.string.dictionary_title), style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.dictionary_summary, dictionaryCount, totalDictionaryEntries))
                         if (dictionaryLoading) {
-                            Text(dictionaryProgressText ?: "正在导入辞典...")
+                            Text(dictionaryProgressText ?: stringResource(R.string.dictionary_importing))
                             if (dictionaryProgressValue != null) {
                                 LinearProgressIndicator(
                                     progress = { dictionaryProgressValue ?: 0f },
@@ -1910,35 +1920,35 @@ private fun ReaderSyncScreen() {
                             }
                         }
                         if (dictionaryError != null) {
-                            Text("辞典错误：$dictionaryError", color = MaterialTheme.colorScheme.error)
+                            Text(stringResource(R.string.dictionary_error, dictionaryError.orEmpty()), color = MaterialTheme.colorScheme.error)
                         }
                         Row(
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Button(onClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) }) {
-                                Text("导入辞典")
+                                Text(stringResource(R.string.dictionary_import))
                             }
                             OutlinedButton(
                                 onClick = { showDictionaryManager = !showDictionaryManager }
                             ) {
-                                Text(if (showDictionaryManager) "隐藏辞典列表" else "查看辞典列表")
+                                Text(if (showDictionaryManager) stringResource(R.string.dictionary_hide_list) else stringResource(R.string.dictionary_show_list))
                             }
                         }
 
                         if (showDictionaryManager) {
                             if (dictionaryRefs.isEmpty()) {
-                                Text("暂无已导入辞典。")
+                                Text(stringResource(R.string.dictionary_empty))
                             } else {
                                 dictionaryRefs.forEachIndexed { index, ref ->
                                     val loaded = loadedDictionaries.getOrNull(index)
-                                    val countText = loaded?.entryCount?.let { "$it 条" } ?: "未加载"
+                                    val countText = loaded?.entryCount?.let { context.getString(R.string.dictionary_count, it) } ?: stringResource(R.string.dictionary_unloaded)
                                     Card(modifier = Modifier.fillMaxWidth()) {
                                         Column(
                                             modifier = Modifier.padding(10.dp),
                                             verticalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
-                                            Text(ref.name.ifBlank { "辞典 ${index + 1}" })
+                                            Text(ref.name.ifBlank { context.getString(R.string.dictionary_default_name, index + 1) })
                                             Text(countText)
                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                 OutlinedButton(
@@ -1957,7 +1967,7 @@ private fun ReaderSyncScreen() {
                                                     onClick = { removeDictionaryAt(index) },
                                                     enabled = !dictionaryLoading
                                                 ) {
-                                                    Text("删除")
+                                                    Text(stringResource(R.string.common_delete))
                                                 }
                                             }
                                         }
@@ -1970,7 +1980,7 @@ private fun ReaderSyncScreen() {
                             value = lookupQuery,
                             onValueChange = { lookupQuery = it },
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("查词") },
+                            label = { Text(stringResource(R.string.dictionary_query_label)) },
                             singleLine = true
                         )
 
@@ -1979,7 +1989,7 @@ private fun ReaderSyncScreen() {
                                 onClick = { triggerLookupCandidates(listOf(lookupQuery)) },
                                 enabled = loadedDictionaries.isNotEmpty() && lookupQuery.isNotBlank()
                             ) {
-                                Text("查询")
+                                Text(stringResource(R.string.dictionary_query_button))
                             }
                             OutlinedButton(
                                 onClick = {
@@ -1988,14 +1998,14 @@ private fun ReaderSyncScreen() {
                                     selectedEntryKey = null
                                 }
                             ) {
-                                Text("清空")
+                                Text(stringResource(R.string.common_clear))
                             }
                         }
 
                         if (lookupLoading) {
-                            Text("正在查询辞典...")
+                            Text(stringResource(R.string.dictionary_querying))
                         } else if (lookupQuery.isNotBlank() && groupedLookupResults.isEmpty()) {
-                            Text("无查询结果。")
+                            Text(stringResource(R.string.common_no_results))
                         }
 
                         groupedLookupResults.forEach { groupedResult ->
@@ -2016,7 +2026,7 @@ private fun ReaderSyncScreen() {
                                                 OutlinedButton(
                                                     onClick = { playLookupGroupAudio(groupedResult, updatePopupStatus = false) }
                                                 ) {
-                                                    Text("音")
+                                                    Text(stringResource(R.string.common_audio))
                                                 }
                                             }
                                             OutlinedButton(
@@ -2040,7 +2050,7 @@ private fun ReaderSyncScreen() {
                                                 modifier = Modifier.padding(8.dp),
                                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
-                                                val frequencyBadges = parseMetaBadges(dictionaryGroup.frequency, "词频")
+                                                val frequencyBadges = parseMetaBadges(dictionaryGroup.frequency, stringResource(R.string.bookreader_meta_frequency))
                                                 if (frequencyBadges.isNotEmpty()) {
                                                     MetaBadgeRow(
                                                         badges = frequencyBadges,
@@ -2051,7 +2061,7 @@ private fun ReaderSyncScreen() {
                                                 val pitchBadges = parsePitchBadgeGroups(
                                                     raw = dictionaryGroup.pitch,
                                                     reading = groupedResult.reading,
-                                                    defaultLabel = "音调"
+                                                    defaultLabel = stringResource(R.string.bookreader_meta_pitch)
                                                 )
                                                 if (pitchBadges.isNotEmpty()) {
                                                     pitchBadges.forEach { group ->
@@ -2093,10 +2103,10 @@ private fun ReaderSyncScreen() {
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("收藏", style = MaterialTheme.typography.titleMedium)
-                        Text("共 ${collectedCues.size} 条")
+                        Text(stringResource(R.string.collections_title), style = MaterialTheme.typography.titleMedium)
+                        Text(context.getString(R.string.collections_count, collectedCues.size))
                         if (collectedCues.isEmpty()) {
-                            Text("暂无收藏。")
+                            Text(stringResource(R.string.collections_empty))
                         } else {
                             collectedCues.forEach { item ->
                                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -2106,14 +2116,14 @@ private fun ReaderSyncScreen() {
                                     ) {
                                         Text(item.text)
                                         Text(
-                                            formatCollectedCueMeta(item),
+                                            formatCollectedCueMeta(context, item),
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             OutlinedButton(
                                                 onClick = { playCollectedCue(item) }
                                             ) {
-                                                Text("播放")
+                                                Text(stringResource(R.string.common_play))
                                             }
                                             OutlinedButton(
                                                 onClick = {
@@ -2128,7 +2138,7 @@ private fun ReaderSyncScreen() {
                                                 },
                                                 enabled = loadedDictionaries.isNotEmpty()
                                             ) {
-                                                Text("查词")
+                                                Text(stringResource(R.string.common_lookup))
                                             }
                                             OutlinedButton(
                                                 onClick = {
@@ -2136,7 +2146,7 @@ private fun ReaderSyncScreen() {
                                                     refreshCollectedCues()
                                                 }
                                             ) {
-                                                Text("删除")
+                                                Text(stringResource(R.string.common_delete))
                                             }
                                         }
                                     }
@@ -2148,249 +2158,145 @@ private fun ReaderSyncScreen() {
             }
 
             if (activeSection == MiningSection.SETTINGS) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    tonalElevation = 1.dp,
-                    shape = MaterialTheme.shapes.medium
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            "设置",
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                SettingsPanel(
+                    selectedAppLanguageLabel = selectedAppLanguage.displayLabel(context),
+                    versionName = resolveAppVersionName(context),
+                    onAudiobookClick = { context.startActivity(Intent(context, AudiobookSettingsActivity::class.java)) },
+                    onControlModeClick = { context.startActivity(Intent(context, ControlModeSettingsActivity::class.java)) },
+                    onControllerClick = { context.startActivity(Intent(context, ControllerSettingsActivity::class.java)) },
+                    onAnkiClick = { context.startActivity(Intent(context, AnkiSettingsActivity::class.java)) },
+                    onLanguageClick = { languageDialogVisible = true },
+                    onGuideClick = {
+                        val intent = Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse("https://github.com/techza14/9Player")
                         )
-                        SettingsListItem(
-                            title = "Anki",
-                            onClick = { context.startActivity(Intent(context, AnkiSettingsActivity::class.java)) }
-                        )
-                        SettingsListItem(
-                            title = "有声书",
-                            onClick = { context.startActivity(Intent(context, AudiobookSettingsActivity::class.java)) }
-                        )
-                        SettingsListItem(
-                            title = "控制模式",
-                            onClick = { context.startActivity(Intent(context, ControlModeSettingsActivity::class.java)) }
-                        )
-                        SettingsListItem(
-                            title = "手柄",
-                            onClick = { context.startActivity(Intent(context, ControllerSettingsActivity::class.java)) }
-                        )
-                        SettingsListItem(
-                            title = "手柄蓝牙",
-                            onClick = { context.startActivity(Intent(context, ControllerBluetoothSettingsActivity::class.java)) },
-                            showDivider = true
-                        )
-                        SettingsListItem(
-                            title = "使用说明",
-                            onClick = {
-                                val intent = Intent(
-                                    Intent.ACTION_VIEW,
-                                    Uri.parse("https://github.com/techza14/9Player")
-                                )
-                                runCatching { context.startActivity(intent) }
-                                    .onFailure { Toast.makeText(context, "无法打开链接。", Toast.LENGTH_SHORT).show() }
-                            }
-                        )
-                        SettingsListItem(
-                            title = "当前版本",
-                            onClick = {
-                                val version = resolveAppVersionName(context)
-                                Toast.makeText(context, "当前版本：$version", Toast.LENGTH_SHORT).show()
-                                versionTapCount += 1
-                                if (versionTapCount >= 5) {
-                                    versionTapCount = 0
-                                    showVersionEasterGif = true
-                                }
-                            },
-                            showDivider = false
-                        )
+                        runCatching { context.startActivity(intent) }
+                            .onFailure { Toast.makeText(context, context.getString(R.string.settings_open_link_failed), Toast.LENGTH_SHORT).show() }
+                    },
+                    onVersionClick = {
+                        val version = resolveAppVersionName(context)
+                        Toast.makeText(context, context.getString(R.string.settings_version_toast, version), Toast.LENGTH_SHORT).show()
+                        versionTapCount += 1
+                        if (versionTapCount >= 5) {
+                            versionTapCount = 0
+                            showVersionEasterGif = true
+                        }
                     }
-                }
+                )
             }
         }
 
+        if (languageDialogVisible) {
+            AppLanguageDialog(
+                selectedAppLanguage = selectedAppLanguage,
+                onDismiss = { languageDialogVisible = false },
+                onSelectLanguage = { option ->
+                    selectedAppLanguage = option
+                    saveAppLanguageOption(context, option)
+                    applyAppLanguage(option)
+                    languageDialogVisible = false
+                    val activity = context as? Activity
+                    if (activity != null) {
+                        val restartIntent = Intent(activity, MainActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                        }
+                        activity.startActivity(restartIntent)
+                        activity.overridePendingTransition(0, 0)
+                        activity.finish()
+                    }
+                }
+            )
+        }
+
         if (importGuideVisible) {
-            AlertDialog(
-                onDismissRequest = {},
-                title = { Text("导入方式") },
-                text = { Text("首次安装需要选择导入方式：是否自动把书移动到有声书文件夹。") },
-                dismissButton = {
-                    OutlinedButton(
-                        onClick = {
-                            autoMoveToAudiobookFolder = false
-                            importOnboardingCompleted = true
-                            importGuideVisible = false
-                            persistImportState()
-                        }
-                    ) {
-                        Text("不自动移动")
-                    }
+            ImportGuideDialog(
+                onKeepOriginal = {
+                    autoMoveToAudiobookFolder = false
+                    importOnboardingCompleted = true
+                    importGuideVisible = false
+                    persistImportState()
                 },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            autoMoveToAudiobookFolder = true
-                            importOnboardingCompleted = true
-                            importGuideVisible = false
-                            persistImportState()
-                        }
-                    ) {
-                        Text("自动移动")
-                    }
+                onAutoMove = {
+                    autoMoveToAudiobookFolder = true
+                    importOnboardingCompleted = true
+                    importGuideVisible = false
+                    persistImportState()
                 }
             )
         }
 
         if (clearCollectionsConfirmVisible) {
-            AlertDialog(
-                onDismissRequest = { clearCollectionsConfirmVisible = false },
-                title = { Text("清空收藏") },
-                text = { Text("确认删除全部收藏吗？此操作不可恢复。") },
-                dismissButton = {
-                    TextButton(onClick = { clearCollectionsConfirmVisible = false }) {
-                        Text("取消")
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            clearBookReaderCollectedCues(context)
-                            refreshCollectedCues()
-                            clearCollectionsConfirmVisible = false
-                        }
-                    ) {
-                        Text("确认删除")
-                    }
+            ClearCollectionsDialog(
+                onDismiss = { clearCollectionsConfirmVisible = false },
+                onConfirm = {
+                    clearBookReaderCollectedCues(context)
+                    refreshCollectedCues()
+                    clearCollectionsConfirmVisible = false
                 }
             )
         }
 
         if (deleteBooksConfirmVisible) {
-            AlertDialog(
-                onDismissRequest = { deleteBooksConfirmVisible = false },
-                title = { Text("删除书籍") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("确认删除所选书籍，并删除对应文件夹吗？\n（如果文件夹处于有声书文件夹）")
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Checkbox(
-                                checked = deleteBooksDontAskAgain,
-                                onCheckedChange = { checked ->
-                                    deleteBooksDontAskAgain = checked
-                                }
-                            )
-                            Text("下次不再提醒")
-                        }
-                    }
+            DeleteBooksConfirmDialog(
+                deleteBooksDontAskAgain = deleteBooksDontAskAgain,
+                onDontAskAgainChange = { checked -> deleteBooksDontAskAgain = checked },
+                onDismiss = {
+                    deleteBooksConfirmVisible = false
+                    pendingDeleteBookIds = emptySet()
                 },
-                dismissButton = {
-                    TextButton(
-                        onClick = {
-                            deleteBooksConfirmVisible = false
-                            pendingDeleteBookIds = emptySet()
-                        }
-                    ) {
-                        Text("取消")
+                onConfirm = {
+                    if (deleteBooksDontAskAgain) {
+                        skipDeleteBookConfirm = true
+                        saveSkipDeleteBookConfirm(context, true)
                     }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            if (deleteBooksDontAskAgain) {
-                                skipDeleteBookConfirm = true
-                                saveSkipDeleteBookConfirm(context, true)
-                            }
-                            val removeIds = pendingDeleteBookIds
-                            deleteBooksConfirmVisible = false
-                            pendingDeleteBookIds = emptySet()
-                            deleteSelectedBooks(removeIds)
-                        }
-                    ) {
-                        Text("确认删除")
-                    }
+                    val removeIds = pendingDeleteBookIds
+                    deleteBooksConfirmVisible = false
+                    pendingDeleteBookIds = emptySet()
+                    deleteSelectedBooks(removeIds)
                 }
             )
         }
 
         if (addBookDialogVisible) {
-            AlertDialog(
-                onDismissRequest = { addBookDialogVisible = false },
-                title = { Text("添加书籍") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("有声书文件夹: ${addBookFolderName ?: "未选择"}")
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
-                                onClick = { pickBookFolderLauncher.launch(null) }
-                            ) {
-                                Text("选择文件夹")
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    addBookFolderUri = null
-                                    addBookFolderName = null
-                                    addBookAudioUri = null
-                                    addBookAudioName = null
-                                    addBookSrtUri = null
-                                    addBookSrtName = null
-                                    persistImportState()
-                                },
-                                enabled = addBookFolderUri != null
-                            ) {
-                                Text("清除")
-                            }
-                        }
-
-                        Text("音频/m4b: ${addBookAudioName ?: "未选择"}")
-                        OutlinedButton(
-                            onClick = {
-                                pickBookAudioLauncher.launch(
-                                        arrayOf(
-                                        "audio/*",
-                                        "audio/mp4",
-                                        "audio/x-m4a",
-                                        "audio/m4a",
-                                        "audio/x-m4b",
-                                        "audio/m4b",
-                                        "application/mp4"
-                                    )
-                                )
-                            },
-                            enabled = addBookFolderUri != null || !autoMoveToAudiobookFolder
-                        ) {
-                            Text("选择音频/m4b")
-                        }
-                        Text("SRT（可选）: ${addBookSrtName ?: "未选择"}")
-                        OutlinedButton(
-                            onClick = {
-                                pickBookSrtLauncher.launch(
-                                    arrayOf("application/x-subrip", "text/plain", "*/*")
-                                )
-                            },
-                            enabled = addBookFolderUri != null || !autoMoveToAudiobookFolder
-                        ) {
-                            Text("选择字幕 SRT（可选）")
-                        }
-                    }
+            AddBookDialog(
+                folderName = addBookFolderName,
+                folderUri = addBookFolderUri,
+                audioName = addBookAudioName,
+                audioUri = addBookAudioUri,
+                srtName = addBookSrtName,
+                autoMoveToAudiobookFolder = autoMoveToAudiobookFolder,
+                srtLoading = srtLoading,
+                onPickFolder = { pickBookFolderLauncher.launch(null) },
+                onClearFolderSelection = {
+                    addBookFolderUri = null
+                    addBookFolderName = null
+                    addBookAudioUri = null
+                    addBookAudioName = null
+                    addBookSrtUri = null
+                    addBookSrtName = null
+                    persistImportState()
                 },
-                dismissButton = {
-                    TextButton(onClick = { addBookDialogVisible = false }) {
-                        Text("取消")
-                    }
+                onPickAudio = {
+                    pickBookAudioLauncher.launch(
+                        arrayOf(
+                            "audio/*",
+                            "audio/mp4",
+                            "audio/x-m4a",
+                            "audio/m4a",
+                            "audio/x-m4b",
+                            "audio/m4b",
+                            "application/mp4"
+                        )
+                    )
                 },
-                confirmButton = {
-                    Button(
-                        onClick = { confirmAddBookFromDialog() },
-                        enabled = (addBookFolderUri != null || !autoMoveToAudiobookFolder) &&
-                            addBookAudioUri != null &&
-                            !srtLoading
-                    ) {
-                        Text("确认")
-                    }
-                }
+                onPickSrt = {
+                    pickBookSrtLauncher.launch(
+                        arrayOf("application/x-subrip", "text/plain", "*/*")
+                    )
+                },
+                onDismiss = { addBookDialogVisible = false },
+                onConfirm = { confirmAddBookFromDialog() }
             )
         }
 
@@ -2445,16 +2351,16 @@ private fun ReaderSyncScreen() {
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             if (mainLookupPopupLoading) {
-                                Text("查询中...")
+                                Text(stringResource(R.string.common_querying))
                             }
                             if (mainLookupPopupError != null) {
                                 Text(
-                                    "查询错误：$mainLookupPopupError",
+                                    context.getString(R.string.lookup_error_prefix, mainLookupPopupError.orEmpty()),
                                     color = MaterialTheme.colorScheme.error
                                 )
                             }
                             if (!mainLookupPopupLoading && groupedMainLookupPopupResults.isEmpty()) {
-                                Text("无查询结果。")
+                                Text(stringResource(R.string.common_no_results))
                             }
                             groupedMainLookupPopupResults.forEach { groupedResult ->
                                 val reading = groupedResult.reading?.takeIf { it.isNotBlank() }?.let { " [$it]" } ?: ""
@@ -2474,7 +2380,7 @@ private fun ReaderSyncScreen() {
                                                     OutlinedButton(
                                                         onClick = { playLookupGroupAudio(groupedResult, updatePopupStatus = true) }
                                                     ) {
-                                                        Text("音")
+                                                        Text(stringResource(R.string.common_audio))
                                                     }
                                                 }
                                                 OutlinedButton(
@@ -2499,7 +2405,7 @@ private fun ReaderSyncScreen() {
                                                     modifier = Modifier.padding(8.dp),
                                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                                 ) {
-                                                    val frequencyBadges = parseMetaBadges(dictionaryGroup.frequency, "词频")
+                                                val frequencyBadges = parseMetaBadges(dictionaryGroup.frequency, stringResource(R.string.bookreader_meta_frequency))
                                                     if (frequencyBadges.isNotEmpty()) {
                                                         MetaBadgeRow(
                                                             badges = frequencyBadges,
@@ -2510,7 +2416,7 @@ private fun ReaderSyncScreen() {
                                                     val pitchBadges = parsePitchBadgeGroups(
                                                         raw = dictionaryGroup.pitch,
                                                         reading = groupedResult.reading,
-                                                        defaultLabel = "音调"
+                                                    defaultLabel = stringResource(R.string.bookreader_meta_pitch)
                                                     )
                                                     if (pitchBadges.isNotEmpty()) {
                                                         pitchBadges.forEach { group ->
@@ -2554,7 +2460,7 @@ private fun ReaderSyncScreen() {
                                     mainLookupAnkiStatus = null
                                 }
                             ) {
-                                Text("关闭")
+                        Text(stringResource(R.string.common_close))
                             }
                         }
                     }
@@ -2567,33 +2473,6 @@ private fun ReaderSyncScreen() {
                 bottomPadding = innerPadding.calculateBottomPadding(),
                 onDismiss = { showVersionEasterGif = false }
             )
-        }
-    }
-}
-
-@Composable
-private fun SettingsListItem(
-    title: String,
-    onClick: () -> Unit,
-    showDivider: Boolean = true
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(">")
-        }
-        if (showDivider) {
-            HorizontalDivider(modifier = Modifier.padding(start = 12.dp))
         }
     }
 }
@@ -2707,145 +2586,6 @@ private fun FieldVariableDropdown(
             }
         }
     }
-}
-
-@Composable
-private fun RichDefinitionView(
-    definition: String,
-    indexLabel: String = "",
-    dictionaryName: String? = null,
-    dictionaryCss: String? = null
-) {
-    val trimmed = definition.trim()
-    if (trimmed.isBlank()) return
-
-    if (looksLikeHtmlDefinition(trimmed)) {
-        val html = buildDefinitionHtml(
-            definitionHtml = trimmed,
-            indexLabel = indexLabel,
-            dictionaryName = dictionaryName,
-            dictionaryCss = dictionaryCss
-        )
-        AndroidView(
-            modifier = Modifier.fillMaxWidth(),
-            factory = { context ->
-                WebView(context).apply {
-                    setBackgroundColor(0x00000000)
-                    settings.javaScriptEnabled = false
-                    settings.domStorageEnabled = false
-                    settings.loadsImagesAutomatically = true
-                    webViewClient = WebViewClient()
-                }
-            },
-            update = { webView ->
-                webView.loadDataWithBaseURL(
-                    null,
-                    html,
-                    "text/html",
-                    "utf-8",
-                    null
-                )
-            }
-        )
-    } else {
-        Text("$indexLabel${trimmed}")
-    }
-}
-
-private fun buildDefinitionHtml(
-    definitionHtml: String,
-    indexLabel: String,
-    dictionaryName: String?,
-    dictionaryCss: String?
-): String {
-    val prefix = if (indexLabel.isBlank()) "" else "<div>${escapeHtmlText(indexLabel)}</div>"
-    val dictionaryLabel = dictionaryName?.trim().orEmpty()
-    val wrappedBody = if (dictionaryLabel.isBlank()) {
-        definitionHtml
-    } else {
-        val safeDictionaryLabel = escapeHtmlText(dictionaryLabel)
-        val safeDictionaryAttr = escapeHtmlAttributeForHtml(dictionaryLabel)
-        """
-        <div class="yomitan-glossary">
-            <ol>
-                <li data-dictionary="$safeDictionaryAttr">
-                    <i>($safeDictionaryLabel)</i> $definitionHtml
-                </li>
-            </ol>
-        </div>
-        """.trimIndent()
-    }
-    val customCss = buildScopedDictionaryCss(
-        rawCss = dictionaryCss.orEmpty(),
-        dictionaryName = dictionaryLabel
-    )
-    return """
-        <html>
-        <head>
-            <meta charset="utf-8"/>
-            <style>
-                body { margin: 0; padding: 0; font-size: 14px; line-height: 1.4; color: #1f1f1f; }
-                img { max-width: 100%; height: auto; }
-                .yomitan-glossary { text-align: left; }
-                .yomitan-glossary ol { margin: 0; padding-left: 1.1em; }
-                .yomitan-glossary li { margin: 0; }
-                $customCss
-            </style>
-        </head>
-        <body>
-            $prefix
-            $wrappedBody
-        </body>
-        </html>
-    """.trimIndent()
-}
-
-private fun looksLikeHtmlDefinition(text: String): Boolean {
-    return Regex("<\\s*/?\\s*[a-zA-Z][^>]*>").containsMatchIn(text)
-}
-
-private fun escapeHtmlText(value: String): String {
-    return value
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-}
-
-private fun escapeHtmlAttributeForHtml(value: String): String {
-    return escapeHtmlText(value).replace("\"", "&quot;")
-}
-
-private fun buildScopedDictionaryCss(rawCss: String, dictionaryName: String): String {
-    val trimmed = rawCss.trim()
-    if (trimmed.isBlank()) return ""
-    if (dictionaryName.isBlank()) return trimmed
-
-    val dictionaryAttr = escapeCssString(dictionaryName)
-    val prefix = ".yomitan-glossary [data-dictionary=\"$dictionaryAttr\"]"
-    val ruleRegex = Regex("([^{}]+)\\{([^}]*)\\}")
-    val scoped = ruleRegex.replace(trimmed) { match ->
-        val selectors = match.groupValues[1]
-        val body = match.groupValues[2]
-        if (selectors.trim().startsWith("@")) return@replace match.value
-        val prefixed = selectors
-            .split(',')
-            .map { selector ->
-                val s = selector.trim()
-                if (s.isBlank()) s else "$prefix $s"
-            }
-            .joinToString(", ")
-        "$prefixed {$body}"
-    }
-    return buildString {
-        appendLine(scoped)
-        appendLine(trimmed)
-    }.trim()
-}
-
-private fun escapeCssString(value: String): String {
-    return value
-        .replace("\\", "\\\\")
-        .replace("\"", "\\\"")
 }
 
 private data class SubtitleCue(
@@ -2981,14 +2721,15 @@ private fun relocateSelectedBookFilesToAudFolder(
     srtSourceName: String?
 ): RelocatedBookFiles {
     val root = DocumentFile.fromTreeUri(context, rootFolderUri)
-        ?: error("无法访问有声书文件夹。")
-    if (!root.isDirectory) error("所选有声书路径不是文件夹。")
+        ?: error(context.getString(R.string.error_audiobook_folder_inaccessible))
+    if (!root.isDirectory) error(context.getString(R.string.error_audiobook_folder_not_directory))
 
-    val audFolder = createNextAudFolder(root)
+    val audFolder = createNextAudFolder(context, root)
     val audioDisplayName = audioSourceName?.trim().takeUnless { it.isNullOrBlank() }
         ?: queryDisplayName(contentResolver, audioSourceUri)
 
     val copiedAudio = copyUriIntoFolder(
+        context = context,
         contentResolver = contentResolver,
         parentFolder = audFolder,
         sourceUri = audioSourceUri,
@@ -2998,6 +2739,7 @@ private fun relocateSelectedBookFilesToAudFolder(
         val srtDisplayName = srtSourceName?.trim().takeUnless { it.isNullOrBlank() }
             ?: queryDisplayName(contentResolver, sourceUri)
         copyUriIntoFolder(
+            context = context,
             contentResolver = contentResolver,
             parentFolder = audFolder,
             sourceUri = sourceUri,
@@ -3007,10 +2749,10 @@ private fun relocateSelectedBookFilesToAudFolder(
 
     val warnings = mutableListOf<String>()
     if (!deleteSourceUri(context, contentResolver, audioSourceUri)) {
-        warnings += "音频原文件删除失败，已保留原文件。"
+        warnings += context.getString(R.string.error_audio_delete_failed)
     }
     if (srtSourceUri != null && !deleteSourceUri(context, contentResolver, srtSourceUri)) {
-        warnings += "SRT原文件删除失败，已保留原文件。"
+        warnings += context.getString(R.string.error_srt_delete_failed)
     }
 
     return RelocatedBookFiles(
@@ -3023,7 +2765,7 @@ private fun relocateSelectedBookFilesToAudFolder(
     )
 }
 
-private fun createNextAudFolder(rootFolder: DocumentFile): DocumentFile {
+private fun createNextAudFolder(context: Context, rootFolder: DocumentFile): DocumentFile {
     val pattern = Regex("^Aud(\\d+)$", RegexOption.IGNORE_CASE)
     var next = rootFolder.listFiles()
         .filter { it.isDirectory }
@@ -3039,14 +2781,15 @@ private fun createNextAudFolder(rootFolder: DocumentFile): DocumentFile {
     repeat(1000) {
         val candidate = "Aud$next"
         if (rootFolder.findFile(candidate) == null) {
-            return rootFolder.createDirectory(candidate) ?: error("无法创建文件夹：$candidate")
+            return rootFolder.createDirectory(candidate) ?: error(context.getString(R.string.error_create_folder_failed, candidate))
         }
         next += 1
     }
-    error("无法创建新的 Aud 文件夹。")
+    error(context.getString(R.string.error_create_aud_folder_failed))
 }
 
 private fun copyUriIntoFolder(
+    context: Context,
     contentResolver: ContentResolver,
     parentFolder: DocumentFile,
     sourceUri: Uri,
@@ -3057,14 +2800,14 @@ private fun copyUriIntoFolder(
     val sourceMime = contentResolver.getType(sourceUri)
     val targetMime = resolveMimeTypeForDocument(uniqueName, sourceMime)
     val created = parentFolder.createFile(targetMime, uniqueName)
-        ?: error("无法在目标文件夹创建文件：$uniqueName")
+        ?: error(context.getString(R.string.error_create_target_file_failed, uniqueName))
 
     val input = openBookInputStream(contentResolver, sourceUri)
-        ?: error("无法读取源文件：$normalizedName")
+        ?: error(context.getString(R.string.error_read_source_file_failed, normalizedName))
     input.use { src ->
         contentResolver.openOutputStream(created.uri, "w")?.use { output ->
             src.copyTo(output)
-        } ?: error("无法写入目标文件：$uniqueName")
+        } ?: error(context.getString(R.string.error_write_target_file_failed, uniqueName))
     }
 
     return CopiedBookFile(
@@ -3097,8 +2840,8 @@ private fun scanBooksFromRootFolder(
     rootFolderUri: Uri
 ): FolderBookScanResult {
     val root = DocumentFile.fromTreeUri(context, rootFolderUri)
-        ?: error("无法访问有声书文件夹。")
-    if (!root.isDirectory) error("所选有声书路径不是文件夹。")
+        ?: error(context.getString(R.string.error_audiobook_folder_inaccessible))
+    if (!root.isDirectory) error(context.getString(R.string.error_audiobook_folder_not_directory))
 
     val books = mutableListOf<FolderBookCandidate>()
     val skippedFolders = mutableListOf<String>()
@@ -3198,20 +2941,6 @@ private fun deleteSourceUri(
     return runCatching {
         contentResolver.delete(uri, null, null) > 0
     }.getOrDefault(false)
-}
-
-private fun loadSkipDeleteBookConfirm(context: Context): Boolean {
-    return context
-        .getSharedPreferences(BOOK_DELETE_PREFS, Context.MODE_PRIVATE)
-        .getBoolean(KEY_SKIP_DELETE_CONFIRM, false)
-}
-
-private fun saveSkipDeleteBookConfirm(context: Context, skip: Boolean) {
-    context
-        .getSharedPreferences(BOOK_DELETE_PREFS, Context.MODE_PRIVATE)
-        .edit()
-        .putBoolean(KEY_SKIP_DELETE_CONFIRM, skip)
-        .apply()
 }
 
 private data class DeleteBookStorageResult(
@@ -3317,74 +3046,6 @@ private fun deleteAudParentFolder(context: Context, fileUri: Uri): Boolean {
     return runCatching { parentDocument.delete() }.getOrDefault(false)
 }
 
-private fun keepReadPermission(context: Context, uri: Uri) {
-    val resolver = context.contentResolver
-    val readWriteFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-    try {
-        resolver.takePersistableUriPermission(uri, readWriteFlags)
-        return
-    } catch (_: SecurityException) {
-        // Fallback to read-only permission.
-    }
-    try {
-        resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    } catch (_: SecurityException) {
-        // Some providers do not support persistable permission.
-    }
-}
-
-private fun queryDisplayName(contentResolver: ContentResolver, uri: Uri): String {
-    val fallback = uri.lastPathSegment ?: "Unknown"
-    return contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-        if (cursor.moveToFirst()) {
-            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (index >= 0) cursor.getString(index) else fallback
-        } else {
-            fallback
-        }
-    } ?: fallback
-}
-
-private fun queryTreeDisplayName(
-    context: Context,
-    contentResolver: ContentResolver,
-    treeUri: Uri
-): String {
-    val fromDocument = runCatching {
-        DocumentFile.fromTreeUri(context, treeUri)?.name?.trim()
-    }.getOrNull().orEmpty()
-    if (fromDocument.isNotBlank()) return fromDocument
-    return queryDisplayName(contentResolver, treeUri)
-}
-
-private fun buildBookTitle(audioName: String, srtName: String?): String {
-    val audioBase = audioName.substringBeforeLast('.').trim().ifBlank { audioName.trim() }
-    if (audioBase.isNotBlank()) return audioBase
-    val srtBase = srtName?.let { name ->
-        name.substringBeforeLast('.').trim().ifBlank { name.trim() }
-    }.orEmpty()
-    if (srtBase.isNotBlank()) return srtBase
-    return "Untitled Book"
-}
-
-private fun buildReaderBookPlaybackKeyMain(book: ReaderBook): String {
-    val raw = "title=${book.title}|audio=${book.audioUri}|srt=${book.srtUri?.toString().orEmpty()}"
-    return buildDictionaryCacheKey(raw, book.title.ifBlank { "book" })
-}
-
-private suspend fun loadReaderBookPlaybackSnapshotsForBooks(
-    context: Context,
-    books: List<ReaderBook>
-): Map<String, BookReaderPlaybackSnapshot> {
-    return withContext(Dispatchers.IO) {
-        books.associate { book ->
-            val playbackKey = buildReaderBookPlaybackKeyMain(book)
-            val stored = loadBookReaderPlaybackSnapshot(context, playbackKey)
-            book.id to stored
-        }
-    }
-}
-
 private fun findCueAtTime(cues: List<SubtitleCue>, timeMs: Long): SubtitleCue? {
     if (cues.isEmpty()) return null
     var low = 0
@@ -3416,35 +3077,13 @@ private fun addLookupDefinitionToAnkiMain(
     glossarySections: List<String> = emptyList(),
     popupSelectionText: String? = null
 ) {
-    if (!isAnkiInstalled(context)) error("AnkiDroid is not installed.")
-    if (!hasAnkiReadWritePermission(context)) {
-        error("Anki permission not granted. Authorize in 设置 > Anki.")
-    }
-
     val persistedConfig = loadPersistedAnkiConfig(context)
-    if (persistedConfig.modelName.isBlank()) {
-        error("No Anki model configured. Open 设置 > Anki.")
-    }
-
-    val catalog = loadAnkiCatalog(context)
-    val model = catalog.models.firstOrNull { it.name == persistedConfig.modelName }
-        ?: error("Configured model not found: ${persistedConfig.modelName}")
-
-    val templates = model.fields.associateWith { field ->
-        persistedConfig.fieldTemplates[field].orEmpty()
-    }
-    if (!hasAnyAnkiFieldTemplate(templates)) {
-        error("All field variables are empty. Configure at least one marker in 设置 > Anki.")
-    }
-    if (audioUri != null && !templates.values.any { templateUsesVariableMain(it, "cut-audio") }) {
-        error("Current model templates do not include {cut-audio}. Set audio field to {cut-audio} in 设置 > Anki.")
-    }
-    val requiresLookupAudio = templates.values.any {
-        templateUsesVariableMain(it, "audio")
-    }
-    if (requiresLookupAudio && lookupAudioUri == null) {
-        error("Current model templates include {audio}, but lookup audio is unavailable. Configure it in 设置 > 有声书.")
-    }
+    val preparedExport = prepareAnkiExport(
+        context = context,
+        persistedConfig = persistedConfig,
+        audioUri = audioUri,
+        lookupAudioUri = lookupAudioUri
+    )
 
     val normalizedGlossarySections = glossarySections
         .map { it.trim() }
@@ -3456,13 +3095,6 @@ private fun addLookupDefinitionToAnkiMain(
     }
     val cardDictionaryName = if (normalizedGlossarySections.isNotEmpty()) null else entry.dictionary
     val cardDictionaryCss = dictionaryCss
-
-    val config = AnkiExportConfig(
-        deckName = persistedConfig.deckName.ifBlank { "Default" },
-        modelName = model.name,
-        fieldTemplates = templates,
-        tags = parseAnkiTags(persistedConfig.tags)
-    )
 
     val card = MinedCard(
         word = entry.term,
@@ -3483,27 +3115,7 @@ private fun addLookupDefinitionToAnkiMain(
         requireCueAudioClip = audioUri != null
     )
 
-    exportToAnkiDroidApi(context, card, config)
-}
-
-private fun templateUsesVariableMain(template: String, variableName: String): Boolean {
-    if (template.isBlank()) return false
-    val target = variableName
-        .trim()
-        .lowercase(Locale.ROOT)
-        .replace(Regex("[^a-z0-9]"), "")
-    if (target.isBlank()) return false
-
-    return Regex("\\{([^{}]+)\\}")
-        .findAll(template)
-        .any { match ->
-            match.groupValues
-                .getOrNull(1)
-                .orEmpty()
-                .trim()
-                .lowercase(Locale.ROOT)
-                .replace(Regex("[^a-z0-9]"), "") == target
-        }
+    exportToAnkiDroidApi(context, card, preparedExport.config)
 }
 
 private fun buildMinedCard(
@@ -3570,9 +3182,9 @@ private fun formatTime(ms: Long): String {
     }
 }
 
-private fun formatCollectedCueMeta(item: BookReaderCollectedCue): String {
+private fun formatCollectedCueMeta(context: Context, item: BookReaderCollectedCue): String {
     val chapterLabel = item.chapterTitle?.takeIf { it.isNotBlank() }
-        ?: item.chapterIndex?.let { "第${it + 1}章" }
+        ?: item.chapterIndex?.let { context.getString(R.string.chapter_label_number, it + 1) }
     val startLabel = if (item.chapterStartOffsetMs != null) {
         formatTime(item.chapterStartOffsetMs)
     } else {
@@ -3596,241 +3208,6 @@ private fun formatCollectedCueMeta(item: BookReaderCollectedCue): String {
     }
 }
 
-private data class MetaBadge(val label: String, val value: String)
-private data class PitchBadgeGroup(val label: String, val reading: String?, val values: List<String>)
-
-private fun parseMetaBadges(raw: String?, defaultLabel: String): List<MetaBadge> {
-    val text = raw?.trim().orEmpty()
-    if (text.isBlank()) return emptyList()
-    return text
-        .split(';')
-        .mapNotNull { segment ->
-            val part = segment.trim()
-            if (part.isBlank()) return@mapNotNull null
-            val separator = part.indexOf(':')
-            if (separator > 0 && separator < part.lastIndex) {
-                val label = part.substring(0, separator).trim()
-                val value = part.substring(separator + 1).trim()
-                if (label.isBlank() || value.isBlank()) {
-                    MetaBadge(defaultLabel, part)
-                } else {
-                    MetaBadge(label, value)
-                }
-            } else {
-                MetaBadge(defaultLabel, part)
-            }
-        }
-}
-
-private fun parsePitchBadgeGroups(raw: String?, reading: String?, defaultLabel: String): List<PitchBadgeGroup> {
-    return parseMetaBadges(raw, defaultLabel).mapNotNull { badge ->
-        val values = extractPitchNumbers(badge.value)
-        if (values.isEmpty()) return@mapNotNull null
-        PitchBadgeGroup(
-            label = badge.label,
-            reading = reading?.takeIf { it.isNotBlank() },
-            values = values
-        )
-    }
-}
-
-private fun extractPitchNumbers(raw: String): List<String> {
-    return Regex("-?\\d+")
-        .findAll(raw)
-        .map { it.value }
-        .toList()
-}
-
-@Composable
-private fun MetaBadgeRow(
-    badges: List<MetaBadge>,
-    labelColor: Color,
-    labelTextColor: Color
-) {
-    if (badges.isEmpty()) return
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        badges.forEach { badge ->
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                Surface(
-                    color = labelColor,
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text(
-                        text = badge.label,
-                        color = labelTextColor,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-                Surface(
-                    color = Color(0xFFF2F2F2),
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text(
-                        text = badge.value,
-                        color = Color.Black,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PitchBadgeRow(
-    group: PitchBadgeGroup,
-    labelColor: Color,
-    labelTextColor: Color
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Surface(
-            color = labelColor,
-            shape = RoundedCornerShape(4.dp)
-        ) {
-            Text(
-                text = group.label,
-                color = labelTextColor,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-            )
-        }
-        group.values.forEach { number ->
-            Surface(
-                color = Color(0xFFF2F2F2),
-                shape = RoundedCornerShape(4.dp)
-            ) {
-                PitchValueChipContent(
-                    reading = group.reading,
-                    number = number
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PitchValueChipContent(reading: String?, number: String) {
-    val normalized = number.trim()
-    val pitchPart = if (normalized.startsWith("[") && normalized.endsWith("]")) normalized else "[$normalized]"
-    val accent = normalized.trim('[', ']').toIntOrNull()
-    Row(
-        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        val kana = reading?.trim().orEmpty()
-        if (kana.isNotBlank()) {
-            PitchReadingWithAccent(reading = kana, accent = accent)
-        }
-        Text(
-            text = pitchPart,
-            color = Color.Black,
-            style = MaterialTheme.typography.labelSmall
-        )
-    }
-}
-
-@Composable
-private fun PitchReadingWithAccent(reading: String, accent: Int?) {
-    val moras = remember(reading) { splitIntoMoras(reading) }
-    if (moras.isEmpty() || accent == null) {
-        Text(
-            text = reading,
-            color = Color.Black,
-            style = MaterialTheme.typography.labelSmall
-        )
-        return
-    }
-
-    val moraCount = moras.size
-    Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
-        moras.forEachIndexed { index, mora ->
-            val moraIndex = index + 1
-            val high = isHighMora(moraIndex = moraIndex, moraCount = moraCount, accent = accent)
-            val dropAfter = isDropAfterMora(moraIndex = moraIndex, moraCount = moraCount, accent = accent)
-            Text(
-                text = mora,
-                color = Color.Black,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier
-                    .padding(top = 2.dp)
-                    .drawBehind {
-                        if (!high) return@drawBehind
-                        val stroke = 1.dp.toPx()
-                        val y = 1.dp.toPx()
-                        drawLine(
-                            color = Color.Black.copy(alpha = 0.8f),
-                            start = androidx.compose.ui.geometry.Offset(0f, y),
-                            end = androidx.compose.ui.geometry.Offset(size.width, y),
-                            strokeWidth = stroke
-                        )
-                        if (dropAfter) {
-                            val x = size.width - stroke / 2f
-                            drawLine(
-                                color = Color.Black.copy(alpha = 0.8f),
-                                start = androidx.compose.ui.geometry.Offset(x, y),
-                                end = androidx.compose.ui.geometry.Offset(x, size.height * 0.36f),
-                                strokeWidth = stroke
-                            )
-                        }
-                    }
-            )
-        }
-
-    }
-}
-
-private fun splitIntoMoras(reading: String): List<String> {
-    if (reading.isBlank()) return emptyList()
-    val smallKana = setOf(
-        'ゃ', 'ゅ', 'ょ', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'ゎ', 'ゕ', 'ゖ',
-        'ャ', 'ュ', 'ョ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ヮ', 'ヵ', 'ヶ'
-    )
-    val out = mutableListOf<String>()
-    reading.forEach { ch ->
-        when {
-            ch == '\u3099' || ch == '\u309A' -> {
-                if (out.isNotEmpty()) {
-                    out[out.lastIndex] = out.last() + ch
-                } else {
-                    out += ch.toString()
-                }
-            }
-            ch in smallKana && out.isNotEmpty() -> {
-                out[out.lastIndex] = out.last() + ch
-            }
-            else -> out += ch.toString()
-        }
-    }
-    return out
-}
-
-private fun isHighMora(moraIndex: Int, moraCount: Int, accent: Int): Boolean {
-    if (moraIndex !in 1..moraCount) return false
-    return when {
-        accent <= 0 -> moraIndex >= 2
-        accent == 1 -> moraIndex == 1
-        accent <= moraCount -> moraIndex in 2..accent
-        else -> moraIndex >= 2
-    }
-}
-
-private fun isDropAfterMora(moraIndex: Int, moraCount: Int, accent: Int): Boolean {
-    if (accent <= 0) return false
-    return accent < moraCount && moraIndex == accent
-}
 
 
 

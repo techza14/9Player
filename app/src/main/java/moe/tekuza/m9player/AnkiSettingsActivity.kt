@@ -2,7 +2,7 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import moe.tekuza.m9player.ui.theme.TsetTheme
 import kotlinx.coroutines.Dispatchers
@@ -44,7 +45,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-class AnkiSettingsActivity : ComponentActivity() {
+class AnkiSettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -129,7 +130,7 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
         }
         savePersistedAnkiConfig(
             context = context,
-            config = PersistedAnkiConfig(
+            config = buildPersistedAnkiConfig(
                 deckName = ankiDeckName,
                 modelName = ankiModelName,
                 tags = ankiTagsInput,
@@ -143,11 +144,13 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
         fields: List<String>,
         modelTemplates: Map<String, String> = emptyMap()
     ) {
-        ankiFieldTemplates.clear()
         ankiModelFields = fields
-        fields.forEach { field ->
-            ankiFieldTemplates[field] = modelTemplates[field].orEmpty()
-        }
+        syncAnkiFieldTemplates(
+            target = ankiFieldTemplates,
+            fields = fields,
+            clearExisting = true,
+            modelTemplates = modelTemplates
+        )
     }
 
     fun selectAnkiModel(modelName: String) {
@@ -168,7 +171,7 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
 
     fun refreshAnkiCatalog() {
         if (!isAnkiInstalled(context)) {
-            ankiError = "未安装 AnkiDroid。"
+            ankiError = context.getString(R.string.anki_not_installed)
             ankiDecks = emptyList()
             ankiModels = emptyList()
             ankiModelFields = emptyList()
@@ -176,7 +179,7 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
         }
 
         if (!ankiPermissionGranted) {
-            ankiError = "请先授权 Anki 访问。"
+            ankiError = context.getString(R.string.anki_authorize_first)
             return
         }
 
@@ -184,24 +187,24 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
             ankiLoading = true
             ankiError = null
             val result = withContext(Dispatchers.IO) {
-                runCatching { loadAnkiCatalog(context) }
+                runCatching {
+                    loadResolvedAnkiCatalog(
+                        context = context,
+                        currentDeckName = ankiDeckName,
+                        currentModelName = ankiModelName,
+                        defaultDeckName = context.getString(R.string.anki_default_deck)
+                    )
+                }
             }
             ankiLoading = false
 
-            result.onSuccess { catalog ->
-                ankiDecks = catalog.decks
-                ankiModels = catalog.models
-                if (ankiDeckName.isBlank()) {
-                    ankiDeckName = catalog.decks.firstOrNull() ?: "默认"
-                }
-                val resolvedModelName = when {
-                    ankiModelName.isNotBlank() && catalog.models.any { it.name == ankiModelName } -> ankiModelName
-                    catalog.models.isNotEmpty() -> catalog.models.first().name
-                    else -> ""
-                }
-                selectAnkiModel(resolvedModelName)
+            result.onSuccess { resolvedCatalog ->
+                ankiDecks = resolvedCatalog.decks
+                ankiModels = resolvedCatalog.models
+                ankiDeckName = resolvedCatalog.selection.deckName
+                selectAnkiModel(resolvedCatalog.selection.modelName)
             }.onFailure { error ->
-                ankiError = error.message ?: "加载 Anki 牌组/模板失败"
+                ankiError = error.message ?: context.getString(R.string.anki_load_failed)
             }
         }
     }
@@ -225,10 +228,12 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
         if (persistedAnki.modelName.isNotBlank()) {
             ankiModelTemplateSnapshots[persistedAnki.modelName] = persistedAnki.fieldTemplates
         }
-        ankiFieldTemplates.clear()
-        persistedAnki.fieldTemplates.forEach { (field, template) ->
-            ankiFieldTemplates[field] = template
-        }
+        syncAnkiFieldTemplates(
+            target = ankiFieldTemplates,
+            fields = persistedAnki.fieldTemplates.keys.toList(),
+            clearExisting = true,
+            modelTemplates = persistedAnki.fieldTemplates
+        )
         if (ankiPermissionGranted) {
             refreshAnkiCatalog()
         }
@@ -247,9 +252,9 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             TextButton(onClick = onBack) {
-                Text("< 返回")
-            }
-            Text("Anki", style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.common_back))
+        }
+        Text(stringResource(R.string.anki_title), style = MaterialTheme.typography.titleLarge)
         }
 
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -259,38 +264,38 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
             ) {
                 Text(
                     if (ankiPermissionGranted) {
-                        "Anki 访问：已授权"
+                        stringResource(R.string.anki_access_granted)
                     } else {
-                        "Anki 访问：未授权"
+                        stringResource(R.string.anki_access_denied)
                     }
                 )
                 OutlinedButton(
                     onClick = {
                         if (!isAnkiInstalled(context)) {
-                            ankiError = "未安装 AnkiDroid。"
+                            ankiError = context.getString(R.string.anki_not_installed)
                         } else if (!ankiPermissionGranted) {
                             requestAnkiPermissionLauncher.launch(ANKI_READ_WRITE_PERMISSION)
                         }
                     }
                 ) {
-                    Text(if (ankiPermissionGranted) "Anki 已授权" else "授权 Anki 访问")
+                    Text(if (ankiPermissionGranted) stringResource(R.string.anki_access_button_granted) else stringResource(R.string.anki_access_button_request))
                 }
 
                 OutlinedButton(
                     onClick = { refreshAnkiCatalog() },
                     enabled = ankiPermissionGranted && !ankiLoading
                 ) {
-                    Text(if (ankiLoading) "加载中..." else "刷新牌组/模板")
+                    Text(if (ankiLoading) stringResource(R.string.common_loading) else stringResource(R.string.anki_refresh_catalog))
                 }
                 if (ankiError != null) {
-                    Text("Anki 错误：$ankiError", color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.anki_error_prefix, ankiError.orEmpty()), color = MaterialTheme.colorScheme.error)
                 }
 
                 AnkiListSelector(
-                    label = "牌组",
+                    label = stringResource(R.string.anki_deck_label),
                     value = ankiDeckName,
                     options = ankiDecks,
-                    placeholder = "请选择牌组",
+                    placeholder = stringResource(R.string.anki_deck_placeholder),
                     onValueChange = { selectedDeck ->
                         ankiDeckName = selectedDeck
                         persistAnkiConfig()
@@ -298,10 +303,10 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
                 )
 
                 AnkiListSelector(
-                    label = "笔记类型/模板",
+                    label = stringResource(R.string.anki_model_label),
                     value = ankiModelName,
                     options = ankiModels.map { it.name },
-                    placeholder = "请选择模板",
+                    placeholder = stringResource(R.string.anki_model_placeholder),
                     onValueChange = { selectedModel ->
                         selectAnkiModel(selectedModel)
                     }
@@ -314,19 +319,19 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
                         persistAnkiConfig()
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("标签（空格/逗号分隔）") },
+                    label = { Text(stringResource(R.string.anki_tags_label)) },
                     singleLine = true
                 )
 
                 if (ankiModelFields.isNotEmpty()) {
-                    Text("字段变量", style = MaterialTheme.typography.titleSmall)
+                    Text(stringResource(R.string.anki_field_variables), style = MaterialTheme.typography.titleSmall)
                     OutlinedButton(
                         onClick = { clearCurrentFieldTemplates() }
                     ) {
-                        Text("清空字段变量")
+                        Text(stringResource(R.string.anki_clear_field_variables))
                     }
                     Text(
-                        "{audio} 用于导出查词发音，{cut-audio} 用于导出剪切音频。"
+                        stringResource(R.string.anki_field_variable_help)
                     )
                     ankiModelFields.forEach { field ->
                         val selectedValue = ankiFieldTemplates[field].orEmpty()
@@ -493,7 +498,7 @@ private fun AnkiFieldVariableInput(
                 .fillMaxWidth()
                 .menuAnchor(type = MenuAnchorType.PrimaryEditable),
             label = { Text(fieldName) },
-            placeholder = { Text("可输入占位符或从列表选择") },
+            placeholder = { Text(stringResource(R.string.anki_field_placeholder)) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             singleLine = true
         )
@@ -502,7 +507,7 @@ private fun AnkiFieldVariableInput(
             onDismissRequest = { expanded = false }
         ) {
             filteredOptions.forEach { choice ->
-                val text = choice.ifBlank { "(empty)" }
+                val text = choice.ifBlank { stringResource(R.string.common_empty_option) }
                 DropdownMenuItem(
                     text = { Text(text) },
                     onClick = {
@@ -514,6 +519,7 @@ private fun AnkiFieldVariableInput(
         }
     }
 }
+
 
 
 
