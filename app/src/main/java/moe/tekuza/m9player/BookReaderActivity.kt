@@ -1,4 +1,4 @@
-﻿package moe.tekuza.m9player
+package moe.tekuza.m9player
 
 import android.Manifest
 import android.app.ActivityManager
@@ -12,9 +12,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Html
+import android.util.Base64
 import android.app.Activity
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -448,6 +450,7 @@ private fun BookReaderScreen(
     var chapterOptionsVisible by remember { mutableStateOf(false) }
     var coverModeEnabled by remember(srtUri) { mutableStateOf(srtUri == null) }
     var showOverallProgress by remember { mutableStateOf(false) }
+    var showOverallDuration by remember { mutableStateOf(false) }
     var timeEditDialogVisible by remember { mutableStateOf(false) }
     var timeEditInput by remember { mutableStateOf("") }
     var timeEditError by remember { mutableStateOf<String?>(null) }
@@ -524,6 +527,11 @@ private fun BookReaderScreen(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 positionMs = player.currentPosition.coerceAtLeast(0L)
                 durationMs = if (player.duration > 0L) player.duration else 0L
+                if (playbackState == Player.STATE_ENDED) {
+                    scope.launch(Dispatchers.IO) {
+                        cleanupBookReaderSrtCache(context)
+                    }
+                }
             }
 
             override fun onPositionDiscontinuity(
@@ -559,7 +567,6 @@ private fun BookReaderScreen(
         val restoredPositionMs = savedPositionMs.coerceAtLeast(0L)
         player.setMediaItem(MediaItem.fromUri(selectedAudio))
         player.prepare()
-        player.pause()
         player.seekTo(restoredPositionMs)
         positionMs = restoredPositionMs
     }
@@ -589,7 +596,7 @@ private fun BookReaderScreen(
         srtLoading = true
         srtError = null
         val result = withContext(Dispatchers.IO) {
-            runCatching { parseBookSrt(contentResolver, uri) }
+            runCatching { parseBookSrtWithCache(context, contentResolver, uri) }
         }
         srtLoading = false
         result.onSuccess { cues = it }
@@ -741,7 +748,17 @@ private fun BookReaderScreen(
     } else {
         previewPositionMs.coerceAtLeast(0L)
     }
+    val displayedLeftTimeMs = if (useChapterTimeline && showOverallDuration) {
+        previewPositionMs.coerceAtLeast(0L)
+    } else {
+        displayedPreviewTimeMs
+    }
     val displayedDurationTimeMs = if (useChapterTimeline) timelineRangeMs else durationMs.coerceAtLeast(0L)
+    val displayedRightDurationTimeMs = if (useChapterTimeline && showOverallDuration) {
+        durationMs.coerceAtLeast(0L)
+    } else {
+        displayedDurationTimeMs
+    }
     val progressPercent = remember(displayedPreviewTimeMs, displayedDurationTimeMs) {
         if (displayedDurationTimeMs <= 0L) {
             0
@@ -764,6 +781,7 @@ private fun BookReaderScreen(
     LaunchedEffect(useChapterTimeline) {
         if (!useChapterTimeline) {
             showOverallProgress = false
+            showOverallDuration = false
         }
     }
     val sleepRemainingLabel = remember(sleepTimerDeadlineMs, positionMs) {
@@ -1455,12 +1473,13 @@ private fun BookReaderScreen(
     val latestHandleGamepadKeyEvent by rememberUpdatedState<(KeyEvent) -> Boolean>({ event ->
         handleGamepadKeyEvent(event)
     })
-    val controlModeHintText = remember(controlModeEnabled, context) {
-        val config = loadGamepadControlConfig(context)
+    val controlModeConfig = loadGamepadControlConfig(context)
+    val controlModePowerSaveEnabled = controlModeEnabled && controlModeConfig.powerSaveBlackScreenInControlMode
+    val controlModeHintText = remember(controlModeEnabled, controlModeConfig) {
         buildString {
             append("控制模式\n屏幕常亮\n可开启计时结束自动退出\n")
             append(
-                if (config.singleTapCollectOnlyInControlMode) {
+                if (controlModeConfig.singleTapCollectOnlyInControlMode) {
                     "单击：直接收藏当前句"
                 } else {
                     "单击：重播当前句并收藏"
@@ -1593,12 +1612,12 @@ private fun BookReaderScreen(
                             ) {
                                 TextButton(
                                     onClick = {
-                                        timeEditInput = formatBookTime(displayedPreviewTimeMs)
+                                        timeEditInput = formatBookTime(displayedLeftTimeMs)
                                         timeEditError = null
                                         timeEditDialogVisible = true
                                     }
                                 ) {
-                                    Text(formatBookTime(displayedPreviewTimeMs))
+                                    Text(formatBookTime(displayedLeftTimeMs))
                                 }
                                 Slider(
                                     modifier = Modifier
@@ -1625,7 +1644,14 @@ private fun BookReaderScreen(
                                         dragPreviewPositionMs = null
                                     }
                                 )
-                                Text(formatBookTime(displayedDurationTimeMs))
+                                Text(
+                                    text = formatBookTime(displayedRightDurationTimeMs),
+                                    modifier = if (useChapterTimeline) {
+                                        Modifier.clickable { showOverallDuration = !showOverallDuration }
+                                    } else {
+                                        Modifier
+                                    }
+                                )
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1899,7 +1925,7 @@ private fun BookReaderScreen(
                     timeEditError = null
                 },
                 title = {
-                    Text(if (useChapterTimeline) "编辑章节时间" else "编辑播放时间")
+                    Text(if (useChapterTimeline && !showOverallDuration) "编辑章节时间" else "编辑播放时间")
                 },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1935,7 +1961,7 @@ private fun BookReaderScreen(
                                 timeEditError = "时间格式无效"
                                 return@Button
                             }
-                            val absoluteTarget = if (useChapterTimeline) {
+                            val absoluteTarget = if (useChapterTimeline && !showOverallDuration) {
                                 activeChapterStartMs + targetOffsetMs.coerceIn(0L, timelineRangeMs)
                             } else {
                                 targetOffsetMs.coerceAtLeast(0L)
@@ -2044,7 +2070,7 @@ private fun BookReaderScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Gray.copy(alpha = 0.38f))
+                    .background(if (controlModePowerSaveEnabled) Color.Black else Color.Gray.copy(alpha = 0.38f))
                     .pointerInput(playbackCueIndex, isPlaying, cues.size) {
                         detectTapGestures(onTap = { handleControlOverlayTap() })
                     }
@@ -2114,7 +2140,11 @@ private fun BookReaderScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    controlModeHintText,
+                    if (controlModePowerSaveEnabled) {
+                        "省电模式\n黑屏中\n双指短长按：退出"
+                    } else {
+                        controlModeHintText
+                    },
                     color = Color.White
                 )
             }
@@ -2570,7 +2600,7 @@ private fun addLookupDefinitionToAnki(
         error("Current model templates do not include {cut-audio}. Set audio field to {cut-audio} in 设置 > Anki.")
     }
     val requiresLookupAudio = templates.values.any {
-        templateUsesVariable(it, "audio") || templateUsesVariable(it, "audioTag")
+        templateUsesVariable(it, "audio")
     }
     if (requiresLookupAudio && lookupAudioUri == null) {
         error("Current model templates include {audio}, but lookup audio is unavailable. Configure it in 设置 > 有声书.")
@@ -2618,43 +2648,176 @@ private fun addLookupDefinitionToAnki(
     }
 }
 
+private const val BOOK_READER_SRT_CACHE_DIR = "book_reader_srt_cache"
+private const val BOOK_READER_SRT_CACHE_MAX_FILES = 120
+private const val BOOK_READER_SRT_CACHE_MAX_AGE_MS = 14L * 24L * 60L * 60L * 1000L
+
+private fun parseBookSrtWithCache(
+    context: Context,
+    contentResolver: ContentResolver,
+    uri: Uri
+): List<ReaderSubtitleCue> {
+    val cacheDir = File(context.cacheDir, BOOK_READER_SRT_CACHE_DIR)
+    if (!cacheDir.exists()) {
+        cacheDir.mkdirs()
+    }
+    val cacheKey = buildDictionaryCacheKey(uri.toString(), "srt")
+    val cacheFile = File(cacheDir, "$cacheKey.cache")
+    val sourceStamp = buildSrtSourceStamp(contentResolver, uri)
+
+    readBookSrtCache(cacheFile, sourceStamp)?.let { cached ->
+        cacheFile.setLastModified(System.currentTimeMillis())
+        return cached
+    }
+
+    val parsed = parseBookSrt(contentResolver, uri)
+    writeBookSrtCache(cacheFile, sourceStamp, parsed)
+    return parsed
+}
+
+private fun buildSrtSourceStamp(contentResolver: ContentResolver, uri: Uri): String {
+    val projection = arrayOf(OpenableColumns.SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+    return runCatching {
+        contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use "size=-1|modified=-1"
+            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+            val modifiedIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            val size = if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) cursor.getLong(sizeIndex) else -1L
+            val modified = if (modifiedIndex >= 0 && !cursor.isNull(modifiedIndex)) cursor.getLong(modifiedIndex) else -1L
+            "size=$size|modified=$modified"
+        } ?: "size=-1|modified=-1"
+    }.getOrDefault("size=-1|modified=-1")
+}
+
+private fun readBookSrtCache(cacheFile: File, expectedStamp: String): List<ReaderSubtitleCue>? {
+    if (!cacheFile.exists() || !cacheFile.isFile) return null
+    return runCatching {
+        cacheFile.bufferedReader(Charsets.UTF_8).use { reader ->
+            val header = reader.readLine() ?: return@use null
+            if (!header.startsWith("#stamp\t")) return@use null
+            val stamp = header.substringAfter('\t')
+            if (stamp != expectedStamp) return@use null
+
+            val cues = mutableListOf<ReaderSubtitleCue>()
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.isBlank()) continue
+                val parts = line.split('\t', limit = 3)
+                if (parts.size < 3) return@use null
+                val start = parts[0].toLongOrNull() ?: return@use null
+                val end = parts[1].toLongOrNull() ?: return@use null
+                val text = runCatching {
+                    String(Base64.decode(parts[2], Base64.DEFAULT), Charsets.UTF_8)
+                }.getOrNull() ?: return@use null
+                cues += ReaderSubtitleCue(startMs = start, endMs = end, text = text)
+            }
+            cues.sortedBy { it.startMs }
+        }
+    }.getOrNull()
+}
+
+private fun writeBookSrtCache(cacheFile: File, sourceStamp: String, cues: List<ReaderSubtitleCue>) {
+    val parent = cacheFile.parentFile
+    if (parent != null && !parent.exists()) {
+        parent.mkdirs()
+    }
+    val tempFile = File(parent, "${cacheFile.name}.tmp")
+    runCatching {
+        tempFile.bufferedWriter(Charsets.UTF_8).use { writer ->
+            writer.append("#stamp\t").append(sourceStamp).append('\n')
+            cues.forEach { cue ->
+                val encoded = Base64.encodeToString(cue.text.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                writer.append(cue.startMs.toString())
+                    .append('\t')
+                    .append(cue.endMs.toString())
+                    .append('\t')
+                    .append(encoded)
+                    .append('\n')
+            }
+        }
+        if (cacheFile.exists()) {
+            cacheFile.delete()
+        }
+        tempFile.renameTo(cacheFile)
+        cacheFile.setLastModified(System.currentTimeMillis())
+    }.onFailure {
+        tempFile.delete()
+    }
+}
+
+private fun cleanupBookReaderSrtCache(context: Context) {
+    val cacheDir = File(context.cacheDir, BOOK_READER_SRT_CACHE_DIR)
+    if (!cacheDir.exists() || !cacheDir.isDirectory) return
+    val files = cacheDir.listFiles()?.filter { it.isFile }?.toMutableList() ?: return
+    if (files.isEmpty()) return
+
+    val now = System.currentTimeMillis()
+    files.forEach { file ->
+        val ageMs = now - file.lastModified()
+        if (ageMs > BOOK_READER_SRT_CACHE_MAX_AGE_MS) {
+            file.delete()
+        }
+    }
+
+    val remaining = cacheDir.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() } ?: return
+    if (remaining.size <= BOOK_READER_SRT_CACHE_MAX_FILES) return
+    remaining.drop(BOOK_READER_SRT_CACHE_MAX_FILES).forEach { it.delete() }
+}
+
 private fun parseBookSrt(contentResolver: ContentResolver, uri: Uri): List<ReaderSubtitleCue> {
-    val rawText = openReaderInputStream(contentResolver, uri)?.use { input ->
-        input.bufferedReader(Charsets.UTF_8).readText()
+    val cues = mutableListOf<ReaderSubtitleCue>()
+    val blockLines = mutableListOf<String>()
+
+    openReaderInputStream(contentResolver, uri)?.use { input ->
+        input.bufferedReader(Charsets.UTF_8).use { reader ->
+            var isFirstLine = true
+            while (true) {
+                val rawLine = reader.readLine() ?: break
+                val line = if (isFirstLine) {
+                    isFirstLine = false
+                    rawLine.removePrefix("\uFEFF")
+                } else {
+                    rawLine
+                }
+                if (line.isBlank()) {
+                    appendParsedSrtBlock(blockLines, cues)
+                    blockLines.clear()
+                } else {
+                    blockLines += line.trimEnd()
+                }
+            }
+        }
     } ?: error("Unable to read SRT file")
 
-    val normalizedText = rawText
-        .removePrefix("\uFEFF")
-        .replace("\r\n", "\n")
-        .replace('\r', '\n')
-
-    val blocks = normalizedText.split(Regex("\n\\s*\n"))
-    val cues = mutableListOf<ReaderSubtitleCue>()
-
-    blocks.forEach { block ->
-        val lines = block.lines().map { it.trimEnd() }.filter { it.isNotBlank() }
-        if (lines.isEmpty()) return@forEach
-
-        val timingLineIndex = if (lines.first().all { it.isDigit() } && lines.size >= 2) 1 else 0
-        val timingLine = lines.getOrNull(timingLineIndex) ?: return@forEach
-        if (!timingLine.contains("-->")) return@forEach
-
-        val parts = timingLine.split("-->")
-        if (parts.size < 2) return@forEach
-
-        val start = parseBookSrtTimestamp(parts[0].trim()) ?: return@forEach
-        val endToken = parts[1].trim().substringBefore(' ')
-        val end = parseBookSrtTimestamp(endToken) ?: return@forEach
-
-        val cueTextRaw = lines.drop(timingLineIndex + 1).joinToString("\n").trim()
-        val cueText = Html.fromHtml(cueTextRaw, Html.FROM_HTML_MODE_LEGACY).toString().trim()
-        if (cueText.isBlank()) return@forEach
-
-        cues += ReaderSubtitleCue(startMs = start, endMs = end, text = cueText)
-    }
+    appendParsedSrtBlock(blockLines, cues)
 
     if (cues.isEmpty()) error("No valid subtitle cues found in SRT")
     return cues.sortedBy { it.startMs }
+}
+
+private fun appendParsedSrtBlock(
+    blockLines: List<String>,
+    out: MutableList<ReaderSubtitleCue>
+) {
+    val lines = blockLines.filter { it.isNotBlank() }
+    if (lines.isEmpty()) return
+
+    val timingLineIndex = if (lines.first().all { it.isDigit() } && lines.size >= 2) 1 else 0
+    val timingLine = lines.getOrNull(timingLineIndex) ?: return
+    if (!timingLine.contains("-->")) return
+
+    val parts = timingLine.split("-->")
+    if (parts.size < 2) return
+
+    val start = parseBookSrtTimestamp(parts[0].trim()) ?: return
+    val endToken = parts[1].trim().substringBefore(' ')
+    val end = parseBookSrtTimestamp(endToken) ?: return
+
+    val cueTextRaw = lines.drop(timingLineIndex + 1).joinToString("\n").trim()
+    val cueText = Html.fromHtml(cueTextRaw, Html.FROM_HTML_MODE_LEGACY).toString().trim()
+    if (cueText.isBlank()) return
+
+    out += ReaderSubtitleCue(startMs = start, endMs = end, text = cueText)
 }
 
 private fun templateUsesVariable(template: String, variableName: String): Boolean {

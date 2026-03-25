@@ -50,6 +50,9 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
     var singleTapCollectOnlyInControlMode by remember {
         mutableStateOf(config.singleTapCollectOnlyInControlMode)
     }
+    var powerSaveBlackScreenInControlMode by remember {
+        mutableStateOf(config.powerSaveBlackScreenInControlMode)
+    }
 
     Column(
         modifier = Modifier
@@ -110,6 +113,29 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
                     )
                 }
                 Text("启用后，控制模式单击会直接收藏当前句，不再先重播。")
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("省电模式（黑屏）")
+                    Switch(
+                        checked = powerSaveBlackScreenInControlMode,
+                        onCheckedChange = { checked ->
+                            powerSaveBlackScreenInControlMode = checked
+                            savePowerSaveBlackScreenInControlMode(context, checked)
+                        }
+                    )
+                }
+                Text("启用后，控制模式使用纯黑遮罩并停止视觉变化显示。")
             }
         }
     }
