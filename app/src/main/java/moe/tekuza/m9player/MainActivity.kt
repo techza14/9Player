@@ -1707,8 +1707,8 @@ private fun ReaderSyncScreen() {
                     .fillMaxSize()
                     .padding(innerPadding)
                     .padding(
-                        start = if (activeSection == MiningSection.SETTINGS) 0.dp else 16.dp,
-                        end = if (activeSection == MiningSection.SETTINGS) 0.dp else 16.dp,
+                        start = 16.dp,
+                        end = 16.dp,
                         top = 16.dp,
                         bottom = 16.dp
                     )

@@ -236,9 +236,9 @@ internal fun ControllerBluetoothSection() {
                     )
                 }
                 Text(stringResource(R.string.controller_bluetooth_disable_fallback_help))
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(onClick = { refreshTargetController() }) {
                         Text(stringResource(R.string.common_refresh))
@@ -252,11 +252,6 @@ internal fun ControllerBluetoothSection() {
                     OutlinedButton(onClick = { openBluetoothSettings() }) {
                         Text(stringResource(R.string.controller_bluetooth_open_bluetooth))
                     }
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
                     Button(
                         onClick = { disconnectControllerBluetooth() },
                         enabled = !actionRunning

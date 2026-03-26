@@ -469,6 +469,8 @@ private fun BookReaderScreen(
     val playbackPositionKey = remember(title, audioUri, srtUri) {
         buildBookReaderPlaybackKey(title, audioUri, srtUri)
     }
+    var playbackRestoreCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
+    var playbackCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val player = remember(context) {
         ExoPlayer.Builder(context)
@@ -529,7 +531,14 @@ private fun BookReaderScreen(
                 positionMs = player.currentPosition.coerceAtLeast(0L)
                 durationMs = if (player.duration > 0L) player.duration else 0L
                 if (playbackState == Player.STATE_ENDED) {
+                    playbackCompleted = true
                     scope.launch(Dispatchers.IO) {
+                        saveBookReaderPlaybackPosition(
+                            context = context,
+                            bookKey = playbackPositionKey,
+                            positionMs = 0L,
+                            durationMs = if (player.duration > 0L) player.duration else 0L
+                        )
                         cleanupBookReaderSrtCache(context)
                     }
                 }
@@ -541,6 +550,10 @@ private fun BookReaderScreen(
                 reason: Int
             ) {
                 positionMs = newPosition.positionMs.coerceAtLeast(0L)
+                val total = if (player.duration > 0L) player.duration else 0L
+                if (total <= 0L || newPosition.positionMs < total - 1_500L) {
+                    playbackCompleted = false
+                }
             }
         }
         player.addListener(listener)
@@ -561,7 +574,12 @@ private fun BookReaderScreen(
     }
 
     LaunchedEffect(audioUri, playbackPositionKey) {
-        val selectedAudio = audioUri ?: return@LaunchedEffect
+        playbackRestoreCompleted = false
+        playbackCompleted = false
+        val selectedAudio = audioUri ?: run {
+            playbackRestoreCompleted = true
+            return@LaunchedEffect
+        }
         val savedPositionMs = withContext(Dispatchers.IO) {
             loadBookReaderPlaybackPosition(context, playbackPositionKey)
         }
@@ -570,6 +588,7 @@ private fun BookReaderScreen(
         player.prepare()
         player.seekTo(restoredPositionMs)
         positionMs = restoredPositionMs
+        playbackRestoreCompleted = true
     }
 
     LaunchedEffect(audioUri) {
@@ -813,13 +832,14 @@ private fun BookReaderScreen(
         }
     }
 
-    LaunchedEffect(playbackPositionKey, player, isPlaying) {
+    LaunchedEffect(playbackPositionKey, player, isPlaying, playbackRestoreCompleted) {
         if (playbackPositionKey.isBlank()) return@LaunchedEffect
+        if (!playbackRestoreCompleted) return@LaunchedEffect
         var lastSavedPosition = Long.MIN_VALUE
         suspend fun saveSnapshotIfChanged() {
             val current = player.currentPosition.coerceAtLeast(0L)
             val total = if (player.duration > 0L) player.duration else 0L
-            val normalized = normalizeBookReaderPlaybackPosition(current, total)
+            val normalized = if (playbackCompleted) 0L else normalizeBookReaderPlaybackPosition(current, total)
             if (normalized == lastSavedPosition) return
             lastSavedPosition = normalized
             withContext(Dispatchers.IO) {
@@ -841,11 +861,12 @@ private fun BookReaderScreen(
         }
     }
 
-    DisposableEffect(playbackPositionKey, player) {
+    DisposableEffect(playbackPositionKey, player, playbackRestoreCompleted) {
         onDispose {
+            if (!playbackRestoreCompleted) return@onDispose
             val current = player.currentPosition.coerceAtLeast(0L)
             val total = if (player.duration > 0L) player.duration else 0L
-            val normalized = normalizeBookReaderPlaybackPosition(current, total)
+            val normalized = if (playbackCompleted) 0L else normalizeBookReaderPlaybackPosition(current, total)
             saveBookReaderPlaybackPosition(
                 context = context,
                 bookKey = playbackPositionKey,
@@ -2849,14 +2870,14 @@ private fun buildBookReaderPlaybackKey(
     audioUri: Uri?,
     srtUri: Uri?
 ): String {
-    val raw = "title=$title|audio=${audioUri?.toString().orEmpty()}|srt=${srtUri?.toString().orEmpty()}"
-    return buildDictionaryCacheKey(raw, title.ifBlank { "book" })
+    val stableSource = audioUri?.toString().orEmpty().ifBlank {
+        "title=$title|srt=${srtUri?.toString().orEmpty()}"
+    }
+    return buildDictionaryCacheKey(stableSource, title.ifBlank { "book" })
 }
 
 private fun normalizeBookReaderPlaybackPosition(positionMs: Long, durationMs: Long): Long {
-    val safe = positionMs.coerceAtLeast(0L)
-    if (durationMs <= 0L) return safe
-    return if (safe >= durationMs - 1_500L) 0L else safe
+    return positionMs.coerceAtLeast(0L)
 }
 
 private fun findBookChapterIndexAtTime(chapters: List<ReaderAudioChapter>, timeMs: Long): Int {
