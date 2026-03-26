@@ -79,26 +79,12 @@ internal suspend fun loadReaderBookPlaybackSnapshotsForBooks(
     books: List<ReaderBook>
 ): Map<String, BookReaderPlaybackSnapshot> {
     return withContext(Dispatchers.IO) {
-        books.associate { book ->
+        books.mapNotNull { book ->
             val playbackKey = buildReaderBookPlaybackKey(book)
-            val legacyPlaybackKey = buildLegacyReaderBookPlaybackKey(book)
-            val stored = when {
-                hasBookReaderPlaybackSnapshot(context, playbackKey) ->
-                    loadBookReaderPlaybackSnapshot(context, playbackKey)
-                hasBookReaderPlaybackSnapshot(context, legacyPlaybackKey) -> {
-                    loadBookReaderPlaybackSnapshot(context, legacyPlaybackKey).also { legacy ->
-                        saveBookReaderPlaybackPosition(
-                            context = context,
-                            bookKey = playbackKey,
-                            positionMs = legacy.positionMs,
-                            durationMs = legacy.durationMs
-                        )
-                    }
-                }
-                else -> loadBookReaderPlaybackSnapshot(context, playbackKey)
-            }
-            book.id to stored
+            val stored = loadBookReaderPlaybackSnapshotOrNull(context, playbackKey)
+            stored?.let { book.id to it }
         }
+            .toMap()
     }
 }
 

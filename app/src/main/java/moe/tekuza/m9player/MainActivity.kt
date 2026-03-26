@@ -214,6 +214,12 @@ internal data class ReaderBook(
     val coverUri: Uri?
 )
 
+private data class ReturnedBookProgress(
+    val audioUri: String,
+    val positionMs: Long,
+    val durationMs: Long
+)
+
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 private fun ReaderSyncScreen() {
@@ -354,10 +360,32 @@ private fun ReaderSyncScreen() {
             if (event == Lifecycle.Event.ON_RESUME) {
                 audiobookSettings = loadAudiobookSettingsConfig(context)
                 scope.launch {
-                    readerBookPlaybackSnapshots = loadReaderBookPlaybackSnapshotsForBooks(
+                    var loadedSnapshots = loadReaderBookPlaybackSnapshotsForBooks(
                         context = context,
                         books = readerBooks
                     )
+                    val returnedProgress = consumeReturnedBookProgress(activity?.intent)
+                    if (returnedProgress != null && returnedProgress.durationMs > 0L) {
+                        val targetBook = readerBooks.firstOrNull {
+                            it.audioUri.toString() == returnedProgress.audioUri
+                        }
+                        if (targetBook != null) {
+                            val immediate = BookReaderPlaybackSnapshot(
+                                positionMs = returnedProgress.positionMs.coerceAtLeast(0L),
+                                durationMs = returnedProgress.durationMs.coerceAtLeast(0L)
+                            )
+                            loadedSnapshots = loadedSnapshots + (targetBook.id to immediate)
+                            withContext(Dispatchers.IO) {
+                                saveBookReaderPlaybackPosition(
+                                    context = context,
+                                    bookKey = buildReaderBookPlaybackKey(targetBook),
+                                    positionMs = immediate.positionMs,
+                                    durationMs = immediate.durationMs
+                                )
+                            }
+                        }
+                    }
+                    readerBookPlaybackSnapshots = loadedSnapshots
                 }
             }
         }
@@ -3180,6 +3208,25 @@ private fun formatTime(ms: Long): String {
     } else {
         String.format(Locale.US, "%02d:%02d", minutes, seconds)
     }
+}
+
+private fun consumeReturnedBookProgress(intent: Intent?): ReturnedBookProgress? {
+    val sourceIntent = intent ?: return null
+    val audioUri = sourceIntent
+        .getStringExtra(BookReaderActivity.EXTRA_RETURN_AUDIO_URI)
+        ?.trim()
+        .orEmpty()
+    val positionMs = sourceIntent.getLongExtra(BookReaderActivity.EXTRA_RETURN_POSITION_MS, -1L)
+    val durationMs = sourceIntent.getLongExtra(BookReaderActivity.EXTRA_RETURN_DURATION_MS, -1L)
+    sourceIntent.removeExtra(BookReaderActivity.EXTRA_RETURN_AUDIO_URI)
+    sourceIntent.removeExtra(BookReaderActivity.EXTRA_RETURN_POSITION_MS)
+    sourceIntent.removeExtra(BookReaderActivity.EXTRA_RETURN_DURATION_MS)
+    if (audioUri.isBlank() || positionMs < 0L || durationMs <= 0L) return null
+    return ReturnedBookProgress(
+        audioUri = audioUri,
+        positionMs = positionMs,
+        durationMs = durationMs
+    )
 }
 
 private fun formatCollectedCueMeta(context: Context, item: BookReaderCollectedCue): String {

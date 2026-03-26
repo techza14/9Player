@@ -167,10 +167,24 @@ class BookReaderActivity : AppCompatActivity() {
                             ?: loadTargetControllerInfo(this)?.address
                             ?: detectConnectedControllerInfo(this)?.address
                     },
-                    onBack = {
+                    onBack = { currentPositionMs, currentDurationMs ->
+                        val playbackKey = buildBookReaderPlaybackKey(title, audioUri, srtUri)
+                        val normalized = normalizeBookReaderPlaybackPosition(
+                            currentPositionMs,
+                            currentDurationMs
+                        )
+                        saveBookReaderPlaybackPosition(
+                            context = this,
+                            bookKey = playbackKey,
+                            positionMs = normalized,
+                            durationMs = currentDurationMs.coerceAtLeast(0L)
+                        )
                         val intent = Intent(this, MainActivity::class.java).apply {
                             addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            putExtra(EXTRA_RETURN_AUDIO_URI, audioUri?.toString())
+                            putExtra(EXTRA_RETURN_POSITION_MS, normalized)
+                            putExtra(EXTRA_RETURN_DURATION_MS, currentDurationMs.coerceAtLeast(0L))
                         }
                         startActivity(intent)
                     }
@@ -366,6 +380,9 @@ class BookReaderActivity : AppCompatActivity() {
         const val EXTRA_AUDIO_URI = "extra_audio_uri"
         const val EXTRA_SRT_URI = "extra_srt_uri"
         const val EXTRA_COVER_URI = "extra_cover_uri"
+        const val EXTRA_RETURN_AUDIO_URI = "extra_return_audio_uri"
+        const val EXTRA_RETURN_POSITION_MS = "extra_return_position_ms"
+        const val EXTRA_RETURN_DURATION_MS = "extra_return_duration_ms"
         @Volatile
         private var activeReaderRef: WeakReference<BookReaderActivity>? = null
 
@@ -408,7 +425,7 @@ private fun BookReaderScreen(
     contentResolver: ContentResolver,
     registerGamepadKeyHandler: (((KeyEvent) -> Boolean)?) -> Unit,
     latestControllerAddressProvider: () -> String?,
-    onBack: () -> Unit
+    onBack: (Long, Long) -> Unit
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -537,7 +554,8 @@ private fun BookReaderScreen(
                             context = context,
                             bookKey = playbackPositionKey,
                             positionMs = 0L,
-                            durationMs = if (player.duration > 0L) player.duration else 0L
+                            durationMs = if (player.duration > 0L) player.duration else 0L,
+                            allowZeroPositionWrite = true
                         )
                         cleanupBookReaderSrtCache(context)
                     }
@@ -580,25 +598,10 @@ private fun BookReaderScreen(
             playbackRestoreCompleted = true
             return@LaunchedEffect
         }
-        val legacyPlaybackKey = buildLegacyBookReaderPlaybackKey(title, selectedAudio, srtUri)
-        val savedSnapshot = withContext(Dispatchers.IO) {
-            when {
-                hasBookReaderPlaybackSnapshot(context, playbackPositionKey) ->
-                    loadBookReaderPlaybackSnapshot(context, playbackPositionKey)
-                hasBookReaderPlaybackSnapshot(context, legacyPlaybackKey) -> {
-                    loadBookReaderPlaybackSnapshot(context, legacyPlaybackKey).also { legacy ->
-                        saveBookReaderPlaybackPosition(
-                            context = context,
-                            bookKey = playbackPositionKey,
-                            positionMs = legacy.positionMs,
-                            durationMs = legacy.durationMs
-                        )
-                    }
-                }
-                else -> loadBookReaderPlaybackSnapshot(context, playbackPositionKey)
-            }
+        val savedPositionMs = withContext(Dispatchers.IO) {
+            loadBookReaderPlaybackSnapshotOrNull(context, playbackPositionKey)?.positionMs ?: 0L
         }
-        val restoredPositionMs = savedSnapshot.positionMs.coerceAtLeast(0L)
+        val restoredPositionMs = savedPositionMs.coerceAtLeast(0L)
         player.setMediaItem(MediaItem.fromUri(selectedAudio))
         player.prepare()
         player.seekTo(restoredPositionMs)
@@ -699,7 +702,13 @@ private fun BookReaderScreen(
     }
     val activeCueIndex = remember(previewPositionMs, cues) { findBookDisplayCueIndexAtTime(cues, previewPositionMs) }
     val activeCue = cues.getOrNull(activeCueIndex)
-    val backToMain = remember(onBack) { { onBack() } }
+    val backToMain = remember(onBack, player, durationMs) {
+        {
+            val current = player.currentPosition.coerceAtLeast(0L)
+            val total = if (player.duration > 0L) player.duration else durationMs.coerceAtLeast(0L)
+            onBack(current, total)
+        }
+    }
     val activeSubtitleStyle = MaterialTheme.typography.headlineMedium.copy(
         fontSize = 34.sp,
         lineHeight = 42.sp,
