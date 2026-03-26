@@ -1,6 +1,8 @@
 # ⑨Player
 
 有声书播放器 支持Anki 
+
+[简体中文](README.md) | [繁體中文](README.zh-TW.md) | [English](README.en.md)
 界面语言支持：简体中文 / 繁體中文 / English
 
 ## 语言支持
