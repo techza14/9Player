@@ -35,8 +35,8 @@ SRT 可參考：
 支援 Yomitan 詞彙、音調、詞頻辭典
 
 辭典連結
-- [明鏡日漢雙解辭典](https://forum.freemdict.com/t/topic/38630)
-- [小學館日中辭典第三版](https://github.com/DgnFBJkH5k/Golden-Parcel)
+- [明镜日汉双解辞典](https://forum.freemdict.com/t/topic/38630)
+- [小学馆日中辞典第三版](https://github.com/DgnFBJkH5k/Golden-Parcel)
 
 Collection
 - [marv](https://github.com/MarvNC/yomitan-dictionaries?tab=readme-ov-file#dictionary-collection)
