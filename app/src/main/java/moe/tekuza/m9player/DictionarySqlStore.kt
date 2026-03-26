@@ -728,7 +728,7 @@ private fun importDictionaryZipWithHoshi(
         }
         hoshiRoot.mkdirs()
 
-        onProgress?.invoke(DictionaryImportProgress(stage = "Importing with hoshidicts", current = 0, total = 0))
+        onProgress?.invoke(DictionaryImportProgress(stage = "Importing", current = 0, total = 0))
         val nativeResult = HoshiNativeBridge.importZip(
             zipPath = tempZip.absolutePath,
             outputDir = hoshiRoot.absolutePath,

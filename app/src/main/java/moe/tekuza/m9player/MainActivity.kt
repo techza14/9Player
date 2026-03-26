@@ -2359,7 +2359,7 @@ private fun ReaderSyncScreen() {
                         if (popupCue != null) {
                             ClickableText(
                                 text = buildMainHighlightedText(popupCue.text, mainLookupPopupSelectedRange),
-                                style = MaterialTheme.typography.bodyLarge,
+                                style = MaterialTheme.typography.headlineSmall,
                                 onClick = { offset -> triggerMainCueLookup(popupCue, offset) }
                             )
                             Text(
