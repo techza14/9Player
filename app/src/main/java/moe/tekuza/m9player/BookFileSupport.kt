@@ -69,6 +69,11 @@ internal fun buildReaderBookPlaybackKey(book: ReaderBook): String {
     return buildDictionaryCacheKey(stableSource, book.title.ifBlank { "book" })
 }
 
+internal fun buildLegacyReaderBookPlaybackKey(book: ReaderBook): String {
+    val raw = "title=${book.title}|audio=${book.audioUri}|srt=${book.srtUri?.toString().orEmpty()}"
+    return buildDictionaryCacheKey(raw, book.title.ifBlank { "book" })
+}
+
 internal suspend fun loadReaderBookPlaybackSnapshotsForBooks(
     context: Context,
     books: List<ReaderBook>
@@ -76,7 +81,22 @@ internal suspend fun loadReaderBookPlaybackSnapshotsForBooks(
     return withContext(Dispatchers.IO) {
         books.associate { book ->
             val playbackKey = buildReaderBookPlaybackKey(book)
-            val stored = loadBookReaderPlaybackSnapshot(context, playbackKey)
+            val legacyPlaybackKey = buildLegacyReaderBookPlaybackKey(book)
+            val stored = when {
+                hasBookReaderPlaybackSnapshot(context, playbackKey) ->
+                    loadBookReaderPlaybackSnapshot(context, playbackKey)
+                hasBookReaderPlaybackSnapshot(context, legacyPlaybackKey) -> {
+                    loadBookReaderPlaybackSnapshot(context, legacyPlaybackKey).also { legacy ->
+                        saveBookReaderPlaybackPosition(
+                            context = context,
+                            bookKey = playbackKey,
+                            positionMs = legacy.positionMs,
+                            durationMs = legacy.durationMs
+                        )
+                    }
+                }
+                else -> loadBookReaderPlaybackSnapshot(context, playbackKey)
+            }
             book.id to stored
         }
     }

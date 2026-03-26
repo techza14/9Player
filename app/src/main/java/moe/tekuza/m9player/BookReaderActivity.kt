@@ -580,10 +580,25 @@ private fun BookReaderScreen(
             playbackRestoreCompleted = true
             return@LaunchedEffect
         }
-        val savedPositionMs = withContext(Dispatchers.IO) {
-            loadBookReaderPlaybackPosition(context, playbackPositionKey)
+        val legacyPlaybackKey = buildLegacyBookReaderPlaybackKey(title, selectedAudio, srtUri)
+        val savedSnapshot = withContext(Dispatchers.IO) {
+            when {
+                hasBookReaderPlaybackSnapshot(context, playbackPositionKey) ->
+                    loadBookReaderPlaybackSnapshot(context, playbackPositionKey)
+                hasBookReaderPlaybackSnapshot(context, legacyPlaybackKey) -> {
+                    loadBookReaderPlaybackSnapshot(context, legacyPlaybackKey).also { legacy ->
+                        saveBookReaderPlaybackPosition(
+                            context = context,
+                            bookKey = playbackPositionKey,
+                            positionMs = legacy.positionMs,
+                            durationMs = legacy.durationMs
+                        )
+                    }
+                }
+                else -> loadBookReaderPlaybackSnapshot(context, playbackPositionKey)
+            }
         }
-        val restoredPositionMs = savedPositionMs.coerceAtLeast(0L)
+        val restoredPositionMs = savedSnapshot.positionMs.coerceAtLeast(0L)
         player.setMediaItem(MediaItem.fromUri(selectedAudio))
         player.prepare()
         player.seekTo(restoredPositionMs)
@@ -2874,6 +2889,15 @@ private fun buildBookReaderPlaybackKey(
         "title=$title|srt=${srtUri?.toString().orEmpty()}"
     }
     return buildDictionaryCacheKey(stableSource, title.ifBlank { "book" })
+}
+
+private fun buildLegacyBookReaderPlaybackKey(
+    title: String,
+    audioUri: Uri?,
+    srtUri: Uri?
+): String {
+    val raw = "title=$title|audio=${audioUri?.toString().orEmpty()}|srt=${srtUri?.toString().orEmpty()}"
+    return buildDictionaryCacheKey(raw, title.ifBlank { "book" })
 }
 
 private fun normalizeBookReaderPlaybackPosition(positionMs: Long, durationMs: Long): Long {

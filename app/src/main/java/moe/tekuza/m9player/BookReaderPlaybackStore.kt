@@ -32,6 +32,14 @@ internal fun loadBookReaderPlaybackSnapshot(context: Context, bookKey: String): 
     )
 }
 
+internal fun hasBookReaderPlaybackSnapshot(context: Context, bookKey: String): Boolean {
+    if (bookKey.isBlank()) return false
+    val prefs = context.getSharedPreferences(BOOK_READER_PLAYBACK_PREFS, Context.MODE_PRIVATE)
+    val positionKey = buildPlaybackPreferenceKey(BOOK_READER_PLAYBACK_POSITION_KEY_PREFIX, bookKey)
+    val durationKey = buildPlaybackPreferenceKey(BOOK_READER_PLAYBACK_DURATION_KEY_PREFIX, bookKey)
+    return prefs.contains(positionKey) || prefs.contains(durationKey)
+}
+
 internal fun loadBookReaderPlaybackPosition(context: Context, bookKey: String): Long {
     return loadBookReaderPlaybackSnapshot(context, bookKey).positionMs
 }
