@@ -4,12 +4,6 @@
 
 [简体中文](README.md) | [繁體中文](README.zh-TW.md) | [English](README.en.md)
 
-## 語言支援
-
-- 简体中文
-- 繁體中文
-- English
-
 ## 有聲書
 
 點擊右下角 +書籍 後：

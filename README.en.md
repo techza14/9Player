@@ -4,12 +4,6 @@ Audiobook player with Anki support.
 
 [Simplified Chinese](README.md) | [Traditional Chinese](README.zh-TW.md) | [English](README.en.md)
 
-## Language Support
-
-- Simplified Chinese
-- Traditional Chinese
-- English
-
 ## Audiobooks
 
 After tapping `+书籍` at the bottom-right:
