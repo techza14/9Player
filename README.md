@@ -49,9 +49,11 @@ Collection
   <img src="./docs/images/anki-settings-2.jpg" width="260" alt="Anki设置2" />
 </p>
 
-```{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}```
+```
+{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}
 {cut-audio} 句子音频
 {book-title} 音频文件名字
+```
 
 Anki模板:[Lapis](https://github.com/donkuri/lapis)
 ## 手柄
