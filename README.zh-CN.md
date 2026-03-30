@@ -74,9 +74,6 @@ Anki模板:[Lapis](https://github.com/donkuri/lapis)
 悬浮球 设置 -> 有声书 可开启  
 播放有声书时 回到桌面/切换app 即可显示
 
-## 待改善
-优化
-
 ##  特别感谢
 
 - [hoshidicts](https://github.com/Manhhao/hoshidicts)
