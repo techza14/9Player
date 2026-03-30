@@ -1,10 +1,40 @@
 # ⑨Player
 
+![App Icon](./app/src/main/res/mipmap-xxxhdpi/ic_launcher.png)
+
 有声书播放器 支持Anki 
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
-## 有声书
+## 特性
+
+播放有声书
+
+
+### 基础播放器功能
+- 计时，倍数...等基础功能
+- 封面/字幕 切换
+- 书架/列表 切换
+
+### m4b
+- 章节
+- 点击切换显示章节/总时长&进度
+
+### 扩展功能
+- [控制模式](控制模式)
+- [悬浮球](#悬浮球)
+- 收藏句子
+- [手柄](#手柄)支持
+
+### [Mine 流程](#Mine流程)
+- [音频](#音频)
+- 导入Yomitan辞典
+- 字幕点击查词
+- Anki导出
+
+---
+
+# 添加有声书
 
 点击右下角 `+` 后：
 
@@ -29,7 +59,7 @@
 SRT 可参考：
 [SubPlz](https://github.com/kanjieater/SubPlz)
 
-## Anki
+## Mine流程
 
 支持Yomitan词汇，音调，词频辞典  
 
@@ -42,13 +72,17 @@ Collection
 - [uchagikun](https://github.com/SalwynnJP/yomitan-dictionaries)
 - [Shoui](https://learnjapanese.moe/yomichan/#acquiring-dictionaries)
 
+可参考以下设置：
+
 <p>
   <img src="./docs/images/anki-settings-1.jpg" width="260" alt="Anki设置1" />
   <img src="./docs/images/anki-settings-2.jpg" width="260" alt="Anki设置2" />
 </p>
 
-```text
+```
 {cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}
+```
+```
 {cut-audio} 句子音频
 {book-title} 音频文件名字
 ```
@@ -67,6 +101,7 @@ Anki模板:[Lapis](https://github.com/donkuri/lapis)
 
 ## 控制模式
 
+用于手势操控  
 处于控制模式时，屏幕不会自然熄屏。
 
 ## 悬浮球

@@ -1,10 +1,39 @@
 # ⑨Player
 
+![App Icon](./app/src/main/res/mipmap-xxxhdpi/ic_launcher.png)
+
 Audiobook player with Anki support.
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
-## Audiobooks
+## Features
+
+Play audiobooks
+
+### Core Player Features
+- Timer, speed, and other basic playback functions
+- Cover/subtitle view switching
+- Bookshelf/list view switching
+
+### m4b
+- Chapters
+- Tap to switch chapter/total duration and progress display
+
+### Extended Features
+- [Control Mode](#control-mode)
+- [Floating Bubble](#floating-bubble)
+- Sentence bookmarking
+- [Controller](#controller) support
+
+### [Mine Workflow](#mine-workflow)
+- [Audio](#audio)
+- Import Yomitan dictionaries
+- Tap subtitles to look up words
+- Export to Anki
+
+---
+
+# Add Audiobook
 
 After tapping `+` at the bottom-right:
 
@@ -29,7 +58,7 @@ audiobook-folder/
 SRT reference:
 [SubPlz](https://github.com/kanjieater/SubPlz)
 
-## Anki
+## Mine Workflow
 
 Supports Yomitan vocabulary, pitch accent, and frequency dictionaries.
 
@@ -66,6 +95,8 @@ To use "Disconnect controller Bluetooth":
 Use local TTS or import [android.db](https://github.com/KamWithK/AnkiconnectAndroid?tab=readme-ov-file#additional-instructions-local-audio).
 
 ## Control Mode
+
+Used for gesture-based control.
 
 In control mode, the screen does not turn off naturally.
 
