@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import java.util.Locale
 import moe.tekuza.m9player.ui.theme.TsetTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -90,9 +91,6 @@ private val ANKI_FIELD_VARIABLE_CHOICES = listOf(
     "{glossary-first-no-dictionary}",
     "{single-frequency-DICT-NAME}",
     "{single-frequency-number-DICT-NAME}",
-    "{single-glossary-DICT-NAME}",
-    "{single-glossary-DICT-NAME-brief}",
-    "{single-glossary-DICT-NAME-no-dictionary}",
     "{popup-selection-text}",
     "{search-query}",
     "{sentence}"
@@ -115,6 +113,30 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
     var ankiModelFields by remember { mutableStateOf<List<String>>(emptyList()) }
     val ankiFieldTemplates = remember { mutableStateMapOf<String, String>() }
     val ankiModelTemplateSnapshots = remember { mutableStateMapOf<String, Map<String, String>>() }
+    val dictionarySpecificGlossaryChoices = remember {
+        resolveImportedDictionaryNamesForAnki(context)
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .map { dictName ->
+                val safeName = dictName
+                    .replace("{", "")
+                    .replace("}", "")
+                    .lowercase(Locale.ROOT)
+                    .replace(Regex("[\\s\\p{Punct}\\p{S}]+"), "-")
+                    .trim('-')
+                    .ifBlank { dictName }
+                "{single-glossary-$safeName}"
+            }
+    }
+    val fieldVariableChoices = remember(dictionarySpecificGlossaryChoices) {
+        val baseChoices = ANKI_FIELD_VARIABLE_CHOICES
+            .filterNot { it.contains("-brief", ignoreCase = true) }
+            .distinct()
+        val extraChoices = dictionarySpecificGlossaryChoices
+            .filterNot { baseChoices.contains(it) }
+        baseChoices + extraChoices
+    }
     var ankiLoading by remember { mutableStateOf(false) }
     var ankiError by remember { mutableStateOf<String?>(null) }
 
@@ -335,11 +357,10 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
                     )
                     ankiModelFields.forEach { field ->
                         val selectedValue = ankiFieldTemplates[field].orEmpty()
-                        val options = ANKI_FIELD_VARIABLE_CHOICES.distinct()
                         AnkiFieldVariableInput(
                             fieldName = field,
                             value = selectedValue,
-                            options = options,
+                            options = fieldVariableChoices,
                             onValueChange = { value ->
                                 ankiFieldTemplates[field] = value
                                 val currentModelName = ankiModelName.trim()
@@ -397,6 +418,24 @@ private fun saveAnkiModelTemplateSnapshots(
         .edit()
         .putString(ANKI_MODEL_TEMPLATE_SNAPSHOTS_KEY, root.toString())
         .apply()
+}
+
+private fun resolveImportedDictionaryNamesForAnki(context: Context): List<String> {
+    val imports = loadPersistedImports(context)
+    return imports.dictionaries.mapNotNull { ref ->
+        val fromMeta = ref.cacheKey
+            ?.takeIf { it.isNotBlank() }
+            ?.let { cacheKey -> loadDictionaryFromSqlite(context, cacheKey)?.name }
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+        val fallback = ref.name
+            .trim()
+            .removeSuffix(".zip")
+            .removeSuffix(".mdx")
+            .removeSuffix(".mdd")
+            .takeIf { it.isNotBlank() }
+        fromMeta ?: fallback
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

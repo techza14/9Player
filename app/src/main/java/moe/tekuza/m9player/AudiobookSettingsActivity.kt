@@ -28,10 +28,12 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,6 +70,7 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
     var inputSeconds by remember { mutableStateOf((config.seekStepMillis / 1000L).toString()) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var importGuideVisible by remember { mutableStateOf(!importState.importOnboardingCompleted) }
+    var overlaySizeDraft by remember { mutableStateOf(config.floatingOverlaySizeDp.toFloat()) }
     var lookupAudioImporting by remember { mutableStateOf(false) }
     var lookupAudioImportStage by remember { mutableStateOf(context.getString(R.string.audiobook_import_stage_preparing)) }
     var lookupAudioImportCopiedBytes by remember { mutableStateOf(0L) }
@@ -81,6 +84,9 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
         config = loadAudiobookSettingsConfig(context)
         importState = loadPersistedImports(context)
         inputSeconds = (config.seekStepMillis / 1000L).toString()
+    }
+    LaunchedEffect(config.floatingOverlaySizeDp) {
+        overlaySizeDraft = config.floatingOverlaySizeDp.toFloat()
     }
     val pickLookupAudioLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -474,6 +480,43 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                     )
                 }
                 if (config.floatingOverlayEnabled) {
+                    Text(
+                        stringResource(
+                            R.string.audiobook_overlay_size_value,
+                            overlaySizeDraft.toInt()
+                        )
+                    )
+                    Slider(
+                        value = overlaySizeDraft,
+                        onValueChange = { value ->
+                            overlaySizeDraft = value.coerceIn(
+                                MIN_FLOATING_OVERLAY_SIZE_DP.toFloat(),
+                                MAX_FLOATING_OVERLAY_SIZE_DP.toFloat()
+                            )
+                        },
+                        onValueChangeFinished = {
+                            val size = overlaySizeDraft.toInt().coerceIn(
+                                MIN_FLOATING_OVERLAY_SIZE_DP,
+                                MAX_FLOATING_OVERLAY_SIZE_DP
+                            )
+                            if (size != config.floatingOverlaySizeDp) {
+                                saveAudiobookFloatingOverlaySizeDp(context, size)
+                                refreshConfig()
+                                refreshAudiobookFloatingOverlayService(context)
+                            }
+                        },
+                        valueRange = MIN_FLOATING_OVERLAY_SIZE_DP.toFloat()..MAX_FLOATING_OVERLAY_SIZE_DP.toFloat()
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            saveAudiobookFloatingOverlaySizeDp(context, DEFAULT_FLOATING_OVERLAY_SIZE_DP)
+                            refreshConfig()
+                            refreshAudiobookFloatingOverlayService(context)
+                            statusText = context.getString(R.string.audiobook_overlay_size_reset)
+                        }
+                    ) {
+                        Text(stringResource(R.string.audiobook_overlay_size_reset_button))
+                    }
                     Text(
                         if (overlayGranted) {
                             stringResource(R.string.audiobook_overlay_permission_granted)

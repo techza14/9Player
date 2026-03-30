@@ -27,6 +27,7 @@ classes-shizuku-provider.jar
 /.codex_tmp/
 /third_party/
 /release/
+/scripts/
 
 # Android signature sidecar generated alongside APK
 /release/*.idsig

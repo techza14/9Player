@@ -1,23 +1,23 @@
 # ⑨Player
 
-有声书播放器 支持Anki 
+Audiobook player with Anki support.
 
-[简体中文](README.md) | [繁體中文](README.zh-TW.md) | [English](README.en.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
-## 有声书
+## Audiobooks
 
-点击右下角 +书籍 后：
+After tapping `+` at the bottom-right:
 
-1. 选择有声书文件夹
-2. 选择音频和 SRT
-3. 如果选择自动移动到有声书文件夹 
-   App 会自动：
-   - 在有声书文件夹下新建一个 AudX 文件夹
-   - 把音频和 SRT 移动到该文件夹
-```
-目录示例：
+1. Select the audiobook folder.
+2. Select audio and SRT.
+3. If "auto move to audiobook folder" is enabled, the app will:
+   - Create an `AudX` folder under your audiobook folder.
+   - Move audio and SRT into that folder.
 
-有声书文件夹/
+```text
+Example:
+
+audiobook-folder/
 ├── Aud1/
 │   ├── 1.mp3
 │   └── 1.srt
@@ -26,66 +26,69 @@
     └── 2.srt
 ```
 
-SRT 可参考：
+SRT reference:
 [SubPlz](https://github.com/kanjieater/SubPlz)
 
 ## Anki
 
-支持Yomitan词汇，音调，词频辞典  
-
-辞典链接
-- [明镜日汉双解辞典](https://forum.freemdict.com/t/topic/38630)
-- [小学馆日中辞典第三版](https://github.com/DgnFBJkH5k/Golden-Parcel)
+Supports Yomitan vocabulary, pitch accent, and frequency dictionaries.
 
 Collection
 - [marv](https://github.com/MarvNC/yomitan-dictionaries?tab=readme-ov-file#dictionary-collection)
 - [uchagikun](https://github.com/SalwynnJP/yomitan-dictionaries)
 - [Shoui](https://learnjapanese.moe/yomichan/#acquiring-dictionaries)
 
-不保证其他变量可用 可参考以下设置：
+Some variables may depend on your template setup:
 
 <p>
-  <img src="./docs/images/anki-settings-1.jpg" width="260" alt="Anki设置1" />
-  <img src="./docs/images/anki-settings-2.jpg" width="260" alt="Anki设置2" />
+  <img src="./docs/images/anki-settings-1.jpg" width="260" alt="Anki settings 1" />
+  <img src="./docs/images/anki-settings-2.jpg" width="260" alt="Anki settings 2" />
 </p>
 
-```
+```text
 {cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}
-{cut-audio} 句子音频
-{book-title} 音频文件名字
+{cut-audio} sentence audio
+{book-title} audio file name
 ```
 
-Anki模板:[Lapis](https://github.com/donkuri/lapis)
-## 手柄
+Anki template: [Lapis](https://github.com/donkuri/lapis)
 
-如果要使用“断开手柄蓝牙”功能：
+## Controller
 
-1. 先安装并配置 Shizuku
-2. 进入 设置 -> 手柄蓝牙
-3. 点击请求 Shizuku 权限
+To use "Disconnect controller Bluetooth":
 
-## 音频
-可使用本地tts or 导入 [android.db](https://github.com/KamWithK/AnkiconnectAndroid?tab=readme-ov-file#additional-instructions-local-audio)
+1. Install and configure Shizuku.
+2. Go to `Settings -> Controller Bluetooth`.
+3. Tap request Shizuku permission.
 
-## 控制模式
+## Audio
 
-处于控制模式时，屏幕不会自然熄屏。
+Use local TTS or import [android.db](https://github.com/KamWithK/AnkiconnectAndroid?tab=readme-ov-file#additional-instructions-local-audio).
 
-## 悬浮球
+## Control Mode
 
-悬浮球 设置 -> 有声书 可开启  
-播放有声书时 回到桌面/切换app 即可显示
+In control mode, the screen does not turn off naturally.
 
-## 待改善
-优化
+## Floating Ball
 
-##  特别感谢
+Enable in `Settings -> Audiobooks`.
+
+While playing an audiobook, return to home/switch apps to show it.
+
+## Auto Release
+
+Use local script to build signed APK and create GitHub release:
+
+```powershell
+pwsh ./scripts/release.ps1 -Version 1.3.5
+```
+
+## Credits
 
 - [hoshidicts](https://github.com/Manhhao/hoshidicts)
-- [Ankiconnect Android](https://github.com/KamWithK/AnkiconnectAndroid)本地音频
+- [Ankiconnect Android](https://github.com/KamWithK/AnkiconnectAndroid) (local audio)
 - [Yomitan](https://github.com/yomidevs/yomitan)
 
 ## License
 
-本项目采用 `GPLv3.0开源。
-完整协议见 [LICENSE](LICENSE)。
+This project is licensed under [GPLv3.0](LICENSE).

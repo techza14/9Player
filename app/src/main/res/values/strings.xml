@@ -58,7 +58,7 @@
     <string name="nav_dictionary">辞典查询</string>
     <string name="nav_settings">设置</string>
     <string name="home_refresh">刷新</string>
-    <string name="home_add_book">+书籍</string>
+    <string name="home_add_book">+</string>
     <string name="home_clear">清空</string>
     <string name="home_bookshelf_title">我的书架</string>
     <string name="home_delete_selected">删除(%1$d)</string>
@@ -243,6 +243,9 @@
     <string name="audiobook_overlay_permission_granted">悬浮窗权限：已授予</string>
     <string name="audiobook_overlay_permission_denied">悬浮窗权限：未授予</string>
     <string name="audiobook_overlay_permission_button">授予悬浮窗权限</string>
+    <string name="audiobook_overlay_size_value">悬浮球大小：%1$ddp</string>
+    <string name="audiobook_overlay_size_reset_button">恢复默认大小</string>
+    <string name="audiobook_overlay_size_reset">已恢复默认悬浮球大小。</string>
     <string name="audiobook_overlay_help">悬浮球：单击播放/暂停，双击展开前进/后退/收藏。</string>
     <string name="audiobook_unknown_file">未知文件</string>
     <string name="audiobook_import_stage_copy">复制文件...</string>

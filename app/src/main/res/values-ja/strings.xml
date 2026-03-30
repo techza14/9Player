@@ -55,7 +55,7 @@
     <string name="nav_dictionary">辞書検索</string>
     <string name="nav_settings">設定</string>
     <string name="home_refresh">更新</string>
-    <string name="home_add_book">+書籍</string>
+    <string name="home_add_book">+</string>
     <string name="home_clear">クリア</string>
     <string name="home_bookshelf_title">マイ本棚</string>
     <string name="home_delete_selected">削除(%1$d)</string>
@@ -236,6 +236,9 @@
     <string name="audiobook_overlay_permission_granted">フローティング権限：許可済み</string>
     <string name="audiobook_overlay_permission_denied">フローティング権限：未許可</string>
     <string name="audiobook_overlay_permission_button">フローティング権限を許可</string>
+    <string name="audiobook_overlay_size_value">バブルサイズ：%1$ddp</string>
+    <string name="audiobook_overlay_size_reset_button">デフォルトサイズに戻す</string>
+    <string name="audiobook_overlay_size_reset">バブルサイズをデフォルトに戻しました。</string>
     <string name="audiobook_overlay_help">バブル：タップで再生/一時停止、ダブルタップで戻る/進む/お気に入りを表示。</string>
     <string name="audiobook_unknown_file">不明なファイル</string>
     <string name="audiobook_import_stage_copy">ファイルをコピー中...</string>
@@ -383,3 +386,4 @@
     <string name="anki_field_variable_help">{audio} は辞書音声、{cut-audio} は切り出し音声を書き出します。</string>
     <string name="anki_field_placeholder">プレースホルダーを入力するか、一覧から選択</string>
 </resources>
+

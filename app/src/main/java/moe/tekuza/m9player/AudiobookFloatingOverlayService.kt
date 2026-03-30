@@ -32,6 +32,14 @@ internal fun startAudiobookFloatingOverlayService(context: Context) {
     context.startService(intent)
 }
 
+internal fun refreshAudiobookFloatingOverlayService(context: Context) {
+    if (!hasOverlayPermission(context)) return
+    val intent = Intent(context, AudiobookFloatingOverlayService::class.java).apply {
+        action = AudiobookFloatingOverlayService.ACTION_REFRESH
+    }
+    context.startService(intent)
+}
+
 internal fun stopAudiobookFloatingOverlayService(context: Context) {
     val intent = Intent(context, AudiobookFloatingOverlayService::class.java).apply {
         action = AudiobookFloatingOverlayService.ACTION_HIDE
@@ -83,6 +91,10 @@ class AudiobookFloatingOverlayService : Service() {
                 ensureOverlayVisible()
                 return START_STICKY
             }
+            ACTION_REFRESH -> {
+                rebuildOverlay()
+                return START_STICKY
+            }
             else -> return START_NOT_STICKY
         }
     }
@@ -111,6 +123,10 @@ class AudiobookFloatingOverlayService : Service() {
             stopSelf()
             return
         }
+
+        val savedPosition = loadAudiobookSettingsConfig(this)
+        val bubbleSizeDp = savedPosition.floatingOverlaySizeDp
+        val scale = bubbleSizeDp / DEFAULT_FLOATING_OVERLAY_SIZE_DP.toFloat()
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -171,7 +187,7 @@ class AudiobookFloatingOverlayService : Service() {
 
         val prevButton = createActionButton(
             iconRes = android.R.drawable.ic_media_rew,
-            sizeDp = 46,
+            sizeDp = (46f * scale).toInt().coerceAtLeast(30),
             fillColor = 0x00000000,
             withBackground = false
         ) {
@@ -179,7 +195,7 @@ class AudiobookFloatingOverlayService : Service() {
         }
         val nextButton = createActionButton(
             iconRes = android.R.drawable.ic_media_ff,
-            sizeDp = 46,
+            sizeDp = (46f * scale).toInt().coerceAtLeast(30),
             fillColor = 0x00000000,
             withBackground = false
         ) {
@@ -187,7 +203,7 @@ class AudiobookFloatingOverlayService : Service() {
         }
         val favoriteButton = createActionButton(
             iconRes = android.R.drawable.btn_star_big_on,
-            sizeDp = 46,
+            sizeDp = (46f * scale).toInt().coerceAtLeast(30),
             fillColor = 0x00000000,
             withBackground = false
         ) {
@@ -197,7 +213,7 @@ class AudiobookFloatingOverlayService : Service() {
         controls.addView(nextButton)
         controls.addView(favoriteButton)
 
-        val underlineWidthPx = (136 * resources.displayMetrics.density).toInt()
+        val underlineWidthPx = ((136f * scale) * resources.displayMetrics.density).toInt().coerceAtLeast(72)
         val underline = View(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 underlineWidthPx,
@@ -214,7 +230,7 @@ class AudiobookFloatingOverlayService : Service() {
 
         val bubble = createActionButton(
             iconRes = android.R.drawable.ic_media_pause,
-            sizeDp = 58,
+            sizeDp = bubbleSizeDp,
             fillColor = 0xDD151515.toInt(),
             withBackground = true
         ) {}
@@ -263,7 +279,6 @@ class AudiobookFloatingOverlayService : Service() {
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         )
-        val savedPosition = loadAudiobookSettingsConfig(this)
         params.gravity = Gravity.START or Gravity.TOP
         params.x = savedPosition.floatingOverlayX.coerceAtLeast(0)
         params.y = savedPosition.floatingOverlayY.coerceAtLeast(0)
@@ -288,6 +303,15 @@ class AudiobookFloatingOverlayService : Service() {
         bubbleButton = null
         favoriteButton = null
         panelView = null
+    }
+
+    private fun rebuildOverlay() {
+        val params = windowLayoutParams
+        val anchorX = params?.x ?: loadAudiobookSettingsConfig(this).floatingOverlayX
+        val anchorY = params?.y ?: loadAudiobookSettingsConfig(this).floatingOverlayY
+        removeOverlay()
+        saveAudiobookFloatingOverlayPosition(this, anchorX, anchorY)
+        ensureOverlayVisible()
     }
 
     private fun updateBubbleIcon(isPlaying: Boolean) {
@@ -465,5 +489,6 @@ class AudiobookFloatingOverlayService : Service() {
     companion object {
         const val ACTION_SHOW = "moe.tekuza.m9player.action.SHOW_FLOATING_OVERLAY"
         const val ACTION_HIDE = "moe.tekuza.m9player.action.HIDE_FLOATING_OVERLAY"
+        const val ACTION_REFRESH = "moe.tekuza.m9player.action.REFRESH_FLOATING_OVERLAY"
     }
 }

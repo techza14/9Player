@@ -2,7 +2,7 @@
 
 有聲書播放器，支援 Anki
 
-[简体中文](README.md) | [繁體中文](README.zh-TW.md) | [English](README.en.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
 ## 有聲書
 
@@ -87,3 +87,4 @@ Anki 模板：[Lapis](https://github.com/donkuri/lapis)
 ## License
 
 本專案採用 [GPLv3.0](LICENSE) 開源。
+

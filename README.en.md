@@ -2,11 +2,11 @@
 
 Audiobook player with Anki support.
 
-[Simplified Chinese](README.md) | [Traditional Chinese](README.zh-TW.md) | [English](README.en.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
 ## Audiobooks
 
-After tapping `+书籍` at the bottom-right:
+After tapping `+` at the bottom-right:
 
 1. Select the audiobook folder.
 2. Select audio and SRT.
@@ -84,3 +84,4 @@ While playing an audiobook, return to home/switch apps to show it.
 ## License
 
 This project is licensed under [GPLv3.0](LICENSE).
+
