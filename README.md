@@ -9,6 +9,7 @@ Audiobook player with Anki support.
 ## Features
 
 Play audiobooks
+Export to Anki (Only support japanese now)
 
 ### Core Player Features
 - Timer, speed, and other basic playback functions

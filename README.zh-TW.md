@@ -9,6 +9,7 @@
 ## 特性
 
 播放有聲書
+匯出到 Anki（目前僅支援日語）
 
 ### 基礎播放器功能
 - 計時、倍速等基礎功能
@@ -81,6 +82,8 @@ Collection
 
 ```text
 {cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}
+```
+```text
 {cut-audio} 句子音訊
 {book-title} 音訊文件名字
 ```
