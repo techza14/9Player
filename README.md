@@ -75,14 +75,6 @@ Enable in `Settings -> Audiobooks`.
 
 While playing an audiobook, return to home/switch apps to show it.
 
-## Auto Release
-
-Use local script to build signed APK and create GitHub release:
-
-```powershell
-pwsh ./scripts/release.ps1 -Version 1.3.5
-```
-
 ## Credits
 
 - [hoshidicts](https://github.com/Manhhao/hoshidicts)

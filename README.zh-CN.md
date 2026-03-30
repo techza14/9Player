@@ -6,13 +6,13 @@
 
 ## 有声书
 
-点击右下角 + 后：
+点击右下角 `+` 后：
 
 1. 选择有声书文件夹
 2. 选择音频和 SRT
 3. 如果选择自动移动到有声书文件夹 
    App 会自动：
-   - 在有声书文件夹下新建一个 AudX 文件夹
+   - 在有声书文件夹下新建一个 `AudX` 文件夹
    - 把音频和 SRT 移动到该文件夹
 ```
 目录示例：
@@ -49,9 +49,11 @@ Collection
   <img src="./docs/images/anki-settings-2.jpg" width="260" alt="Anki设置2" />
 </p>
 
-```{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}```
+```text
+{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}
 {cut-audio} 句子音频
 {book-title} 音频文件名字
+```
 
 Anki模板:[Lapis](https://github.com/donkuri/lapis)
 ## 手柄
@@ -87,12 +89,4 @@ Anki模板:[Lapis](https://github.com/donkuri/lapis)
 
 本项目采用 `GPLv3.0开源。
 完整协议见 [LICENSE](LICENSE)。
-
-## 自动发布
-
-可用本地脚本一键构建签名包并发 GitHub Release：
-
-```powershell
-pwsh ./scripts/release.ps1 -Version 1.3.5
-```
 
