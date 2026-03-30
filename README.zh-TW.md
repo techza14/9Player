@@ -43,8 +43,6 @@ Collection
 - [uchagikun](https://github.com/SalwynnJP/yomitan-dictionaries)
 - [Shoui](https://learnjapanese.moe/yomichan/#acquiring-dictionaries)
 
-不保證其他變數可用，可參考以下設定：
-
 <p>
   <img src="./docs/images/anki-settings-1.jpg" width="260" alt="Anki設定1" />
   <img src="./docs/images/anki-settings-2.jpg" width="260" alt="Anki設定2" />

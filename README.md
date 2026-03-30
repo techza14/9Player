@@ -38,7 +38,7 @@ Collection
 - [uchagikun](https://github.com/SalwynnJP/yomitan-dictionaries)
 - [Shoui](https://learnjapanese.moe/yomichan/#acquiring-dictionaries)
 
-Some variables may depend on your template setup:
+You can refer to the settings below:
 
 <p>
   <img src="./docs/images/anki-settings-1.jpg" width="260" alt="Anki settings 1" />
@@ -69,7 +69,7 @@ Use local TTS or import [android.db](https://github.com/KamWithK/AnkiconnectAndr
 
 In control mode, the screen does not turn off naturally.
 
-## Floating Ball
+## Floating Bubble
 
 Enable in `Settings -> Audiobooks`.
 
