@@ -77,6 +77,8 @@ You can refer to the settings below:
 
 ```text
 {cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}
+```
+```text
 {cut-audio} sentence audio
 {book-title} audio file name
 ```
