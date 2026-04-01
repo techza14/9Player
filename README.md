@@ -26,7 +26,7 @@ Export to Anki (Only support japanese now)
 - Sentence bookmarking
 - [Controller](#controller) support
 
-### [Mine Workflow](#mine-workflow)
+### [Mining Workflow](#mining-workflow)
 - [Audio](#audio)
 - Import Yomitan dictionaries
 - Tap subtitles to look up words or look up from bookmarks
@@ -59,7 +59,7 @@ audiobook-folder/
 SRT reference:
 [SubPlz](https://github.com/kanjieater/SubPlz)
 
-## Mine Workflow
+## Mining Workflow
 
 Supports Yomitan vocabulary, pitch accent, and frequency dictionaries.
 

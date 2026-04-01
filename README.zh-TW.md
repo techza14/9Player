@@ -26,7 +26,7 @@
 - 收藏句子
 - [手柄](#手柄)支援
 
-### [Mine 流程](#mine流程)
+### [Mining Workflow](#mining-workflow)
 - [音訊](#音訊)
 - 導入 Yomitan 辭典
 - 點擊字幕查詞或在收藏中查詞
@@ -60,7 +60,7 @@
 SRT 可參考：
 [SubPlz](https://github.com/kanjieater/SubPlz)
 
-## Mine流程
+## Mining Workflow
 
 支援 Yomitan 詞彙、音調、詞頻辭典
 
