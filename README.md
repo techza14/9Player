@@ -114,6 +114,7 @@ While playing an audiobook, return to home/switch apps to show it.
 - [hoshidicts](https://github.com/Manhhao/hoshidicts)
 - [Ankiconnect Android](https://github.com/KamWithK/AnkiconnectAndroid) (local audio)
 - [Yomitan](https://github.com/yomidevs/yomitan)
+- [Voice](https://github.com/PaulWoitaschek/Voice)
 
 ## License
 

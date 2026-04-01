@@ -119,6 +119,7 @@ Anki模板：[Lapis](https://github.com/donkuri/lapis)
 - [hoshidicts](https://github.com/Manhhao/hoshidicts)
 - [Ankiconnect Android](https://github.com/KamWithK/AnkiconnectAndroid) 本地音訊
 - [Yomitan](https://github.com/yomidevs/yomitan)
+- [Voice](https://github.com/PaulWoitaschek/Voice)
 
 ## License
 

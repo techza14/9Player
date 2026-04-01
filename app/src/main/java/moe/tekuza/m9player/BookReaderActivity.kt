@@ -614,8 +614,11 @@ private fun BookReaderScreen(
             audioChapters = emptyList()
             return@LaunchedEffect
         }
+        // Delay chapter parsing slightly to avoid competing with first-play startup IO.
+        delay(500L)
         val loadedChapters = withContext(Dispatchers.IO) {
             loadM4bChapters(
+                context = context,
                 contentResolver = contentResolver,
                 audioUri = selectedAudio
             )
@@ -645,15 +648,17 @@ private fun BookReaderScreen(
     }
 
     LaunchedEffect(Unit) {
-        val persisted = loadPersistedImports(context)
-        val refs = persisted.dictionaries.distinctBy { it.uri }
-        val restored = refs.mapNotNull { ref ->
-            val restoredUri = runCatching { Uri.parse(ref.uri) }.getOrNull()
-            val displayName = ref.name.ifBlank {
-                restoredUri?.let { queryBookDisplayName(contentResolver, it) }.orEmpty()
+        val restored = withContext(Dispatchers.IO) {
+            val persisted = loadPersistedImports(context)
+            val refs = persisted.dictionaries.distinctBy { it.uri }
+            refs.mapNotNull { ref ->
+                val restoredUri = runCatching { Uri.parse(ref.uri) }.getOrNull()
+                val displayName = ref.name.ifBlank {
+                    restoredUri?.let { queryBookDisplayName(contentResolver, it) }.orEmpty()
+                }
+                val cacheKey = ref.cacheKey ?: buildDictionaryCacheKey(ref.uri, displayName)
+                loadDictionaryFromSqlite(context, cacheKey)
             }
-            val cacheKey = ref.cacheKey ?: buildDictionaryCacheKey(ref.uri, displayName)
-            loadDictionaryFromSqlite(context, cacheKey)
         }
         loadedDictionaries = restored
     }
