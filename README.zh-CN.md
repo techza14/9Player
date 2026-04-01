@@ -30,7 +30,7 @@
 ### [Mine 流程](#Mine流程)
 - [音频](#音频)
 - 导入Yomitan辞典
-- 字幕点击查词
+- 点击字幕查词或者在收藏查词
 - Anki导出
 
 ---
@@ -109,6 +109,9 @@ Anki模板:[Lapis](https://github.com/donkuri/lapis)
 
 悬浮球 设置 -> 有声书 可开启  
 播放有声书时 回到桌面/切换app 即可显示
+
+Single tap: Play/Pause.  
+Double tap: Expand the control bar.
 
 ##  特别感谢
 

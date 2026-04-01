@@ -549,12 +549,13 @@ private fun BookReaderScreen(
                 durationMs = if (player.duration > 0L) player.duration else 0L
                 if (playbackState == Player.STATE_ENDED) {
                     playbackCompleted = true
+                    val endedDurationMs = if (player.duration > 0L) player.duration else 0L
                     scope.launch(Dispatchers.IO) {
                         saveBookReaderPlaybackPosition(
                             context = context,
                             bookKey = playbackPositionKey,
                             positionMs = 0L,
-                            durationMs = if (player.duration > 0L) player.duration else 0L,
+                            durationMs = endedDurationMs,
                             allowZeroPositionWrite = true
                         )
                         cleanupBookReaderSrtCache(context)

@@ -29,7 +29,7 @@ Export to Anki (Only support japanese now)
 ### [Mine Workflow](#mine-workflow)
 - [Audio](#audio)
 - Import Yomitan dictionaries
-- Tap subtitles to look up words
+- Tap subtitles to look up words or look up from bookmarks
 - Export to Anki
 
 ---
@@ -108,6 +108,9 @@ In control mode, the screen does not turn off naturally.
 Enable in `Settings -> Audiobooks`.
 
 While playing an audiobook, return to home/switch apps to show it.
+
+Single tap: Play/Pause.  
+Double tap: Expand the control bar.
 
 ## Credits
 

@@ -29,7 +29,7 @@
 ### [Mine 流程](#mine流程)
 - [音訊](#音訊)
 - 導入 Yomitan 辭典
-- 點擊字幕查詞
+- 點擊字幕查詞或在收藏中查詞
 - 匯出到 Anki
 
 ---
@@ -113,6 +113,9 @@ Anki模板：[Lapis](https://github.com/donkuri/lapis)
 懸浮球在 設定 -> 有聲書 可開啟。
 
 播放有聲書時回到桌面/切換 app 即可顯示。
+
+Single tap: Play/Pause.  
+Double tap: Expand the control bar.
 
 ## 特別感謝
 
