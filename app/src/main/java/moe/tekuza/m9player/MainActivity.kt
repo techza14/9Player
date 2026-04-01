@@ -58,6 +58,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -95,6 +96,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -2042,19 +2045,28 @@ private fun ReaderSyncScreen() {
                                     modifier = Modifier.padding(10.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    val readingText = groupedResult.reading?.takeIf { it.isNotBlank() }?.let { " [$it]" } ?: ""
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text("${groupedResult.term}$readingText")
+                                        LookupHeadwordWithReading(
+                                            term = groupedResult.term,
+                                            reading = groupedResult.reading,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .padding(end = 8.dp),
+                                        )
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             if (audiobookSettings.lookupPlaybackAudioEnabled) {
                                                 OutlinedButton(
                                                     onClick = { playLookupGroupAudio(groupedResult, updatePopupStatus = false) }
                                                 ) {
-                                                    Text(stringResource(R.string.common_audio))
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Audiotrack,
+                                                        contentDescription = stringResource(R.string.common_audio),
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
                                                 }
                                             }
                                             OutlinedButton(
@@ -2391,7 +2403,6 @@ private fun ReaderSyncScreen() {
                                 Text(stringResource(R.string.common_no_results))
                             }
                             groupedMainLookupPopupResults.forEach { groupedResult ->
-                                val reading = groupedResult.reading?.takeIf { it.isNotBlank() }?.let { " [$it]" } ?: ""
                                 Card(modifier = Modifier.fillMaxWidth()) {
                                     Column(
                                         modifier = Modifier.padding(10.dp),
@@ -2402,13 +2413,23 @@ private fun ReaderSyncScreen() {
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text("${groupedResult.term}$reading")
+                                            LookupHeadwordWithReading(
+                                                term = groupedResult.term,
+                                                reading = groupedResult.reading,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .padding(end = 8.dp),
+                                            )
                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                 if (audiobookSettings.lookupPlaybackAudioEnabled) {
                                                     OutlinedButton(
                                                         onClick = { playLookupGroupAudio(groupedResult, updatePopupStatus = true) }
                                                     ) {
-                                                        Text(stringResource(R.string.common_audio))
+                                                        Icon(
+                                                            imageVector = Icons.Outlined.Audiotrack,
+                                                            contentDescription = stringResource(R.string.common_audio),
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
                                                     }
                                                 }
                                                 OutlinedButton(

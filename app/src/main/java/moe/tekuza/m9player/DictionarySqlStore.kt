@@ -562,14 +562,19 @@ private fun searchDictionaryWithHoshi(
 
     val merged = linkedMapOf<String, DictionarySearchResult>()
     hits.forEachIndexed { index, hit ->
-        val definition = glossaryRawToDefinitionHtmlSql(hit.glossaryRaw).ifBlank { return@forEachIndexed }
+        val definition = glossaryRawToDefinitionHtmlSql(hit.glossaryRaw)
+        val normalizedPitch = hit.pitch?.ifBlank { null }
+        val normalizedFrequency = hit.frequency?.ifBlank { null }
+        if (definition.isBlank() && normalizedPitch == null && normalizedFrequency == null) {
+            return@forEachIndexed
+        }
         val dictionaryName = hit.dictionary.ifBlank { dictionaries.firstOrNull()?.name.orEmpty() }
         val entry = DictionaryEntry(
             term = hit.term,
             reading = hit.reading?.ifBlank { null },
-            definitions = listOf(definition),
-            pitch = hit.pitch?.ifBlank { null },
-            frequency = hit.frequency?.ifBlank { null },
+            definitions = definition.takeIf { it.isNotBlank() }?.let(::listOf) ?: emptyList(),
+            pitch = normalizedPitch,
+            frequency = normalizedFrequency,
             dictionary = dictionaryName
         )
         val order = dictionaryOrder[dictionaryName] ?: dictionaryOrder.size
