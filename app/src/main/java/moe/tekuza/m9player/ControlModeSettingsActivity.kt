@@ -81,7 +81,10 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(stringResource(R.string.control_mode_dim_screen))
+                    Text(
+                        text = stringResource(R.string.control_mode_dim_screen),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
                     Switch(
                         checked = dimScreenInControlMode,
                         onCheckedChange = { checked ->
@@ -104,7 +107,10 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(stringResource(R.string.control_mode_single_tap_collect))
+                    Text(
+                        text = stringResource(R.string.control_mode_single_tap_collect),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
                     Switch(
                         checked = singleTapCollectOnlyInControlMode,
                         onCheckedChange = { checked ->
@@ -127,7 +133,10 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(stringResource(R.string.control_mode_black_screen))
+                    Text(
+                        text = stringResource(R.string.control_mode_black_screen),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
                     Switch(
                         checked = powerSaveBlackScreenInControlMode,
                         onCheckedChange = { checked ->

@@ -259,7 +259,10 @@ private fun ControllerSettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(stringResource(R.string.controller_double_tap_collect_previous))
+                            Text(
+                                text = stringResource(R.string.controller_double_tap_collect_previous),
+                                modifier = Modifier.weight(1f).padding(end = 12.dp)
+                            )
                             Switch(
                                 checked = config.doubleTapCollectPrevious,
                                 onCheckedChange = { checked -> updateCustom(doubleTapCollectPrevious = checked) }
@@ -335,7 +338,10 @@ private fun SettingRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("$label: $keyLabel")
+        Text(
+            text = "$label: $keyLabel",
+            modifier = Modifier.weight(1f).padding(end = 12.dp)
+        )
         OutlinedButton(onClick = onChange) { Text(stringResource(R.string.common_change)) }
     }
 }

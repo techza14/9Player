@@ -4,6 +4,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -18,11 +19,175 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 
 internal data class MetaBadge(val label: String, val value: String)
 internal data class PitchBadgeGroup(val label: String, val reading: String?, val values: List<String>)
+private data class RubyPart(val base: String, val ruby: String?)
+
+@Composable
+internal fun LookupHeadwordWithReading(
+    term: String,
+    reading: String?,
+    modifier: Modifier = Modifier
+) {
+    val normalizedReading = reading?.trim().orEmpty()
+    if (normalizedReading.isBlank() || !containsKanji(term)) {
+        Text(
+            text = term,
+            modifier = modifier,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        return
+    }
+
+    val parts = remember(term, normalizedReading) {
+        buildRubyParts(term = term, reading = normalizedReading)
+    }
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(0.dp)
+    ) {
+        parts.forEach { part ->
+            if (!part.ruby.isNullOrBlank()) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = part.ruby,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip
+                    )
+                    Text(
+                        text = part.base,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip
+                    )
+                }
+            } else {
+                Text(
+                    text = part.base,
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip
+                )
+            }
+        }
+    }
+}
+
+private fun containsKanji(text: String): Boolean {
+    return text.any { ch ->
+        ch in '\u4E00'..'\u9FFF' || // CJK Unified Ideographs
+            ch in '\u3400'..'\u4DBF' || // CJK Unified Ideographs Extension A
+            ch in '\uF900'..'\uFAFF' // CJK Compatibility Ideographs
+    }
+}
+
+private fun buildRubyParts(term: String, reading: String): List<RubyPart> {
+    val firstKanji = term.indexOfFirst(::isKanjiChar)
+    val lastKanji = term.indexOfLast(::isKanjiChar)
+    if (firstKanji < 0 || lastKanji < 0 || firstKanji > lastKanji) {
+        return listOf(RubyPart(base = term, ruby = null))
+    }
+
+    val prefix = term.substring(0, firstKanji)
+    val core = term.substring(firstKanji, lastKanji + 1)
+    val suffix = term.substring(lastKanji + 1)
+
+    var coreReading = reading
+    if (prefix.isNotBlank() && coreReading.startsWith(prefix)) {
+        coreReading = coreReading.removePrefix(prefix)
+    }
+    if (suffix.isNotBlank() && coreReading.endsWith(suffix)) {
+        coreReading = coreReading.removeSuffix(suffix)
+    }
+
+    val result = mutableListOf<RubyPart>()
+    if (prefix.isNotEmpty()) {
+        result += RubyPart(base = prefix, ruby = null)
+    }
+
+    val groups = mutableListOf<Pair<String, Boolean>>() // text, isKanjiGroup
+    var current = StringBuilder()
+    var currentIsKanji: Boolean? = null
+    core.forEach { ch ->
+        val isKanji = isKanjiChar(ch)
+        if (currentIsKanji == null || currentIsKanji == isKanji) {
+            current.append(ch)
+            currentIsKanji = isKanji
+        } else {
+            resultGroup(groups, current, currentIsKanji == true)
+            current = StringBuilder().append(ch)
+            currentIsKanji = isKanji
+        }
+    }
+    if (current.isNotEmpty()) {
+        resultGroup(groups, current, currentIsKanji == true)
+    }
+
+    var remaining = coreReading
+    groups.forEachIndexed { index, (groupText, isKanjiGroup) ->
+        if (!isKanjiGroup) {
+            result += RubyPart(base = groupText, ruby = null)
+            if (remaining.startsWith(groupText)) {
+                remaining = remaining.removePrefix(groupText)
+            }
+            return@forEachIndexed
+        }
+
+        val nextLiteral = groups
+            .drop(index + 1)
+            .firstOrNull { !it.second }
+            ?.first
+            .orEmpty()
+        val ruby = if (nextLiteral.isNotEmpty()) {
+            val markerIndex = remaining.indexOf(nextLiteral)
+            if (markerIndex >= 0) {
+                val value = remaining.substring(0, markerIndex)
+                remaining = remaining.substring(markerIndex)
+                value
+            } else {
+                val value = remaining
+                remaining = ""
+                value
+            }
+        } else {
+            val value = remaining
+            remaining = ""
+            value
+        }
+        result += RubyPart(base = groupText, ruby = ruby.ifBlank { null })
+    }
+
+    if (suffix.isNotEmpty()) {
+        result += RubyPart(base = suffix, ruby = null)
+    }
+    return result
+}
+
+private fun resultGroup(
+    groups: MutableList<Pair<String, Boolean>>,
+    builder: StringBuilder,
+    isKanjiGroup: Boolean
+) {
+    val text = builder.toString()
+    if (text.isNotEmpty()) {
+        groups += text to isKanjiGroup
+    }
+}
+
+private fun isKanjiChar(ch: Char): Boolean {
+    return ch in '\u4E00'..'\u9FFF' || // CJK Unified Ideographs
+        ch in '\u3400'..'\u4DBF' || // CJK Unified Ideographs Extension A
+        ch in '\uF900'..'\uFAFF' // CJK Compatibility Ideographs
+}
 
 internal fun parseMetaBadges(raw: String?, defaultLabel: String): List<MetaBadge> {
     val text = raw?.trim().orEmpty()
@@ -267,11 +432,14 @@ internal fun RichDefinitionView(
     if (trimmed.isBlank()) return
 
     if (looksLikeHtmlDefinition(trimmed)) {
+        val bodyTextColor = MaterialTheme.colorScheme.onSurface
+        val bodyTextColorCss = remember(bodyTextColor) { colorToCssHex(bodyTextColor) }
         val html = buildDefinitionHtml(
             definitionHtml = trimmed,
             indexLabel = indexLabel,
             dictionaryName = dictionaryName,
-            dictionaryCss = dictionaryCss
+            dictionaryCss = dictionaryCss,
+            bodyTextColorCss = bodyTextColorCss
         )
         AndroidView(
             modifier = Modifier.fillMaxWidth(),
@@ -303,7 +471,8 @@ private fun buildDefinitionHtml(
     definitionHtml: String,
     indexLabel: String,
     dictionaryName: String?,
-    dictionaryCss: String?
+    dictionaryCss: String?,
+    bodyTextColorCss: String
 ): String {
     val prefix = if (indexLabel.isBlank()) "" else "<div>${escapeHtmlText(indexLabel)}</div>"
     val dictionaryLabel = dictionaryName?.trim().orEmpty()
@@ -331,7 +500,7 @@ private fun buildDefinitionHtml(
         <head>
             <meta charset="utf-8"/>
             <style>
-                body { margin: 0; padding: 0; font-size: 14px; line-height: 1.4; color: #1f1f1f; }
+                body { margin: 0; padding: 0; font-size: 14px; line-height: 1.4; color: $bodyTextColorCss; }
                 img { max-width: 100%; height: auto; }
                 .yomitan-glossary { text-align: left; }
                 .yomitan-glossary ol { margin: 0; padding-left: 1.1em; }
@@ -393,4 +562,10 @@ private fun escapeCssString(value: String): String {
     return value
         .replace("\\", "\\\\")
         .replace("\"", "\\\"")
+}
+
+private fun colorToCssHex(color: Color): String {
+    val argb = color.toArgb()
+    val rgb = argb and 0x00FFFFFF
+    return String.format("#%06X", rgb)
 }

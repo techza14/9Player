@@ -223,7 +223,10 @@ internal fun ControllerBluetoothSection() {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(stringResource(R.string.controller_bluetooth_disable_fallback))
+                    Text(
+                        text = stringResource(R.string.controller_bluetooth_disable_fallback),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
                     Switch(
                         checked = disableBluetoothFallback,
                         onCheckedChange = { checked ->

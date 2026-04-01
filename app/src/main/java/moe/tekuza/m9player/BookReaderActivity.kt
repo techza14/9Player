@@ -51,6 +51,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -62,6 +63,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -106,6 +108,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
@@ -2137,7 +2141,10 @@ private fun BookReaderScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(stringResource(R.string.bookreader_sleep_exit_control))
+                            Text(
+                                text = stringResource(R.string.bookreader_sleep_exit_control),
+                                modifier = Modifier.weight(1f).padding(end = 12.dp)
+                            )
                             Switch(
                                 checked = sleepExitControlModeWhenDone,
                                 onCheckedChange = { checked ->
@@ -2150,7 +2157,10 @@ private fun BookReaderScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(stringResource(R.string.bookreader_sleep_disconnect_bluetooth))
+                            Text(
+                                text = stringResource(R.string.bookreader_sleep_disconnect_bluetooth),
+                                modifier = Modifier.weight(1f).padding(end = 12.dp)
+                            )
                             Switch(
                                 checked = sleepDisconnectControllerBluetoothWhenDone,
                                 onCheckedChange = { checked ->
@@ -2303,7 +2313,6 @@ private fun BookReaderScreen(
                             Text(stringResource(R.string.common_no_results))
                         }
                         groupedLookupPopupResults.forEach { groupedResult ->
-                            val reading = groupedResult.reading?.takeIf { it.isNotBlank() }?.let { " [$it]" } ?: ""
                             Card(modifier = Modifier.fillMaxWidth()) {
                                 Column(
                                     modifier = Modifier.padding(10.dp),
@@ -2314,13 +2323,23 @@ private fun BookReaderScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text("${groupedResult.term}$reading")
+                                        LookupHeadwordWithReading(
+                                            term = groupedResult.term,
+                                            reading = groupedResult.reading,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .padding(end = 8.dp),
+                                        )
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             if (audiobookSettings.lookupPlaybackAudioEnabled) {
                                                 OutlinedButton(
                                                     onClick = { playLookupGroupAudio(groupedResult) }
                                                 ) {
-                                                        Text(stringResource(R.string.common_audio))
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Audiotrack,
+                                                        contentDescription = stringResource(R.string.common_audio),
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
                                                 }
                                             }
                                             OutlinedButton(

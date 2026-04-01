@@ -311,7 +311,10 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(stringResource(R.string.audiobook_pause_on_lookup))
+                    Text(
+                        text = stringResource(R.string.audiobook_pause_on_lookup),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
                     Switch(
                         checked = config.pausePlaybackOnLookup,
                         onCheckedChange = { checked ->
@@ -330,7 +333,10 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(stringResource(R.string.audiobook_play_audio))
+                    Text(
+                        text = stringResource(R.string.audiobook_play_audio),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
                     Switch(
                         checked = config.lookupPlaybackAudioEnabled,
                         onCheckedChange = { checked ->
@@ -350,7 +356,10 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(stringResource(R.string.audiobook_autoplay_lookup_audio))
+                        Text(
+                            text = stringResource(R.string.audiobook_autoplay_lookup_audio),
+                            modifier = Modifier.weight(1f).padding(end = 12.dp)
+                        )
                         Switch(
                             checked = config.lookupPlaybackAudioAutoPlay,
                             onCheckedChange = { checked ->
@@ -465,7 +474,10 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(stringResource(R.string.audiobook_overlay_enable))
+                    Text(
+                        text = stringResource(R.string.audiobook_overlay_enable),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
                     Switch(
                         checked = config.floatingOverlayEnabled,
                         onCheckedChange = { checked ->
