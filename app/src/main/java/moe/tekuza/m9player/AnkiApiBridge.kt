@@ -9,12 +9,19 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.TeeAudioProcessor
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.ExportException
@@ -22,7 +29,10 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.TransformationResult
 import androidx.media3.transformer.Transformer
 import com.ichi2.anki.api.AddContentApi
+import com.zuidsoft.audioconverter.ConvertionCode
+import com.zuidsoft.audioconverter.WavToM4AConverter
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.nio.ByteBuffer
@@ -690,6 +700,37 @@ private fun attachLookupAudio(
         }
     }
 
+    val transcodedLookup = transcodeAudioToM4a(
+        context = context,
+        sourceUri = sourceUri,
+        prefix = "lookup-tx"
+    ) { reason ->
+        failures += "lookup-transcode $reason"
+    }
+    if (transcodedLookup != null) {
+        try {
+            val transcodedProviderUri = runCatching {
+                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", transcodedLookup)
+            }.onFailure {
+                failures += "lookup transcoded fileprovider-uri-failed: ${it.message ?: it.javaClass.simpleName}"
+            }.getOrNull()
+            if (transcodedProviderUri != null) {
+                attemptWithUri(
+                    label = "lookup-transcoded-fileprovider",
+                    uri = transcodedProviderUri,
+                    grantReadPermission = true
+                )?.let { return it }
+            }
+            attemptWithUri(
+                label = "lookup-transcoded-file",
+                uri = Uri.fromFile(transcodedLookup),
+                grantReadPermission = false
+            )?.let { return it }
+        } finally {
+            runCatching { transcodedLookup.delete() }
+        }
+    }
+
     attemptWithUri(
         label = "lookup-direct",
         uri = sourceUri,
@@ -757,15 +798,28 @@ private fun addMediaAsAudioTag(
     preferredName: String,
     onAttemptFailure: (String) -> Unit = {}
 ): String? {
+    val resolvedName = buildPreferredAudioMediaName(preferredName, uri)
     val mediaTag = runCatching {
         // Per Anki API contract, mediaType must be "audio" or "image".
-        api.addMediaFromUri(uri, preferredName, "audio")
+        api.addMediaFromUri(uri, resolvedName, "audio")
     }.onFailure {
         onAttemptFailure("exception=${it.message ?: it.javaClass.simpleName}")
     }.getOrNull()
     if (!mediaTag.isNullOrBlank()) return mediaTag
     onAttemptFailure("returned-null")
     return null
+}
+
+private fun buildPreferredAudioMediaName(preferredName: String, uri: Uri): String {
+    val currentExt = preferredName.substringAfterLast('.', "")
+    if (currentExt.isNotBlank()) return preferredName
+    val uriExt = uri.lastPathSegment
+        ?.substringAfterLast('.', "")
+        ?.trim()
+        ?.trimStart('.')
+        ?.lowercase(Locale.ROOT)
+        .orEmpty()
+    return if (uriExt.isNotBlank()) "$preferredName.$uriExt" else preferredName
 }
 
 private fun stageAudioInMediaStore(
@@ -938,8 +992,169 @@ private fun createCueAudioClip(
     )
     if (clipByTransformer != null) return clipByTransformer
 
+    val clipByExoDecode = createCueAudioClipByExoDecodeToWav(
+        context = context,
+        sourceUri = sourceUri,
+        cueStartMs = cueStartMs,
+        cueEndMs = cueEndMs,
+        onFailure = onFailure
+    )
+    if (clipByExoDecode != null) return clipByExoDecode
+
     onFailure("all-clip-methods-failed")
     return null
+}
+
+private fun createCueAudioClipByExoDecodeToWav(
+    context: Context,
+    sourceUri: Uri,
+    cueStartMs: Long,
+    cueEndMs: Long,
+    onFailure: (String) -> Unit
+): File? {
+    if (cueEndMs <= cueStartMs) return null
+
+    val clipDurationMs = cueEndMs - cueStartMs
+    if (clipDurationMs < 50L) {
+        onFailure("exo-window-too-short")
+        return null
+    }
+
+    val outputDir = File(context.cacheDir, "anki_media")
+    if (!outputDir.exists()) {
+        outputDir.mkdirs()
+    }
+    val outputPrefixName = "tset-cue-exo-${System.currentTimeMillis()}"
+    val outputPrefixPath = File(outputDir, outputPrefixName).absolutePath
+
+    outputDir.listFiles()
+        ?.filter { it.name.startsWith(outputPrefixName) }
+        ?.forEach { runCatching { it.delete() } }
+
+    val teeAudioProcessor = TeeAudioProcessor(
+        TeeAudioProcessor.WavFileAudioBufferSink(outputPrefixPath)
+    )
+    val renderersFactory = object : DefaultRenderersFactory(context) {
+        override fun buildAudioSink(
+            context: Context,
+            enableFloatOutput: Boolean,
+            enableAudioTrackPlaybackParams: Boolean
+        ) = DefaultAudioSink.Builder(context)
+            .setEnableFloatOutput(enableFloatOutput)
+            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+            .setAudioProcessors(arrayOf(teeAudioProcessor))
+            .build()
+    }
+
+    val playerThread = HandlerThread("anki-cue-exo")
+    playerThread.start()
+    val playerHandler = Handler(playerThread.looper)
+    val playbackLatch = CountDownLatch(1)
+    val initLatch = CountDownLatch(1)
+    val releaseLatch = CountDownLatch(1)
+    val completed = AtomicBoolean(false)
+    val released = AtomicBoolean(false)
+    var failureDetail: String? = null
+    var player: ExoPlayer? = null
+
+    playerHandler.post {
+        try {
+            player = ExoPlayer.Builder(context, renderersFactory)
+                .setLooper(playerThread.looper)
+                .build()
+                .apply {
+                    volume = 0f
+                    addListener(object : Player.Listener {
+                        override fun onPlaybackStateChanged(playbackState: Int) {
+                            if (playbackState == Player.STATE_ENDED) {
+                                completed.set(true)
+                                playbackLatch.countDown()
+                            }
+                        }
+
+                        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                            failureDetail = "${error.errorCodeName}:${error.message.orEmpty()}"
+                            playbackLatch.countDown()
+                        }
+                    })
+                    setMediaItem(
+                        MediaItem.Builder()
+                            .setUri(sourceUri)
+                            .setClipStartPositionMs(cueStartMs.coerceAtLeast(0L))
+                            .setClipEndPositionMs(cueEndMs.coerceAtLeast(cueStartMs + 1L))
+                            .build()
+                    )
+                    prepare()
+                    play()
+                }
+        } catch (error: Throwable) {
+            failureDetail = "exo-init-failed=${error.javaClass.simpleName}:${error.message.orEmpty()}"
+            playbackLatch.countDown()
+        } finally {
+            initLatch.countDown()
+        }
+    }
+
+    val initialized = runCatching { initLatch.await(10, TimeUnit.SECONDS) }.getOrDefault(false)
+    if (!initialized) {
+        onFailure("exo-init-timeout")
+        playerHandler.post {
+            if (released.compareAndSet(false, true)) {
+                runCatching { player?.release() }
+                playerThread.quitSafely()
+                releaseLatch.countDown()
+            }
+        }
+        runCatching { releaseLatch.await(5, TimeUnit.SECONDS) }
+        outputDir.listFiles()?.filter { it.name.startsWith(outputPrefixName) }?.forEach { it.delete() }
+        return null
+    }
+
+    val timeoutMs = (clipDurationMs.coerceAtLeast(3_000L) + 15_000L).coerceAtMost(120_000L)
+    val finished = runCatching { playbackLatch.await(timeoutMs, TimeUnit.MILLISECONDS) }.getOrDefault(false)
+    if (!finished) {
+        onFailure("exo-timeout")
+    } else if (!completed.get()) {
+        onFailure(failureDetail ?: "exo-playback-failed")
+    }
+
+    playerHandler.post {
+        if (released.compareAndSet(false, true)) {
+            runCatching { player?.release() }
+            playerThread.quitSafely()
+            releaseLatch.countDown()
+        }
+    }
+    runCatching { releaseLatch.await(10, TimeUnit.SECONDS) }
+
+    if (!finished || !completed.get()) {
+        outputDir.listFiles()?.filter { it.name.startsWith(outputPrefixName) }?.forEach { it.delete() }
+        return null
+    }
+
+    val wavFile = outputDir.listFiles()
+        ?.filter { it.name.startsWith(outputPrefixName) && it.extension.equals("wav", ignoreCase = true) }
+        ?.maxByOrNull { it.length() }
+
+    if (wavFile == null || !wavFile.exists() || wavFile.length() <= 44L) {
+        outputDir.listFiles()?.filter { it.name.startsWith(outputPrefixName) }?.forEach { it.delete() }
+        onFailure("exo-no-wav-output")
+        return null
+    }
+
+    val transcoded = transcodeAudioToM4a(
+        context = context,
+        sourceUri = Uri.fromFile(wavFile),
+        prefix = "cue-exo-tx"
+    ) { reason ->
+        onFailure("exo-wav-transcode-$reason")
+    }
+    if (transcoded != null) {
+        runCatching { wavFile.delete() }
+        return transcoded
+    }
+
+    return wavFile
 }
 
 private fun createCueAudioClipByRemux(
@@ -1072,6 +1287,234 @@ private fun createCueAudioClipByRemux(
     } finally {
         runCatching { muxer?.release() }
         runCatching { extractor.release() }
+    }
+}
+
+private fun transcodeAudioToM4a(
+    context: Context,
+    sourceUri: Uri,
+    prefix: String,
+    onFailure: (String) -> Unit
+): File? {
+    val sourceExtension = resolveAudioExtension(context, sourceUri, fallback = "").lowercase(Locale.ROOT)
+    if (sourceExtension == "wav") {
+        transcodeWavToM4aWithAudioConverter(
+            context = context,
+            sourceUri = sourceUri,
+            prefix = prefix,
+            onFailure = onFailure
+        )?.let { return it }
+    }
+
+    return try {
+        val outputFile = createAnkiMediaTempFile(context, prefix = prefix, extension = "m4a")
+        val done = AtomicBoolean(false)
+        val success = AtomicBoolean(false)
+        val latch = CountDownLatch(1)
+        var errorDetail: String? = null
+
+        val listener = object : Transformer.Listener {
+            override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                if (done.compareAndSet(false, true)) {
+                    success.set(true)
+                    latch.countDown()
+                }
+            }
+
+            override fun onError(
+                composition: Composition,
+                exportResult: ExportResult,
+                exportException: ExportException
+            ) {
+                if (done.compareAndSet(false, true)) {
+                    errorDetail = "${exportException.errorCodeName}:${exportException.message.orEmpty()}"
+                    latch.countDown()
+                }
+            }
+
+            override fun onTransformationCompleted(
+                mediaItem: MediaItem,
+                transformationResult: TransformationResult
+            ) {
+                if (done.compareAndSet(false, true)) {
+                    success.set(true)
+                    latch.countDown()
+                }
+            }
+
+            override fun onTransformationError(mediaItem: MediaItem, exception: Exception) {
+                if (done.compareAndSet(false, true)) {
+                    errorDetail = "${exception.javaClass.simpleName}:${exception.message.orEmpty()}"
+                    latch.countDown()
+                }
+            }
+        }
+
+        val mediaItem = MediaItem.fromUri(sourceUri)
+        val editedItem = EditedMediaItem.Builder(mediaItem)
+            .setRemoveVideo(true)
+            .build()
+        val transformer = Transformer.Builder(context)
+            .setAudioMimeType("audio/mp4a-latm")
+            .setListener(listener)
+            .build()
+
+        val started = runCatching {
+            transformer.start(editedItem, outputFile.absolutePath)
+        }.onFailure {
+            onFailure("start-failed=${it.javaClass.simpleName}")
+        }.isSuccess
+        if (!started) {
+            outputFile.delete()
+            return null
+        }
+
+        val finished = runCatching {
+            latch.await(120, TimeUnit.SECONDS)
+        }.getOrElse {
+            onFailure("await-failed=${it.javaClass.simpleName}")
+            false
+        }
+        if (!finished) {
+            transformer.cancel()
+            onFailure("timeout")
+            outputFile.delete()
+            return null
+        }
+        if (!success.get()) {
+            onFailure("error=${errorDetail.orEmpty()}")
+            outputFile.delete()
+            return null
+        }
+        if (outputFile.length() <= 0L) {
+            onFailure("empty-output")
+            outputFile.delete()
+            return null
+        }
+        outputFile
+    } catch (e: Exception) {
+        onFailure("exception=${e.javaClass.simpleName}")
+        null
+    }
+}
+
+private data class WavHeaderInfo(
+    val sampleRate: Int,
+    val channelCount: Int
+)
+
+private fun transcodeWavToM4aWithAudioConverter(
+    context: Context,
+    sourceUri: Uri,
+    prefix: String,
+    onFailure: (String) -> Unit
+): File? {
+    var tempWavFile: File? = null
+    val wavFile = try {
+        if (sourceUri.scheme.equals("file", ignoreCase = true)) {
+            val path = sourceUri.path
+            if (path.isNullOrBlank()) {
+                onFailure("audioconverter-file-path-missing")
+                return null
+            }
+            File(path)
+        } else {
+            copyUriToTempAudioFile(
+                context = context,
+                sourceUri = sourceUri,
+                extension = "wav",
+                prefix = "${prefix}-src"
+            )?.also { tempWavFile = it }
+        }
+    } catch (e: Exception) {
+        onFailure("audioconverter-source-exception=${e.javaClass.simpleName}")
+        null
+    } ?: run {
+        onFailure("audioconverter-source-unavailable")
+        return null
+    }
+
+    try {
+        val wavInfo = parseSimpleWavHeader(wavFile)
+        if (wavInfo == null) {
+            onFailure("audioconverter-invalid-wav-header")
+            return null
+        }
+
+        val outputFile = createAnkiMediaTempFile(context, prefix = prefix, extension = "m4a")
+        val bitRate = recommendedM4aBitrate(
+            sampleRate = wavInfo.sampleRate,
+            channelCount = wavInfo.channelCount
+        )
+        val result = runCatching {
+            WavToM4AConverter(
+                wavInfo.sampleRate,
+                wavInfo.channelCount,
+                bitRate
+            ).convert(wavFile, outputFile)
+        }.onFailure {
+            onFailure("audioconverter-exception=${it.javaClass.simpleName}")
+        }.getOrNull() ?: run {
+            outputFile.delete()
+            return null
+        }
+
+        if (result.convertCode != ConvertionCode.SUCCESS) {
+            onFailure("audioconverter-failed=${result.errorMessage.orEmpty()}")
+            outputFile.delete()
+            return null
+        }
+        if (!outputFile.exists() || outputFile.length() <= 0L) {
+            onFailure("audioconverter-empty-output")
+            outputFile.delete()
+            return null
+        }
+        return outputFile
+    } finally {
+        runCatching { tempWavFile?.delete() }
+    }
+}
+
+private fun parseSimpleWavHeader(file: File): WavHeaderInfo? {
+    return runCatching<WavHeaderInfo?> {
+        FileInputStream(file).use { input: FileInputStream ->
+            val header = ByteArray(44)
+            if (input.read(header) < header.size) return@use null
+            val riff = String(header, 0, 4, Charsets.US_ASCII)
+            val wave = String(header, 8, 4, Charsets.US_ASCII)
+            if (riff != "RIFF" || wave != "WAVE") return@use null
+
+            val channelCount = littleEndianUnsignedShort(header, 22)
+            val sampleRate = littleEndianInt(header, 24)
+            if (channelCount <= 0 || sampleRate <= 0) return@use null
+
+            WavHeaderInfo(
+                sampleRate = sampleRate,
+                channelCount = channelCount
+            )
+        }
+    }.getOrNull()
+}
+
+private fun littleEndianUnsignedShort(buffer: ByteArray, offset: Int): Int {
+    return (buffer[offset].toInt() and 0xFF) or
+        ((buffer[offset + 1].toInt() and 0xFF) shl 8)
+}
+
+private fun littleEndianInt(buffer: ByteArray, offset: Int): Int {
+    return (buffer[offset].toInt() and 0xFF) or
+        ((buffer[offset + 1].toInt() and 0xFF) shl 8) or
+        ((buffer[offset + 2].toInt() and 0xFF) shl 16) or
+        ((buffer[offset + 3].toInt() and 0xFF) shl 24)
+}
+
+private fun recommendedM4aBitrate(sampleRate: Int, channelCount: Int): Int {
+    val normalizedChannels = channelCount.coerceIn(1, 2)
+    return when {
+        sampleRate >= 48_000 -> 128_000 * normalizedChannels
+        sampleRate >= 44_100 -> 96_000 * normalizedChannels
+        sampleRate >= 24_000 -> 64_000 * normalizedChannels
+        else -> 48_000 * normalizedChannels
     }
 }
 

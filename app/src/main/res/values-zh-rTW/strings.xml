@@ -299,6 +299,7 @@
     <string name="bookreader_anki_no_content">沒有可匯出的辭典內容。</string>
     <string name="bookreader_anki_exporting">正在加入 Anki...</string>
     <string name="bookreader_anki_exported">已加入 Anki。</string>
+    <string name="bookreader_anki_export_failed">加入 Anki 失敗。</string>
     <string name="bookreader_meta_frequency">詞頻</string>
     <string name="bookreader_meta_pitch">音調</string>
     <string name="controller_title">手柄</string>
