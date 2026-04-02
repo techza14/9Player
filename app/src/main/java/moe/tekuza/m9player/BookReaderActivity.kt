@@ -25,6 +25,7 @@ import android.view.WindowManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ImageView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -1437,8 +1438,10 @@ private fun BookReaderScreen(
             ?.trim()
             .orEmpty()
         val settingsSnapshot = audiobookSettings
+        lookupPopupVisible = false
+        lookupPopupSelectionText = null
         scope.launch {
-        ankiActionStatus = context.getString(R.string.bookreader_anki_exporting)
+            ankiActionStatus = context.getString(R.string.bookreader_anki_exporting)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val preparedLookupAudio = prepareLookupAudioForAnkiExport(
@@ -1466,7 +1469,10 @@ private fun BookReaderScreen(
                 }
             }
             ankiActionStatus = result.fold(
-            onSuccess = { context.getString(R.string.bookreader_anki_exported) },
+                onSuccess = {
+                    Toast.makeText(context, context.getString(R.string.bookreader_anki_exported), Toast.LENGTH_SHORT).show()
+                    context.getString(R.string.bookreader_anki_exported)
+                },
                 onFailure = { formatAnkiFailure(it) }
             )
         }

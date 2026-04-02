@@ -1366,7 +1366,7 @@ private fun ReaderSyncScreen() {
         lookupTitle: String
     ) {
         val dictionaryGroup = groupedResult.dictionaries.firstOrNull() ?: run {
-            mainLookupAnkiStatus = "No dictionary content to export."
+            mainLookupAnkiStatus = context.getString(R.string.bookreader_anki_no_content)
             return
         }
         val cueText = sourceCue?.text?.trim()
@@ -1390,8 +1390,10 @@ private fun ReaderSyncScreen() {
             ?.trim()
             .orEmpty()
         val settingsSnapshot = audiobookSettings
+        mainLookupPopupVisible = false
+        mainLookupPopupSelectedRange = null
         scope.launch {
-            mainLookupAnkiStatus = "Adding to Anki..."
+            mainLookupAnkiStatus = context.getString(R.string.bookreader_anki_exporting)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val preparedLookupAudio = prepareLookupAudioForAnkiExport(
@@ -1419,8 +1421,11 @@ private fun ReaderSyncScreen() {
                 }
             }
             val status = result.fold(
-                onSuccess = { "Added to Anki." },
-                onFailure = { it.message ?: "Failed to add to Anki." }
+                onSuccess = {
+                    Toast.makeText(context, context.getString(R.string.bookreader_anki_exported), Toast.LENGTH_SHORT).show()
+                    context.getString(R.string.bookreader_anki_exported)
+                },
+                onFailure = { it.message ?: context.getString(R.string.bookreader_anki_export_failed) }
             )
             mainLookupAnkiStatus = status
             exportStatus = status

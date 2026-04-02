@@ -299,6 +299,7 @@
     <string name="bookreader_anki_no_content">No dictionary content available to export.</string>
     <string name="bookreader_anki_exporting">Adding to Anki...</string>
     <string name="bookreader_anki_exported">Added to Anki.</string>
+    <string name="bookreader_anki_export_failed">Failed to add to Anki.</string>
     <string name="bookreader_meta_frequency">Frequency</string>
     <string name="bookreader_meta_pitch">Pitch</string>
     <string name="controller_title">Controller</string>

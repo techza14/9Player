@@ -307,6 +307,7 @@
     <string name="bookreader_anki_no_content">没有可导出的辞典内容。</string>
     <string name="bookreader_anki_exporting">正在添加到 Anki...</string>
     <string name="bookreader_anki_exported">已添加到 Anki。</string>
+    <string name="bookreader_anki_export_failed">添加到 Anki 失败。</string>
     <string name="bookreader_meta_frequency">词频</string>
     <string name="bookreader_meta_pitch">音调</string>
 
