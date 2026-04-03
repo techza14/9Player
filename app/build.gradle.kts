@@ -76,6 +76,7 @@ dependencies {
     implementation("dev.rikka.shizuku:provider:13.1.5")
     implementation("com.github.ankidroid:Anki-Android:api-v1.1.0")
     implementation("com.github.renezuidhof:AudioConverter:1.0.0")
+    implementation("io.github.kyant0:taglib:1.0.5")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)

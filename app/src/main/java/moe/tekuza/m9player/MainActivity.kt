@@ -5,8 +5,11 @@ import android.app.ActivityManager
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.graphics.drawable.AnimatedImageDrawable
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -105,6 +108,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import com.kyant.taglib.TagLib
 import moe.tekuza.m9player.ui.theme.TsetTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -2696,20 +2700,115 @@ private fun resolveEmbeddedCoverUriForM4b(
         } else {
             retriever.setDataSource(context, audioUri)
         }
-        val picture = retriever.embeddedPicture ?: return null
-        val ext = if (
-            picture.size >= 4 &&
-            picture[0] == 0x89.toByte() &&
-            picture[1] == 0x50.toByte() &&
-            picture[2] == 0x4E.toByte() &&
-            picture[3] == 0x47.toByte()
-        ) {
-            "png"
+        val picture = retriever.embeddedPicture
+        if (picture != null) {
+            val ext = if (
+                picture.size >= 4 &&
+                picture[0] == 0x89.toByte() &&
+                picture[1] == 0x50.toByte() &&
+                picture[2] == 0x4E.toByte() &&
+                picture[3] == 0x47.toByte()
+            ) {
+                "png"
+            } else {
+                "jpg"
+            }
+            val outFile = File(coverDir, "cover-$cacheKey.$ext")
+            outFile.writeBytes(picture)
+            if (outFile.exists() && outFile.length() > 0L) {
+                return Uri.fromFile(outFile)
+            }
+        }
+
+        val attachedFrame = runCatching {
+            retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        }.getOrNull()
+        saveBitmapCoverIfPresent(
+            bitmap = attachedFrame,
+            coverDir = coverDir,
+            cacheKey = cacheKey
+        )?.let { return it }
+
+        extractAttachedPicCoverWithMediaExtractor(
+            context = context,
+            audioUri = audioUri,
+            coverDir = coverDir,
+            cacheKey = cacheKey
+        )?.let { return it }
+
+        extractCoverWithTagLib(context, audioUri, coverDir, cacheKey)
+    } catch (_: Throwable) {
+        extractCoverWithTagLib(context, audioUri, coverDir, cacheKey)
+    } finally {
+        runCatching { retriever.release() }
+    }
+}
+
+private fun saveBitmapCoverIfPresent(
+    bitmap: Bitmap?,
+    coverDir: File,
+    cacheKey: String
+): Uri? {
+    val target = bitmap ?: return null
+    val outFile = File(coverDir, "cover-$cacheKey.jpg")
+    return runCatching {
+        outFile.outputStream().use { output ->
+            target.compress(Bitmap.CompressFormat.JPEG, 95, output)
+        }
+        if (outFile.exists() && outFile.length() > 0L) {
+            Uri.fromFile(outFile)
         } else {
-            "jpg"
+            null
+        }
+    }.getOrNull()
+}
+
+private fun extractAttachedPicCoverWithMediaExtractor(
+    context: Context,
+    audioUri: Uri,
+    coverDir: File,
+    cacheKey: String
+): Uri? {
+    val extractor = MediaExtractor()
+    return try {
+        val dataSourceSet = if (audioUri.scheme.equals("file", ignoreCase = true)) {
+            val path = audioUri.path ?: return null
+            runCatching { extractor.setDataSource(path) }.isSuccess
+        } else {
+            runCatching { extractor.setDataSource(context, audioUri, null) }.isSuccess
+        }
+        if (!dataSourceSet) return null
+
+        val trackIndex = (0 until extractor.trackCount).firstOrNull { index ->
+            val format = extractor.getTrackFormat(index)
+            val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
+            mime.startsWith("image/", ignoreCase = true) ||
+                mime.startsWith("video/", ignoreCase = true)
+        } ?: return null
+
+        extractor.selectTrack(trackIndex)
+        val format = extractor.getTrackFormat(trackIndex)
+        val mime = format.getString(MediaFormat.KEY_MIME).orEmpty().lowercase(Locale.ROOT)
+        val maxSize = if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+            format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE).coerceAtLeast(256 * 1024)
+        } else {
+            2 * 1024 * 1024
+        }
+        val buffer = java.nio.ByteBuffer.allocateDirect(maxSize)
+        val size = extractor.readSampleData(buffer, 0)
+        if (size <= 0) return null
+
+        val bytes = ByteArray(size)
+        buffer.position(0)
+        buffer.get(bytes, 0, size)
+
+        val ext = when {
+            mime.contains("png") -> "png"
+            mime.contains("webp") -> "webp"
+            else -> "jpg"
         }
         val outFile = File(coverDir, "cover-$cacheKey.$ext")
-        outFile.writeBytes(picture)
+        outFile.writeBytes(bytes)
         if (outFile.exists() && outFile.length() > 0L) {
             Uri.fromFile(outFile)
         } else {
@@ -2718,7 +2817,84 @@ private fun resolveEmbeddedCoverUriForM4b(
     } catch (_: Throwable) {
         null
     } finally {
-        runCatching { retriever.release() }
+        runCatching { extractor.release() }
+    }
+}
+
+private fun extractCoverWithTagLib(
+    context: Context,
+    audioUri: Uri,
+    coverDir: File,
+    cacheKey: String
+): Uri? {
+    val descriptor = if (audioUri.scheme.equals("file", ignoreCase = true)) {
+        val path = audioUri.path ?: return null
+        runCatching {
+            ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY)
+        }.getOrNull()
+    } else {
+        runCatching {
+            context.contentResolver.openFileDescriptor(audioUri, "r")
+        }.getOrNull()
+    } ?: return null
+
+    return descriptor.use { pfd ->
+        val detachedFd = runCatching { pfd.detachFd() }.getOrNull() ?: return@use null
+        runCatching {
+            val picture = TagLib.getFrontCover(detachedFd) ?: return@runCatching null
+            saveTagLibCoverBytes(
+                bytes = picture.data,
+                mimeType = picture.mimeType,
+                coverDir = coverDir,
+                cacheKey = cacheKey
+            )
+        }.getOrNull()
+    }
+}
+
+private fun saveTagLibCoverBytes(
+    bytes: ByteArray,
+    mimeType: String?,
+    coverDir: File,
+    cacheKey: String
+): Uri? {
+    if (bytes.isEmpty()) return null
+    val normalizedMime = mimeType.orEmpty().lowercase(Locale.ROOT)
+    val ext = when {
+        normalizedMime.contains("png") -> "png"
+        normalizedMime.contains("webp") -> "webp"
+        normalizedMime.contains("bmp") -> "bmp"
+        normalizedMime.contains("gif") -> "gif"
+        else -> detectTagLibCoverFileExtension(bytes)
+    }
+    val outFile = File(coverDir, "cover-$cacheKey.$ext")
+    return runCatching {
+        outFile.writeBytes(bytes)
+        if (outFile.exists() && outFile.length() > 0L) {
+            Uri.fromFile(outFile)
+        } else {
+            null
+        }
+    }.getOrNull()
+}
+
+private fun detectTagLibCoverFileExtension(bytes: ByteArray): String {
+    return when {
+        bytes.size >= 4 &&
+            bytes[0] == 0x89.toByte() &&
+            bytes[1] == 0x50.toByte() &&
+            bytes[2] == 0x4E.toByte() &&
+            bytes[3] == 0x47.toByte() -> "png"
+        bytes.size >= 3 &&
+            bytes[0] == 0xFF.toByte() &&
+            bytes[1] == 0xD8.toByte() &&
+            bytes[2] == 0xFF.toByte() -> "jpg"
+        bytes.size >= 4 &&
+            bytes[0] == 'R'.code.toByte() &&
+            bytes[1] == 'I'.code.toByte() &&
+            bytes[2] == 'F'.code.toByte() &&
+            bytes[3] == 'F'.code.toByte() -> "webp"
+        else -> "jpg"
     }
 }
 
