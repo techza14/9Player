@@ -1518,40 +1518,60 @@ private fun ReaderSyncScreen() {
         persistImportState()
     }
 
-    val pickDictionaryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        keepReadPermission(context, uri)
-        val displayName = queryDisplayName(contentResolver, uri)
-        val uriValue = uri.toString()
-        if (dictionaryRefs.any { it.uri == uriValue }) {
-            dictionaryError = context.getString(R.string.status_duplicate_dictionary)
-            return@rememberLauncherForActivityResult
-        }
-        val cacheKey = buildDictionaryCacheKey(uriValue, displayName)
+    val pickDictionaryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val selectedUris = uris.distinctBy { it.toString() }
+        if (selectedUris.isEmpty()) return@rememberLauncherForActivityResult
 
         scope.launch {
             dictionaryLoading = true
-            updateDictionaryProgress(DictionaryImportProgress(stage = "Scanning archive", current = 0, total = 0))
             dictionaryError = null
-            val parseResult = withContext(Dispatchers.IO) {
-                runCatching {
-                    importDictionaryToSqlite(
-                        context = context,
-                        contentResolver = contentResolver,
-                        uri = uri,
-                        displayName = displayName,
-                        cacheKey = cacheKey
-                    ) { progress ->
-                        scope.launch(Dispatchers.Main.immediate) {
-                            updateDictionaryProgress(progress)
+            var nextLoadedDictionaries = loadedDictionaries
+            var nextDictionaryRefs = dictionaryRefs
+            val importErrors = mutableListOf<String>()
+
+            selectedUris.forEachIndexed { index, uri ->
+                keepReadPermission(context, uri)
+                val displayName = queryDisplayName(contentResolver, uri)
+                val uriValue = uri.toString()
+                if (nextDictionaryRefs.any { it.uri == uriValue }) {
+                    importErrors += context.getString(R.string.status_duplicate_dictionary)
+                    return@forEachIndexed
+                }
+                val cacheKey = buildDictionaryCacheKey(uriValue, displayName)
+
+                updateDictionaryProgress(
+                    DictionaryImportProgress(
+                        stage = "Importing ${index + 1}/${selectedUris.size}: $displayName",
+                        current = 0,
+                        total = 0
+                    )
+                )
+
+                val parseResult = withContext(Dispatchers.IO) {
+                    runCatching {
+                        importDictionaryToSqlite(
+                            context = context,
+                            contentResolver = contentResolver,
+                            uri = uri,
+                            displayName = displayName,
+                            cacheKey = cacheKey
+                        ) { progress ->
+                            scope.launch(Dispatchers.Main.immediate) {
+                                updateDictionaryProgress(
+                                    progress.copy(stage = "${progress.stage} (${index + 1}/${selectedUris.size})")
+                                )
+                            }
                         }
                     }
                 }
-            }
-            dictionaryLoading = false
-            val parsedDictionary = parseResult.getOrNull()
-            if (parsedDictionary != null) {
-                val duplicateByName = loadedDictionaries.any {
+
+                val parsedDictionary = parseResult.getOrNull()
+                if (parsedDictionary == null) {
+                    importErrors += parseResult.exceptionOrNull()?.message ?: "Failed to import dictionary"
+                    return@forEachIndexed
+                }
+
+                val duplicateByName = nextLoadedDictionaries.any {
                     it.name.equals(parsedDictionary.name, ignoreCase = true) &&
                         it.entryCount > 0 &&
                         parsedDictionary.entryCount > 0 &&
@@ -1563,26 +1583,26 @@ private fun ReaderSyncScreen() {
                         ?.let { key ->
                             scope.launch(Dispatchers.IO) { deleteDictionaryFromSqlite(context, key) }
                         }
-            dictionaryError = context.getString(R.string.status_duplicate_dictionary_detected, parsedDictionary.name)
-                    clearDictionaryProgress()
-                    return@launch
+                    importErrors += context.getString(R.string.status_duplicate_dictionary_detected, parsedDictionary.name)
+                    return@forEachIndexed
                 }
-                loadedDictionaries = loadedDictionaries + parsedDictionary
-                dictionaryRefs = (dictionaryRefs + PersistedDictionaryRef(
+
+                nextLoadedDictionaries = nextLoadedDictionaries + parsedDictionary
+                nextDictionaryRefs = (nextDictionaryRefs + PersistedDictionaryRef(
                     uri = uriValue,
                     name = displayName,
                     cacheKey = cacheKey
-                ))
-                    .distinctBy { it.uri }
-                persistImportState()
-                clearDictionaryProgress()
-                if (lookupQuery.isNotBlank()) {
-                    triggerLookupCandidates(listOf(lookupQuery))
-                }
-            } else {
-                val error = parseResult.exceptionOrNull()
-                dictionaryError = error?.message ?: "Failed to import dictionary"
-                clearDictionaryProgress()
+                )).distinctBy { it.uri }
+            }
+
+            loadedDictionaries = nextLoadedDictionaries
+            dictionaryRefs = nextDictionaryRefs
+            persistImportState()
+            clearDictionaryProgress()
+            dictionaryLoading = false
+            dictionaryError = importErrors.takeIf { it.isNotEmpty() }?.joinToString("\n")
+            if (lookupQuery.isNotBlank()) {
+                triggerLookupCandidates(listOf(lookupQuery))
             }
         }
     }
