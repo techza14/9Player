@@ -17,6 +17,7 @@ import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Html
 import android.util.Base64
+import android.util.Log
 import android.app.Activity
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -85,6 +86,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
@@ -137,6 +139,7 @@ private const val BOOK_READER_PENDING_INTENT_REQUEST_CODE = 21_002
 private const val BOOK_READER_SLEEP_OPTIONS_PREFS = "book_reader_sleep_options_prefs"
 private const val BOOK_READER_SLEEP_EXIT_CONTROL_KEY = "sleep_exit_control"
 private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
+private const val BOOK_READER_RANGE_LOG_TAG = "BookReaderRange"
 
 class BookReaderActivity : AppCompatActivity() {
     private var gamepadKeyHandler: ((KeyEvent) -> Boolean)? = null
@@ -174,6 +177,10 @@ class BookReaderActivity : AppCompatActivity() {
                             ?: detectConnectedControllerInfo(this)?.address
                     },
                     onBack = { currentPositionMs, currentDurationMs ->
+                        Log.d(
+                            BOOK_READER_RANGE_LOG_TAG,
+                            "onBack navigate-main positionMs=$currentPositionMs durationMs=$currentDurationMs"
+                        )
                         val playbackKey = buildBookReaderPlaybackKey(title, audioUri, srtUri)
                         val normalized = normalizeBookReaderPlaybackPosition(
                             currentPositionMs,
@@ -201,6 +208,7 @@ class BookReaderActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        Log.d(BOOK_READER_RANGE_LOG_TAG, "activity-onStart")
         floatingOverlayStartJob?.cancel()
         floatingOverlayStartJob = null
         stopAudiobookFloatingOverlayService(this)
@@ -208,6 +216,7 @@ class BookReaderActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
+        Log.d(BOOK_READER_RANGE_LOG_TAG, "activity-onStop")
         val settings = loadAudiobookSettingsConfig(this)
         floatingOverlayStartJob?.cancel()
         if (isChangingConfigurations || !settings.floatingOverlayEnabled || !BookReaderFloatingBridge.isPlaying()) return
@@ -225,6 +234,7 @@ class BookReaderActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        Log.d(BOOK_READER_RANGE_LOG_TAG, "activity-onDestroy")
         floatingOverlayStartJob?.cancel()
         floatingOverlayStartJob = null
         if (activeReaderRef?.get() === this) {
@@ -417,6 +427,11 @@ private data class ReaderAudioChapter(
     val title: String
 )
 
+private data class ReaderSentenceSelection(
+    val text: String,
+    val cueRange: IntRange
+)
+
 private enum class AdjacentJumpMode {
     CUE,
     DURATION
@@ -448,18 +463,25 @@ private fun BookReaderScreen(
     var lookupPopupTitle by remember { mutableStateOf("") }
     var lookupPopupResults by remember { mutableStateOf<List<DictionarySearchResult>>(emptyList()) }
     var lookupPopupCue by remember { mutableStateOf<ReaderSubtitleCue?>(null) }
+    var lookupPopupCueIndex by remember { mutableStateOf<Int?>(null) }
+    var lookupPopupAnchorOffset by remember { mutableStateOf<Int?>(null) }
     var selectedLookupRange by remember { mutableStateOf<IntRange?>(null) }
     var lookupPopupSelectionText by remember { mutableStateOf<String?>(null) }
+    var lookupPopupTemporarilyHidden by remember { mutableStateOf(false) }
     var ankiActionStatus by remember { mutableStateOf<String?>(null) }
     var lookupPopupAutoPlayNonce by remember { mutableStateOf(0L) }
     var lookupPopupAutoPlayedKey by remember { mutableStateOf<String?>(null) }
     val lookupCollapsedSections = remember { mutableStateMapOf<String, Boolean>() }
+    var reopenLookupPopupAfterCueRangeSelection by remember { mutableStateOf(false) }
     var resumePlaybackAfterLookupDismiss by remember { mutableStateOf(false) }
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
 
     var lyricsMode by remember { mutableStateOf(true) }
     var controlModeEnabled by remember { mutableStateOf(false) }
     var controlModeStatus by remember { mutableStateOf<String?>(null) }
+    var cueRangeSelectionMode by remember { mutableStateOf(false) }
+    var cueRangeStartIndex by remember { mutableStateOf<Int?>(null) }
+    var cueRangeEndIndex by remember { mutableStateOf<Int?>(null) }
     var controlTargetCueIndex by remember { mutableStateOf<Int?>(null) }
     var bottomControlsVisible by remember { mutableStateOf(true) }
     var topActionsExpanded by remember { mutableStateOf(false) }
@@ -548,6 +570,24 @@ private fun BookReaderScreen(
         if (!hasSubtitleFile && controlModeEnabled) {
             controlModeEnabled = false
             controlModeStatus = null
+        }
+        if ((!hasSubtitleFile || !audiobookSettings.lookupRangeSelectionEnabled) && cueRangeSelectionMode) {
+            cueRangeSelectionMode = false
+            cueRangeStartIndex = null
+            cueRangeEndIndex = null
+        }
+        if (!hasSubtitleFile) {
+            lookupPopupTemporarilyHidden = false
+        }
+    }
+
+    LaunchedEffect(audiobookSettings.lookupRangeSelectionEnabled) {
+        if (!audiobookSettings.lookupRangeSelectionEnabled) {
+            cueRangeSelectionMode = false
+            cueRangeStartIndex = null
+            cueRangeEndIndex = null
+            reopenLookupPopupAfterCueRangeSelection = false
+            lookupPopupTemporarilyHidden = false
         }
     }
 
@@ -723,6 +763,11 @@ private fun BookReaderScreen(
     }
     val activeCueIndex = remember(previewPositionMs, cues) { findBookDisplayCueIndexAtTime(cues, previewPositionMs) }
     val activeCue = cues.getOrNull(activeCueIndex)
+    val selectedCueIndexRange = remember(cueRangeStartIndex, cueRangeEndIndex) {
+        val start = cueRangeStartIndex ?: return@remember null
+        val end = cueRangeEndIndex ?: start
+        minOf(start, end)..maxOf(start, end)
+    }
     val backToMain = remember(onBack, player, durationMs) {
         {
             val current = player.currentPosition.coerceAtLeast(0L)
@@ -1120,6 +1165,73 @@ private fun BookReaderScreen(
         }
     }
 
+    fun clearCueRangeSelection() {
+        cueRangeSelectionMode = false
+        cueRangeStartIndex = null
+        cueRangeEndIndex = null
+        reopenLookupPopupAfterCueRangeSelection = false
+        lookupPopupTemporarilyHidden = false
+    }
+
+    fun beginCueRangeSelection(reopenLookupPopupAfterSelection: Boolean) {
+        if (!audiobookSettings.lookupRangeSelectionEnabled) return
+        Log.d(
+            BOOK_READER_RANGE_LOG_TAG,
+            "beginCueRangeSelection reopenAfter=$reopenLookupPopupAfterSelection"
+        )
+        cueRangeSelectionMode = true
+        cueRangeStartIndex = null
+        cueRangeEndIndex = null
+        reopenLookupPopupAfterCueRangeSelection = reopenLookupPopupAfterSelection
+        lookupPopupTemporarilyHidden = reopenLookupPopupAfterSelection
+        if (!lyricsMode) lyricsMode = true
+        if (coverModeEnabled) coverModeEnabled = false
+        controlModeStatus = context.getString(R.string.bookreader_range_select_start)
+    }
+
+    fun consumeCueRangeSelection() {
+        if (selectedCueIndexRange != null) {
+            clearCueRangeSelection()
+        }
+    }
+
+    fun handleCueRangeTap(index: Int) {
+        if (!cueRangeSelectionMode || cues.isEmpty()) return
+        val normalizedIndex = index.coerceIn(0, cues.lastIndex)
+        Log.d(
+            BOOK_READER_RANGE_LOG_TAG,
+            "handleCueRangeTap index=$normalizedIndex start=$cueRangeStartIndex end=$cueRangeEndIndex reopen=$reopenLookupPopupAfterCueRangeSelection"
+        )
+        val start = cueRangeStartIndex
+        val end = cueRangeEndIndex
+        when {
+            start == null || end != null -> {
+                cueRangeStartIndex = normalizedIndex
+                cueRangeEndIndex = null
+                controlModeStatus = context.getString(
+                    R.string.bookreader_range_start_selected,
+                    normalizedIndex + 1
+                )
+            }
+            else -> {
+                cueRangeEndIndex = normalizedIndex
+                val range = minOf(start, normalizedIndex)..maxOf(start, normalizedIndex)
+                controlModeStatus = context.getString(
+                    R.string.bookreader_range_end_selected,
+                    range.first + 1,
+                    range.last + 1,
+                    range.count()
+                )
+                cueRangeSelectionMode = false
+                if (reopenLookupPopupAfterCueRangeSelection) {
+                    reopenLookupPopupAfterCueRangeSelection = false
+                    Log.d(BOOK_READER_RANGE_LOG_TAG, "popupRestoreFromHidden")
+                    lookupPopupTemporarilyHidden = false
+                }
+            }
+        }
+    }
+
     fun seekToManual(targetMs: Long) {
         val target = if (durationMs > 0L) {
             targetMs.coerceAtLeast(0L).coerceAtMost(durationMs)
@@ -1338,7 +1450,9 @@ private fun BookReaderScreen(
     }
 
     fun triggerPopupLookup(cue: ReaderSubtitleCue, offset: Int) {
+        consumeCueRangeSelection()
         val dictionariesSnapshot = loadedDictionaries
+        val cueIndex = cues.indexOf(cue).takeIf { it >= 0 }
         if (dictionariesSnapshot.isEmpty()) {
             lookupPopupAutoPlayNonce += 1L
             lookupPopupAutoPlayedKey = null
@@ -1348,6 +1462,8 @@ private fun BookReaderScreen(
             lookupPopupTitle = ""
             lookupPopupError = context.getString(R.string.bookreader_lookup_no_dict)
             lookupPopupCue = cue
+            lookupPopupCueIndex = cueIndex
+            lookupPopupAnchorOffset = offset
             lookupPopupSelectionText = null
             return
         }
@@ -1367,6 +1483,8 @@ private fun BookReaderScreen(
             lookupPopupTitle = selectedToken.orEmpty()
             lookupPopupError = context.getString(R.string.bookreader_lookup_no_term)
             lookupPopupCue = cue
+            lookupPopupCueIndex = cueIndex
+            lookupPopupAnchorOffset = offset
             lookupPopupSelectionText = null
             return
         }
@@ -1379,6 +1497,8 @@ private fun BookReaderScreen(
         lookupPopupError = null
         lookupPopupTitle = candidates.firstOrNull() ?: selectedToken.orEmpty()
         lookupPopupCue = cue
+        lookupPopupCueIndex = cueIndex
+        lookupPopupAnchorOffset = offset
         lookupPopupSelectionText = selectedToken
         ankiActionStatus = null
 
@@ -1427,8 +1547,16 @@ private fun BookReaderScreen(
     }
 
     fun closeLookupPopup(resumePlayback: Boolean = true) {
+        Log.d(
+            BOOK_READER_RANGE_LOG_TAG,
+            "closeLookupPopup resumePlayback=$resumePlayback visibleBefore=$lookupPopupVisible cueRangeSelectionMode=$cueRangeSelectionMode selectedRange=$selectedCueIndexRange"
+        )
         lookupPopupVisible = false
+        lookupPopupTemporarilyHidden = false
         lookupPopupSelectionText = null
+        lookupPopupCueIndex = null
+        lookupPopupAnchorOffset = null
+        consumeCueRangeSelection()
         if (resumePlayback && resumePlaybackAfterLookupDismiss) {
             player.play()
         }
@@ -1440,7 +1568,17 @@ private fun BookReaderScreen(
             ankiActionStatus = context.getString(R.string.bookreader_anki_no_content)
             return
         }
-        val cue = lookupPopupCue ?: return
+        val baseCue = lookupPopupCue ?: return
+        val cue = selectedCueIndexRange
+            ?.takeIf { it.first >= 0 && it.last < cues.size }
+            ?.let { range ->
+                ReaderSubtitleCue(
+                    startMs = cues[range.first].startMs,
+                    endMs = cues[range.last].endMs,
+                    text = cues.slice(range).joinToString("\n") { it.text }
+                )
+            }
+            ?: baseCue
         val popupSelectionText = lookupPopupSelectionText?.trim()?.takeIf { it.isNotBlank() }
         val glossarySections = buildGroupedGlossarySections(groupedResult)
         val primaryDefinition = dictionaryGroup.definitions
@@ -1448,8 +1586,45 @@ private fun BookReaderScreen(
             ?.trim()
             .orEmpty()
         val settingsSnapshot = audiobookSettings
+        val sentenceSelection = when {
+            selectedCueIndexRange != null -> ReaderSentenceSelection(
+                text = cue.text,
+                cueRange = selectedCueIndexRange!!
+            )
+            settingsSnapshot.lookupExportFullSentence -> lookupPopupCueIndex?.let { cueIndex ->
+                extractFullSentenceLikeHoshiFromCues(
+                    cues = cues,
+                    cueIndex = cueIndex,
+                    anchorText = popupSelectionText ?: groupedResult.term,
+                    selectedRangeInCue = selectedLookupRange,
+                    rawAnchorOffsetInCue = lookupPopupAnchorOffset
+                )
+            } ?: ReaderSentenceSelection(
+                text = extractFullSentenceLikeHoshi(
+                    text = cue.text,
+                    anchorText = popupSelectionText ?: groupedResult.term,
+                    anchorIndexHint = lookupPopupAnchorOffset ?: selectedLookupRange?.first
+                ),
+                cueRange = (cues.indexOf(baseCue).takeIf { it >= 0 } ?: 0)..(cues.indexOf(baseCue).takeIf { it >= 0 } ?: 0)
+            )
+            else -> ReaderSentenceSelection(
+                text = cue.text,
+                cueRange = (cues.indexOf(baseCue).takeIf { it >= 0 } ?: 0)..(cues.indexOf(baseCue).takeIf { it >= 0 } ?: 0)
+            )
+        }
+        val exportCue = sentenceSelection.cueRange
+            .takeIf { it.first >= 0 && it.last < cues.size }
+            ?.let { range ->
+                ReaderSubtitleCue(
+                    startMs = cues[range.first].startMs,
+                    endMs = cues[range.last].endMs,
+                    text = sentenceSelection.text
+                )
+            }
+            ?: cue
         lookupPopupVisible = false
         lookupPopupSelectionText = null
+        consumeCueRangeSelection()
         scope.launch {
             ankiActionStatus = context.getString(R.string.bookreader_anki_exporting)
             val result = withContext(Dispatchers.IO) {
@@ -1463,7 +1638,7 @@ private fun BookReaderScreen(
                     try {
                         addLookupDefinitionToAnki(
                             context = context,
-                            cue = cue,
+                            cue = exportCue,
                             audioUri = audioUri,
                             lookupAudioUri = preparedLookupAudio?.uri,
                             bookTitle = title,
@@ -1471,7 +1646,8 @@ private fun BookReaderScreen(
                             definition = primaryDefinition.ifBlank { groupedResult.term },
                             dictionaryCss = null,
                             glossarySections = glossarySections,
-                            popupSelectionText = popupSelectionText
+                            popupSelectionText = popupSelectionText,
+                            sentenceOverride = sentenceSelection.text
                         )
                     } finally {
                         preparedLookupAudio?.cleanup?.invoke()
@@ -1489,6 +1665,7 @@ private fun BookReaderScreen(
     }
 
     fun playLookupGroupAudio(groupedResult: GroupedLookupResult) {
+        consumeCueRangeSelection()
         playLookupAudioForTerm(
             context = context,
             term = groupedResult.term,
@@ -1603,6 +1780,10 @@ private fun BookReaderScreen(
     }
 
     BackHandler {
+        Log.d(
+            BOOK_READER_RANGE_LOG_TAG,
+            "BackHandler lookupPopupVisible=$lookupPopupVisible chapterOptionsVisible=$chapterOptionsVisible coverModeEnabled=$coverModeEnabled"
+        )
         when {
             lookupPopupVisible -> closeLookupPopup()
             sleepTimerOptionsVisible -> sleepTimerOptionsVisible = false
@@ -1997,26 +2178,43 @@ private fun BookReaderScreen(
                                 ) {
                                     itemsIndexed(cues) { index, cue ->
                                         val isActive = index == activeCueIndex
-                                        ClickableText(
-                                            text = buildHighlightedText(
-                                                cue.text,
-                                                if (isActive) selectedLookupRange else null
-                                            ),
-                                            style = if (isActive) {
-                                                activeSubtitleStyle
-                                            } else {
-                                                MaterialTheme.typography.titleLarge.copy(
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        val inSelectedRange = selectedCueIndexRange?.contains(index) == true
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(
+                                                    if (inSelectedRange) {
+                                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                                                    } else {
+                                                        Color.Transparent
+                                                    },
+                                                    shape = RoundedCornerShape(12.dp)
                                                 )
-                                            },
-                                            onClick = { offset ->
-                                                if (isActive) {
-                                                    triggerPopupLookup(cue, offset)
+                                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        ) {
+                                            ClickableText(
+                                                text = buildHighlightedText(
+                                                    cue.text,
+                                                    if (isActive) selectedLookupRange else null
+                                                ),
+                                                style = if (isActive) {
+                                                    activeSubtitleStyle
                                                 } else {
-                                                    jumpToCue(index)
+                                                    MaterialTheme.typography.titleLarge.copy(
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                },
+                                                onClick = { offset ->
+                                                    if (cueRangeSelectionMode) {
+                                                        handleCueRangeTap(index)
+                                                    } else if (isActive) {
+                                                        triggerPopupLookup(cue, offset)
+                                                    } else {
+                                                        jumpToCue(index)
+                                                    }
                                                 }
-                                            }
-                                        )
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -2037,7 +2235,13 @@ private fun BookReaderScreen(
                                     ClickableText(
                                         text = buildHighlightedText(activeCue.text, selectedLookupRange),
                                         style = activeSubtitleStyle,
-                                        onClick = { offset -> triggerPopupLookup(activeCue, offset) }
+                                        onClick = { offset ->
+                                            if (cueRangeSelectionMode) {
+                                                handleCueRangeTap(activeCueIndex)
+                                            } else {
+                                                triggerPopupLookup(activeCue, offset)
+                                            }
+                                        }
                                     )
                                 }
                             }
@@ -2296,149 +2500,173 @@ private fun BookReaderScreen(
         Popup(
             alignment = Alignment.BottomCenter,
             offset = IntOffset(0, lookupPopupOffsetY),
-            onDismissRequest = { closeLookupPopup() },
+            onDismissRequest = {
+                if (lookupPopupTemporarilyHidden) return@Popup
+                Log.d(BOOK_READER_RANGE_LOG_TAG, "popup-onDismissRequest")
+                closeLookupPopup()
+            },
             properties = PopupProperties(
-                focusable = true,
+                focusable = !lookupPopupTemporarilyHidden,
                 dismissOnBackPress = true,
                 dismissOnClickOutside = true,
                 clippingEnabled = false
             )
         ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth(0.96f)
-                    .padding(horizontal = 8.dp, vertical = 12.dp),
-                shape = MaterialTheme.shapes.large,
-                tonalElevation = 8.dp
-            ) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+            if (lookupPopupTemporarilyHidden) {
+                Box(
+                    modifier = Modifier
+                        .size(1.dp)
+                        .alpha(0f)
+                )
+            } else {
+                Surface(
+                    modifier = Modifier
+                        .alpha(
+                            if (selectedCueIndexRange != null && !cueRangeSelectionMode) 0.92f else 1f
+                        )
+                        .fillMaxWidth(0.96f)
+                        .padding(horizontal = 8.dp, vertical = 12.dp),
+                    shape = MaterialTheme.shapes.large,
+                    tonalElevation = 8.dp
                 ) {
-                    if (ankiActionStatus != null) {
-                        Text(ankiActionStatus!!)
-                    }
-
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 380.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        if (lookupPopupLoading) {
-                            Text(stringResource(R.string.common_querying))
+                        if (ankiActionStatus != null) {
+                            Text(ankiActionStatus!!)
                         }
-                        if (lookupPopupError != null) {
-                            Text(lookupPopupError!!, color = MaterialTheme.colorScheme.error)
-                        }
-                        if (!lookupPopupLoading && groupedLookupPopupResults.isEmpty() && lookupPopupError == null) {
-                            Text(stringResource(R.string.common_no_results))
-                        }
-                        groupedLookupPopupResults.forEach { groupedResult ->
-                            Card(modifier = Modifier.fillMaxWidth()) {
-                                Column(
-                                    modifier = Modifier.padding(10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 380.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (lookupPopupLoading) {
+                                Text(stringResource(R.string.common_querying))
+                            }
+                            if (lookupPopupError != null) {
+                                Text(lookupPopupError!!, color = MaterialTheme.colorScheme.error)
+                            }
+                            if (!lookupPopupLoading && groupedLookupPopupResults.isEmpty() && lookupPopupError == null) {
+                                Text(stringResource(R.string.common_no_results))
+                            }
+                            groupedLookupPopupResults.forEach { groupedResult ->
+                                Card(modifier = Modifier.fillMaxWidth()) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        LookupHeadwordWithReading(
-                                            term = groupedResult.term,
-                                            reading = groupedResult.reading,
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .padding(end = 8.dp),
-                                        )
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            if (audiobookSettings.lookupPlaybackAudioEnabled) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            LookupHeadwordWithReading(
+                                                term = groupedResult.term,
+                                                reading = groupedResult.reading,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .padding(end = 8.dp),
+                                            )
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                if (hasSubtitleFile && audiobookSettings.lookupRangeSelectionEnabled) {
+                                                    OutlinedButton(
+                                                        onClick = {
+                                                            beginCueRangeSelection(reopenLookupPopupAfterSelection = true)
+                                                        }
+                                                    ) {
+                                                        Text("▦")
+                                                    }
+                                                }
+                                                if (audiobookSettings.lookupPlaybackAudioEnabled) {
+                                                    OutlinedButton(
+                                                        onClick = { playLookupGroupAudio(groupedResult) }
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Outlined.Audiotrack,
+                                                            contentDescription = stringResource(R.string.common_audio),
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    }
+                                                }
                                                 OutlinedButton(
-                                                    onClick = { playLookupGroupAudio(groupedResult) }
+                                                    onClick = { addLookupGroupToAnki(groupedResult) }
                                                 ) {
-                                                    Icon(
-                                                        imageVector = Icons.Outlined.Audiotrack,
-                                                        contentDescription = stringResource(R.string.common_audio),
-                                                        modifier = Modifier.size(18.dp)
-                                                    )
+                                                    Text("+")
                                                 }
                                             }
-                                            OutlinedButton(
-                                                onClick = { addLookupGroupToAnki(groupedResult) }
-                                            ) {
-                                                Text("+")
+                                        }
+                                        val frequencyLabel = stringResource(R.string.bookreader_meta_frequency)
+                                        val pitchLabel = stringResource(R.string.bookreader_meta_pitch)
+                                        val topFrequencyBadges = groupedResult.dictionaries
+                                            .asSequence()
+                                            .map { dictionaryGroup ->
+                                                parseMetaBadges(
+                                                    dictionaryGroup.frequency,
+                                                    frequencyLabel
+                                                )
+                                            }
+                                            .firstOrNull { it.isNotEmpty() }
+                                            .orEmpty()
+                                        if (topFrequencyBadges.isNotEmpty()) {
+                                            MetaBadgeRow(
+                                                badges = topFrequencyBadges,
+                                                labelColor = Color(0xFFDDF0DD),
+                                                labelTextColor = Color(0xFF305E33)
+                                            )
+                                        }
+                                        val topPitchBadges = groupedResult.dictionaries
+                                            .asSequence()
+                                            .map { dictionaryGroup ->
+                                                parsePitchBadgeGroups(
+                                                    raw = dictionaryGroup.pitch,
+                                                    reading = groupedResult.reading,
+                                                    defaultLabel = pitchLabel
+                                                )
+                                            }
+                                            .firstOrNull { it.isNotEmpty() }
+                                            .orEmpty()
+                                        if (topPitchBadges.isNotEmpty()) {
+                                            topPitchBadges.forEach { group ->
+                                                PitchBadgeRow(
+                                                    group = group,
+                                                    labelColor = Color(0xFFE7DDF8),
+                                                    labelTextColor = Color(0xFF4E3A74)
+                                                )
                                             }
                                         }
-                                    }
-                                    val frequencyLabel = stringResource(R.string.bookreader_meta_frequency)
-                                    val pitchLabel = stringResource(R.string.bookreader_meta_pitch)
-                                    val topFrequencyBadges = groupedResult.dictionaries
-                                        .asSequence()
-                                        .map { dictionaryGroup ->
-                                            parseMetaBadges(
-                                                dictionaryGroup.frequency,
-                                                frequencyLabel
-                                            )
-                                        }
-                                        .firstOrNull { it.isNotEmpty() }
-                                        .orEmpty()
-                                    if (topFrequencyBadges.isNotEmpty()) {
-                                        MetaBadgeRow(
-                                            badges = topFrequencyBadges,
-                                            labelColor = Color(0xFFDDF0DD),
-                                            labelTextColor = Color(0xFF305E33)
-                                        )
-                                    }
-                                    val topPitchBadges = groupedResult.dictionaries
-                                        .asSequence()
-                                        .map { dictionaryGroup ->
-                                            parsePitchBadgeGroups(
-                                                raw = dictionaryGroup.pitch,
-                                                reading = groupedResult.reading,
-                                                defaultLabel = pitchLabel
-                                            )
-                                        }
-                                        .firstOrNull { it.isNotEmpty() }
-                                        .orEmpty()
-                                    if (topPitchBadges.isNotEmpty()) {
-                                        topPitchBadges.forEach { group ->
-                                            PitchBadgeRow(
-                                                group = group,
-                                                labelColor = Color(0xFFE7DDF8),
-                                                labelTextColor = Color(0xFF4E3A74)
-                                            )
-                                        }
-                                    }
 
-                                    groupedResult.dictionaries.forEach { dictionaryGroup ->
-                                        val sectionKey = "readerPopup|${groupedResult.term}|${dictionaryGroup.dictionary}"
-                                        val expanded = !(lookupCollapsedSections[sectionKey] ?: false)
-                                        Card(modifier = Modifier.fillMaxWidth()) {
-                                            Column(
-                                                modifier = Modifier.padding(8.dp),
-                                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                                            ) {
-                                                DictionaryEntryHeader(
-                                                    dictionaryName = dictionaryGroup.dictionary,
-                                                    expanded = expanded,
-                                                    onToggleExpanded = {
-                                                        lookupCollapsedSections[sectionKey] = expanded
-                                                    }
-                                                )
-                                                if (expanded) {
-                                                    dictionaryGroup.definitions.forEach { definition ->
-                                                        Card(modifier = Modifier.fillMaxWidth()) {
-                                                            Column(
-                                                                modifier = Modifier.padding(8.dp),
-                                                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                                                            ) {
-                                                                RichDefinitionView(
-                                                                    definition = definition,
-                                                                    dictionaryName = null,
-                                                                    dictionaryCss = dictionaryGroup.css
-                                                                )
+                                        groupedResult.dictionaries.forEach { dictionaryGroup ->
+                                            val sectionKey = "readerPopup|${groupedResult.term}|${dictionaryGroup.dictionary}"
+                                            val expanded = !(lookupCollapsedSections[sectionKey] ?: false)
+                                            Card(modifier = Modifier.fillMaxWidth()) {
+                                                Column(
+                                                    modifier = Modifier.padding(8.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    DictionaryEntryHeader(
+                                                        dictionaryName = dictionaryGroup.dictionary,
+                                                        expanded = expanded,
+                                                        onToggleExpanded = {
+                                                            lookupCollapsedSections[sectionKey] = expanded
+                                                        }
+                                                    )
+                                                    if (expanded) {
+                                                        dictionaryGroup.definitions.forEach { definition ->
+                                                            Card(modifier = Modifier.fillMaxWidth()) {
+                                                                Column(
+                                                                    modifier = Modifier.padding(8.dp),
+                                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                                ) {
+                                                                    RichDefinitionView(
+                                                                        definition = definition,
+                                                                        dictionaryName = null,
+                                                                        dictionaryCss = dictionaryGroup.css
+                                                                    )
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -2449,11 +2677,11 @@ private fun BookReaderScreen(
                                 }
                             }
                         }
-                    }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { closeLookupPopup() }) {
-                            Text(stringResource(R.string.common_close))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { closeLookupPopup() }) {
+                                Text(stringResource(R.string.common_close))
+                            }
                         }
                     }
                 }
@@ -2471,6 +2699,123 @@ private fun buildHighlightedText(text: String, selectedRange: IntRange?): Annota
         if (endExclusive <= start) return@buildAnnotatedString
         addStyle(SpanStyle(background = Color(0x66A0A0A0)), start, endExclusive)
     }
+}
+
+private val HOSHI_SENTENCE_DELIMITERS = setOf('。', '！', '？', '.', '!', '?', '\n', '\r')
+
+private data class SentenceBounds(val start: Int, val endExclusive: Int)
+
+private fun findSentenceBoundsLikeHoshi(
+    text: String,
+    anchorIndex: Int
+): SentenceBounds {
+    if (text.isEmpty()) return SentenceBounds(0, 0)
+    val normalizedAnchor = anchorIndex.coerceIn(0, text.lastIndex)
+    var start = 0
+    for (index in (normalizedAnchor - 1) downTo 0) {
+        if (text[index] in HOSHI_SENTENCE_DELIMITERS) {
+            start = index + 1
+            break
+        }
+    }
+
+    var endExclusive = text.length
+    for (index in normalizedAnchor until text.length) {
+        if (text[index] in HOSHI_SENTENCE_DELIMITERS) {
+            endExclusive = index + 1
+            while (endExclusive < text.length) {
+                val next = text[endExclusive]
+                if (next == '「') break
+                if (next.isLetterOrDigit() || Character.getType(next) == Character.OTHER_LETTER.toInt()) {
+                    break
+                }
+                endExclusive += 1
+            }
+            break
+        }
+    }
+    return SentenceBounds(start, endExclusive)
+}
+
+private fun extractFullSentenceLikeHoshi(
+    text: String,
+    anchorText: String?,
+    anchorIndexHint: Int? = null
+): String {
+    val source = text.trim()
+    if (source.isBlank()) return ""
+    val anchor = anchorText?.trim().orEmpty()
+    val anchorIndex = when {
+        anchorIndexHint != null -> anchorIndexHint.coerceIn(0, source.lastIndex)
+        anchor.isNotBlank() -> source.indexOf(anchor).takeIf { it >= 0 } ?: 0
+        else -> 0
+    }
+    val bounds = findSentenceBoundsLikeHoshi(source, anchorIndex)
+    var sentence = source.substring(
+        bounds.start.coerceAtLeast(0),
+        bounds.endExclusive.coerceIn(bounds.start, source.length)
+    ).trim()
+    while (sentence.startsWith("「")) {
+        sentence = sentence.removePrefix("「").trimStart()
+    }
+    return sentence.ifBlank { source }
+}
+
+private fun extractFullSentenceLikeHoshiFromCues(
+    cues: List<ReaderSubtitleCue>,
+    cueIndex: Int,
+    anchorText: String?,
+    selectedRangeInCue: IntRange?,
+    rawAnchorOffsetInCue: Int?
+): ReaderSentenceSelection {
+    if (cues.isEmpty() || cueIndex !in cues.indices) return ReaderSentenceSelection("", 0..0)
+    val cueStarts = IntArray(cues.size)
+    val combined = buildString {
+        cues.forEachIndexed { index, cue ->
+            cueStarts[index] = length
+            append(cue.text)
+        }
+    }.trim()
+    if (combined.isBlank()) return ReaderSentenceSelection("", cueIndex..cueIndex)
+
+    val localCueText = cues[cueIndex].text
+    val localAnchor = anchorText?.trim().orEmpty()
+    val localAnchorIndex = when {
+        rawAnchorOffsetInCue != null -> rawAnchorOffsetInCue.coerceIn(0, localCueText.lastIndex.coerceAtLeast(0))
+        selectedRangeInCue != null -> selectedRangeInCue.first.coerceIn(0, localCueText.lastIndex.coerceAtLeast(0))
+        localAnchor.isNotBlank() -> localCueText.indexOf(localAnchor).takeIf { it >= 0 } ?: 0
+        else -> 0
+    }
+    val globalAnchor = (cueStarts[cueIndex] + localAnchorIndex).coerceIn(0, combined.lastIndex)
+    val bounds = findSentenceBoundsLikeHoshi(combined, globalAnchor)
+    var sentenceText = combined.substring(bounds.start, bounds.endExclusive).trim()
+    while (sentenceText.startsWith("「")) {
+        sentenceText = sentenceText.removePrefix("「").trimStart()
+    }
+    val leadingTrim = combined.substring(bounds.start, bounds.endExclusive).indexOf(sentenceText).takeIf { it >= 0 } ?: 0
+    val sentenceStart = bounds.start + leadingTrim
+    val sentenceEndExclusive = sentenceStart + sentenceText.length
+    var firstCue = cueIndex
+    var lastCue = cueIndex
+    for (index in cues.indices) {
+        val cueStart = cueStarts[index]
+        val cueEndExclusive = cueStart + cues[index].text.length
+        if (cueEndExclusive > sentenceStart) {
+            firstCue = index
+            break
+        }
+    }
+    for (index in cues.indices.reversed()) {
+        val cueStart = cueStarts[index]
+        if (cueStart < sentenceEndExclusive) {
+            lastCue = index
+            break
+        }
+    }
+    return ReaderSentenceSelection(
+        text = sentenceText,
+        cueRange = firstCue..lastCue
+    )
 }
 
 private fun findLookupSelection(
@@ -2512,7 +2857,8 @@ private fun addLookupDefinitionToAnki(
     definition: String,
     dictionaryCss: String?,
     glossarySections: List<String> = emptyList(),
-    popupSelectionText: String? = null
+    popupSelectionText: String? = null,
+    sentenceOverride: String? = null
 ) {
     val persistedConfig = withAnkiStep("load-config") {
         loadPersistedAnkiConfig(context)
@@ -2540,7 +2886,7 @@ private fun addLookupDefinitionToAnki(
     val card = MinedCard(
         word = entry.term,
         popupSelectionText = popupSelectionText,
-        sentence = cue.text,
+        sentence = sentenceOverride ?: cue.text,
         bookTitle = bookTitle,
         reading = entry.reading,
         definitions = cardDefinitions,

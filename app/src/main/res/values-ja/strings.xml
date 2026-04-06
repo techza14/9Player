@@ -199,6 +199,12 @@
     <string name="audiobook_pause_on_lookup">辞書表示時に再生を停止</string>
     <string name="audiobook_pause_on_lookup_enabled">有効：辞書表示時に再生を停止します。</string>
     <string name="audiobook_pause_on_lookup_disabled">無効：辞書表示時も再生を続けます。</string>
+    <string name="audiobook_lookup_full_sentence">全文を出力</string>
+    <string name="audiobook_lookup_full_sentence_enabled">有効：Anki エクスポートで全文を使います。</string>
+    <string name="audiobook_lookup_full_sentence_disabled">無効：Anki エクスポートで現在の字幕文を使います。</string>
+    <string name="audiobook_lookup_range_selection_enable">範囲選択を有効化</string>
+    <string name="audiobook_lookup_range_selection_enabled">有効：辞書ポップアップで文の範囲選択が使えます。</string>
+    <string name="audiobook_lookup_range_selection_disabled">無効：文の範囲選択を非表示にしました。</string>
     <string name="audiobook_play_audio">音声を再生</string>
     <string name="audiobook_play_audio_enabled">有効：辞書音声を再生できます。</string>
     <string name="audiobook_play_audio_disabled">無効：辞書音声の再生。</string>
@@ -270,6 +276,12 @@
     <string name="bookreader_controls_shown">再生バーを表示しました。</string>
     <string name="bookreader_controls_hidden">再生バーを隠しました。</string>
     <string name="bookreader_control_mode_entered">コントロールモードに入りました。</string>
+    <string name="bookreader_range_selection">範囲</string>
+    <string name="bookreader_range_selection_cancel">範囲解除</string>
+    <string name="bookreader_range_selection_cleared">文範囲の選択を解除しました。</string>
+    <string name="bookreader_range_select_start">開始文を選んでください。</string>
+    <string name="bookreader_range_start_selected">開始を選択：%1$d 文目。</string>
+    <string name="bookreader_range_end_selected">範囲を選択：%1$d 文目から %2$d 文目まで（全 %3$d 文）。</string>
     <string name="bookreader_subtitle_list">字幕-一覧表示</string>
     <string name="bookreader_subtitle_single">字幕-単文表示</string>
     <string name="bookreader_subtitle_list_enabled">字幕-一覧表示に切り替えました。</string>
