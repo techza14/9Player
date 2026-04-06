@@ -2115,6 +2115,45 @@ private fun ReaderSyncScreen() {
                                             }
                                         }
                                     }
+                                    val frequencyLabel = stringResource(R.string.bookreader_meta_frequency)
+                                    val pitchLabel = stringResource(R.string.bookreader_meta_pitch)
+                                    val topFrequencyBadges = groupedResult.dictionaries
+                                        .asSequence()
+                                        .map { dictionaryGroup ->
+                                            parseMetaBadges(
+                                                dictionaryGroup.frequency,
+                                                frequencyLabel
+                                            )
+                                        }
+                                        .firstOrNull { it.isNotEmpty() }
+                                        .orEmpty()
+                                    if (topFrequencyBadges.isNotEmpty()) {
+                                        MetaBadgeRow(
+                                            badges = topFrequencyBadges,
+                                            labelColor = Color(0xFFDDF0DD),
+                                            labelTextColor = Color(0xFF305E33)
+                                        )
+                                    }
+                                    val topPitchBadges = groupedResult.dictionaries
+                                        .asSequence()
+                                        .map { dictionaryGroup ->
+                                            parsePitchBadgeGroups(
+                                                raw = dictionaryGroup.pitch,
+                                                reading = groupedResult.reading,
+                                                defaultLabel = pitchLabel
+                                            )
+                                        }
+                                        .firstOrNull { it.isNotEmpty() }
+                                        .orEmpty()
+                                    if (topPitchBadges.isNotEmpty()) {
+                                        topPitchBadges.forEach { group ->
+                                            PitchBadgeRow(
+                                                group = group,
+                                                labelColor = Color(0xFFE7DDF8),
+                                                labelTextColor = Color(0xFF4E3A74)
+                                            )
+                                        }
+                                    }
                                     groupedResult.dictionaries.forEach { dictionaryGroup ->
                                         val sectionKey = "dictionary|${groupedResult.term}|${dictionaryGroup.dictionary}"
                                         val expanded = !(dictionaryLookupCollapsedSections[sectionKey] ?: false)
@@ -2123,29 +2162,6 @@ private fun ReaderSyncScreen() {
                                                 modifier = Modifier.padding(8.dp),
                                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
-                                                val frequencyBadges = parseMetaBadges(dictionaryGroup.frequency, stringResource(R.string.bookreader_meta_frequency))
-                                                if (frequencyBadges.isNotEmpty()) {
-                                                    MetaBadgeRow(
-                                                        badges = frequencyBadges,
-                                                        labelColor = Color(0xFFDDF0DD),
-                                                        labelTextColor = Color(0xFF305E33)
-                                                    )
-                                                }
-                                                val pitchBadges = parsePitchBadgeGroups(
-                                                    raw = dictionaryGroup.pitch,
-                                                    reading = groupedResult.reading,
-                                                    defaultLabel = stringResource(R.string.bookreader_meta_pitch)
-                                                )
-                                                if (pitchBadges.isNotEmpty()) {
-                                                    pitchBadges.forEach { group ->
-                                                        PitchBadgeRow(
-                                                            group = group,
-                                                            labelColor = Color(0xFFE7DDF8),
-                                                            labelTextColor = Color(0xFF4E3A74)
-                                                        )
-                                                    }
-                                                }
-
                                                 DictionaryEntryHeader(
                                                     dictionaryName = dictionaryGroup.dictionary,
                                                     expanded = expanded,
@@ -2488,8 +2504,47 @@ private fun ReaderSyncScreen() {
                                                 ) {
                                                     Text("+")
                                                 }
-                                            }
                                         }
+                                    }
+                                    val frequencyLabel = stringResource(R.string.bookreader_meta_frequency)
+                                    val pitchLabel = stringResource(R.string.bookreader_meta_pitch)
+                                    val topFrequencyBadges = groupedResult.dictionaries
+                                        .asSequence()
+                                        .map { dictionaryGroup ->
+                                            parseMetaBadges(
+                                                dictionaryGroup.frequency,
+                                                frequencyLabel
+                                            )
+                                        }
+                                        .firstOrNull { it.isNotEmpty() }
+                                        .orEmpty()
+                                    if (topFrequencyBadges.isNotEmpty()) {
+                                        MetaBadgeRow(
+                                            badges = topFrequencyBadges,
+                                            labelColor = Color(0xFFDDF0DD),
+                                            labelTextColor = Color(0xFF305E33)
+                                        )
+                                    }
+                                    val topPitchBadges = groupedResult.dictionaries
+                                        .asSequence()
+                                        .map { dictionaryGroup ->
+                                            parsePitchBadgeGroups(
+                                                raw = dictionaryGroup.pitch,
+                                                reading = groupedResult.reading,
+                                                defaultLabel = pitchLabel
+                                            )
+                                        }
+                                        .firstOrNull { it.isNotEmpty() }
+                                        .orEmpty()
+                                    if (topPitchBadges.isNotEmpty()) {
+                                        topPitchBadges.forEach { group ->
+                                            PitchBadgeRow(
+                                                group = group,
+                                                labelColor = Color(0xFFE7DDF8),
+                                                labelTextColor = Color(0xFF4E3A74)
+                                            )
+                                        }
+                                    }
                                         groupedResult.dictionaries.forEach { dictionaryGroup ->
                                             val sectionKey = "mainPopup|${groupedResult.term}|${dictionaryGroup.dictionary}"
                                             val expanded = !(mainLookupCollapsedSections[sectionKey] ?: false)
@@ -2498,29 +2553,6 @@ private fun ReaderSyncScreen() {
                                                     modifier = Modifier.padding(8.dp),
                                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                                 ) {
-                                                val frequencyBadges = parseMetaBadges(dictionaryGroup.frequency, stringResource(R.string.bookreader_meta_frequency))
-                                                    if (frequencyBadges.isNotEmpty()) {
-                                                        MetaBadgeRow(
-                                                            badges = frequencyBadges,
-                                                            labelColor = Color(0xFFDDF0DD),
-                                                            labelTextColor = Color(0xFF305E33)
-                                                        )
-                                                    }
-                                                    val pitchBadges = parsePitchBadgeGroups(
-                                                        raw = dictionaryGroup.pitch,
-                                                        reading = groupedResult.reading,
-                                                    defaultLabel = stringResource(R.string.bookreader_meta_pitch)
-                                                    )
-                                                    if (pitchBadges.isNotEmpty()) {
-                                                        pitchBadges.forEach { group ->
-                                                            PitchBadgeRow(
-                                                                group = group,
-                                                                labelColor = Color(0xFFE7DDF8),
-                                                                labelTextColor = Color(0xFF4E3A74)
-                                                            )
-                                                        }
-                                                    }
-
                                                     DictionaryEntryHeader(
                                                         dictionaryName = dictionaryGroup.dictionary,
                                                         expanded = expanded,

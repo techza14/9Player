@@ -474,6 +474,7 @@ private fun BookReaderScreen(
     var playbackSpeed by remember { mutableStateOf(1.0f) }
     var chapterOptionsVisible by remember { mutableStateOf(false) }
     var coverModeEnabled by remember(srtUri) { mutableStateOf(srtUri == null) }
+    val hasSubtitleFile = srtUri != null
     var showOverallProgress by remember { mutableStateOf(false) }
     var showOverallDuration by remember { mutableStateOf(false) }
     var timeEditDialogVisible by remember { mutableStateOf(false) }
@@ -537,9 +538,16 @@ private fun BookReaderScreen(
     }
     DisposableEffect(controlModeEnabled, context) {
         val shouldDimToMinimum = controlModeEnabled && loadGamepadControlConfig(context).dimScreenInControlMode
-        applyControlModeScreenBrightness(context, dimToMinimum = shouldDimToMinimum)
+        val restoreBrightness = applyControlModeScreenBrightness(context, dimToMinimum = shouldDimToMinimum)
         onDispose {
-            applyControlModeScreenBrightness(context, dimToMinimum = false)
+            restoreBrightness()
+        }
+    }
+
+    LaunchedEffect(hasSubtitleFile) {
+        if (!hasSubtitleFile && controlModeEnabled) {
+            controlModeEnabled = false
+            controlModeStatus = null
         }
     }
 
@@ -1864,14 +1872,16 @@ private fun BookReaderScreen(
                                     }
                                 }
                             )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.bookreader_control_mode)) },
-                                onClick = {
-                                    controlModeEnabled = true
-                                    topActionsExpanded = false
-                                    controlModeStatus = context.getString(R.string.bookreader_control_mode_entered)
-                                }
-                            )
+                            if (hasSubtitleFile) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.bookreader_control_mode)) },
+                                    onClick = {
+                                        controlModeEnabled = true
+                                        topActionsExpanded = false
+                                        controlModeStatus = context.getString(R.string.bookreader_control_mode_entered)
+                                    }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = {
                                     Text(
@@ -1943,7 +1953,7 @@ private fun BookReaderScreen(
                                     if (coverUri != null) {
                                         Text(
                                             text = title,
-                                            color = Color.Black,
+                                            color = MaterialTheme.colorScheme.onSurface,
                                             style = MaterialTheme.typography.titleLarge,
                                             maxLines = 2,
                                             overflow = TextOverflow.Ellipsis,
@@ -1963,10 +1973,15 @@ private fun BookReaderScreen(
                                             )
                                         }
                                     } else {
-                                        Text(text = title, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
+                                        Text(
+                                            text = title,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                        )
                                         Box(modifier = Modifier.fillMaxSize()) {
                                             Text(
                                                 text = "No cover",
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.align(Alignment.Center)
                                             )
                                         }
@@ -2357,6 +2372,45 @@ private fun BookReaderScreen(
                                             }
                                         }
                                     }
+                                    val frequencyLabel = stringResource(R.string.bookreader_meta_frequency)
+                                    val pitchLabel = stringResource(R.string.bookreader_meta_pitch)
+                                    val topFrequencyBadges = groupedResult.dictionaries
+                                        .asSequence()
+                                        .map { dictionaryGroup ->
+                                            parseMetaBadges(
+                                                dictionaryGroup.frequency,
+                                                frequencyLabel
+                                            )
+                                        }
+                                        .firstOrNull { it.isNotEmpty() }
+                                        .orEmpty()
+                                    if (topFrequencyBadges.isNotEmpty()) {
+                                        MetaBadgeRow(
+                                            badges = topFrequencyBadges,
+                                            labelColor = Color(0xFFDDF0DD),
+                                            labelTextColor = Color(0xFF305E33)
+                                        )
+                                    }
+                                    val topPitchBadges = groupedResult.dictionaries
+                                        .asSequence()
+                                        .map { dictionaryGroup ->
+                                            parsePitchBadgeGroups(
+                                                raw = dictionaryGroup.pitch,
+                                                reading = groupedResult.reading,
+                                                defaultLabel = pitchLabel
+                                            )
+                                        }
+                                        .firstOrNull { it.isNotEmpty() }
+                                        .orEmpty()
+                                    if (topPitchBadges.isNotEmpty()) {
+                                        topPitchBadges.forEach { group ->
+                                            PitchBadgeRow(
+                                                group = group,
+                                                labelColor = Color(0xFFE7DDF8),
+                                                labelTextColor = Color(0xFF4E3A74)
+                                            )
+                                        }
+                                    }
 
                                     groupedResult.dictionaries.forEach { dictionaryGroup ->
                                         val sectionKey = "readerPopup|${groupedResult.term}|${dictionaryGroup.dictionary}"
@@ -2366,32 +2420,6 @@ private fun BookReaderScreen(
                                                 modifier = Modifier.padding(8.dp),
                                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
-                                                val frequencyBadges = parseMetaBadges(
-                                                    dictionaryGroup.frequency,
-                                                    stringResource(R.string.bookreader_meta_frequency)
-                                                )
-                                                if (frequencyBadges.isNotEmpty()) {
-                                                    MetaBadgeRow(
-                                                        badges = frequencyBadges,
-                                                        labelColor = Color(0xFFDDF0DD),
-                                                        labelTextColor = Color(0xFF305E33)
-                                                    )
-                                                }
-                                                val pitchBadges = parsePitchBadgeGroups(
-                                                    raw = dictionaryGroup.pitch,
-                                                    reading = groupedResult.reading,
-                                                    defaultLabel = stringResource(R.string.bookreader_meta_pitch)
-                                                )
-                                                if (pitchBadges.isNotEmpty()) {
-                                                    pitchBadges.forEach { group ->
-                                                        PitchBadgeRow(
-                                                            group = group,
-                                                            labelColor = Color(0xFFE7DDF8),
-                                                            labelTextColor = Color(0xFF4E3A74)
-                                                        )
-                                                    }
-                                                }
-
                                                 DictionaryEntryHeader(
                                                     dictionaryName = dictionaryGroup.dictionary,
                                                     expanded = expanded,
@@ -3044,10 +3072,63 @@ private fun queryBookDisplayName(contentResolver: ContentResolver, uri: Uri): St
     } ?: fallback
 }
 
-private fun applyControlModeScreenBrightness(context: Context, dimToMinimum: Boolean) {
-    val activity = context.findHostActivity() ?: return
-    val window = activity.window ?: return
+private fun applyControlModeScreenBrightness(context: Context, dimToMinimum: Boolean): () -> Unit {
+    val activity = context.findHostActivity() ?: return {}
+    val window = activity.window ?: return {}
+
+    if (Settings.System.canWrite(context)) {
+        val resolver = context.contentResolver
+        val previousMode = runCatching {
+            Settings.System.getInt(resolver, Settings.System.SCREEN_BRIGHTNESS_MODE)
+        }.getOrNull()
+        val previousBrightness = runCatching {
+            Settings.System.getInt(resolver, Settings.System.SCREEN_BRIGHTNESS)
+        }.getOrNull()
+
+        if (dimToMinimum) {
+            runCatching {
+                Settings.System.putInt(
+                    resolver,
+                    Settings.System.SCREEN_BRIGHTNESS_MODE,
+                    Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+                )
+                Settings.System.putInt(
+                    resolver,
+                    Settings.System.SCREEN_BRIGHTNESS,
+                    1
+                )
+            }
+        }
+
+        return {
+            previousMode?.let {
+                runCatching {
+                    Settings.System.putInt(
+                        resolver,
+                        Settings.System.SCREEN_BRIGHTNESS_MODE,
+                        it
+                    )
+                }
+            }
+            previousBrightness?.let {
+                runCatching {
+                    Settings.System.putInt(
+                        resolver,
+                        Settings.System.SCREEN_BRIGHTNESS,
+                        it
+                    )
+                }
+            }
+            val attrs = window.attributes
+            if (attrs.screenBrightness != WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE) {
+                attrs.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                window.attributes = attrs
+            }
+        }
+    }
+
     val attrs = window.attributes
+    val previousBrightness = attrs.screenBrightness
     val targetBrightness = if (dimToMinimum) {
         0.01f
     } else {
@@ -3056,6 +3137,13 @@ private fun applyControlModeScreenBrightness(context: Context, dimToMinimum: Boo
     if (attrs.screenBrightness != targetBrightness) {
         attrs.screenBrightness = targetBrightness
         window.attributes = attrs
+    }
+    return {
+        val restoreAttrs = window.attributes
+        if (restoreAttrs.screenBrightness != previousBrightness) {
+            restoreAttrs.screenBrightness = previousBrightness
+            window.attributes = restoreAttrs
+        }
     }
 }
 
