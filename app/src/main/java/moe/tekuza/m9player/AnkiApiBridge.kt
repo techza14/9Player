@@ -15,6 +15,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
+import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -77,6 +78,7 @@ private val SINGLE_FREQUENCY_NUMBER_DICT_MARKER_REGEX =
 private val SINGLE_FREQUENCY_DICT_MARKER_REGEX = Regex("\\{single-frequency-([^{}]+)\\}", RegexOption.IGNORE_CASE)
 private val NON_ALNUM_TEMPLATE_KEY_REGEX = Regex("[^a-z0-9]")
 private val DICTIONARY_TOKEN_STRIP_REGEX = Regex("[\\s\\p{Punct}\\p{S}]")
+private const val ANKI_AUDIO_LOG_TAG = "AnkiAudio"
 
 internal fun loadAnkiCatalog(context: Context): AnkiCatalog {
     if (!isAnkiInstalled(context)) error("AnkiDroid is not installed")
@@ -506,6 +508,10 @@ private fun attachAudio(
         uri: Uri,
         grantReadPermission: Boolean
     ): String? {
+        Log.d(
+            ANKI_AUDIO_LOG_TAG,
+            "audio-attempt label=$label uri=$uri scheme=${uri.scheme.orEmpty()} last=${uri.lastPathSegment.orEmpty()} grant=$grantReadPermission"
+        )
         if (grantReadPermission && uri.scheme.equals("content", ignoreCase = true)) {
             runCatching {
                 context.grantUriPermission(
@@ -672,6 +678,10 @@ private fun attachLookupAudio(
         uri: Uri,
         grantReadPermission: Boolean
     ): String? {
+        Log.d(
+            ANKI_AUDIO_LOG_TAG,
+            "lookup-attempt label=$label uri=$uri scheme=${uri.scheme.orEmpty()} last=${uri.lastPathSegment.orEmpty()} grant=$grantReadPermission"
+        )
         if (grantReadPermission && uri.scheme.equals("content", ignoreCase = true)) {
             runCatching {
                 context.grantUriPermission(
@@ -799,13 +809,27 @@ private fun addMediaAsAudioTag(
     onAttemptFailure: (String) -> Unit = {}
 ): String? {
     val resolvedName = buildPreferredAudioMediaName(preferredName, uri)
+    Log.d(
+        ANKI_AUDIO_LOG_TAG,
+        "anki-addmedia-attempt uri=$uri scheme=${uri.scheme.orEmpty()} last=${uri.lastPathSegment.orEmpty()} name=$resolvedName"
+    )
     val mediaTag = runCatching {
         // Per Anki API contract, mediaType must be "audio" or "image".
         api.addMediaFromUri(uri, resolvedName, "audio")
     }.onFailure {
         onAttemptFailure("exception=${it.message ?: it.javaClass.simpleName}")
     }.getOrNull()
-    if (!mediaTag.isNullOrBlank()) return mediaTag
+    if (!mediaTag.isNullOrBlank()) {
+        Log.d(
+            ANKI_AUDIO_LOG_TAG,
+            "anki-addmedia-success name=$resolvedName tag=$mediaTag"
+        )
+        return mediaTag
+    }
+    Log.d(
+        ANKI_AUDIO_LOG_TAG,
+        "anki-addmedia-null name=$resolvedName uri=$uri"
+    )
     onAttemptFailure("returned-null")
     return null
 }
@@ -1440,11 +1464,19 @@ private fun transcodeWavToM4aWithAudioConverter(
             onFailure("audioconverter-invalid-wav-header")
             return null
         }
+        Log.d(
+            ANKI_AUDIO_LOG_TAG,
+            "wav-to-m4a-start source=$sourceUri file=${wavFile.absolutePath} sampleRate=${wavInfo.sampleRate} channels=${wavInfo.channelCount}"
+        )
 
         val outputFile = createAnkiMediaTempFile(context, prefix = prefix, extension = "m4a")
         val bitRate = recommendedM4aBitrate(
             sampleRate = wavInfo.sampleRate,
             channelCount = wavInfo.channelCount
+        )
+        Log.d(
+            ANKI_AUDIO_LOG_TAG,
+            "wav-to-m4a-config output=${outputFile.absolutePath} bitRate=$bitRate"
         )
         val result = runCatching {
             WavToM4AConverter(
@@ -1453,6 +1485,11 @@ private fun transcodeWavToM4aWithAudioConverter(
                 bitRate
             ).convert(wavFile, outputFile)
         }.onFailure {
+            Log.e(
+                ANKI_AUDIO_LOG_TAG,
+                "wav-to-m4a-exception source=$sourceUri file=${wavFile.absolutePath}",
+                it
+            )
             onFailure("audioconverter-exception=${it.javaClass.simpleName}")
         }.getOrNull() ?: run {
             outputFile.delete()
@@ -1460,15 +1497,27 @@ private fun transcodeWavToM4aWithAudioConverter(
         }
 
         if (result.convertCode != ConvertionCode.SUCCESS) {
+            Log.e(
+                ANKI_AUDIO_LOG_TAG,
+                "wav-to-m4a-failed code=${result.convertCode} message=${result.errorMessage.orEmpty()}"
+            )
             onFailure("audioconverter-failed=${result.errorMessage.orEmpty()}")
             outputFile.delete()
             return null
         }
         if (!outputFile.exists() || outputFile.length() <= 0L) {
+            Log.e(
+                ANKI_AUDIO_LOG_TAG,
+                "wav-to-m4a-empty-output output=${outputFile.absolutePath}"
+            )
             onFailure("audioconverter-empty-output")
             outputFile.delete()
             return null
         }
+        Log.d(
+            ANKI_AUDIO_LOG_TAG,
+            "wav-to-m4a-success output=${outputFile.absolutePath} size=${outputFile.length()}"
+        )
         return outputFile
     } finally {
         runCatching { tempWavFile?.delete() }

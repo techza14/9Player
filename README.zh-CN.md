@@ -119,6 +119,8 @@ Double tap: Expand the control bar.
 - [Ankiconnect Android](https://github.com/KamWithK/AnkiconnectAndroid)本地音频
 - [Yomitan](https://github.com/yomidevs/yomitan)
 - [Voice](https://github.com/PaulWoitaschek/Voice)
+- [AudioConverter](https://github.com/renezuidhof/AudioConverter)
+- [taglib](https://github.com/Kyant0/taglib)
 
 ## License
 
