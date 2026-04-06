@@ -275,6 +275,8 @@ private fun ReaderSyncScreen() {
     var lookupLoading by remember { mutableStateOf(false) }
     var selectedEntryKey by remember { mutableStateOf<String?>(null) }
     var dictionaryLookupAutoPlayedKey by remember { mutableStateOf<String?>(null) }
+    val dictionaryLookupCollapsedSections = remember { mutableStateMapOf<String, Boolean>() }
+    val mainLookupCollapsedSections = remember { mutableStateMapOf<String, Boolean>() }
 
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var pendingAnkiCard by remember { mutableStateOf<MinedCard?>(null) }
@@ -2114,6 +2116,8 @@ private fun ReaderSyncScreen() {
                                         }
                                     }
                                     groupedResult.dictionaries.forEach { dictionaryGroup ->
+                                        val sectionKey = "dictionary|${groupedResult.term}|${dictionaryGroup.dictionary}"
+                                        val expanded = !(dictionaryLookupCollapsedSections[sectionKey] ?: false)
                                         Card(modifier = Modifier.fillMaxWidth()) {
                                             Column(
                                                 modifier = Modifier.padding(8.dp),
@@ -2142,17 +2146,26 @@ private fun ReaderSyncScreen() {
                                                     }
                                                 }
 
-                                                dictionaryGroup.definitions.forEach { definition ->
-                                                    Card(modifier = Modifier.fillMaxWidth()) {
-                                                        Column(
-                                                            modifier = Modifier.padding(8.dp),
-                                                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                                                        ) {
-                                                            RichDefinitionView(
-                                                                definition = definition,
-                                                                dictionaryName = null,
-                                                                dictionaryCss = dictionaryGroup.css
-                                                            )
+                                                DictionaryEntryHeader(
+                                                    dictionaryName = dictionaryGroup.dictionary,
+                                                    expanded = expanded,
+                                                    onToggleExpanded = {
+                                                        dictionaryLookupCollapsedSections[sectionKey] = expanded
+                                                    }
+                                                )
+                                                if (expanded) {
+                                                    dictionaryGroup.definitions.forEach { definition ->
+                                                        Card(modifier = Modifier.fillMaxWidth()) {
+                                                            Column(
+                                                                modifier = Modifier.padding(8.dp),
+                                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                            ) {
+                                                                RichDefinitionView(
+                                                                    definition = definition,
+                                                                    dictionaryName = null,
+                                                                    dictionaryCss = dictionaryGroup.css
+                                                                )
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -2478,6 +2491,8 @@ private fun ReaderSyncScreen() {
                                             }
                                         }
                                         groupedResult.dictionaries.forEach { dictionaryGroup ->
+                                            val sectionKey = "mainPopup|${groupedResult.term}|${dictionaryGroup.dictionary}"
+                                            val expanded = !(mainLookupCollapsedSections[sectionKey] ?: false)
                                             Card(modifier = Modifier.fillMaxWidth()) {
                                                 Column(
                                                     modifier = Modifier.padding(8.dp),
@@ -2506,17 +2521,26 @@ private fun ReaderSyncScreen() {
                                                         }
                                                     }
 
-                                                    dictionaryGroup.definitions.forEach { definition ->
-                                                        Card(modifier = Modifier.fillMaxWidth()) {
-                                                            Column(
-                                                                modifier = Modifier.padding(8.dp),
-                                                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                                                            ) {
-                                                                RichDefinitionView(
-                                                                    definition = definition,
-                                                                    dictionaryName = null,
-                                                                    dictionaryCss = dictionaryGroup.css
-                                                                )
+                                                    DictionaryEntryHeader(
+                                                        dictionaryName = dictionaryGroup.dictionary,
+                                                        expanded = expanded,
+                                                        onToggleExpanded = {
+                                                            mainLookupCollapsedSections[sectionKey] = expanded
+                                                        }
+                                                    )
+                                                    if (expanded) {
+                                                        dictionaryGroup.definitions.forEach { definition ->
+                                                            Card(modifier = Modifier.fillMaxWidth()) {
+                                                                Column(
+                                                                    modifier = Modifier.padding(8.dp),
+                                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                                ) {
+                                                                    RichDefinitionView(
+                                                                        definition = definition,
+                                                                        dictionaryName = null,
+                                                                        dictionaryCss = dictionaryGroup.css
+                                                                    )
+                                                                }
                                                             }
                                                         }
                                                     }

@@ -2,6 +2,7 @@ package moe.tekuza.m9player
 
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -27,6 +28,38 @@ import androidx.compose.ui.unit.dp
 internal data class MetaBadge(val label: String, val value: String)
 internal data class PitchBadgeGroup(val label: String, val reading: String?, val values: List<String>)
 private data class RubyPart(val base: String, val ruby: String?)
+
+@Composable
+internal fun DictionaryEntryHeader(
+    dictionaryName: String,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggleExpanded),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            color = Color(0xFFC09AE8),
+            contentColor = Color.White,
+            shape = RoundedCornerShape(6.dp)
+        ) {
+            Text(
+                text = dictionaryName,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.labelLarge
+            )
+        }
+        Text(
+            text = if (expanded) "▾" else "▸",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
 
 @Composable
 internal fun LookupHeadwordWithReading(

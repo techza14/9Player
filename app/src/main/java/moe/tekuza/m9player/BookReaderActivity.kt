@@ -78,6 +78,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -452,6 +453,7 @@ private fun BookReaderScreen(
     var ankiActionStatus by remember { mutableStateOf<String?>(null) }
     var lookupPopupAutoPlayNonce by remember { mutableStateOf(0L) }
     var lookupPopupAutoPlayedKey by remember { mutableStateOf<String?>(null) }
+    val lookupCollapsedSections = remember { mutableStateMapOf<String, Boolean>() }
     var resumePlaybackAfterLookupDismiss by remember { mutableStateOf(false) }
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
 
@@ -2357,6 +2359,8 @@ private fun BookReaderScreen(
                                     }
 
                                     groupedResult.dictionaries.forEach { dictionaryGroup ->
+                                        val sectionKey = "readerPopup|${groupedResult.term}|${dictionaryGroup.dictionary}"
+                                        val expanded = !(lookupCollapsedSections[sectionKey] ?: false)
                                         Card(modifier = Modifier.fillMaxWidth()) {
                                             Column(
                                                 modifier = Modifier.padding(8.dp),
@@ -2388,17 +2392,26 @@ private fun BookReaderScreen(
                                                     }
                                                 }
 
-                                                dictionaryGroup.definitions.forEach { definition ->
-                                                    Card(modifier = Modifier.fillMaxWidth()) {
-                                                        Column(
-                                                            modifier = Modifier.padding(8.dp),
-                                                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                                                        ) {
+                                                DictionaryEntryHeader(
+                                                    dictionaryName = dictionaryGroup.dictionary,
+                                                    expanded = expanded,
+                                                    onToggleExpanded = {
+                                                        lookupCollapsedSections[sectionKey] = expanded
+                                                    }
+                                                )
+                                                if (expanded) {
+                                                    dictionaryGroup.definitions.forEach { definition ->
+                                                        Card(modifier = Modifier.fillMaxWidth()) {
+                                                            Column(
+                                                                modifier = Modifier.padding(8.dp),
+                                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                            ) {
                                                                 RichDefinitionView(
                                                                     definition = definition,
                                                                     dictionaryName = null,
                                                                     dictionaryCss = dictionaryGroup.css
                                                                 )
+                                                            }
                                                         }
                                                     }
                                                 }
