@@ -206,6 +206,12 @@
     <string name="audiobook_pause_on_lookup">点击查词时停止播放</string>
     <string name="audiobook_pause_on_lookup_enabled">已开启：点击查词时停止播放。</string>
     <string name="audiobook_pause_on_lookup_disabled">已关闭：点击查词时停止播放。</string>
+    <string name="audiobook_lookup_full_sentence">输出完整句子</string>
+    <string name="audiobook_lookup_full_sentence_enabled">已开启：Anki 导出时输出完整句子。</string>
+    <string name="audiobook_lookup_full_sentence_disabled">已关闭：Anki 导出时输出当前字幕文本。</string>
+    <string name="audiobook_lookup_range_selection_enable">开启选中范围功能</string>
+    <string name="audiobook_lookup_range_selection_enabled">已开启：可以在查词弹窗中选择句子范围。</string>
+    <string name="audiobook_lookup_range_selection_disabled">已关闭：已隐藏句子范围功能。</string>
     <string name="audiobook_play_audio">播放音频</string>
     <string name="audiobook_play_audio_enabled">已开启：查词时可播放音频。</string>
     <string name="audiobook_play_audio_disabled">已关闭：查词时播放音频。</string>
@@ -278,6 +284,12 @@
     <string name="bookreader_controls_shown">已显示播放条。</string>
     <string name="bookreader_controls_hidden">已隐藏播放条。</string>
     <string name="bookreader_control_mode_entered">已进入控制模式。</string>
+    <string name="bookreader_range_selection">范围</string>
+    <string name="bookreader_range_selection_cancel">取消范围</string>
+    <string name="bookreader_range_selection_cleared">已取消句子范围选择。</string>
+    <string name="bookreader_range_select_start">请选择起点句子。</string>
+    <string name="bookreader_range_start_selected">已选择起点：第 %1$d 句。</string>
+    <string name="bookreader_range_end_selected">已选择范围：第 %1$d 到第 %2$d 句，共 %3$d 句。</string>
     <string name="bookreader_subtitle_list">字幕-列表显示</string>
     <string name="bookreader_subtitle_single">字幕-单句显示</string>
     <string name="bookreader_subtitle_list_enabled">已切换到字幕-列表显示。</string>

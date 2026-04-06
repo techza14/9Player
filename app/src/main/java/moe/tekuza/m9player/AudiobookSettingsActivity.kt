@@ -334,6 +334,50 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
+                        text = stringResource(R.string.audiobook_lookup_full_sentence),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
+                    Switch(
+                        checked = config.lookupExportFullSentence,
+                        onCheckedChange = { checked ->
+                            saveLookupExportFullSentence(context, checked)
+                            refreshConfig()
+                            statusText = if (checked) {
+                                context.getString(R.string.audiobook_lookup_full_sentence_enabled)
+                            } else {
+                                context.getString(R.string.audiobook_lookup_full_sentence_disabled)
+                            }
+                        }
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.audiobook_lookup_range_selection_enable),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
+                    Switch(
+                        checked = config.lookupRangeSelectionEnabled,
+                        onCheckedChange = { checked ->
+                            saveLookupRangeSelectionEnabled(context, checked)
+                            refreshConfig()
+                            statusText = if (checked) {
+                                context.getString(R.string.audiobook_lookup_range_selection_enabled)
+                            } else {
+                                context.getString(R.string.audiobook_lookup_range_selection_disabled)
+                            }
+                        }
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
                         text = stringResource(R.string.audiobook_play_audio),
                         modifier = Modifier.weight(1f).padding(end = 12.dp)
                     )

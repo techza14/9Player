@@ -199,6 +199,12 @@
     <string name="audiobook_pause_on_lookup">Pause playback on lookup</string>
     <string name="audiobook_pause_on_lookup_enabled">Enabled: playback pauses on lookup.</string>
     <string name="audiobook_pause_on_lookup_disabled">Disabled: playback keeps running on lookup.</string>
+    <string name="audiobook_lookup_full_sentence">Export full sentence</string>
+    <string name="audiobook_lookup_full_sentence_enabled">Enabled: Anki export uses the full sentence.</string>
+    <string name="audiobook_lookup_full_sentence_disabled">Disabled: Anki export uses the current subtitle text.</string>
+    <string name="audiobook_lookup_range_selection_enable">Enable range selection</string>
+    <string name="audiobook_lookup_range_selection_enabled">Enabled: sentence range selection is available in the lookup popup.</string>
+    <string name="audiobook_lookup_range_selection_disabled">Disabled: sentence range selection has been hidden.</string>
     <string name="audiobook_play_audio">Play audio</string>
     <string name="audiobook_play_audio_enabled">Enabled: lookup audio can be played.</string>
     <string name="audiobook_play_audio_disabled">Disabled: lookup audio playback.</string>
@@ -270,6 +276,12 @@
     <string name="bookreader_controls_shown">Playback bar shown.</string>
     <string name="bookreader_controls_hidden">Playback bar hidden.</string>
     <string name="bookreader_control_mode_entered">Entered control mode.</string>
+    <string name="bookreader_range_selection">Range</string>
+    <string name="bookreader_range_selection_cancel">Cancel range</string>
+    <string name="bookreader_range_selection_cleared">Cleared subtitle range selection.</string>
+    <string name="bookreader_range_select_start">Choose the start subtitle.</string>
+    <string name="bookreader_range_start_selected">Start selected: subtitle %1$d.</string>
+    <string name="bookreader_range_end_selected">Range selected: subtitle %1$d to %2$d (%3$d total).</string>
     <string name="bookreader_subtitle_list">Subtitles - list</string>
     <string name="bookreader_subtitle_single">Subtitles - single line</string>
     <string name="bookreader_subtitle_list_enabled">Switched to subtitle list.</string>
