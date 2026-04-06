@@ -2698,8 +2698,10 @@ private fun findSentenceBoundsLikeHoshi(
             endExclusive = index + 1
             while (endExclusive < text.length) {
                 val next = text[endExclusive]
-                if (next == '「' || next == '『') break
                 if (next.isLetterOrDigit() || Character.getType(next) == Character.OTHER_LETTER.toInt()) {
+                    break
+                }
+                if (next !in setOf('」', '』', '）', '】', '!', '?', '！', '？', '…')) {
                     break
                 }
                 endExclusive += 1
