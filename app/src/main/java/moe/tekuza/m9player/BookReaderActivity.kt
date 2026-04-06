@@ -2676,7 +2676,6 @@ private fun buildHighlightedText(text: String, selectedRange: IntRange?): Annota
 }
 
 private val HOSHI_SENTENCE_DELIMITERS = setOf('。', '！', '？', '.', '!', '?', '\n', '\r')
-
 private data class SentenceBounds(val start: Int, val endExclusive: Int)
 
 private fun findSentenceBoundsLikeHoshi(
@@ -2699,7 +2698,7 @@ private fun findSentenceBoundsLikeHoshi(
             endExclusive = index + 1
             while (endExclusive < text.length) {
                 val next = text[endExclusive]
-                if (next == '「') break
+                if (next == '「' || next == '『') break
                 if (next.isLetterOrDigit() || Character.getType(next) == Character.OTHER_LETTER.toInt()) {
                     break
                 }
@@ -2725,13 +2724,10 @@ private fun extractFullSentenceLikeHoshi(
         else -> 0
     }
     val bounds = findSentenceBoundsLikeHoshi(source, anchorIndex)
-    var sentence = source.substring(
+    val sentence = source.substring(
         bounds.start.coerceAtLeast(0),
         bounds.endExclusive.coerceIn(bounds.start, source.length)
     ).trim()
-    while (sentence.startsWith("「")) {
-        sentence = sentence.removePrefix("「").trimStart()
-    }
     return sentence.ifBlank { source }
 }
 
@@ -2762,10 +2758,7 @@ private fun extractFullSentenceLikeHoshiFromCues(
     }
     val globalAnchor = (cueStarts[cueIndex] + localAnchorIndex).coerceIn(0, combined.lastIndex)
     val bounds = findSentenceBoundsLikeHoshi(combined, globalAnchor)
-    var sentenceText = combined.substring(bounds.start, bounds.endExclusive).trim()
-    while (sentenceText.startsWith("「")) {
-        sentenceText = sentenceText.removePrefix("「").trimStart()
-    }
+    val sentenceText = combined.substring(bounds.start, bounds.endExclusive).trim()
     val leadingTrim = combined.substring(bounds.start, bounds.endExclusive).indexOf(sentenceText).takeIf { it >= 0 } ?: 0
     val sentenceStart = bounds.start + leadingTrim
     val sentenceEndExclusive = sentenceStart + sentenceText.length

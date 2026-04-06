@@ -31,3 +31,5 @@ classes-shizuku-provider.jar
 
 # Android signature sidecar generated alongside APK
 /release/*.idsig
+
+/docs/
