@@ -115,6 +115,7 @@ Double tap: Expand the control bar.
 ## Credits
 
 - [hoshidicts](https://github.com/Manhhao/hoshidicts)
+- [Hoshi-Reader](https://github.com/Manhhao/Hoshi-Reader)
 - [Ankiconnect Android](https://github.com/KamWithK/AnkiconnectAndroid) (local audio)
 - [Yomitan](https://github.com/yomidevs/yomitan)
 - [Voice](https://github.com/PaulWoitaschek/Voice)
