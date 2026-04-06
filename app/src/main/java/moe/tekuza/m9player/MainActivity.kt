@@ -1390,11 +1390,10 @@ private fun ReaderSyncScreen() {
                 if (endExclusive > start) cueItem.text.substring(start, endExclusive) else ""
             }
         }?.trim()?.takeIf { it.isNotBlank() }
-        val glossarySections = buildGroupedGlossarySections(groupedResult)
-        val primaryDefinition = dictionaryGroup.definitions
-            .firstOrNull { it.isNotBlank() }
-            ?.trim()
-            .orEmpty()
+        val exportDefinitions = dictionaryGroup.definitions
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        val exportDefinitionHtml = exportDefinitions.joinToString("<br>").ifBlank { groupedResult.term }
         val settingsSnapshot = audiobookSettings
         mainLookupPopupVisible = false
         mainLookupPopupSelectedRange = null
@@ -1416,9 +1415,8 @@ private fun ReaderSyncScreen() {
                             lookupAudioUri = preparedLookupAudio?.uri,
                             bookTitle = readerBooks.firstOrNull { it.audioUri == mainLookupPopupAudioUri }?.title,
                             entry = dictionaryGroup.entry,
-                            definition = primaryDefinition.ifBlank { groupedResult.term },
-                            dictionaryCss = null,
-                            glossarySections = glossarySections,
+                            definition = exportDefinitionHtml,
+                            dictionaryCss = dictionaryGroup.css,
                             popupSelectionText = popupSelectionText
                         )
                     } finally {
@@ -1431,7 +1429,11 @@ private fun ReaderSyncScreen() {
                     Toast.makeText(context, context.getString(R.string.bookreader_anki_exported), Toast.LENGTH_SHORT).show()
                     context.getString(R.string.bookreader_anki_exported)
                 },
-                onFailure = { it.message ?: context.getString(R.string.bookreader_anki_export_failed) }
+                onFailure = {
+                    val message = it.message ?: context.getString(R.string.bookreader_anki_export_failed)
+                    Toast.makeText(context, message.take(200), Toast.LENGTH_LONG).show()
+                    message
+                }
             )
             mainLookupAnkiStatus = status
             exportStatus = status
@@ -3380,7 +3382,6 @@ private fun addLookupDefinitionToAnkiMain(
     entry: DictionaryEntry,
     definition: String,
     dictionaryCss: String?,
-    glossarySections: List<String> = emptyList(),
     popupSelectionText: String? = null
 ) {
     val persistedConfig = loadPersistedAnkiConfig(context)
@@ -3391,26 +3392,15 @@ private fun addLookupDefinitionToAnkiMain(
         lookupAudioUri = lookupAudioUri
     )
 
-    val normalizedGlossarySections = glossarySections
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
-    val cardDefinitions = if (normalizedGlossarySections.isNotEmpty()) {
-        normalizedGlossarySections
-    } else {
-        listOf(definition)
-    }
-    val cardDictionaryName = if (normalizedGlossarySections.isNotEmpty()) null else entry.dictionary
-    val cardDictionaryCss = dictionaryCss
-
     val card = MinedCard(
         word = entry.term,
         popupSelectionText = popupSelectionText,
         sentence = cue.text,
         bookTitle = bookTitle,
         reading = entry.reading,
-        definitions = cardDefinitions,
-        dictionaryName = cardDictionaryName,
-        dictionaryCss = cardDictionaryCss,
+        definitions = listOf(definition),
+        dictionaryName = entry.dictionary,
+        dictionaryCss = dictionaryCss,
         pitch = entry.pitch,
         frequency = entry.frequency,
         cueStartMs = cue.startMs,

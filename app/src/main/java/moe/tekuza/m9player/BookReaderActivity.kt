@@ -17,7 +17,6 @@ import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Html
 import android.util.Base64
-import android.util.Log
 import android.app.Activity
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -139,8 +138,6 @@ private const val BOOK_READER_PENDING_INTENT_REQUEST_CODE = 21_002
 private const val BOOK_READER_SLEEP_OPTIONS_PREFS = "book_reader_sleep_options_prefs"
 private const val BOOK_READER_SLEEP_EXIT_CONTROL_KEY = "sleep_exit_control"
 private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
-private const val BOOK_READER_RANGE_LOG_TAG = "BookReaderRange"
-
 class BookReaderActivity : AppCompatActivity() {
     private var gamepadKeyHandler: ((KeyEvent) -> Boolean)? = null
     private var lastMotionHorizontalKeyCode: Int? = null
@@ -177,10 +174,6 @@ class BookReaderActivity : AppCompatActivity() {
                             ?: detectConnectedControllerInfo(this)?.address
                     },
                     onBack = { currentPositionMs, currentDurationMs ->
-                        Log.d(
-                            BOOK_READER_RANGE_LOG_TAG,
-                            "onBack navigate-main positionMs=$currentPositionMs durationMs=$currentDurationMs"
-                        )
                         val playbackKey = buildBookReaderPlaybackKey(title, audioUri, srtUri)
                         val normalized = normalizeBookReaderPlaybackPosition(
                             currentPositionMs,
@@ -208,7 +201,6 @@ class BookReaderActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        Log.d(BOOK_READER_RANGE_LOG_TAG, "activity-onStart")
         floatingOverlayStartJob?.cancel()
         floatingOverlayStartJob = null
         stopAudiobookFloatingOverlayService(this)
@@ -216,7 +208,6 @@ class BookReaderActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
-        Log.d(BOOK_READER_RANGE_LOG_TAG, "activity-onStop")
         val settings = loadAudiobookSettingsConfig(this)
         floatingOverlayStartJob?.cancel()
         if (isChangingConfigurations || !settings.floatingOverlayEnabled || !BookReaderFloatingBridge.isPlaying()) return
@@ -234,7 +225,6 @@ class BookReaderActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        Log.d(BOOK_READER_RANGE_LOG_TAG, "activity-onDestroy")
         floatingOverlayStartJob?.cancel()
         floatingOverlayStartJob = null
         if (activeReaderRef?.get() === this) {
@@ -1175,10 +1165,6 @@ private fun BookReaderScreen(
 
     fun beginCueRangeSelection(reopenLookupPopupAfterSelection: Boolean) {
         if (!audiobookSettings.lookupRangeSelectionEnabled) return
-        Log.d(
-            BOOK_READER_RANGE_LOG_TAG,
-            "beginCueRangeSelection reopenAfter=$reopenLookupPopupAfterSelection"
-        )
         cueRangeSelectionMode = true
         cueRangeStartIndex = null
         cueRangeEndIndex = null
@@ -1198,10 +1184,6 @@ private fun BookReaderScreen(
     fun handleCueRangeTap(index: Int) {
         if (!cueRangeSelectionMode || cues.isEmpty()) return
         val normalizedIndex = index.coerceIn(0, cues.lastIndex)
-        Log.d(
-            BOOK_READER_RANGE_LOG_TAG,
-            "handleCueRangeTap index=$normalizedIndex start=$cueRangeStartIndex end=$cueRangeEndIndex reopen=$reopenLookupPopupAfterCueRangeSelection"
-        )
         val start = cueRangeStartIndex
         val end = cueRangeEndIndex
         when {
@@ -1225,7 +1207,6 @@ private fun BookReaderScreen(
                 cueRangeSelectionMode = false
                 if (reopenLookupPopupAfterCueRangeSelection) {
                     reopenLookupPopupAfterCueRangeSelection = false
-                    Log.d(BOOK_READER_RANGE_LOG_TAG, "popupRestoreFromHidden")
                     lookupPopupTemporarilyHidden = false
                 }
             }
@@ -1547,10 +1528,6 @@ private fun BookReaderScreen(
     }
 
     fun closeLookupPopup(resumePlayback: Boolean = true) {
-        Log.d(
-            BOOK_READER_RANGE_LOG_TAG,
-            "closeLookupPopup resumePlayback=$resumePlayback visibleBefore=$lookupPopupVisible cueRangeSelectionMode=$cueRangeSelectionMode selectedRange=$selectedCueIndexRange"
-        )
         lookupPopupVisible = false
         lookupPopupTemporarilyHidden = false
         lookupPopupSelectionText = null
@@ -1580,11 +1557,10 @@ private fun BookReaderScreen(
             }
             ?: baseCue
         val popupSelectionText = lookupPopupSelectionText?.trim()?.takeIf { it.isNotBlank() }
-        val glossarySections = buildGroupedGlossarySections(groupedResult)
-        val primaryDefinition = dictionaryGroup.definitions
-            .firstOrNull { it.isNotBlank() }
-            ?.trim()
-            .orEmpty()
+        val exportDefinitions = dictionaryGroup.definitions
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        val exportDefinitionHtml = exportDefinitions.joinToString("<br>").ifBlank { groupedResult.term }
         val settingsSnapshot = audiobookSettings
         val sentenceSelection = when {
             selectedCueIndexRange != null -> ReaderSentenceSelection(
@@ -1643,9 +1619,8 @@ private fun BookReaderScreen(
                             lookupAudioUri = preparedLookupAudio?.uri,
                             bookTitle = title,
                             entry = dictionaryGroup.entry,
-                            definition = primaryDefinition.ifBlank { groupedResult.term },
-                            dictionaryCss = null,
-                            glossarySections = glossarySections,
+                            definition = exportDefinitionHtml,
+                            dictionaryCss = dictionaryGroup.css,
                             popupSelectionText = popupSelectionText,
                             sentenceOverride = sentenceSelection.text
                         )
@@ -1659,7 +1634,11 @@ private fun BookReaderScreen(
                     Toast.makeText(context, context.getString(R.string.bookreader_anki_exported), Toast.LENGTH_SHORT).show()
                     context.getString(R.string.bookreader_anki_exported)
                 },
-                onFailure = { formatAnkiFailure(it) }
+                onFailure = {
+                    val message = formatAnkiFailure(it)
+                    Toast.makeText(context, message.take(200), Toast.LENGTH_LONG).show()
+                    message
+                }
             )
         }
     }
@@ -1780,10 +1759,6 @@ private fun BookReaderScreen(
     }
 
     BackHandler {
-        Log.d(
-            BOOK_READER_RANGE_LOG_TAG,
-            "BackHandler lookupPopupVisible=$lookupPopupVisible chapterOptionsVisible=$chapterOptionsVisible coverModeEnabled=$coverModeEnabled"
-        )
         when {
             lookupPopupVisible -> closeLookupPopup()
             sleepTimerOptionsVisible -> sleepTimerOptionsVisible = false
@@ -2502,7 +2477,6 @@ private fun BookReaderScreen(
             offset = IntOffset(0, lookupPopupOffsetY),
             onDismissRequest = {
                 if (lookupPopupTemporarilyHidden) return@Popup
-                Log.d(BOOK_READER_RANGE_LOG_TAG, "popup-onDismissRequest")
                 closeLookupPopup()
             },
             properties = PopupProperties(
@@ -2856,7 +2830,6 @@ private fun addLookupDefinitionToAnki(
     entry: DictionaryEntry,
     definition: String,
     dictionaryCss: String?,
-    glossarySections: List<String> = emptyList(),
     popupSelectionText: String? = null,
     sentenceOverride: String? = null
 ) {
@@ -2872,26 +2845,15 @@ private fun addLookupDefinitionToAnki(
         )
     }
 
-    val normalizedGlossarySections = glossarySections
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
-    val cardDefinitions = if (normalizedGlossarySections.isNotEmpty()) {
-        normalizedGlossarySections
-    } else {
-        listOf(definition)
-    }
-    val cardDictionaryName = if (normalizedGlossarySections.isNotEmpty()) null else entry.dictionary
-    val cardDictionaryCss = dictionaryCss
-
     val card = MinedCard(
         word = entry.term,
         popupSelectionText = popupSelectionText,
         sentence = sentenceOverride ?: cue.text,
         bookTitle = bookTitle,
         reading = entry.reading,
-        definitions = cardDefinitions,
-        dictionaryName = cardDictionaryName,
-        dictionaryCss = cardDictionaryCss,
+        definitions = listOf(definition),
+        dictionaryName = entry.dictionary,
+        dictionaryCss = dictionaryCss,
         pitch = entry.pitch,
         frequency = entry.frequency,
         cueStartMs = cue.startMs,

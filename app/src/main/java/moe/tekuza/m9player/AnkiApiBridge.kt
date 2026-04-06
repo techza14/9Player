@@ -170,14 +170,8 @@ internal fun prepareAnkiExport(
     if (!hasAnyAnkiFieldTemplate(templates)) {
         error(context.getString(R.string.error_anki_fields_empty))
     }
-    if (audioUri != null && !templates.values.any { templateUsesVariable(it, "cut-audio") }) {
-        error(context.getString(R.string.error_anki_cut_audio_missing))
-    }
     val requiresLookupAudio = templates.values.any {
         templateUsesVariable(it, "audio")
-    }
-    if (requiresLookupAudio && lookupAudioUri == null) {
-        error(context.getString(R.string.error_anki_lookup_audio_missing))
     }
 
     return PreparedAnkiExport(
