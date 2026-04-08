@@ -6,6 +6,8 @@
     <string name="playback_progress_unknown">Progress unavailable</string>
     <string name="common_back">&lt; Back</string>
     <string name="common_close">Close</string>
+    <string name="common_close_all">Close all</string>
+    <string name="anki_toast_added">Added to Anki.</string>
     <string name="common_cancel">Cancel</string>
     <string name="common_confirm">Confirm</string>
     <string name="common_save">Save</string>
@@ -18,7 +20,6 @@
     <string name="common_lookup">Lookup</string>
     <string name="common_loading">Loading...</string>
     <string name="common_querying">Searching...</string>
-    <string name="common_no_results">No results.</string>
     <string name="common_not_selected">Not selected</string>
     <string name="common_unknown">Unknown</string>
     <string name="common_audio">Audio</string>
@@ -306,11 +307,7 @@
     <string name="bookreader_sleep_disconnect_bluetooth">Disconnect controller Bluetooth when timer ends (Shizuku)</string>
     <string name="bookreader_open_bluetooth">Open phone Bluetooth settings</string>
     <string name="bookreader_lookup_no_dict">No dictionary loaded. Import one from Home first.</string>
-    <string name="bookreader_lookup_no_term">No queryable term at the current position.</string>
     <string name="bookreader_lookup_failed">Lookup failed</string>
-    <string name="bookreader_anki_no_content">No dictionary content available to export.</string>
-    <string name="bookreader_anki_exporting">Adding to Anki...</string>
-    <string name="bookreader_anki_exported">Added to Anki.</string>
     <string name="bookreader_anki_export_failed">Failed to add to Anki.</string>
     <string name="bookreader_meta_frequency">Frequency</string>
     <string name="bookreader_meta_pitch">Pitch</string>

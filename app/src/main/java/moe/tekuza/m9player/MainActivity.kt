@@ -17,8 +17,6 @@ import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -31,6 +29,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -46,7 +45,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -59,6 +57,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Icon
@@ -85,13 +84,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -102,6 +102,7 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.documentfile.provider.DocumentFile
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
@@ -312,7 +313,6 @@ private fun ReaderSyncScreen() {
     var mainLookupPopupCue by remember { mutableStateOf<SubtitleCue?>(null) }
     var mainLookupPopupSelectedRange by remember { mutableStateOf<IntRange?>(null) }
     var mainLookupPopupAudioUri by remember { mutableStateOf<Uri?>(null) }
-    var mainLookupAnkiStatus by remember { mutableStateOf<String?>(null) }
     var mainLookupAutoPlayNonce by remember { mutableStateOf(0L) }
     var mainLookupAutoPlayedKey by remember { mutableStateOf<String?>(null) }
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
@@ -1304,8 +1304,6 @@ private fun ReaderSyncScreen() {
         mainLookupPopupSelectedKey = null
         mainLookupPopupError = null
         mainLookupPopupLoading = true
-        mainLookupAnkiStatus = null
-
         triggerLookupCandidates(candidates) { result ->
             result.onSuccess { hits ->
                 mainLookupPopupResults = hits
@@ -1352,8 +1350,6 @@ private fun ReaderSyncScreen() {
         mainLookupPopupCue = null
         mainLookupPopupSelectedRange = null
         mainLookupPopupAudioUri = null
-        mainLookupAnkiStatus = null
-
         triggerLookupCandidates(candidates) { result ->
             result.onSuccess { hits ->
                 mainLookupPopupResults = hits
@@ -1371,10 +1367,7 @@ private fun ReaderSyncScreen() {
         sourceCue: SubtitleCue?,
         lookupTitle: String
     ) {
-        val dictionaryGroup = groupedResult.dictionaries.firstOrNull() ?: run {
-            mainLookupAnkiStatus = context.getString(R.string.bookreader_anki_no_content)
-            return
-        }
+        val dictionaryGroup = groupedResult.dictionaries.firstOrNull() ?: return
         val cueText = sourceCue?.text?.trim()
             ?.takeIf { it.isNotBlank() }
             ?: lookupTitle.trim().ifBlank { groupedResult.term }
@@ -1398,7 +1391,6 @@ private fun ReaderSyncScreen() {
         mainLookupPopupVisible = false
         mainLookupPopupSelectedRange = null
         scope.launch {
-            mainLookupAnkiStatus = context.getString(R.string.bookreader_anki_exporting)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val preparedLookupAudio = prepareLookupAudioForAnkiExport(
@@ -1426,8 +1418,12 @@ private fun ReaderSyncScreen() {
             }
             val status = result.fold(
                 onSuccess = {
-                    Toast.makeText(context, context.getString(R.string.bookreader_anki_exported), Toast.LENGTH_SHORT).show()
-                    context.getString(R.string.bookreader_anki_exported)
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.anki_toast_added),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    ""
                 },
                 onFailure = {
                     val message = it.message ?: context.getString(R.string.bookreader_anki_export_failed)
@@ -1435,25 +1431,18 @@ private fun ReaderSyncScreen() {
                     message
                 }
             )
-            mainLookupAnkiStatus = status
-            exportStatus = status
+            exportStatus = status.ifBlank { null }
         }
     }
 
-    fun playLookupGroupAudio(groupedResult: GroupedLookupResult, updatePopupStatus: Boolean) {
-        val started = playLookupAudioForTerm(
+    fun playLookupGroupAudio(groupedResult: GroupedLookupResult) {
+        playLookupAudioForTerm(
             context = context,
             term = groupedResult.term,
             reading = groupedResult.reading,
             settings = audiobookSettings
         ) { error ->
             exportStatus = error
-            if (updatePopupStatus) {
-                mainLookupAnkiStatus = error
-            }
-        }
-        if (started && updatePopupStatus) {
-            mainLookupAnkiStatus = null
         }
     }
 
@@ -1656,7 +1645,7 @@ private fun ReaderSyncScreen() {
         val key = "$normalizedQuery|${target.term}|${target.reading.orEmpty()}"
         if (dictionaryLookupAutoPlayedKey == key) return@LaunchedEffect
         dictionaryLookupAutoPlayedKey = key
-        playLookupGroupAudio(target, updatePopupStatus = false)
+        playLookupGroupAudio(target)
     }
     val groupedMainLookupPopupResults = remember(mainLookupPopupResults, dictionaryCssByName, dictionaryPriorityByName) {
         groupLookupResultsByTerm(
@@ -1682,7 +1671,7 @@ private fun ReaderSyncScreen() {
         val key = "${mainLookupAutoPlayNonce}|${target.term}|${target.reading.orEmpty()}"
         if (mainLookupAutoPlayedKey == key) return@LaunchedEffect
         mainLookupAutoPlayedKey = key
-        playLookupGroupAudio(target, updatePopupStatus = true)
+        playLookupGroupAudio(target)
     }
     val dictionarySpecificVariableChoices = remember(loadedDictionaries) {
         loadedDictionaries.map { "{single-glossary-${it.name}}" }.distinct()
@@ -2068,8 +2057,6 @@ private fun ReaderSyncScreen() {
 
                         if (lookupLoading) {
                             Text(stringResource(R.string.dictionary_querying))
-                        } else if (lookupQuery.isNotBlank() && groupedLookupResults.isEmpty()) {
-                            Text(stringResource(R.string.common_no_results))
                         }
 
                         groupedLookupResults.forEach { groupedResult ->
@@ -2093,7 +2080,7 @@ private fun ReaderSyncScreen() {
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             if (audiobookSettings.lookupPlaybackAudioEnabled) {
                                                 OutlinedButton(
-                                                    onClick = { playLookupGroupAudio(groupedResult, updatePopupStatus = false) }
+                                                    onClick = { playLookupGroupAudio(groupedResult) }
                                                 ) {
                                                     Icon(
                                                         imageVector = Icons.Outlined.Audiotrack,
@@ -2429,20 +2416,23 @@ private fun ReaderSyncScreen() {
                     ) {
                         val popupCue = mainLookupPopupCue
                         if (popupCue != null) {
-                            ClickableText(
+                            var popupCueLayout by remember(popupCue.text, mainLookupPopupSelectedRange) { mutableStateOf<TextLayoutResult?>(null) }
+                            Text(
                                 text = buildMainHighlightedText(popupCue.text, mainLookupPopupSelectedRange),
                                 style = MaterialTheme.typography.headlineSmall,
-                                onClick = { offset -> triggerMainCueLookup(popupCue, offset) }
+                                modifier = Modifier.pointerInput(popupCue) {
+                                    detectTapGestures { tapOffset ->
+                                        val layout = popupCueLayout ?: return@detectTapGestures
+                                        triggerMainCueLookup(popupCue, layout.getOffsetForPosition(tapOffset))
+                                    }
+                                },
+                                onTextLayout = { popupCueLayout = it }
                             )
                             Text(
                                 "${formatTime(popupCue.startMs)} - ${formatTime(popupCue.endMs)}",
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
-                        if (mainLookupAnkiStatus != null) {
-                            Text(mainLookupAnkiStatus!!)
-                        }
-
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2458,9 +2448,6 @@ private fun ReaderSyncScreen() {
                                     context.getString(R.string.lookup_error_prefix, mainLookupPopupError.orEmpty()),
                                     color = MaterialTheme.colorScheme.error
                                 )
-                            }
-                            if (!mainLookupPopupLoading && groupedMainLookupPopupResults.isEmpty()) {
-                                Text(stringResource(R.string.common_no_results))
                             }
                             groupedMainLookupPopupResults.forEach { groupedResult ->
                                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -2483,7 +2470,7 @@ private fun ReaderSyncScreen() {
                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                 if (audiobookSettings.lookupPlaybackAudioEnabled) {
                                                     OutlinedButton(
-                                                        onClick = { playLookupGroupAudio(groupedResult, updatePopupStatus = true) }
+                                                        onClick = { playLookupGroupAudio(groupedResult) }
                                                     ) {
                                                         Icon(
                                                             imageVector = Icons.Outlined.Audiotrack,
@@ -2593,7 +2580,6 @@ private fun ReaderSyncScreen() {
                                     mainLookupPopupCue = null
                                     mainLookupPopupSelectedRange = null
                                     mainLookupPopupAudioUri = null
-                                    mainLookupAnkiStatus = null
                                 }
                             ) {
                         Text(stringResource(R.string.common_close))
@@ -2701,7 +2687,7 @@ private fun FieldVariableDropdown(
             readOnly = true,
             modifier = Modifier
                 .fillMaxWidth()
-                .menuAnchor(),
+                .menuAnchor(type = MenuAnchorType.PrimaryNotEditable),
             label = { Text(fieldName) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             singleLine = true

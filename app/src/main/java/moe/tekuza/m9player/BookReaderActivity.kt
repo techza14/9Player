@@ -17,13 +17,12 @@ import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Html
 import android.util.Base64
+import android.util.Log
 import android.app.Activity
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.WindowManager
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -32,7 +31,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -42,6 +43,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -54,9 +56,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -79,6 +81,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -86,6 +89,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
@@ -96,23 +101,30 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Audiotrack
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
@@ -138,6 +150,7 @@ private const val BOOK_READER_PENDING_INTENT_REQUEST_CODE = 21_002
 private const val BOOK_READER_SLEEP_OPTIONS_PREFS = "book_reader_sleep_options_prefs"
 private const val BOOK_READER_SLEEP_EXIT_CONTROL_KEY = "sleep_exit_control"
 private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
+private const val RECURSIVE_LOOKUP_LOG_TAG = "RecursiveLookup"
 class BookReaderActivity : AppCompatActivity() {
     private var gamepadKeyHandler: ((KeyEvent) -> Boolean)? = null
     private var lastMotionHorizontalKeyCode: Int? = null
@@ -422,6 +435,30 @@ private data class ReaderSentenceSelection(
     val cueRange: IntRange
 )
 
+private data class ReaderLookupAnchor(
+    val rects: List<Rect>
+)
+
+private data class ReaderLookupLayer(
+    val loading: Boolean,
+    val error: String?,
+    val groupedResults: List<GroupedLookupResult>,
+    val cue: ReaderSubtitleCue?,
+    val cueIndex: Int?,
+    val anchorOffset: Int?,
+    val anchor: ReaderLookupAnchor?,
+    val placeBelow: Boolean,
+    val preferSidePlacement: Boolean,
+    val selectedRange: IntRange?,
+    val selectionText: String?,
+    val popupSentence: String?,
+    val highlightedDefinitionKey: String?,
+    val highlightedDefinitionRects: List<Rect>,
+    val collapsedSections: Map<String, Boolean>,
+    val autoPlayNonce: Long,
+    val autoPlayedKey: String?
+)
+
 private enum class AdjacentJumpMode {
     CUE,
     DURATION
@@ -447,21 +484,9 @@ private fun BookReaderScreen(
 
     var loadedDictionaries by remember { mutableStateOf<List<LoadedDictionary>>(emptyList()) }
 
-    var lookupPopupVisible by remember { mutableStateOf(false) }
-    var lookupPopupLoading by remember { mutableStateOf(false) }
-    var lookupPopupError by remember { mutableStateOf<String?>(null) }
-    var lookupPopupTitle by remember { mutableStateOf("") }
-    var lookupPopupResults by remember { mutableStateOf<List<DictionarySearchResult>>(emptyList()) }
-    var lookupPopupCue by remember { mutableStateOf<ReaderSubtitleCue?>(null) }
-    var lookupPopupCueIndex by remember { mutableStateOf<Int?>(null) }
-    var lookupPopupAnchorOffset by remember { mutableStateOf<Int?>(null) }
-    var selectedLookupRange by remember { mutableStateOf<IntRange?>(null) }
-    var lookupPopupSelectionText by remember { mutableStateOf<String?>(null) }
+    val lookupPopupLayers = remember { mutableStateListOf<ReaderLookupLayer>() }
     var lookupPopupTemporarilyHidden by remember { mutableStateOf(false) }
-    var ankiActionStatus by remember { mutableStateOf<String?>(null) }
-    var lookupPopupAutoPlayNonce by remember { mutableStateOf(0L) }
-    var lookupPopupAutoPlayedKey by remember { mutableStateOf<String?>(null) }
-    val lookupCollapsedSections = remember { mutableStateMapOf<String, Boolean>() }
+    var lookupPopupRequestNonce by remember { mutableStateOf(0L) }
     var reopenLookupPopupAfterCueRangeSelection by remember { mutableStateOf(false) }
     var resumePlaybackAfterLookupDismiss by remember { mutableStateOf(false) }
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
@@ -715,22 +740,12 @@ private fun BookReaderScreen(
     val dictionaryPriorityByName = remember(loadedDictionaries) {
         loadedDictionaries.mapIndexed { index, dictionary -> dictionary.name to index }.toMap()
     }
-    val groupedLookupPopupResults = remember(lookupPopupResults, dictionaryCssByName, dictionaryPriorityByName) {
-        groupLookupResultsByTerm(
-            results = lookupPopupResults,
-            dictionaryCssByName = dictionaryCssByName,
-            dictionaryPriorityByName = dictionaryPriorityByName
-        ).take(10)
-    }
+    val activeLookupLayer = lookupPopupLayers.lastOrNull()
+    val lookupPopupVisible = activeLookupLayer != null
     val lifecycleOwner = LocalLifecycleOwner.current
     val lyricsFollowTopPaddingPx = with(LocalDensity.current) { 72.dp.toPx() }
-    val lookupPopupOffsetY = with(LocalDensity.current) {
-        if (audiobookSettings.activeCueDisplayAtTop) {
-            -(120.dp.roundToPx())
-        } else {
-            0
-        }
-    }
+    val lookupPopupGapPx = with(LocalDensity.current) { 14.dp.roundToPx() }
+    val lookupPopupScreenPaddingPx = with(LocalDensity.current) { 12.dp.roundToPx() }
 
     DisposableEffect(lifecycleOwner) {
         val observer = object : DefaultLifecycleObserver {
@@ -770,10 +785,6 @@ private fun BookReaderScreen(
         lineHeight = 42.sp,
         color = MaterialTheme.colorScheme.onSurface
     )
-
-    LaunchedEffect(activeCue?.text) {
-        selectedLookupRange = null
-    }
 
     LaunchedEffect(context) {
         val options = loadBookReaderSleepOptions(context)
@@ -1144,8 +1155,7 @@ private fun BookReaderScreen(
 
     fun jumpToCue(index: Int, showStatus: Boolean = true) {
         val cue = cues.getOrNull(index) ?: return
-        selectedLookupRange = null
-        lookupPopupVisible = false
+        lookupPopupLayers.clear()
         resumePlaybackAfterLookupDismiss = false
         player.seekTo(cue.startMs)
         player.play()
@@ -1223,8 +1233,7 @@ private fun BookReaderScreen(
         pendingSingleTapJob = null
         pendingSingleTapBaseCueIndex = null
         controlTargetCueIndex = null
-        selectedLookupRange = null
-        lookupPopupVisible = false
+        lookupPopupLayers.clear()
         resumePlaybackAfterLookupDismiss = false
         player.seekTo(target)
         if (controlModeEnabled) {
@@ -1430,58 +1439,108 @@ private fun BookReaderScreen(
         }
     }
 
-    fun triggerPopupLookup(cue: ReaderSubtitleCue, offset: Int) {
+    fun buildLookupLayer(
+        loading: Boolean,
+        error: String?,
+        rawResults: List<DictionarySearchResult>,
+        cue: ReaderSubtitleCue?,
+        cueIndex: Int?,
+        anchorOffset: Int?,
+        anchor: ReaderLookupAnchor?,
+        placeBelow: Boolean,
+        preferSidePlacement: Boolean = false,
+        selectedRange: IntRange?,
+        selectionText: String?,
+        popupSentence: String? = null,
+        highlightedDefinitionKey: String? = null,
+        highlightedDefinitionRects: List<Rect> = emptyList(),
+        collapsedSections: Map<String, Boolean> = emptyMap(),
+        autoPlayNonce: Long = System.nanoTime(),
+        autoPlayedKey: String? = null
+    ): ReaderLookupLayer {
+        val groupedResults = groupLookupResultsByTerm(
+            results = rawResults,
+            dictionaryCssByName = dictionaryCssByName,
+            dictionaryPriorityByName = dictionaryPriorityByName
+        ).take(10)
+        return ReaderLookupLayer(
+            loading = loading,
+            error = error,
+            groupedResults = groupedResults,
+            cue = cue,
+            cueIndex = cueIndex,
+            anchorOffset = anchorOffset,
+            anchor = anchor,
+            placeBelow = placeBelow,
+            preferSidePlacement = preferSidePlacement,
+            selectedRange = selectedRange,
+            selectionText = selectionText,
+            popupSentence = popupSentence,
+            highlightedDefinitionKey = highlightedDefinitionKey,
+            highlightedDefinitionRects = highlightedDefinitionRects,
+            collapsedSections = collapsedSections,
+            autoPlayNonce = autoPlayNonce,
+            autoPlayedKey = autoPlayedKey
+        )
+    }
+
+    fun replaceTopLookupLayer(transform: (ReaderLookupLayer) -> ReaderLookupLayer) {
+        val index = lookupPopupLayers.lastIndex
+        if (index < 0) return
+        lookupPopupLayers[index] = transform(lookupPopupLayers[index])
+    }
+
+    fun replaceLookupLayer(index: Int, transform: (ReaderLookupLayer) -> ReaderLookupLayer) {
+        if (index !in lookupPopupLayers.indices) return
+        lookupPopupLayers[index] = transform(lookupPopupLayers[index])
+    }
+
+    fun truncateLookupLayersTo(index: Int) {
+        if (index !in lookupPopupLayers.indices) return
+        while (lookupPopupLayers.size > index + 1) {
+            lookupPopupLayers.removeLastOrNull()
+        }
+    }
+
+    fun triggerPopupLookup(cue: ReaderSubtitleCue, offset: Int, anchor: ReaderLookupAnchor?) {
         consumeCueRangeSelection()
+        lookupPopupLayers.clear()
         val dictionariesSnapshot = loadedDictionaries
         val cueIndex = cues.indexOf(cue).takeIf { it >= 0 }
+        val estimatedAnchorY = anchor.boundingRectOrNull()?.bottom ?: (view.height * 0.56f)
+        val shouldPlaceBelow = estimatedAnchorY <= (view.height / 2f)
+        val requestNonce = lookupPopupRequestNonce + 1L
+        lookupPopupRequestNonce = requestNonce
         if (dictionariesSnapshot.isEmpty()) {
-            lookupPopupAutoPlayNonce += 1L
-            lookupPopupAutoPlayedKey = null
-            lookupPopupVisible = true
-            lookupPopupLoading = false
-            lookupPopupResults = emptyList()
-            lookupPopupTitle = ""
-            lookupPopupError = context.getString(R.string.bookreader_lookup_no_dict)
-            lookupPopupCue = cue
-            lookupPopupCueIndex = cueIndex
-            lookupPopupAnchorOffset = offset
-            lookupPopupSelectionText = null
+            lookupPopupLayers += buildLookupLayer(
+                loading = false,
+                error = context.getString(R.string.bookreader_lookup_no_dict),
+                rawResults = emptyList(),
+                cue = cue,
+                    cueIndex = cueIndex,
+                    anchorOffset = offset,
+                    anchor = anchor,
+                    placeBelow = shouldPlaceBelow,
+                    preferSidePlacement = false,
+                    selectedRange = null,
+                    selectionText = null
+                )
             return
         }
 
-        val selection = findLookupSelection(cue.text, offset)
+        val selection = selectLookupScanText(
+            text = cue.text,
+            charOffset = offset
+        )
         val selectionRange = selection?.range
-        selectedLookupRange = null
         val selectedToken = selection?.text?.trim()?.takeIf { it.isNotBlank() }
         val candidates = listOfNotNull(selectedToken)
 
         if (candidates.isEmpty()) {
-            lookupPopupAutoPlayNonce += 1L
-            lookupPopupAutoPlayedKey = null
-            lookupPopupVisible = true
-            lookupPopupLoading = false
-            lookupPopupResults = emptyList()
-            lookupPopupTitle = selectedToken.orEmpty()
-            lookupPopupError = context.getString(R.string.bookreader_lookup_no_term)
-            lookupPopupCue = cue
-            lookupPopupCueIndex = cueIndex
-            lookupPopupAnchorOffset = offset
-            lookupPopupSelectionText = null
             return
         }
 
-        lookupPopupVisible = true
-        lookupPopupAutoPlayNonce += 1L
-        lookupPopupAutoPlayedKey = null
-        lookupPopupLoading = true
-        lookupPopupResults = emptyList()
-        lookupPopupError = null
-        lookupPopupTitle = candidates.firstOrNull() ?: selectedToken.orEmpty()
-        lookupPopupCue = cue
-        lookupPopupCueIndex = cueIndex
-        lookupPopupAnchorOffset = offset
-        lookupPopupSelectionText = selectedToken
-        ankiActionStatus = null
+        lookupPopupTemporarilyHidden = false
 
         if (audiobookSettings.pausePlaybackOnLookup && player.isPlaying) {
             player.pause()
@@ -1501,38 +1560,54 @@ private fun BookReaderScreen(
                 }
             }
             result.onSuccess { hits ->
-                lookupPopupResults = hits
-                if (hits.isEmpty()) {
-                    lookupPopupError = context.getString(R.string.common_no_results)
-                    selectedLookupRange = null
-                    lookupPopupSelectionText = selectedToken
+                if (lookupPopupRequestNonce != requestNonce) return@onSuccess
+                if (hits.isEmpty()) return@onSuccess
+                val selectedRange = if (hits.isEmpty()) {
+                    null
                 } else {
-                    selectedLookupRange = trimSelectionRangeByMatchedLength(
-                        selectionRange,
-                        hits.first().matchedLength
-                    )
-                    lookupPopupSelectionText = selectedLookupRange?.let { range ->
-                        val start = range.first.coerceIn(0, cue.text.length)
-                        val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
-                        if (endExclusive > start) cue.text.substring(start, endExclusive) else ""
-                    }?.trim()?.takeIf { it.isNotBlank() } ?: selectedToken
+                    trimSelectionRangeByMatchedLength(selectionRange, hits.first().matchedLength)
                 }
+                val selectionText = selectedRange?.let { range ->
+                    val start = range.first.coerceIn(0, cue.text.length)
+                    val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
+                    if (endExclusive > start) cue.text.substring(start, endExclusive) else ""
+                }?.trim()?.takeIf { it.isNotBlank() } ?: selectedToken
+                lookupPopupLayers += buildLookupLayer(
+                    loading = false,
+                    error = null,
+                    rawResults = hits,
+                    cue = cue,
+                    cueIndex = cueIndex,
+                    anchorOffset = offset,
+                    anchor = anchor,
+                    placeBelow = shouldPlaceBelow,
+                    preferSidePlacement = false,
+                    selectedRange = selectedRange,
+                    selectionText = selectionText
+                )
             }.onFailure {
-                lookupPopupResults = emptyList()
-                lookupPopupError = it.message ?: context.getString(R.string.bookreader_lookup_failed)
-                selectedLookupRange = null
-                lookupPopupSelectionText = selectedToken
+                if (lookupPopupRequestNonce != requestNonce) return@onFailure
+                lookupPopupLayers += buildLookupLayer(
+                    loading = false,
+                    error = it.message ?: context.getString(R.string.bookreader_lookup_failed),
+                    rawResults = emptyList(),
+                    cue = cue,
+                    cueIndex = cueIndex,
+                    anchorOffset = offset,
+                    anchor = anchor,
+                    placeBelow = shouldPlaceBelow,
+                    preferSidePlacement = false,
+                    selectedRange = null,
+                    selectionText = selectedToken
+                )
             }
-            lookupPopupLoading = false
         }
     }
 
-    fun closeLookupPopup(resumePlayback: Boolean = true) {
-        lookupPopupVisible = false
+    fun popLookupSnapshotOrClose(resumePlayback: Boolean = true) {
+        lookupPopupLayers.removeLastOrNull()
         lookupPopupTemporarilyHidden = false
-        lookupPopupSelectionText = null
-        lookupPopupCueIndex = null
-        lookupPopupAnchorOffset = null
+        if (lookupPopupLayers.isNotEmpty()) return
         consumeCueRangeSelection()
         if (resumePlayback && resumePlaybackAfterLookupDismiss) {
             player.play()
@@ -1540,13 +1615,135 @@ private fun BookReaderScreen(
         resumePlaybackAfterLookupDismiss = false
     }
 
-    fun addLookupGroupToAnki(groupedResult: GroupedLookupResult) {
-        val dictionaryGroup = groupedResult.dictionaries.firstOrNull() ?: run {
-            ankiActionStatus = context.getString(R.string.bookreader_anki_no_content)
+    fun closeLookupPopup(resumePlayback: Boolean = true) {
+        lookupPopupLayers.clear()
+        lookupPopupTemporarilyHidden = false
+        consumeCueRangeSelection()
+        if (resumePlayback && resumePlaybackAfterLookupDismiss) {
+            player.play()
+        }
+        resumePlaybackAfterLookupDismiss = false
+    }
+
+    fun performRecursiveLookupFromDefinition(
+        sourceLayerIndex: Int,
+        definitionKey: String,
+        tapData: DefinitionLookupTapData,
+        anchor: ReaderLookupAnchor?
+    ) {
+        Log.d(
+            RECURSIVE_LOOKUP_LOG_TAG,
+            "start layer=$sourceLayerIndex key=$definitionKey text=${tapData.text.take(20)} offset=${tapData.offset}"
+        )
+        val currentLayer = lookupPopupLayers.getOrNull(sourceLayerIndex) ?: return
+        val cue = currentLayer.cue ?: return
+        val cueIndex = currentLayer.cueIndex
+        val selection = selectLookupScanText(tapData.text, tapData.offset) ?: run {
+            Log.d(RECURSIVE_LOOKUP_LOG_TAG, "abort noSelection layer=$sourceLayerIndex")
+            truncateLookupLayersTo(sourceLayerIndex)
             return
         }
-        val baseCue = lookupPopupCue ?: return
-        val cue = selectedCueIndexRange
+        val term = selection.text.trim().takeIf { it.isNotBlank() } ?: run {
+            truncateLookupLayersTo(sourceLayerIndex)
+            return
+        }
+        Log.d(RECURSIVE_LOOKUP_LOG_TAG, "selection layer=$sourceLayerIndex term=$term")
+        val dictionariesSnapshot = loadedDictionaries
+        val estimatedAnchorY = anchor.boundingRectOrNull()?.bottom
+            ?: currentLayer.anchor.boundingRectOrNull()?.bottom
+            ?: (view.height * 0.56f)
+        val shouldPlaceBelow = estimatedAnchorY <= (view.height / 2f)
+        val requestNonce = lookupPopupRequestNonce + 1L
+        lookupPopupRequestNonce = requestNonce
+
+        if (dictionariesSnapshot.isEmpty()) {
+            Toast.makeText(context, context.getString(R.string.bookreader_lookup_no_dict), Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        scope.launch {
+            val result = withContext(Dispatchers.Default) {
+                runCatching {
+                    computeBookLookupResults(
+                        context = context,
+                        dictionaries = dictionariesSnapshot,
+                        candidates = listOf(term)
+                    )
+                }
+            }
+            result.onSuccess { hits ->
+                if (lookupPopupRequestNonce != requestNonce) return@onSuccess
+                if (hits.isEmpty()) {
+                    Log.d(RECURSIVE_LOOKUP_LOG_TAG, "result empty layer=$sourceLayerIndex term=$term")
+                    return@onSuccess
+                }
+                Log.d(RECURSIVE_LOOKUP_LOG_TAG, "result ok layer=$sourceLayerIndex term=$term hits=${hits.size}")
+                val adjustedHighlightRects = rebuildDefinitionRectsByMatchedLength(
+                    rects = tapData.localRects,
+                    charRects = tapData.localCharRects,
+                    nodeText = tapData.nodeText,
+                    startOffset = tapData.offset,
+                    matchedLength = hits.first().matchedLength
+                )
+                val adjustedAnchorRects = rebuildDefinitionAnchorRectsByMatchedLength(
+                    charRects = tapData.screenCharRects,
+                    fallbackRect = anchor.boundingRectOrNull() ?: tapData.screenRect,
+                    matchedLength = hits.first().matchedLength
+                )
+                val adjustedAnchor = if (adjustedAnchorRects.isNotEmpty()) {
+                    ReaderLookupAnchor(rects = adjustedAnchorRects)
+                } else {
+                    anchor ?: currentLayer.anchor
+                }
+                truncateLookupLayersTo(sourceLayerIndex)
+                if (sourceLayerIndex in lookupPopupLayers.indices) {
+                    lookupPopupLayers[sourceLayerIndex] = lookupPopupLayers[sourceLayerIndex].copy(
+                        highlightedDefinitionKey = definitionKey,
+                        highlightedDefinitionRects = adjustedHighlightRects
+                    )
+                }
+                consumeCueRangeSelection()
+                lookupPopupTemporarilyHidden = false
+                lookupPopupLayers += buildLookupLayer(
+                    loading = false,
+                    error = null,
+                    rawResults = hits,
+                    cue = cue,
+                    cueIndex = cueIndex,
+                    anchorOffset = tapData.offset,
+                    anchor = adjustedAnchor,
+                    placeBelow = shouldPlaceBelow,
+                    preferSidePlacement = true,
+                    selectedRange = null,
+                    selectionText = term,
+                    popupSentence = tapData.sentence.trim().ifBlank {
+                        extractFullSentenceLikeHoshi(
+                            text = tapData.nodeText,
+                            anchorText = term,
+                            anchorIndexHint = tapData.offset
+                        )
+                    }
+                )
+            }.onFailure {
+                if (lookupPopupRequestNonce != requestNonce) return@onFailure
+                Toast.makeText(
+                    context,
+                    (it.message ?: context.getString(R.string.bookreader_lookup_failed)).take(200),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    fun addLookupGroupToAnki(layerIndex: Int, groupedResult: GroupedLookupResult) {
+        val dictionaryGroup = groupedResult.dictionaries.firstOrNull() ?: run {
+            return
+        }
+        val currentLayer = lookupPopupLayers.getOrNull(layerIndex) ?: return
+        val baseCue = currentLayer.cue ?: return
+        val exportCueRange = selectedCueIndexRange?.takeIf { layerIndex == 0 }
+        val exportAudioUri = audioUri?.takeIf { layerIndex == 0 }
+        val cue = exportCueRange
             ?.takeIf { it.first >= 0 && it.last < cues.size }
             ?.let { range ->
                 ReaderSubtitleCue(
@@ -1556,36 +1753,41 @@ private fun BookReaderScreen(
                 )
             }
             ?: baseCue
-        val popupSelectionText = lookupPopupSelectionText?.trim()?.takeIf { it.isNotBlank() }
+        val popupSelectionText = currentLayer.selectionText?.trim()?.takeIf { it.isNotBlank() }
         val exportDefinitions = dictionaryGroup.definitions
             .map { it.trim() }
             .filter { it.isNotBlank() }
         val exportDefinitionHtml = exportDefinitions.joinToString("<br>").ifBlank { groupedResult.term }
         val settingsSnapshot = audiobookSettings
+        val baseCueIndex = currentLayer.cueIndex ?: cues.indexOf(baseCue).takeIf { it >= 0 } ?: 0
         val sentenceSelection = when {
-            selectedCueIndexRange != null -> ReaderSentenceSelection(
-                text = cue.text,
-                cueRange = selectedCueIndexRange!!
+            !currentLayer.popupSentence.isNullOrBlank() -> ReaderSentenceSelection(
+                text = currentLayer.popupSentence,
+                cueRange = baseCueIndex..baseCueIndex
             )
-            settingsSnapshot.lookupExportFullSentence -> lookupPopupCueIndex?.let { cueIndex ->
+            exportCueRange != null -> ReaderSentenceSelection(
+                text = cue.text,
+                cueRange = exportCueRange
+            )
+            settingsSnapshot.lookupExportFullSentence -> currentLayer.cueIndex?.let { cueIndex ->
                 extractFullSentenceLikeHoshiFromCues(
                     cues = cues,
                     cueIndex = cueIndex,
                     anchorText = popupSelectionText ?: groupedResult.term,
-                    selectedRangeInCue = selectedLookupRange,
-                    rawAnchorOffsetInCue = lookupPopupAnchorOffset
+                    selectedRangeInCue = currentLayer.selectedRange,
+                    rawAnchorOffsetInCue = currentLayer.anchorOffset
                 )
             } ?: ReaderSentenceSelection(
                 text = extractFullSentenceLikeHoshi(
                     text = cue.text,
                     anchorText = popupSelectionText ?: groupedResult.term,
-                    anchorIndexHint = lookupPopupAnchorOffset ?: selectedLookupRange?.first
+                    anchorIndexHint = currentLayer.anchorOffset ?: currentLayer.selectedRange?.first
                 ),
-                cueRange = (cues.indexOf(baseCue).takeIf { it >= 0 } ?: 0)..(cues.indexOf(baseCue).takeIf { it >= 0 } ?: 0)
+                cueRange = baseCueIndex..baseCueIndex
             )
             else -> ReaderSentenceSelection(
                 text = cue.text,
-                cueRange = (cues.indexOf(baseCue).takeIf { it >= 0 } ?: 0)..(cues.indexOf(baseCue).takeIf { it >= 0 } ?: 0)
+                cueRange = baseCueIndex..baseCueIndex
             )
         }
         val exportCue = sentenceSelection.cueRange
@@ -1598,11 +1800,13 @@ private fun BookReaderScreen(
                 )
             }
             ?: cue
-        lookupPopupVisible = false
-        lookupPopupSelectionText = null
         consumeCueRangeSelection()
+        if (layerIndex > 0) {
+            truncateLookupLayersTo(layerIndex - 1)
+        } else {
+            closeLookupPopup()
+        }
         scope.launch {
-            ankiActionStatus = context.getString(R.string.bookreader_anki_exporting)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val preparedLookupAudio = prepareLookupAudioForAnkiExport(
@@ -1615,7 +1819,7 @@ private fun BookReaderScreen(
                         addLookupDefinitionToAnki(
                             context = context,
                             cue = exportCue,
-                            audioUri = audioUri,
+                            audioUri = exportAudioUri,
                             lookupAudioUri = preparedLookupAudio?.uri,
                             bookTitle = title,
                             entry = dictionaryGroup.entry,
@@ -1629,21 +1833,23 @@ private fun BookReaderScreen(
                     }
                 }
             }
-            ankiActionStatus = result.fold(
+            result.fold(
                 onSuccess = {
-                    Toast.makeText(context, context.getString(R.string.bookreader_anki_exported), Toast.LENGTH_SHORT).show()
-                    context.getString(R.string.bookreader_anki_exported)
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.anki_toast_added),
+                        Toast.LENGTH_SHORT
+                    ).show()
                 },
                 onFailure = {
                     val message = formatAnkiFailure(it)
                     Toast.makeText(context, message.take(200), Toast.LENGTH_LONG).show()
-                    message
                 }
             )
         }
     }
 
-    fun playLookupGroupAudio(groupedResult: GroupedLookupResult) {
+    fun playLookupGroupAudio(layerIndex: Int, groupedResult: GroupedLookupResult) {
         consumeCueRangeSelection()
         playLookupAudioForTerm(
             context = context,
@@ -1651,28 +1857,25 @@ private fun BookReaderScreen(
             reading = groupedResult.reading,
             settings = audiobookSettings
         ) { error ->
-            ankiActionStatus = error
+            replaceLookupLayer(layerIndex) { it.copy(error = error) }
         }
     }
 
     LaunchedEffect(
-        lookupPopupVisible,
-        lookupPopupLoading,
-        lookupPopupError,
-        groupedLookupPopupResults,
+        activeLookupLayer,
         audiobookSettings.lookupPlaybackAudioEnabled,
-        audiobookSettings.lookupPlaybackAudioAutoPlay,
-        lookupPopupAutoPlayNonce
+        audiobookSettings.lookupPlaybackAudioAutoPlay
     ) {
-        if (!lookupPopupVisible || lookupPopupLoading || lookupPopupError != null) return@LaunchedEffect
+        val layer = activeLookupLayer ?: return@LaunchedEffect
+        if (layer.loading || layer.error != null) return@LaunchedEffect
         if (!audiobookSettings.lookupPlaybackAudioEnabled || !audiobookSettings.lookupPlaybackAudioAutoPlay) {
             return@LaunchedEffect
         }
-        val target = groupedLookupPopupResults.firstOrNull() ?: return@LaunchedEffect
-        val key = "${lookupPopupAutoPlayNonce}|${target.term}|${target.reading.orEmpty()}"
-        if (lookupPopupAutoPlayedKey == key) return@LaunchedEffect
-        lookupPopupAutoPlayedKey = key
-        playLookupGroupAudio(target)
+        val target = layer.groupedResults.firstOrNull() ?: return@LaunchedEffect
+        val key = "${layer.autoPlayNonce}|${target.term}|${target.reading.orEmpty()}"
+        if (layer.autoPlayedKey == key) return@LaunchedEffect
+        replaceTopLookupLayer { it.copy(autoPlayedKey = key) }
+        playLookupGroupAudio(lookupPopupLayers.lastIndex, target)
     }
 
     fun handleControlOverlaySwipe(step: Int) {
@@ -1760,7 +1963,7 @@ private fun BookReaderScreen(
 
     BackHandler {
         when {
-            lookupPopupVisible -> closeLookupPopup()
+            lookupPopupVisible -> popLookupSnapshotOrClose()
             sleepTimerOptionsVisible -> sleepTimerOptionsVisible = false
             topActionsExpanded -> topActionsExpanded = false
             speedMenuExpanded -> speedMenuExpanded = false
@@ -2167,11 +2370,12 @@ private fun BookReaderScreen(
                                                 )
                                                 .padding(horizontal = 8.dp, vertical = 6.dp)
                                         ) {
-                                            ClickableText(
+                                            ReaderLookupClickableSubtitle(
                                                 text = buildHighlightedText(
                                                     cue.text,
-                                                    if (isActive) selectedLookupRange else null
+                                                    if (isActive) activeLookupLayer?.selectedRange else null
                                                 ),
+                                                selectedRange = if (isActive) activeLookupLayer?.selectedRange else null,
                                                 style = if (isActive) {
                                                     activeSubtitleStyle
                                                 } else {
@@ -2179,11 +2383,11 @@ private fun BookReaderScreen(
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
                                                 },
-                                                onClick = { offset ->
+                                                onTextTap = { offset, anchor ->
                                                     if (cueRangeSelectionMode) {
                                                         handleCueRangeTap(index)
                                                     } else if (isActive) {
-                                                        triggerPopupLookup(cue, offset)
+                                                        triggerPopupLookup(cue, offset, anchor)
                                                     } else {
                                                         jumpToCue(index)
                                                     }
@@ -2207,14 +2411,15 @@ private fun BookReaderScreen(
                                         Alignment.Center
                                     }
                                 ) {
-                                    ClickableText(
-                                        text = buildHighlightedText(activeCue.text, selectedLookupRange),
+                                    ReaderLookupClickableSubtitle(
+                                        text = buildHighlightedText(activeCue.text, activeLookupLayer?.selectedRange),
+                                        selectedRange = activeLookupLayer?.selectedRange,
                                         style = activeSubtitleStyle,
-                                        onClick = { offset ->
+                                        onTextTap = { offset, anchor ->
                                             if (cueRangeSelectionMode) {
                                                 handleCueRangeTap(activeCueIndex)
                                             } else {
-                                                triggerPopupLookup(activeCue, offset)
+                                                triggerPopupLookup(activeCue, offset, anchor)
                                             }
                                         }
                                     )
@@ -2472,178 +2677,275 @@ private fun BookReaderScreen(
     }
 
     if (lookupPopupVisible) {
-        Popup(
-            alignment = Alignment.BottomCenter,
-            offset = IntOffset(0, lookupPopupOffsetY),
-            onDismissRequest = {
-                if (lookupPopupTemporarilyHidden) return@Popup
-                closeLookupPopup()
-            },
-            properties = PopupProperties(
-                focusable = !lookupPopupTemporarilyHidden,
-                dismissOnBackPress = true,
-                dismissOnClickOutside = true,
-                clippingEnabled = false
-            )
-        ) {
-            if (lookupPopupTemporarilyHidden) {
-                Box(
-                    modifier = Modifier
-                        .size(1.dp)
-                        .alpha(0f)
+        val configuration = LocalConfiguration.current
+        val density = LocalDensity.current
+        lookupPopupLayers.forEachIndexed { index, layer ->
+            val isTopLayer = index == lookupPopupLayers.lastIndex
+            val popupSizeSpec = remember(
+                configuration.screenWidthDp,
+                configuration.screenHeightDp,
+                layer.anchor,
+                layer.placeBelow,
+                layer.preferSidePlacement,
+                density.density
+            ) {
+                computeLookupPopupSizeSpec(
+                    screenWidthDp = configuration.screenWidthDp,
+                    screenHeightDp = configuration.screenHeightDp,
+                    anchor = layer.anchor,
+                    placeBelow = layer.placeBelow,
+                    preferSidePlacement = layer.preferSidePlacement,
+                    density = density.density
                 )
-            } else {
-                Surface(
-                    modifier = Modifier
-                        .alpha(
-                            if (selectedCueIndexRange != null && !cueRangeSelectionMode) 0.92f else 1f
+            }
+            val positionProvider = remember(
+                layer.anchor,
+                layer.placeBelow,
+                layer.preferSidePlacement,
+                popupSizeSpec.preferredDirection,
+                lookupPopupGapPx,
+                lookupPopupScreenPaddingPx
+            ) {
+                ReaderLookupPopupPositionProvider(
+                    anchor = layer.anchor,
+                    placeBelow = layer.placeBelow,
+                    preferSidePlacement = layer.preferSidePlacement,
+                    preferredDirection = popupSizeSpec.preferredDirection,
+                    gapPx = lookupPopupGapPx,
+                    screenPaddingPx = lookupPopupScreenPaddingPx
+                )
+            }
+            Popup(
+                popupPositionProvider = positionProvider,
+                onDismissRequest = {
+                    if (!isTopLayer || lookupPopupTemporarilyHidden) return@Popup
+                    popLookupSnapshotOrClose()
+                },
+                properties = PopupProperties(
+                    focusable = isTopLayer && !lookupPopupTemporarilyHidden && lookupPopupLayers.size == 1,
+                    dismissOnBackPress = false,
+                    dismissOnClickOutside = isTopLayer && lookupPopupLayers.size == 1,
+                    clippingEnabled = false
+                )
+            ) {
+                if (lookupPopupTemporarilyHidden) {
+                    Box(
+                        modifier = Modifier
+                            .size(1.dp)
+                            .alpha(0f)
+                    )
+                } else {
+                    Surface(
+                        modifier = Modifier
+                            .width(popupSizeSpec.widthDp.dp)
+                            .padding(horizontal = 6.dp, vertical = 10.dp),
+                        shape = MaterialTheme.shapes.large,
+                        tonalElevation = if (isTopLayer) 8.dp else 6.dp,
+                        shadowElevation = if (isTopLayer) 10.dp else 6.dp,
+                        border = BorderStroke(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
                         )
-                        .fillMaxWidth(0.96f)
-                        .padding(horizontal = 8.dp, vertical = 12.dp),
-                    shape = MaterialTheme.shapes.large,
-                    tonalElevation = 8.dp
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        if (ankiActionStatus != null) {
-                            Text(ankiActionStatus!!)
+                        ReaderLookupPopupCard(
+                            groupedResults = layer.groupedResults,
+                            loading = layer.loading,
+                            error = layer.error,
+                            highlightedDefinitionKey = layer.highlightedDefinitionKey,
+                            highlightedDefinitionRects = layer.highlightedDefinitionRects,
+                            collapsedSections = layer.collapsedSections,
+                            contentMaxHeightDp = popupSizeSpec.contentMaxHeightDp,
+                            onToggleSection = if (isTopLayer) {
+                                { key, expanded ->
+                                    replaceTopLookupLayer {
+                                        it.copy(collapsedSections = it.collapsedSections.toMutableMap().apply {
+                                            this[key] = expanded
+                                        })
+                                    }
+                                }
+                            } else null,
+                            onDefinitionLookup = { definitionKey, tapData ->
+                                val anchor = tapData.screenRect?.let {
+                                    ReaderLookupAnchor(rects = listOf(it))
+                                }
+                                performRecursiveLookupFromDefinition(index, definitionKey, tapData, anchor)
+                            },
+                            onRangeSelection = if (isTopLayer && index == 0 && hasSubtitleFile && audiobookSettings.lookupRangeSelectionEnabled) {
+                                { beginCueRangeSelection(reopenLookupPopupAfterSelection = true) }
+                            } else null,
+                            onPlayAudio = if (audiobookSettings.lookupPlaybackAudioEnabled) {
+                                { groupedResult -> playLookupGroupAudio(index, groupedResult) }
+                            } else null,
+                            onAddToAnki = { groupedResult ->
+                                addLookupGroupToAnki(index, groupedResult)
+                            },
+                            onCloseAll = if (isTopLayer && lookupPopupLayers.size > 1) {
+                                { closeLookupPopup() }
+                            } else null,
+                            onClose = {
+                                if (isTopLayer) {
+                                    popLookupSnapshotOrClose()
+                                } else {
+                                    truncateLookupLayersTo(index)
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReaderLookupPopupCard(
+    groupedResults: List<GroupedLookupResult>,
+    loading: Boolean,
+    error: String?,
+    highlightedDefinitionKey: String?,
+    highlightedDefinitionRects: List<Rect>,
+    collapsedSections: Map<String, Boolean>,
+    contentMaxHeightDp: Int,
+    onToggleSection: ((String, Boolean) -> Unit)?,
+    onDefinitionLookup: ((String, DefinitionLookupTapData) -> Unit)?,
+    onRangeSelection: (() -> Unit)?,
+    onPlayAudio: ((GroupedLookupResult) -> Unit)?,
+    onAddToAnki: ((GroupedLookupResult) -> Unit)?,
+    onCloseAll: (() -> Unit)?,
+    onClose: (() -> Unit)?
+) {
+    Column(
+        modifier = Modifier.padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(contentMaxHeightDp.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (loading) {
+                Text(stringResource(R.string.common_querying))
+            }
+            if (error != null) {
+                Text(error, color = MaterialTheme.colorScheme.error)
+            }
+            groupedResults.forEach { groupedResult ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            LookupHeadwordWithReading(
+                                term = groupedResult.term,
+                                reading = groupedResult.reading,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(end = 8.dp)
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (onRangeSelection != null) {
+                                    OutlinedButton(onClick = onRangeSelection) {
+                                        Text("▦")
+                                    }
+                                }
+                                if (onPlayAudio != null) {
+                                    OutlinedButton(onClick = { onPlayAudio(groupedResult) }) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Audiotrack,
+                                            contentDescription = stringResource(R.string.common_audio),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                                if (onAddToAnki != null) {
+                                    OutlinedButton(onClick = { onAddToAnki(groupedResult) }) {
+                                        Text("+")
+                                    }
+                                }
+                            }
+                        }
+                        val frequencyLabel = stringResource(R.string.bookreader_meta_frequency)
+                        val pitchLabel = stringResource(R.string.bookreader_meta_pitch)
+                        val topFrequencyBadges = groupedResult.dictionaries
+                            .asSequence()
+                            .map { dictionaryGroup ->
+                                parseMetaBadges(dictionaryGroup.frequency, frequencyLabel)
+                            }
+                            .firstOrNull { it.isNotEmpty() }
+                            .orEmpty()
+                        if (topFrequencyBadges.isNotEmpty()) {
+                            MetaBadgeRow(
+                                badges = topFrequencyBadges,
+                                labelColor = Color(0xFFDDF0DD),
+                                labelTextColor = Color(0xFF305E33)
+                            )
+                        }
+                        val topPitchBadges = groupedResult.dictionaries
+                            .asSequence()
+                            .map { dictionaryGroup ->
+                                parsePitchBadgeGroups(
+                                    raw = dictionaryGroup.pitch,
+                                    reading = groupedResult.reading,
+                                    defaultLabel = pitchLabel
+                                )
+                            }
+                            .firstOrNull { it.isNotEmpty() }
+                            .orEmpty()
+                        if (topPitchBadges.isNotEmpty()) {
+                            topPitchBadges.forEach { group ->
+                                PitchBadgeRow(
+                                    group = group,
+                                    labelColor = Color(0xFFE7DDF8),
+                                    labelTextColor = Color(0xFF4E3A74)
+                                )
+                            }
                         }
 
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 380.dp)
-                                .verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            if (lookupPopupLoading) {
-                                Text(stringResource(R.string.common_querying))
-                            }
-                            if (lookupPopupError != null) {
-                                Text(lookupPopupError!!, color = MaterialTheme.colorScheme.error)
-                            }
-                            if (!lookupPopupLoading && groupedLookupPopupResults.isEmpty() && lookupPopupError == null) {
-                                Text(stringResource(R.string.common_no_results))
-                            }
-                            groupedLookupPopupResults.forEach { groupedResult ->
-                                Card(modifier = Modifier.fillMaxWidth()) {
-                                    Column(
-                                        modifier = Modifier.padding(10.dp),
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            LookupHeadwordWithReading(
-                                                term = groupedResult.term,
-                                                reading = groupedResult.reading,
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .padding(end = 8.dp),
-                                            )
-                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                if (hasSubtitleFile && audiobookSettings.lookupRangeSelectionEnabled) {
-                                                    OutlinedButton(
-                                                        onClick = {
-                                                            beginCueRangeSelection(reopenLookupPopupAfterSelection = true)
-                                                        }
-                                                    ) {
-                                                        Text("▦")
-                                                    }
-                                                }
-                                                if (audiobookSettings.lookupPlaybackAudioEnabled) {
-                                                    OutlinedButton(
-                                                        onClick = { playLookupGroupAudio(groupedResult) }
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Outlined.Audiotrack,
-                                                            contentDescription = stringResource(R.string.common_audio),
-                                                            modifier = Modifier.size(18.dp)
-                                                        )
-                                                    }
-                                                }
-                                                OutlinedButton(
-                                                    onClick = { addLookupGroupToAnki(groupedResult) }
-                                                ) {
-                                                    Text("+")
-                                                }
-                                            }
+                        groupedResult.dictionaries.forEach { dictionaryGroup ->
+                            val sectionKey = "readerPopup|${groupedResult.term}|${dictionaryGroup.dictionary}"
+                            val expanded = !(collapsedSections[sectionKey] ?: false)
+                            Card(modifier = Modifier.fillMaxWidth()) {
+                                Column(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    DictionaryEntryHeader(
+                                        dictionaryName = dictionaryGroup.dictionary,
+                                        expanded = expanded,
+                                        onToggleExpanded = {
+                                            onToggleSection?.invoke(sectionKey, expanded)
                                         }
-                                        val frequencyLabel = stringResource(R.string.bookreader_meta_frequency)
-                                        val pitchLabel = stringResource(R.string.bookreader_meta_pitch)
-                                        val topFrequencyBadges = groupedResult.dictionaries
-                                            .asSequence()
-                                            .map { dictionaryGroup ->
-                                                parseMetaBadges(
-                                                    dictionaryGroup.frequency,
-                                                    frequencyLabel
-                                                )
-                                            }
-                                            .firstOrNull { it.isNotEmpty() }
-                                            .orEmpty()
-                                        if (topFrequencyBadges.isNotEmpty()) {
-                                            MetaBadgeRow(
-                                                badges = topFrequencyBadges,
-                                                labelColor = Color(0xFFDDF0DD),
-                                                labelTextColor = Color(0xFF305E33)
-                                            )
-                                        }
-                                        val topPitchBadges = groupedResult.dictionaries
-                                            .asSequence()
-                                            .map { dictionaryGroup ->
-                                                parsePitchBadgeGroups(
-                                                    raw = dictionaryGroup.pitch,
-                                                    reading = groupedResult.reading,
-                                                    defaultLabel = pitchLabel
-                                                )
-                                            }
-                                            .firstOrNull { it.isNotEmpty() }
-                                            .orEmpty()
-                                        if (topPitchBadges.isNotEmpty()) {
-                                            topPitchBadges.forEach { group ->
-                                                PitchBadgeRow(
-                                                    group = group,
-                                                    labelColor = Color(0xFFE7DDF8),
-                                                    labelTextColor = Color(0xFF4E3A74)
-                                                )
-                                            }
-                                        }
-
-                                        groupedResult.dictionaries.forEach { dictionaryGroup ->
-                                            val sectionKey = "readerPopup|${groupedResult.term}|${dictionaryGroup.dictionary}"
-                                            val expanded = !(lookupCollapsedSections[sectionKey] ?: false)
+                                    )
+                                    if (expanded) {
+                                        dictionaryGroup.definitions.forEachIndexed { definitionIndex, definition ->
+                                            val definitionKey = "$sectionKey|$definitionIndex"
                                             Card(modifier = Modifier.fillMaxWidth()) {
                                                 Column(
                                                     modifier = Modifier.padding(8.dp),
                                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                                 ) {
-                                                    DictionaryEntryHeader(
-                                                        dictionaryName = dictionaryGroup.dictionary,
-                                                        expanded = expanded,
-                                                        onToggleExpanded = {
-                                                            lookupCollapsedSections[sectionKey] = expanded
-                                                        }
-                                                    )
-                                                    if (expanded) {
-                                                        dictionaryGroup.definitions.forEach { definition ->
-                                                            Card(modifier = Modifier.fillMaxWidth()) {
-                                                                Column(
-                                                                    modifier = Modifier.padding(8.dp),
-                                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                                                ) {
-                                                                    RichDefinitionView(
-                                                                        definition = definition,
-                                                                        dictionaryName = null,
-                                                                        dictionaryCss = dictionaryGroup.css
-                                                                    )
-                                                                }
+                                                    RichDefinitionView(
+                                                        definition = definition,
+                                                        dictionaryName = null,
+                                                        dictionaryCss = dictionaryGroup.css,
+                                                        highlightedRects = if (highlightedDefinitionKey == definitionKey) {
+                                                            highlightedDefinitionRects
+                                                        } else {
+                                                            emptyList()
+                                                        },
+                                                        onLookupTap = if (onDefinitionLookup != null) {
+                                                            { tapData ->
+                                                                onDefinitionLookup(definitionKey, tapData)
                                                             }
-                                                        }
-                                                    }
+                                                        } else null
+                                                    )
                                                 }
                                             }
                                         }
@@ -2651,12 +2953,19 @@ private fun BookReaderScreen(
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { closeLookupPopup() }) {
-                                Text(stringResource(R.string.common_close))
-                            }
-                        }
+        if (onClose != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onClose) {
+                    Text(stringResource(R.string.common_close))
+                }
+                if (onCloseAll != null) {
+                    TextButton(onClick = onCloseAll) {
+                        Text(stringResource(R.string.common_close_all))
                     }
                 }
             }
@@ -2671,8 +2980,525 @@ private fun buildHighlightedText(text: String, selectedRange: IntRange?): Annota
         val start = range.first.coerceIn(0, text.length)
         val endExclusive = (range.last + 1).coerceIn(start, text.length)
         if (endExclusive <= start) return@buildAnnotatedString
-        addStyle(SpanStyle(background = Color(0x66A0A0A0)), start, endExclusive)
+        addStyle(
+            SpanStyle(
+                background = Color(0x66A0A0A0)
+            ),
+            start,
+            endExclusive
+        )
     }
+}
+
+@Composable
+private fun ReaderLookupClickableSubtitle(
+    text: AnnotatedString,
+    selectedRange: IntRange?,
+    style: androidx.compose.ui.text.TextStyle,
+    modifier: Modifier = Modifier,
+    onTextTap: (offset: Int, anchor: ReaderLookupAnchor) -> Unit
+) {
+    var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var textWindowOrigin by remember { mutableStateOf(Offset.Zero) }
+
+    Text(
+        text = text,
+        style = style,
+        modifier = modifier
+            .onGloballyPositioned { coordinates ->
+                val bounds = coordinates.boundsInWindow()
+                textWindowOrigin = bounds.topLeft
+            }
+            .pointerInput(onTextTap) {
+                detectTapGestures { tapOffset ->
+                    val layout = textLayoutResult ?: return@detectTapGestures
+                    var offset = layout.getOffsetForPosition(tapOffset)
+                    if (offset > 0) {
+                        val previousBox = layout.getBoundingBox(offset - 1)
+                        if (
+                            tapOffset.x >= previousBox.left &&
+                            tapOffset.x <= previousBox.right &&
+                            tapOffset.y >= previousBox.top &&
+                            tapOffset.y <= previousBox.bottom
+                        ) {
+                            offset -= 1
+                        }
+                    }
+                    val box = layout.getBoundingBox(offset)
+                    val anchor = ReaderLookupAnchor(
+                        rects = listOf(
+                            Rect(
+                                left = textWindowOrigin.x + box.left,
+                                right = textWindowOrigin.x + box.right,
+                                top = textWindowOrigin.y + box.top,
+                                bottom = textWindowOrigin.y + box.bottom
+                            )
+                        )
+                    )
+                    onTextTap(offset, anchor)
+                }
+            },
+        onTextLayout = { textLayoutResult = it }
+    )
+}
+
+private data class LookupPopupSizeSpec(
+    val widthDp: Int,
+    val contentMaxHeightDp: Int,
+    val preferredDirection: LookupPopupDirection
+)
+
+private enum class LookupPopupDirection {
+    BELOW,
+    ABOVE,
+    RIGHT,
+    LEFT
+}
+
+private fun computeLookupPopupSizeSpec(
+    screenWidthDp: Int,
+    screenHeightDp: Int,
+    anchor: ReaderLookupAnchor?,
+    placeBelow: Boolean,
+    preferSidePlacement: Boolean,
+    density: Float
+): LookupPopupSizeSpec {
+    val safeDensity = density.takeIf { it > 0f } ?: 1f
+    val screenWidth = screenWidthDp.toFloat().coerceAtLeast(1f)
+    val screenHeight = screenHeightDp.toFloat().coerceAtLeast(1f)
+    val anchorBounds = anchor.boundingRectOrNull()
+    val anchorLeftDp = ((anchorBounds?.left ?: screenWidth * safeDensity * 0.4f) / safeDensity).coerceIn(0f, screenWidth)
+    val anchorRightDp = ((anchorBounds?.right ?: screenWidth * safeDensity * 0.6f) / safeDensity).coerceIn(0f, screenWidth)
+    val anchorTopDp = ((anchorBounds?.top ?: screenHeight * safeDensity * 0.46f) / safeDensity).coerceIn(0f, screenHeight)
+    val anchorBottomDp = ((anchorBounds?.bottom ?: screenHeight * safeDensity * 0.56f) / safeDensity).coerceIn(0f, screenHeight)
+    val screenPaddingDp = 12f
+    val guardDp = 24f
+    val preferredMinWidthDp = 220f
+    val maxWidthDp = 320f
+    val preferredMinContentHeightDp = 96f
+    val maxContentHeightDp = 260f
+    val chromeReserveDp = 112f
+
+    data class DirectionCap(val direction: LookupPopupDirection, val widthCap: Float, val contentHeightCap: Float)
+
+    val fullWidthCap = (screenWidth - screenPaddingDp * 2f).coerceAtLeast(0f)
+    val fullHeightCap = (screenHeight - screenPaddingDp * 2f - chromeReserveDp).coerceAtLeast(0f)
+    val belowCap = DirectionCap(
+        direction = LookupPopupDirection.BELOW,
+        widthCap = fullWidthCap,
+        contentHeightCap = (screenHeight - anchorBottomDp - guardDp - screenPaddingDp - chromeReserveDp).coerceAtLeast(0f)
+    )
+    val aboveCap = DirectionCap(
+        direction = LookupPopupDirection.ABOVE,
+        widthCap = fullWidthCap,
+        contentHeightCap = (anchorTopDp - guardDp - screenPaddingDp - chromeReserveDp).coerceAtLeast(0f)
+    )
+    val rightCap = DirectionCap(
+        direction = LookupPopupDirection.RIGHT,
+        widthCap = (screenWidth - anchorRightDp - guardDp - screenPaddingDp).coerceAtLeast(0f),
+        contentHeightCap = fullHeightCap
+    )
+    val leftCap = DirectionCap(
+        direction = LookupPopupDirection.LEFT,
+        widthCap = (anchorLeftDp - guardDp - screenPaddingDp).coerceAtLeast(0f),
+        contentHeightCap = fullHeightCap
+    )
+
+    val verticalCaps = if (placeBelow) listOf(belowCap, aboveCap) else listOf(aboveCap, belowCap)
+    val sideCaps = if (preferSidePlacement) listOf(rightCap, leftCap) else listOf(leftCap, rightCap)
+
+    val bestCap =
+        verticalCaps.firstOrNull { it.widthCap >= preferredMinWidthDp && it.contentHeightCap >= preferredMinContentHeightDp }
+            ?: sideCaps.firstOrNull { it.widthCap >= preferredMinWidthDp && it.contentHeightCap >= preferredMinContentHeightDp }
+            ?: (verticalCaps + sideCaps).maxByOrNull { it.widthCap * it.contentHeightCap }
+
+    val width = (bestCap?.widthCap ?: maxWidthDp)
+        .coerceIn(1f, maxWidthDp)
+        .toInt()
+    val contentMaxHeight = (bestCap?.contentHeightCap ?: maxContentHeightDp)
+        .coerceIn(1f, maxContentHeightDp)
+        .toInt()
+
+    return LookupPopupSizeSpec(
+        widthDp = width,
+        contentMaxHeightDp = contentMaxHeight,
+        preferredDirection = bestCap?.direction ?: if (placeBelow) LookupPopupDirection.BELOW else LookupPopupDirection.ABOVE
+    )
+}
+
+private fun rebuildDefinitionRectsByMatchedLength(
+    rects: List<Rect>,
+    charRects: List<Rect>,
+    nodeText: String,
+    startOffset: Int,
+    matchedLength: Int
+): List<Rect> {
+    val exactRects = rebuildRectsFromCharacterRects(charRects, matchedLength)
+    if (exactRects.isNotEmpty()) return exactRects
+    if (rects.isEmpty()) return emptyList()
+    val safeNodeTextLength = nodeText.length.takeIf { it > 0 } ?: return rects
+    val safeStartOffset = startOffset.coerceIn(0, safeNodeTextLength - 1)
+    val remainingLength = (safeNodeTextLength - safeStartOffset).coerceAtLeast(1)
+    val safeMatchedLength = matchedLength.coerceAtLeast(1).coerceAtMost(remainingLength)
+    val safeBaseLength = selectLookupScanText(nodeText, safeStartOffset)?.text?.length?.coerceAtLeast(safeMatchedLength)
+        ?: remainingLength
+    if (safeMatchedLength >= safeBaseLength) return rects
+    val totalWidth = rects.sumOf { (it.right - it.left).coerceAtLeast(0f).toDouble() }.toFloat()
+    if (totalWidth <= 0f) return rects
+    var remainingWidth = totalWidth * (safeMatchedLength.toFloat() / safeBaseLength.toFloat())
+    val result = mutableListOf<Rect>()
+    for (rect in rects) {
+        if (remainingWidth <= 0f) break
+        val rectWidth = (rect.right - rect.left).coerceAtLeast(0f)
+        if (rectWidth <= 0f) continue
+        if (remainingWidth >= rectWidth) {
+            result += rect
+            remainingWidth -= rectWidth
+        } else {
+            result += Rect(
+                left = rect.left,
+                top = rect.top,
+                right = rect.left + remainingWidth,
+                bottom = rect.bottom
+            )
+            remainingWidth = 0f
+        }
+    }
+    return result.ifEmpty { rects.take(1) }
+}
+
+private fun rebuildDefinitionAnchorRectsByMatchedLength(
+    charRects: List<Rect>,
+    fallbackRect: Rect?,
+    matchedLength: Int
+): List<Rect> {
+    val exactRects = rebuildRectsFromCharacterRects(charRects, matchedLength)
+    return when {
+        exactRects.isNotEmpty() -> exactRects
+        fallbackRect != null -> listOf(fallbackRect)
+        else -> emptyList()
+    }
+}
+
+private fun rebuildRectsFromCharacterRects(
+    charRects: List<Rect>,
+    matchedLength: Int
+): List<Rect> {
+    if (charRects.isEmpty()) return emptyList()
+    val safeMatchedLength = matchedLength.coerceAtLeast(1).coerceAtMost(charRects.size)
+    val selectedRects = charRects.take(safeMatchedLength).filter {
+        (it.right - it.left) > 0f || (it.bottom - it.top) > 0f
+    }
+    if (selectedRects.isEmpty()) return emptyList()
+    return mergeRectsByLine(selectedRects)
+}
+
+private fun mergeRectsByLine(rects: List<Rect>): List<Rect> {
+    if (rects.isEmpty()) return emptyList()
+    val sorted = rects.sortedWith(compareBy<Rect> { it.top }.thenBy { it.left })
+    val result = mutableListOf<Rect>()
+    val verticalTolerance = 2f
+    var current = sorted.first()
+    for (index in 1 until sorted.size) {
+        val rect = sorted[index]
+        if (kotlin.math.abs(rect.top - current.top) <= verticalTolerance &&
+            kotlin.math.abs(rect.bottom - current.bottom) <= verticalTolerance
+        ) {
+            current = Rect(
+                left = minOf(current.left, rect.left),
+                top = minOf(current.top, rect.top),
+                right = maxOf(current.right, rect.right),
+                bottom = maxOf(current.bottom, rect.bottom)
+            )
+        } else {
+            result += current
+            current = rect
+        }
+    }
+    result += current
+    return result
+}
+
+private fun mergeRects(rects: List<Rect>): Rect {
+    return Rect(
+        left = rects.minOf { it.left },
+        top = rects.minOf { it.top },
+        right = rects.maxOf { it.right },
+        bottom = rects.maxOf { it.bottom }
+    )
+}
+
+private fun ReaderLookupAnchor?.boundingRectOrNull(): Rect? {
+    val rects = this?.rects?.filter { !it.isEmpty } ?: return null
+    if (rects.isEmpty()) return null
+    return mergeRects(rects)
+}
+
+private class ReaderLookupPopupPositionProvider(
+    private val anchor: ReaderLookupAnchor?,
+    private val placeBelow: Boolean,
+    private val preferSidePlacement: Boolean,
+    private val preferredDirection: LookupPopupDirection,
+    private val gapPx: Int,
+    private val screenPaddingPx: Int
+) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+        popupContentSize: IntSize
+    ): IntOffset {
+        val guardPx = maxOf(gapPx * 3, screenPaddingPx * 2)
+        val sourceRects = anchor?.rects
+            ?.filter { !it.isEmpty }
+            ?.map {
+                IntRect(
+                    left = it.left.toInt(),
+                    top = it.top.toInt(),
+                    right = it.right.toInt(),
+                    bottom = it.bottom.toInt()
+                )
+            }
+            ?.takeIf { it.isNotEmpty() }
+            ?: listOf(
+                IntRect(
+                    left = (windowSize.width * 0.4f).toInt(),
+                    top = (windowSize.height * 0.46f).toInt(),
+                    right = (windowSize.width * 0.6f).toInt(),
+                    bottom = (windowSize.height * 0.56f).toInt()
+                )
+            )
+        val guardRects = sourceRects.map { expandRect(it, guardPx) }
+        val sourceBoundsRect = IntRect(
+            left = sourceRects.minOf { it.left },
+            top = sourceRects.minOf { it.top },
+            right = sourceRects.maxOf { it.right },
+            bottom = sourceRects.maxOf { it.bottom }
+        )
+        val guardBoundsRect = IntRect(
+            left = guardRects.minOf { it.left },
+            top = guardRects.minOf { it.top },
+            right = guardRects.maxOf { it.right },
+            bottom = guardRects.maxOf { it.bottom }
+        )
+        val maxX = (windowSize.width - popupContentSize.width - screenPaddingPx).coerceAtLeast(screenPaddingPx)
+        val maxY = (windowSize.height - popupContentSize.height - screenPaddingPx).coerceAtLeast(screenPaddingPx)
+
+        fun fitsScreen(candidate: IntOffset): Boolean {
+            return candidate.x in screenPaddingPx..maxX && candidate.y in screenPaddingPx..maxY
+        }
+
+        fun clampToScreen(candidate: IntOffset): IntOffset {
+            return IntOffset(
+                x = candidate.x.coerceIn(screenPaddingPx, maxX),
+                y = candidate.y.coerceIn(screenPaddingPx, maxY)
+            )
+        }
+
+        fun isNonOverlapping(candidate: IntOffset): Boolean {
+            val candidateRect = popupRect(candidate, popupContentSize)
+            return guardRects.none { rectsOverlap(it, candidateRect) }
+        }
+
+        fun orderedCandidates(requireFit: Boolean): List<Pair<IntRect, IntOffset>> {
+            return sourceRects.zip(guardRects)
+                .flatMap { (sourceRect, guardRect) ->
+                    buildLookupPopupCandidates(
+                        anchorLeft = guardRect.left,
+                        anchorRight = guardRect.right,
+                        anchorTop = guardRect.top,
+                        anchorBottom = guardRect.bottom,
+                        popupContentSize = popupContentSize,
+                        maxX = maxX,
+                        maxY = maxY,
+                        preferSidePlacement = preferSidePlacement,
+                        placeBelow = placeBelow,
+                        gapPx = gapPx,
+                        screenPaddingPx = screenPaddingPx,
+                        requireFit = requireFit
+                    ).map { candidate -> sourceRect to candidate }
+                }
+        }
+
+        fun bestNonOverlappingCandidate(requireFit: Boolean): IntOffset? {
+            return orderedCandidates(requireFit)
+                .filter { (_, candidate) ->
+                    isNonOverlapping(candidate)
+                }
+                .minWithOrNull(
+                    compareBy<Pair<IntRect, IntOffset>> { (sourceRect, candidate) ->
+                        val direction = candidateDirection(sourceRect, candidate, popupContentSize)
+                        if (direction == preferredDirection) 0 else 1
+                    }.thenBy { (sourceRect, candidate) ->
+                        rectDistance(sourceRect, popupRect(candidate, popupContentSize))
+                    }
+                )?.second
+        }
+
+        bestNonOverlappingCandidate(requireFit = true)?.let { return it }
+
+        val clampedCandidates = orderedCandidates(requireFit = false)
+            .map { (sourceRect, candidate) -> sourceRect to clampToScreen(candidate) }
+            .distinctBy { (_, candidate) -> candidate }
+            .filter { (_, candidate) -> fitsScreen(candidate) && isNonOverlapping(candidate) }
+            .minWithOrNull(
+                compareBy<Pair<IntRect, IntOffset>> { (sourceRect, candidate) ->
+                    val direction = candidateDirection(sourceRect, candidate, popupContentSize)
+                    if (direction == preferredDirection) 0 else 1
+                }.thenBy { (sourceRect, candidate) ->
+                    rectDistance(sourceRect, popupRect(candidate, popupContentSize))
+                }
+            )
+            ?.second
+        if (clampedCandidates != null) return clampedCandidates
+
+        val alignedX = sourceBoundsRect.left.coerceIn(screenPaddingPx, maxX)
+        val alignedY = sourceBoundsRect.top.coerceIn(screenPaddingPx, maxY)
+        val forcedVertical = if (placeBelow) {
+            listOf(
+                IntOffset(alignedX, guardBoundsRect.bottom + gapPx),
+                IntOffset(alignedX, guardBoundsRect.top - popupContentSize.height - gapPx)
+            )
+        } else {
+            listOf(
+                IntOffset(alignedX, guardBoundsRect.top - popupContentSize.height - gapPx),
+                IntOffset(alignedX, guardBoundsRect.bottom + gapPx)
+            )
+        }
+        val forcedSide = listOf(
+            IntOffset(guardBoundsRect.right + gapPx, alignedY),
+            IntOffset(guardBoundsRect.left - popupContentSize.width - gapPx, alignedY)
+        )
+        val forcedOrdered = if (preferSidePlacement) forcedSide + forcedVertical else forcedVertical + forcedSide
+        val preferredFitFallback = forcedOrdered
+            .map(::clampToScreen)
+            .firstOrNull {
+                val direction = candidateDirection(sourceBoundsRect, it, popupContentSize)
+                direction == preferredDirection && fitsScreen(it) && isNonOverlapping(it)
+            }
+        if (preferredFitFallback != null) return preferredFitFallback
+        val fullyFitFallback = forcedOrdered
+            .map(::clampToScreen)
+            .firstOrNull { fitsScreen(it) && isNonOverlapping(it) }
+        if (fullyFitFallback != null) return fullyFitFallback
+
+        val emergencyCandidates = listOf(
+            IntOffset(screenPaddingPx, screenPaddingPx),
+            IntOffset(maxX, screenPaddingPx),
+            IntOffset(screenPaddingPx, maxY),
+            IntOffset(maxX, maxY)
+        ).distinct()
+        val emergencyFit = emergencyCandidates
+            .filter { fitsScreen(it) && isNonOverlapping(it) }
+            .minByOrNull { rectDistance(sourceBoundsRect, popupRect(it, popupContentSize)) }
+        if (emergencyFit != null) return emergencyFit
+
+        val preferredForced = clampToScreen(
+            if (placeBelow) {
+                IntOffset(alignedX, guardBoundsRect.bottom + gapPx)
+            } else {
+                IntOffset(alignedX, guardBoundsRect.top - popupContentSize.height - gapPx)
+            }
+        )
+        return forcedOrdered
+            .map(::clampToScreen)
+            .firstOrNull { isNonOverlapping(it) }
+            ?: preferredForced
+    }
+}
+
+private fun candidateDirection(sourceRect: IntRect, candidate: IntOffset, popupContentSize: IntSize): LookupPopupDirection {
+    val candidateRect = popupRect(candidate, popupContentSize)
+    return when {
+        candidateRect.left >= sourceRect.right -> LookupPopupDirection.RIGHT
+        candidateRect.right <= sourceRect.left -> LookupPopupDirection.LEFT
+        candidateRect.top >= sourceRect.bottom -> LookupPopupDirection.BELOW
+        else -> LookupPopupDirection.ABOVE
+    }
+}
+
+private fun expandRect(rect: IntRect, padding: Int): IntRect {
+    return IntRect(
+        left = rect.left - padding,
+        top = rect.top - padding,
+        right = rect.right + padding,
+        bottom = rect.bottom + padding
+    )
+}
+
+private fun popupRect(position: IntOffset, popupContentSize: IntSize): IntRect {
+    return IntRect(
+        left = position.x,
+        top = position.y,
+        right = position.x + popupContentSize.width,
+        bottom = position.y + popupContentSize.height
+    )
+}
+
+private fun rectsOverlap(a: IntRect, b: IntRect): Boolean {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+}
+
+private fun rectDistance(a: IntRect, b: IntRect): Int {
+    val dx = when {
+        b.left >= a.right -> b.left - a.right
+        a.left >= b.right -> a.left - b.right
+        else -> 0
+    }
+    val dy = when {
+        b.top >= a.bottom -> b.top - a.bottom
+        a.top >= b.bottom -> a.top - b.bottom
+        else -> 0
+    }
+    return dx + dy
+}
+
+private fun buildLookupPopupCandidates(
+    anchorLeft: Int,
+    anchorRight: Int,
+    anchorTop: Int,
+    anchorBottom: Int,
+    popupContentSize: IntSize,
+    maxX: Int,
+    maxY: Int,
+    preferSidePlacement: Boolean,
+    placeBelow: Boolean,
+    gapPx: Int,
+    screenPaddingPx: Int,
+    requireFit: Boolean
+): List<IntOffset> {
+    fun candidate(offset: IntOffset): IntOffset? {
+        if (!requireFit) return offset
+        return offset.takeIf {
+            it.x in screenPaddingPx..maxX && it.y in screenPaddingPx..maxY
+        }
+    }
+
+    val alignedX = anchorLeft.coerceIn(screenPaddingPx, maxX)
+    val alignedY = anchorTop.coerceIn(screenPaddingPx, maxY)
+
+    val verticalCandidates = if (placeBelow) {
+        listOf(
+            IntOffset(alignedX, anchorBottom + gapPx),
+            IntOffset(alignedX, anchorTop - popupContentSize.height - gapPx)
+        )
+    } else {
+        listOf(
+            IntOffset(alignedX, anchorTop - popupContentSize.height - gapPx),
+            IntOffset(alignedX, anchorBottom + gapPx)
+        )
+    }
+    val sideCandidates = listOf(
+        IntOffset(anchorRight + gapPx, alignedY),
+        IntOffset(anchorLeft - popupContentSize.width - gapPx, alignedY)
+    )
+
+    val ordered = if (preferSidePlacement) {
+        sideCandidates + verticalCandidates
+    } else {
+        verticalCandidates + sideCandidates
+    }
+    return ordered.mapNotNull(::candidate)
 }
 
 private val HOSHI_SENTENCE_DELIMITERS = setOf('。', '！', '？', '.', '!', '?', '\n', '\r')
@@ -2787,16 +3613,6 @@ private fun extractFullSentenceLikeHoshiFromCues(
     )
 }
 
-private fun findLookupSelection(
-    text: String,
-    offset: Int
-): LookupScanSelection? {
-    return selectLookupScanText(
-        text = text,
-        charOffset = offset
-    )
-}
-
 private fun computeBookLookupResults(
     context: Context,
     dictionaries: List<LoadedDictionary>,
@@ -2856,7 +3672,7 @@ private fun addLookupDefinitionToAnki(
         audioUri = audioUri,
         lookupAudioUri = lookupAudioUri,
         audioTagOnly = true,
-        requireCueAudioClip = true
+        requireCueAudioClip = audioUri != null
     )
 
     withAnkiStep("export-note") {
@@ -3457,6 +4273,7 @@ private tailrec fun Context.findHostActivity(): Activity? {
         else -> null
     }
 }
+
 
 
 

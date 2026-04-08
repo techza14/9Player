@@ -6,6 +6,8 @@
     <string name="playback_progress_unknown">Progress unavailable</string>
     <string name="common_back">&lt; 戻る</string>
     <string name="common_close">閉じる</string>
+    <string name="common_close_all">すべて閉じる</string>
+    <string name="anki_toast_added">Anki に追加しました。</string>
     <string name="common_cancel">キャンセル</string>
     <string name="common_confirm">確認</string>
     <string name="common_save">保存</string>
@@ -18,7 +20,6 @@
     <string name="common_lookup">辞書</string>
     <string name="common_loading">読み込み中...</string>
     <string name="common_querying">検索中...</string>
-    <string name="common_no_results">検索結果はありません。</string>
     <string name="common_not_selected">未選択</string>
     <string name="common_unknown">不明</string>
     <string name="common_audio">音声</string>
@@ -306,11 +307,7 @@
     <string name="bookreader_sleep_disconnect_bluetooth">タイマー終了時にコントローラー Bluetooth を切断 (Shizuku)</string>
     <string name="bookreader_open_bluetooth">スマホの Bluetooth 設定を開く</string>
     <string name="bookreader_lookup_no_dict">辞書が読み込まれていません。ホームで先に辞書をインポートしてください。</string>
-    <string name="bookreader_lookup_no_term">現在位置に検索できる語がありません。</string>
     <string name="bookreader_lookup_failed">検索失敗</string>
-    <string name="bookreader_anki_no_content">書き出せる辞書内容がありません。</string>
-    <string name="bookreader_anki_exporting">Anki に追加中...</string>
-    <string name="bookreader_anki_exported">Anki に追加しました。</string>
     <string name="bookreader_anki_export_failed">Anki への追加に失敗しました。</string>
     <string name="bookreader_meta_frequency">頻度</string>
     <string name="bookreader_meta_pitch">アクセント</string>

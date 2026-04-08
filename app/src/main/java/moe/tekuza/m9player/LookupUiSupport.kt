@@ -1,14 +1,21 @@
 package moe.tekuza.m9player
 
+import android.util.Log
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.view.View
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -19,15 +26,37 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
+import org.json.JSONArray
 
 internal data class MetaBadge(val label: String, val value: String)
 internal data class PitchBadgeGroup(val label: String, val reading: String?, val values: List<String>)
 private data class RubyPart(val base: String, val ruby: String?)
+internal data class DefinitionLookupTapData(
+    val text: String,
+    val sentence: String,
+    val offset: Int,
+    val nodeText: String,
+    val screenRect: Rect?,
+    val localRects: List<Rect>,
+    val localCharRects: List<Rect>,
+    val screenCharRects: List<Rect>
+)
+
+private class DefinitionLookupViewTag(
+    val bridge: DefinitionLookupBridge
+) {
+    var lastHtml: String? = null
+    var lastLookupEnabled: Boolean? = null
+}
+
+private const val LOOKUP_TAP_LOG_TAG = "LookupTap"
 
 @Composable
 internal fun DictionaryEntryHeader(
@@ -459,7 +488,9 @@ internal fun RichDefinitionView(
     definition: String,
     indexLabel: String = "",
     dictionaryName: String? = null,
-    dictionaryCss: String? = null
+    dictionaryCss: String? = null,
+    onLookupTap: ((DefinitionLookupTapData) -> Unit)? = null,
+    highlightedRects: List<Rect> = emptyList()
 ) {
     val trimmed = definition.trim()
     if (trimmed.isBlank()) return
@@ -467,34 +498,95 @@ internal fun RichDefinitionView(
     if (looksLikeHtmlDefinition(trimmed)) {
         val bodyTextColor = MaterialTheme.colorScheme.onSurface
         val bodyTextColorCss = remember(bodyTextColor) { colorToCssHex(bodyTextColor) }
-        val html = buildDefinitionHtml(
-            definitionHtml = trimmed,
-            indexLabel = indexLabel,
-            dictionaryName = dictionaryName,
-            dictionaryCss = dictionaryCss,
-            bodyTextColorCss = bodyTextColorCss
-        )
-        AndroidView(
-            modifier = Modifier.fillMaxWidth(),
-            factory = { context ->
-                WebView(context).apply {
-                    setBackgroundColor(0x00000000)
-                    settings.javaScriptEnabled = false
-                    settings.domStorageEnabled = false
-                    settings.loadsImagesAutomatically = true
-                    webViewClient = WebViewClient()
+        val lookupEnabled = onLookupTap != null
+        val html = remember(trimmed, indexLabel, dictionaryName, dictionaryCss, bodyTextColorCss, lookupEnabled) {
+            buildDefinitionHtml(
+                definitionHtml = trimmed,
+                indexLabel = indexLabel,
+                dictionaryName = dictionaryName,
+                dictionaryCss = dictionaryCss,
+                bodyTextColorCss = bodyTextColorCss,
+                enableLookupTap = lookupEnabled
+            )
+        }
+        Box(modifier = Modifier.fillMaxWidth()) {
+            AndroidView(
+                modifier = Modifier.fillMaxWidth(),
+                factory = { context ->
+                    val bridge = DefinitionLookupBridge(onLookupTap)
+                    val viewTag = DefinitionLookupViewTag(bridge)
+                    WebView(context).apply {
+                        tag = viewTag
+                        bridge.hostView = this
+                        setBackgroundColor(0x00000000)
+                        overScrollMode = WebView.OVER_SCROLL_NEVER
+                        isVerticalScrollBarEnabled = false
+                        isHorizontalScrollBarEnabled = false
+                        isHapticFeedbackEnabled = false
+                        isSoundEffectsEnabled = false
+                        isLongClickable = false
+                        isClickable = lookupEnabled
+                        isFocusable = false
+                        isFocusableInTouchMode = false
+                        settings.javaScriptEnabled = lookupEnabled
+                        settings.domStorageEnabled = false
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = false
+                        settings.blockNetworkLoads = true
+                        settings.builtInZoomControls = false
+                        settings.displayZoomControls = false
+                        settings.setSupportZoom(false)
+                        setOnLongClickListener { true }
+                        setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                        addJavascriptInterface(bridge, "NineLookup")
+                    }
+                },
+                update = { webView ->
+                    (webView.tag as? DefinitionLookupViewTag)?.apply {
+                        bridge.onLookupTap = onLookupTap
+                        bridge.hostView = webView
+                        if (lastLookupEnabled != lookupEnabled) {
+                            webView.settings.javaScriptEnabled = lookupEnabled
+                            webView.isClickable = lookupEnabled
+                            lastLookupEnabled = lookupEnabled
+                        }
+                        if (lastHtml != html) {
+                            webView.loadDataWithBaseURL(
+                                null,
+                                html,
+                                "text/html",
+                                "utf-8",
+                                null
+                            )
+                            lastHtml = html
+                        }
+                    }
                 }
-            },
-            update = { webView ->
-                webView.loadDataWithBaseURL(
-                    null,
-                    html,
-                    "text/html",
-                    "utf-8",
-                    null
-                )
+            )
+            highlightedRects.forEach { rect ->
+                val width = (rect.right - rect.left).coerceAtLeast(0f)
+                val height = (rect.bottom - rect.top).coerceAtLeast(0f)
+                if (width > 0f && height > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .absoluteOffset(
+                                x = rect.left.dp,
+                                y = rect.top.dp
+                            )
+                            .size(width.dp, height.dp)
+                            .border(
+                                width = 1.dp,
+                                color = Color(0x8C7A7A7A),
+                                shape = RoundedCornerShape(4.dp)
+                            )
+                            .background(
+                                color = Color(0x247A7A7A),
+                                shape = RoundedCornerShape(4.dp)
+                            )
+                    )
+                }
             }
-        )
+        }
     } else {
         Text("$indexLabel${trimmed}")
     }
@@ -505,7 +597,8 @@ private fun buildDefinitionHtml(
     indexLabel: String,
     dictionaryName: String?,
     dictionaryCss: String?,
-    bodyTextColorCss: String
+    bodyTextColorCss: String,
+    enableLookupTap: Boolean
 ): String {
     val prefix = if (indexLabel.isBlank()) "" else "<div>${escapeHtmlText(indexLabel)}</div>"
     val dictionaryLabel = dictionaryName?.trim().orEmpty()
@@ -528,6 +621,187 @@ private fun buildDefinitionHtml(
         rawCss = dictionaryCss.orEmpty(),
         dictionaryName = dictionaryLabel
     )
+    val lookupTapScript = if (!enableLookupTap) {
+        ""
+    } else {
+        """
+        <script>
+        (function() {
+            if (window.__nineLookupInstalled) return;
+            window.__nineLookupInstalled = true;
+            const scanDelimiters = '。、「」『』【】〔〕（）()［］[]｛｝{}〈〉《》＜＞…？！!?：:；;，,．。/\\\\\\n\\r';
+            const maxScanLength = 16;
+            function resolveCaretRange(x, y) {
+                if (document.caretRangeFromPoint) {
+                    return document.caretRangeFromPoint(x, y);
+                }
+                if (document.caretPositionFromPoint) {
+                    const position = document.caretPositionFromPoint(x, y);
+                    if (!position) return null;
+                    const range = document.createRange();
+                    range.setStart(position.offsetNode, position.offset);
+                    range.setEnd(position.offsetNode, position.offset);
+                    return range;
+                }
+                return null;
+            }
+            function isScanBoundary(ch) {
+                return !ch || /\\s/.test(ch) || scanDelimiters.includes(ch);
+            }
+            function resolveSelectionEnd(text, startOffset) {
+                const safeOffset = Math.max(0, Math.min(startOffset || 0, Math.max(0, text.length - 1)));
+                if (!text.length || isScanBoundary(text[safeOffset])) return safeOffset;
+                let endExclusive = safeOffset;
+                while (endExclusive < text.length && (endExclusive - safeOffset) < maxScanLength) {
+                    const ch = text[endExclusive];
+                    if (isScanBoundary(ch)) break;
+                    endExclusive += 1;
+                }
+                return endExclusive;
+            }
+            function pickRectForPoint(rectList, x, y) {
+                if (!rectList || rectList.length === 0) return null;
+                for (const rect of rectList) {
+                    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                        return rect;
+                    }
+                }
+                return rectList[0];
+            }
+            const sentenceDelimiters = '。！？.!?\\n\\r';
+            const trailingSentenceChars = '」』）】!?！？…';
+            function extractSentence(text, anchorOffset) {
+                if (!text) return '';
+                const safeOffset = Math.max(0, Math.min(anchorOffset || 0, Math.max(0, text.length - 1)));
+                let start = 0;
+                for (let i = safeOffset - 1; i >= 0; i -= 1) {
+                    if (sentenceDelimiters.includes(text[i])) {
+                        start = i + 1;
+                        break;
+                    }
+                }
+                let end = text.length;
+                for (let i = safeOffset; i < text.length; i += 1) {
+                    if (sentenceDelimiters.includes(text[i])) {
+                        end = i + 1;
+                        while (end < text.length && trailingSentenceChars.includes(text[end])) {
+                            end += 1;
+                        }
+                        break;
+                    }
+                }
+                const sentence = text.slice(start, end).trim();
+                return sentence || text.trim();
+            }
+            document.addEventListener('click', function(e) {
+                if (!window.NineLookup || !window.NineLookup.onTap) return;
+                const range = resolveCaretRange(e.clientX, e.clientY);
+                if (!range) return;
+                const node = range.startContainer;
+                if (!node || node.nodeType !== Node.TEXT_NODE) return;
+                const text = node.textContent || '';
+                if (!text.trim()) return;
+                let targetRect = null;
+                let safeOffset = 0;
+                let selectionEndExclusive = 0;
+                const textLength = text.length;
+                if (textLength > 0) {
+                    safeOffset = Math.max(0, Math.min(range.startOffset || 0, textLength - 1));
+                    if (safeOffset > 0) {
+                        const previousCharRange = document.createRange();
+                        previousCharRange.setStart(node, safeOffset - 1);
+                        previousCharRange.setEnd(node, safeOffset);
+                        const previousCharRect = previousCharRange.getBoundingClientRect();
+                        if (
+                            previousCharRect &&
+                            e.clientX >= previousCharRect.left &&
+                            e.clientX <= previousCharRect.right &&
+                            e.clientY >= previousCharRect.top &&
+                            e.clientY <= previousCharRect.bottom
+                        ) {
+                            safeOffset -= 1;
+                        }
+                    }
+                    selectionEndExclusive = resolveSelectionEnd(text, safeOffset);
+                    if (selectionEndExclusive > safeOffset) {
+                        const selectionRange = document.createRange();
+                        selectionRange.setStart(node, safeOffset);
+                        selectionRange.setEnd(node, selectionEndExclusive);
+                        const rects = Array.from(selectionRange.getClientRects() || []).filter(r => r.width > 0 || r.height > 0);
+                        const rect = pickRectForPoint(rects, e.clientX, e.clientY) || selectionRange.getBoundingClientRect();
+                        if (rect && (rect.width > 0 || rect.height > 0)) {
+                            targetRect = rect;
+                        }
+                    }
+                    if (!targetRect) {
+                        const charRange = document.createRange();
+                        charRange.setStart(node, safeOffset);
+                        charRange.setEnd(node, safeOffset + 1);
+                        const rect = charRange.getBoundingClientRect();
+                        if (rect && (rect.width > 0 || rect.height > 0)) {
+                            targetRect = rect;
+                        }
+                    }
+                }
+                if (!targetRect) {
+                    const rect = range.getBoundingClientRect();
+                    if (rect && (rect.width > 0 || rect.height > 0)) {
+                        targetRect = rect;
+                    }
+                }
+                if (!targetRect) {
+                    targetRect = {left: e.clientX || 0, top: e.clientY || 0, right: e.clientX || 0, bottom: e.clientY || 0};
+                }
+                const localRects = (() => {
+                    if (selectionEndExclusive > safeOffset) {
+                        const selectionRange = document.createRange();
+                        selectionRange.setStart(node, safeOffset);
+                        selectionRange.setEnd(node, selectionEndExclusive);
+                        return Array.from(selectionRange.getClientRects() || [])
+                            .filter(r => r.width > 0 || r.height > 0)
+                            .map(r => ({ left: r.left || 0, top: r.top || 0, right: r.right || 0, bottom: r.bottom || 0 }));
+                    }
+                    if (targetRect) {
+                        return [{ left: targetRect.left || 0, top: targetRect.top || 0, right: targetRect.right || 0, bottom: targetRect.bottom || 0 }];
+                    }
+                    return [];
+                })();
+                const charRects = (() => {
+                    if (!(selectionEndExclusive > safeOffset)) return [];
+                    const result = [];
+                    for (let i = safeOffset; i < selectionEndExclusive; i += 1) {
+                        const charRange = document.createRange();
+                        charRange.setStart(node, i);
+                        charRange.setEnd(node, i + 1);
+                        const rect = charRange.getBoundingClientRect();
+                        if (rect && (rect.width > 0 || rect.height > 0)) {
+                            result.push({
+                                left: rect.left || 0,
+                                top: rect.top || 0,
+                                right: rect.right || 0,
+                                bottom: rect.bottom || 0
+                            });
+                        }
+                    }
+                    return result;
+                })();
+                window.NineLookup.onTap(
+                    text,
+                    extractSentence(text, safeOffset),
+                    safeOffset,
+                    node.textContent || '',
+                    JSON.stringify(localRects),
+                    JSON.stringify(charRects),
+                    targetRect.left || 0,
+                    targetRect.top || 0,
+                    targetRect.right || 0,
+                    targetRect.bottom || 0
+                );
+            }, true);
+        })();
+        </script>
+        """.trimIndent()
+    }
     return """
         <html>
         <head>
@@ -540,6 +814,7 @@ private fun buildDefinitionHtml(
                 .yomitan-glossary li { margin: 0; }
                 $customCss
             </style>
+            $lookupTapScript
         </head>
         <body>
             $prefix
@@ -601,4 +876,76 @@ private fun colorToCssHex(color: Color): String {
     val argb = color.toArgb()
     val rgb = argb and 0x00FFFFFF
     return String.format("#%06X", rgb)
+}
+
+private class DefinitionLookupBridge(
+    var onLookupTap: ((DefinitionLookupTapData) -> Unit)?
+) {
+    var hostView: WebView? = null
+
+    @JavascriptInterface
+    fun onTap(text: String?, sentence: String?, offset: Int, nodeText: String?, localRectsJson: String?, localCharRectsJson: String?, left: Float, top: Float, right: Float, bottom: Float) {
+        val value = text?.trim().orEmpty()
+        if (value.isBlank()) return
+        val localRect = Rect(left, top, right, bottom)
+        val localRects = parseRectListJson(localRectsJson).ifEmpty { listOf(localRect) }
+        val localCharRects = parseRectListJson(localCharRectsJson)
+        val location = IntArray(2)
+        val screenRect = hostView?.let { view ->
+            view.getLocationOnScreen(location)
+            Rect(
+                left = location[0].toFloat() + left,
+                top = location[1].toFloat() + top,
+                right = location[0].toFloat() + right,
+                bottom = location[1].toFloat() + bottom
+            )
+        }
+        val screenCharRects = hostView?.let { view ->
+            view.getLocationOnScreen(location)
+            localCharRects.map { rect ->
+                Rect(
+                    left = location[0].toFloat() + rect.left,
+                    top = location[1].toFloat() + rect.top,
+                    right = location[0].toFloat() + rect.right,
+                    bottom = location[1].toFloat() + rect.bottom
+                )
+            }
+        }.orEmpty()
+        Log.d(
+            LOOKUP_TAP_LOG_TAG,
+            "bridge onTap text=${value.take(20)} offset=$offset hasHandler=${onLookupTap != null} localRects=${localRects.size} charRects=${localCharRects.size}"
+        )
+        onLookupTap?.invoke(
+            DefinitionLookupTapData(
+                text = value,
+                sentence = sentence?.trim().orEmpty(),
+                offset = offset,
+                nodeText = nodeText.orEmpty(),
+                screenRect = screenRect,
+                localRects = localRects,
+                localCharRects = localCharRects,
+                screenCharRects = screenCharRects
+            )
+        )
+    }
+}
+
+private fun parseRectListJson(json: String?): List<Rect> {
+    if (json.isNullOrBlank()) return emptyList()
+    return runCatching {
+        val array = JSONArray(json)
+        buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                add(
+                    Rect(
+                        left = item.optDouble("left", 0.0).toFloat(),
+                        top = item.optDouble("top", 0.0).toFloat(),
+                        right = item.optDouble("right", 0.0).toFloat(),
+                        bottom = item.optDouble("bottom", 0.0).toFloat()
+                    )
+                )
+            }
+        }
+    }.getOrDefault(emptyList())
 }
