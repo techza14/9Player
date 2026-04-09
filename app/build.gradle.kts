@@ -1,6 +1,22 @@
-﻿plugins {
+import java.util.Properties
+
+plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) {
+        file.inputStream().use(::load)
+    }
+}
+
+fun localProperty(name: String): String? {
+    return localProperties.getProperty(name)
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: providers.gradleProperty(name).orNull?.trim()?.takeIf { it.isNotEmpty() }
 }
 
 android {
@@ -14,8 +30,8 @@ android {
         applicationId = "moe.tekuza.m9player"
         minSdk = 29
         targetSdk = 36
-        versionCode = 22
-        versionName = "1.3.10"
+        versionCode = 23
+        versionName = "1.3.11"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -30,9 +46,30 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val releaseKeystore = localProperty("releaseKeystore")
+            val releaseKeyAlias = localProperty("releaseKeyAlias")
+            val releaseStorePassword = localProperty("releaseStorePassword")
+            val releaseKeyPassword = localProperty("releaseKeyPassword")
+            if (
+                !releaseKeystore.isNullOrBlank() &&
+                !releaseKeyAlias.isNullOrBlank() &&
+                !releaseStorePassword.isNullOrBlank() &&
+                !releaseKeyPassword.isNullOrBlank()
+            ) {
+                storeFile = file(releaseKeystore)
+                keyAlias = releaseKeyAlias
+                storePassword = releaseStorePassword
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -91,5 +128,3 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
-
-
