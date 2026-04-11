@@ -17,7 +17,6 @@ import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Html
 import android.util.Base64
-import android.util.Log
 import android.app.Activity
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -27,6 +26,8 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.app.ActivityCompat
@@ -81,7 +82,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -118,6 +118,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
@@ -150,7 +151,6 @@ private const val BOOK_READER_PENDING_INTENT_REQUEST_CODE = 21_002
 private const val BOOK_READER_SLEEP_OPTIONS_PREFS = "book_reader_sleep_options_prefs"
 private const val BOOK_READER_SLEEP_EXIT_CONTROL_KEY = "sleep_exit_control"
 private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
-private const val RECURSIVE_LOOKUP_LOG_TAG = "RecursiveLookup"
 class BookReaderActivity : AppCompatActivity() {
     private var gamepadKeyHandler: ((KeyEvent) -> Boolean)? = null
     private var lastMotionHorizontalKeyCode: Int? = null
@@ -223,13 +223,17 @@ class BookReaderActivity : AppCompatActivity() {
         super.onStop()
         val settings = loadAudiobookSettingsConfig(this)
         floatingOverlayStartJob?.cancel()
-        if (isChangingConfigurations || !settings.floatingOverlayEnabled || !BookReaderFloatingBridge.isPlaying()) return
+        val overlayEnabled = settings.floatingOverlayEnabled || settings.floatingOverlaySubtitleEnabled
+        if (isChangingConfigurations || !overlayEnabled || !BookReaderFloatingBridge.isPlaying()) return
 
         floatingOverlayStartJob = lifecycleScope.launch {
             delay(150L)
             if (
                 !isAppProcessInForeground(this@BookReaderActivity) &&
-                loadAudiobookSettingsConfig(this@BookReaderActivity).floatingOverlayEnabled &&
+                run {
+                    val refreshed = loadAudiobookSettingsConfig(this@BookReaderActivity)
+                    refreshed.floatingOverlayEnabled || refreshed.floatingOverlaySubtitleEnabled
+                } &&
                 BookReaderFloatingBridge.isPlaying()
             ) {
                 startAudiobookFloatingOverlayService(this@BookReaderActivity)
@@ -419,7 +423,7 @@ class BookReaderActivity : AppCompatActivity() {
     }
 }
 
-private data class ReaderSubtitleCue(
+internal data class ReaderSubtitleCue(
     val startMs: Long,
     val endMs: Long,
     val text: String
@@ -428,35 +432,6 @@ private data class ReaderSubtitleCue(
 private data class ReaderAudioChapter(
     val startMs: Long,
     val title: String
-)
-
-private data class ReaderSentenceSelection(
-    val text: String,
-    val cueRange: IntRange
-)
-
-private data class ReaderLookupAnchor(
-    val rects: List<Rect>
-)
-
-private data class ReaderLookupLayer(
-    val loading: Boolean,
-    val error: String?,
-    val groupedResults: List<GroupedLookupResult>,
-    val cue: ReaderSubtitleCue?,
-    val cueIndex: Int?,
-    val anchorOffset: Int?,
-    val anchor: ReaderLookupAnchor?,
-    val placeBelow: Boolean,
-    val preferSidePlacement: Boolean,
-    val selectedRange: IntRange?,
-    val selectionText: String?,
-    val popupSentence: String?,
-    val highlightedDefinitionKey: String?,
-    val highlightedDefinitionRects: List<Rect>,
-    val collapsedSections: Map<String, Boolean>,
-    val autoPlayNonce: Long,
-    val autoPlayedKey: String?
 )
 
 private enum class AdjacentJumpMode {
@@ -476,6 +451,7 @@ private fun BookReaderScreen(
     onBack: (Long, Long) -> Unit
 ) {
     val context = LocalContext.current
+    val activity = context as? Activity
     val view = LocalView.current
     var cues by remember { mutableStateOf<List<ReaderSubtitleCue>>(emptyList()) }
     var audioChapters by remember { mutableStateOf<List<ReaderAudioChapter>>(emptyList()) }
@@ -484,10 +460,11 @@ private fun BookReaderScreen(
 
     var loadedDictionaries by remember { mutableStateOf<List<LoadedDictionary>>(emptyList()) }
 
-    val lookupPopupLayers = remember { mutableStateListOf<ReaderLookupLayer>() }
+    val lookupSession = remember { ReaderLookupSession() }
+    val lookupPopupLayers = lookupSession.layers
     var lookupPopupTemporarilyHidden by remember { mutableStateOf(false) }
-    var lookupPopupRequestNonce by remember { mutableStateOf(0L) }
     var reopenLookupPopupAfterCueRangeSelection by remember { mutableStateOf(false) }
+    var lookupPopupRequestNonce by remember { mutableStateOf(0L) }
     var resumePlaybackAfterLookupDismiss by remember { mutableStateOf(false) }
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
 
@@ -527,6 +504,29 @@ private fun BookReaderScreen(
     var durationMs by remember { mutableStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
     var dragPreviewPositionMs by remember { mutableStateOf<Long?>(null) }
+    val replaceSrtLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val pickedUri = uri ?: return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                pickedUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        saveBookReaderPlaybackPosition(
+            context = context,
+            bookKey = buildBookReaderPlaybackKey(title, audioUri, pickedUri),
+            positionMs = normalizeBookReaderPlaybackPosition(positionMs, durationMs),
+            durationMs = durationMs.coerceAtLeast(0L)
+        )
+        val intent = Intent(context, BookReaderActivity::class.java).apply {
+            putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, title)
+            putExtra(BookReaderActivity.EXTRA_AUDIO_URI, audioUri?.toString())
+            putExtra(BookReaderActivity.EXTRA_SRT_URI, pickedUri.toString())
+            putExtra(BookReaderActivity.EXTRA_COVER_URI, coverUri?.toString())
+        }
+        context.startActivity(intent)
+        activity?.finish()
+    }
 
     val playbackPositionKey = remember(title, audioUri, srtUri) {
         buildBookReaderPlaybackKey(title, audioUri, srtUri)
@@ -534,11 +534,17 @@ private fun BookReaderScreen(
     var playbackRestoreCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
     var playbackCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    var playbackFadeJob by remember { mutableStateOf<Job?>(null) }
     val player = remember(context) {
         ExoPlayer.Builder(context)
             .setSeekBackIncrementMs(10_000L)
             .setSeekForwardIncrementMs(10_000L)
             .build()
+    }
+    fun setLookupPlaybackState(play: Boolean) {
+        playbackFadeJob?.cancel()
+        player.volume = 1f
+        if (play) player.play() else player.pause()
     }
     val notificationController = remember(context, player, title, audioUri, srtUri, coverUri) {
         PlaybackNotificationController(
@@ -740,7 +746,7 @@ private fun BookReaderScreen(
     val dictionaryPriorityByName = remember(loadedDictionaries) {
         loadedDictionaries.mapIndexed { index, dictionary -> dictionary.name to index }.toMap()
     }
-    val activeLookupLayer = lookupPopupLayers.lastOrNull()
+    val activeLookupLayer = lookupSession.activeLayer
     val lookupPopupVisible = activeLookupLayer != null
     val lifecycleOwner = LocalLifecycleOwner.current
     val lyricsFollowTopPaddingPx = with(LocalDensity.current) { 72.dp.toPx() }
@@ -768,6 +774,14 @@ private fun BookReaderScreen(
     }
     val activeCueIndex = remember(previewPositionMs, cues) { findBookDisplayCueIndexAtTime(cues, previewPositionMs) }
     val activeCue = cues.getOrNull(activeCueIndex)
+    val activeCueScrollProgress = remember(activeCue, previewPositionMs) {
+        activeCue?.let { cue ->
+            val duration = (cue.endMs - cue.startMs).coerceAtLeast(1L)
+            mapTimedSubtitleScrollProgress(
+                ((previewPositionMs - cue.startMs).toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+            )
+        } ?: 0f
+    }
     val selectedCueIndexRange = remember(cueRangeStartIndex, cueRangeEndIndex) {
         val start = cueRangeStartIndex ?: return@remember null
         val end = cueRangeEndIndex ?: start
@@ -812,6 +826,12 @@ private fun BookReaderScreen(
 
     LaunchedEffect(isPlaying) {
         BookReaderFloatingBridge.notifyPlaybackState(isPlaying)
+    }
+    LaunchedEffect(activeCue?.text) {
+        BookReaderFloatingBridge.notifySubtitle(activeCue?.text)
+    }
+    LaunchedEffect(positionMs) {
+        BookReaderFloatingBridge.notifyPlaybackPosition(positionMs)
     }
 
     val activeChapterIndex = remember(previewPositionMs, audioChapters) {
@@ -1019,7 +1039,7 @@ private fun BookReaderScreen(
                 if (statusParts.isEmpty()) {
                     controlModeStatus = context.getString(R.string.status_timer_finished)
                 } else {
-                    controlModeStatus = context.getString(R.string.status_timer_finished_with_parts, statusParts.joinToString("，"))
+                    controlModeStatus = context.getString(R.string.status_timer_finished_with_parts, statusParts.joinToString(", "))
                 }
                 break
             }
@@ -1155,7 +1175,7 @@ private fun BookReaderScreen(
 
     fun jumpToCue(index: Int, showStatus: Boolean = true) {
         val cue = cues.getOrNull(index) ?: return
-        lookupPopupLayers.clear()
+        lookupSession.clear()
         resumePlaybackAfterLookupDismiss = false
         player.seekTo(cue.startMs)
         player.play()
@@ -1233,7 +1253,7 @@ private fun BookReaderScreen(
         pendingSingleTapJob = null
         pendingSingleTapBaseCueIndex = null
         controlTargetCueIndex = null
-        lookupPopupLayers.clear()
+        lookupSession.clear()
         resumePlaybackAfterLookupDismiss = false
         player.seekTo(target)
         if (controlModeEnabled) {
@@ -1443,6 +1463,7 @@ private fun BookReaderScreen(
         loading: Boolean,
         error: String?,
         rawResults: List<DictionarySearchResult>,
+        sourceTerm: String? = null,
         cue: ReaderSubtitleCue?,
         cueIndex: Int?,
         anchorOffset: Int?,
@@ -1458,15 +1479,13 @@ private fun BookReaderScreen(
         autoPlayNonce: Long = System.nanoTime(),
         autoPlayedKey: String? = null
     ): ReaderLookupLayer {
-        val groupedResults = groupLookupResultsByTerm(
-            results = rawResults,
+        return buildLookupLayerFromRawResults(
+            rawResults = rawResults,
             dictionaryCssByName = dictionaryCssByName,
-            dictionaryPriorityByName = dictionaryPriorityByName
-        ).take(10)
-        return ReaderLookupLayer(
+            dictionaryPriorityByName = dictionaryPriorityByName,
             loading = loading,
             error = error,
-            groupedResults = groupedResults,
+            sourceTerm = sourceTerm,
             cue = cue,
             cueIndex = cueIndex,
             anchorOffset = anchorOffset,
@@ -1484,27 +1503,16 @@ private fun BookReaderScreen(
         )
     }
 
-    fun replaceTopLookupLayer(transform: (ReaderLookupLayer) -> ReaderLookupLayer) {
-        val index = lookupPopupLayers.lastIndex
-        if (index < 0) return
-        lookupPopupLayers[index] = transform(lookupPopupLayers[index])
-    }
-
-    fun replaceLookupLayer(index: Int, transform: (ReaderLookupLayer) -> ReaderLookupLayer) {
-        if (index !in lookupPopupLayers.indices) return
-        lookupPopupLayers[index] = transform(lookupPopupLayers[index])
-    }
-
     fun truncateLookupLayersTo(index: Int) {
         if (index !in lookupPopupLayers.indices) return
         while (lookupPopupLayers.size > index + 1) {
-            lookupPopupLayers.removeLastOrNull()
+            lookupSession.pop()
         }
     }
 
     fun triggerPopupLookup(cue: ReaderSubtitleCue, offset: Int, anchor: ReaderLookupAnchor?) {
         consumeCueRangeSelection()
-        lookupPopupLayers.clear()
+        lookupSession.clear()
         val dictionariesSnapshot = loadedDictionaries
         val cueIndex = cues.indexOf(cue).takeIf { it >= 0 }
         val estimatedAnchorY = anchor.boundingRectOrNull()?.bottom ?: (view.height * 0.56f)
@@ -1512,7 +1520,7 @@ private fun BookReaderScreen(
         val requestNonce = lookupPopupRequestNonce + 1L
         lookupPopupRequestNonce = requestNonce
         if (dictionariesSnapshot.isEmpty()) {
-            lookupPopupLayers += buildLookupLayer(
+            lookupSession.push(buildLookupLayer(
                 loading = false,
                 error = context.getString(R.string.bookreader_lookup_no_dict),
                 rawResults = emptyList(),
@@ -1524,7 +1532,7 @@ private fun BookReaderScreen(
                     preferSidePlacement = false,
                     selectedRange = null,
                     selectionText = null
-                )
+                ))
             return
         }
 
@@ -1543,7 +1551,7 @@ private fun BookReaderScreen(
         lookupPopupTemporarilyHidden = false
 
         if (audiobookSettings.pausePlaybackOnLookup && player.isPlaying) {
-            player.pause()
+            setLookupPlaybackState(play = false)
             resumePlaybackAfterLookupDismiss = true
         } else {
             resumePlaybackAfterLookupDismiss = false
@@ -1552,7 +1560,7 @@ private fun BookReaderScreen(
         scope.launch {
             val result = withContext(Dispatchers.Default) {
                 runCatching {
-                    computeBookLookupResults(
+                    computeLookupResults(
                         context = context,
                         dictionaries = dictionariesSnapshot,
                         candidates = candidates
@@ -1562,17 +1570,16 @@ private fun BookReaderScreen(
             result.onSuccess { hits ->
                 if (lookupPopupRequestNonce != requestNonce) return@onSuccess
                 if (hits.isEmpty()) return@onSuccess
-                val selectedRange = if (hits.isEmpty()) {
-                    null
-                } else {
-                    trimSelectionRangeByMatchedLength(selectionRange, hits.first().matchedLength)
-                }
+                val selectedRange = trimSelectionRangeByMatchedLength(
+                    selectionRange,
+                    hits.first().matchedLength
+                )
                 val selectionText = selectedRange?.let { range ->
                     val start = range.first.coerceIn(0, cue.text.length)
                     val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
                     if (endExclusive > start) cue.text.substring(start, endExclusive) else ""
                 }?.trim()?.takeIf { it.isNotBlank() } ?: selectedToken
-                lookupPopupLayers += buildLookupLayer(
+                lookupSession.push(buildLookupLayer(
                     loading = false,
                     error = null,
                     rawResults = hits,
@@ -1584,10 +1591,10 @@ private fun BookReaderScreen(
                     preferSidePlacement = false,
                     selectedRange = selectedRange,
                     selectionText = selectionText
-                )
+                ))
             }.onFailure {
                 if (lookupPopupRequestNonce != requestNonce) return@onFailure
-                lookupPopupLayers += buildLookupLayer(
+                lookupSession.push(buildLookupLayer(
                     loading = false,
                     error = it.message ?: context.getString(R.string.bookreader_lookup_failed),
                     rawResults = emptyList(),
@@ -1599,28 +1606,32 @@ private fun BookReaderScreen(
                     preferSidePlacement = false,
                     selectedRange = null,
                     selectionText = selectedToken
-                )
+                ))
             }
         }
     }
 
     fun popLookupSnapshotOrClose(resumePlayback: Boolean = true) {
-        lookupPopupLayers.removeLastOrNull()
+        lookupSession.pop()
+        if (lookupSession.size > 0) {
+            lookupPopupTemporarilyHidden = false
+            return
+        }
+        lookupSession.clear()
         lookupPopupTemporarilyHidden = false
-        if (lookupPopupLayers.isNotEmpty()) return
         consumeCueRangeSelection()
         if (resumePlayback && resumePlaybackAfterLookupDismiss) {
-            player.play()
+            setLookupPlaybackState(play = true)
         }
         resumePlaybackAfterLookupDismiss = false
     }
 
     fun closeLookupPopup(resumePlayback: Boolean = true) {
-        lookupPopupLayers.clear()
+        lookupSession.clear()
         lookupPopupTemporarilyHidden = false
         consumeCueRangeSelection()
         if (resumePlayback && resumePlaybackAfterLookupDismiss) {
-            player.play()
+            setLookupPlaybackState(play = true)
         }
         resumePlaybackAfterLookupDismiss = false
     }
@@ -1631,15 +1642,10 @@ private fun BookReaderScreen(
         tapData: DefinitionLookupTapData,
         anchor: ReaderLookupAnchor?
     ) {
-        Log.d(
-            RECURSIVE_LOOKUP_LOG_TAG,
-            "start layer=$sourceLayerIndex key=$definitionKey text=${tapData.text.take(20)} offset=${tapData.offset}"
-        )
-        val currentLayer = lookupPopupLayers.getOrNull(sourceLayerIndex) ?: return
+        val currentLayer = lookupSession.getOrNull(sourceLayerIndex) ?: return
         val cue = currentLayer.cue ?: return
         val cueIndex = currentLayer.cueIndex
-        val selection = selectLookupScanText(tapData.text, tapData.offset) ?: run {
-            Log.d(RECURSIVE_LOOKUP_LOG_TAG, "abort noSelection layer=$sourceLayerIndex")
+        val selection = selectLookupScanText(tapData.scanText.ifBlank { tapData.text }, 0) ?: run {
             truncateLookupLayersTo(sourceLayerIndex)
             return
         }
@@ -1647,7 +1653,6 @@ private fun BookReaderScreen(
             truncateLookupLayersTo(sourceLayerIndex)
             return
         }
-        Log.d(RECURSIVE_LOOKUP_LOG_TAG, "selection layer=$sourceLayerIndex term=$term")
         val dictionariesSnapshot = loadedDictionaries
         val estimatedAnchorY = anchor.boundingRectOrNull()?.bottom
             ?: currentLayer.anchor.boundingRectOrNull()?.bottom
@@ -1664,7 +1669,7 @@ private fun BookReaderScreen(
         scope.launch {
             val result = withContext(Dispatchers.Default) {
                 runCatching {
-                    computeBookLookupResults(
+                    computeLookupResults(
                         context = context,
                         dictionaries = dictionariesSnapshot,
                         candidates = listOf(term)
@@ -1673,38 +1678,44 @@ private fun BookReaderScreen(
             }
             result.onSuccess { hits ->
                 if (lookupPopupRequestNonce != requestNonce) return@onSuccess
-                if (hits.isEmpty()) {
-                    Log.d(RECURSIVE_LOOKUP_LOG_TAG, "result empty layer=$sourceLayerIndex term=$term")
-                    return@onSuccess
+                if (hits.isEmpty()) return@onSuccess
+                val resolvedRects = resolveDefinitionMatchedRects(tapData, hits.first().matchedLength)
+                val adjustedHighlightRects = if (resolvedRects != null) {
+                    resolvedRects.localCharRects
+                        .let { rebuildRectsFromCharacterRectsShared(it, hits.first().matchedLength) }
+                        .let { sanitizeResolvedHighlightRectsShared(it, tapData.localRects) }
+                } else {
+                    rebuildDefinitionRectsByMatchedLength(
+                        rects = tapData.localRects,
+                        charRects = tapData.localCharRects,
+                        nodeText = tapData.nodeText,
+                        startOffset = tapData.offset,
+                        matchedLength = hits.first().matchedLength
+                    )
                 }
-                Log.d(RECURSIVE_LOOKUP_LOG_TAG, "result ok layer=$sourceLayerIndex term=$term hits=${hits.size}")
-                val adjustedHighlightRects = rebuildDefinitionRectsByMatchedLength(
-                    rects = tapData.localRects,
-                    charRects = tapData.localCharRects,
-                    nodeText = tapData.nodeText,
-                    startOffset = tapData.offset,
-                    matchedLength = hits.first().matchedLength
-                )
-                val adjustedAnchorRects = rebuildDefinitionAnchorRectsByMatchedLength(
-                    charRects = tapData.screenCharRects,
-                    fallbackRect = anchor.boundingRectOrNull() ?: tapData.screenRect,
-                    matchedLength = hits.first().matchedLength
-                )
+                val adjustedAnchorRects = resolvedRects?.screenCharRects
+                    ?.let { rebuildRectsFromCharacterRectsShared(it, hits.first().matchedLength) }
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: rebuildDefinitionAnchorRectsByMatchedLength(
+                        charRects = tapData.screenCharRects,
+                        fallbackRect = anchor.boundingRectOrNull() ?: tapData.screenRect,
+                        matchedLength = hits.first().matchedLength
+                    )
                 val adjustedAnchor = if (adjustedAnchorRects.isNotEmpty()) {
                     ReaderLookupAnchor(rects = adjustedAnchorRects)
                 } else {
                     anchor ?: currentLayer.anchor
                 }
                 truncateLookupLayersTo(sourceLayerIndex)
-                if (sourceLayerIndex in lookupPopupLayers.indices) {
-                    lookupPopupLayers[sourceLayerIndex] = lookupPopupLayers[sourceLayerIndex].copy(
+                if (lookupSession.getOrNull(sourceLayerIndex) != null) {
+                    lookupSession.replaceAt(sourceLayerIndex) { it.copy(
                         highlightedDefinitionKey = definitionKey,
                         highlightedDefinitionRects = adjustedHighlightRects
-                    )
+                    ) }
                 }
                 consumeCueRangeSelection()
                 lookupPopupTemporarilyHidden = false
-                lookupPopupLayers += buildLookupLayer(
+                lookupSession.push(buildLookupLayer(
                     loading = false,
                     error = null,
                     rawResults = hits,
@@ -1723,7 +1734,7 @@ private fun BookReaderScreen(
                             anchorIndexHint = tapData.offset
                         )
                     }
-                )
+                ))
             }.onFailure {
                 if (lookupPopupRequestNonce != requestNonce) return@onFailure
                 Toast.makeText(
@@ -1739,7 +1750,7 @@ private fun BookReaderScreen(
         val dictionaryGroup = groupedResult.dictionaries.firstOrNull() ?: run {
             return
         }
-        val currentLayer = lookupPopupLayers.getOrNull(layerIndex) ?: return
+        val currentLayer = lookupSession.getOrNull(layerIndex) ?: return
         val baseCue = currentLayer.cue ?: return
         val exportCueRange = selectedCueIndexRange?.takeIf { layerIndex == 0 }
         val exportAudioUri = audioUri?.takeIf { layerIndex == 0 }
@@ -1801,10 +1812,9 @@ private fun BookReaderScreen(
             }
             ?: cue
         consumeCueRangeSelection()
-        if (layerIndex > 0) {
-            truncateLookupLayersTo(layerIndex - 1)
-        } else {
-            closeLookupPopup()
+        when (val action = lookupSession.afterAddToAnki(layerIndex)) {
+            CloseLookupAction.ClearAll -> closeLookupPopup()
+            is CloseLookupAction.ShowLayer -> truncateLookupLayersTo(action.index)
         }
         scope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -1834,11 +1844,12 @@ private fun BookReaderScreen(
                 }
             }
             result.fold(
-                onSuccess = {
+                onSuccess = { exportResult ->
+                    val message = ankiExportResultMessage(context, exportResult)
                     Toast.makeText(
                         context,
-                        context.getString(R.string.anki_toast_added),
-                        Toast.LENGTH_SHORT
+                        message.take(200),
+                        if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
                     ).show()
                 },
                 onFailure = {
@@ -1857,7 +1868,7 @@ private fun BookReaderScreen(
             reading = groupedResult.reading,
             settings = audiobookSettings
         ) { error ->
-            replaceLookupLayer(layerIndex) { it.copy(error = error) }
+            lookupSession.replaceAt(layerIndex) { it.copy(error = error) }
         }
     }
 
@@ -1874,8 +1885,8 @@ private fun BookReaderScreen(
         val target = layer.groupedResults.firstOrNull() ?: return@LaunchedEffect
         val key = "${layer.autoPlayNonce}|${target.term}|${target.reading.orEmpty()}"
         if (layer.autoPlayedKey == key) return@LaunchedEffect
-        replaceTopLookupLayer { it.copy(autoPlayedKey = key) }
-        playLookupGroupAudio(lookupPopupLayers.lastIndex, target)
+        lookupSession.replaceTop { it.copy(autoPlayedKey = key) }
+        playLookupGroupAudio(lookupSession.lastIndex, target)
     }
 
     fun handleControlOverlaySwipe(step: Int) {
@@ -1938,6 +1949,10 @@ private fun BookReaderScreen(
                 latestTogglePlayPause()
             }
 
+            override fun setPlaying(play: Boolean) {
+                setLookupPlaybackState(play)
+            }
+
             override fun seekPrevious() {
                 latestSeekPrevious()
             }
@@ -1949,11 +1964,44 @@ private fun BookReaderScreen(
             override fun toggleFavorite() {
                 latestToggleFavorite()
             }
+
+            override fun showReader() {
+                val intent = Intent(context, BookReaderActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, title)
+                    putExtra(BookReaderActivity.EXTRA_AUDIO_URI, audioUri?.toString())
+                    putExtra(BookReaderActivity.EXTRA_SRT_URI, srtUri?.toString())
+                    putExtra(BookReaderActivity.EXTRA_COVER_URI, coverUri?.toString())
+                }
+                context.startActivity(intent)
+            }
+
+            override fun lookupCurrentSubtitleAt(offset: Int) {
+                val cue = activeCue ?: return
+                triggerPopupLookup(
+                    cue = cue,
+                    offset = offset.coerceIn(0, cue.text.length.coerceAtLeast(1) - 1),
+                    anchor = null
+                )
+            }
         }
         BookReaderFloatingBridge.attach(controller)
         onDispose {
+            BookReaderFloatingBridge.notifySubtitle(null)
+            BookReaderFloatingBridge.setCurrentCue(null, null, null, null, null)
             BookReaderFloatingBridge.detach(controller)
         }
+    }
+
+    LaunchedEffect(activeCue, title, audioUri) {
+        BookReaderFloatingBridge.setCurrentCue(
+            text = activeCue?.text,
+            startMs = activeCue?.startMs,
+            endMs = activeCue?.endMs,
+            bookTitle = title,
+            audioUri = audioUri?.toString()
+        )
     }
 
     DisposableEffect(Unit) {
@@ -2193,7 +2241,7 @@ private fun BookReaderScreen(
                             listOf(0.8f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { speed ->
                                 val isCurrent = abs(speed - playbackSpeed) < 0.001f
                                 DropdownMenuItem(
-                                    text = { Text((if (isCurrent) "✓ " else "") + "${speed}x") },
+                                    text = { Text((if (isCurrent) "�?" else "") + "${speed}x") },
                                     onClick = {
                                         playbackSpeed = speed
                                         speedMenuExpanded = false
@@ -2279,6 +2327,13 @@ private fun BookReaderScreen(
                                     } else {
                                         context.getString(R.string.bookreader_switched_to_subtitle)
                                     }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.bookreader_replace_srt)) },
+                                onClick = {
+                                    topActionsExpanded = false
+                                    replaceSrtLauncher.launch(arrayOf("application/x-subrip", "text/*", "*/*"))
                                 }
                             )
                         }
@@ -2679,8 +2734,9 @@ private fun BookReaderScreen(
     if (lookupPopupVisible) {
         val configuration = LocalConfiguration.current
         val density = LocalDensity.current
-        lookupPopupLayers.forEachIndexed { index, layer ->
-            val isTopLayer = index == lookupPopupLayers.lastIndex
+        lookupSession.layers.forEachIndexed { index, layer ->
+            val isTopLayer = index == lookupSession.lastIndex
+            val isPreviousLayer = index == lookupSession.lastIndex - 1
             val popupSizeSpec = remember(
                 configuration.screenWidthDp,
                 configuration.screenHeightDp,
@@ -2722,9 +2778,9 @@ private fun BookReaderScreen(
                     popLookupSnapshotOrClose()
                 },
                 properties = PopupProperties(
-                    focusable = isTopLayer && !lookupPopupTemporarilyHidden && lookupPopupLayers.size == 1,
+                    focusable = isTopLayer && !lookupPopupTemporarilyHidden && lookupSession.size == 1,
                     dismissOnBackPress = false,
-                    dismissOnClickOutside = isTopLayer && lookupPopupLayers.size == 1,
+                    dismissOnClickOutside = isTopLayer && lookupSession.size == 1,
                     clippingEnabled = false
                 )
             ) {
@@ -2738,7 +2794,14 @@ private fun BookReaderScreen(
                     Surface(
                         modifier = Modifier
                             .width(popupSizeSpec.widthDp.dp)
-                            .padding(horizontal = 6.dp, vertical = 10.dp),
+                            .padding(horizontal = 6.dp, vertical = 10.dp)
+                            .then(
+                                if (!isTopLayer && !isPreviousLayer) {
+                                    Modifier.clickable { truncateLookupLayersTo(index) }
+                                } else {
+                                    Modifier
+                                }
+                            ),
                         shape = MaterialTheme.shapes.large,
                         tonalElevation = if (isTopLayer) 8.dp else 6.dp,
                         shadowElevation = if (isTopLayer) 10.dp else 6.dp,
@@ -2747,39 +2810,48 @@ private fun BookReaderScreen(
                             color = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
                         )
                     ) {
+                        val actionState = buildLookupCardActionState(
+                            sourceTerm = layer.sourceTerm,
+                            layerIndex = index,
+                            sessionSize = lookupSession.size,
+                            showRangeSelection = isTopLayer && index == 0 && hasSubtitleFile && audiobookSettings.lookupRangeSelectionEnabled,
+                            showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
+                            showAddToAnki = true
+                        )
                         ReaderLookupPopupCard(
                             groupedResults = layer.groupedResults,
                             loading = layer.loading,
                             error = layer.error,
+                            sourceTerm = layer.sourceTerm,
                             highlightedDefinitionKey = layer.highlightedDefinitionKey,
                             highlightedDefinitionRects = layer.highlightedDefinitionRects,
                             collapsedSections = layer.collapsedSections,
+                            actionState = actionState,
                             contentMaxHeightDp = popupSizeSpec.contentMaxHeightDp,
                             onToggleSection = if (isTopLayer) {
                                 { key, expanded ->
-                                    replaceTopLookupLayer {
-                                        it.copy(collapsedSections = it.collapsedSections.toMutableMap().apply {
-                                            this[key] = expanded
-                                        })
-                                    }
+                                    lookupSession.toggleCollapsedSection(index, key, expanded)
                                 }
                             } else null,
-                            onDefinitionLookup = { definitionKey, tapData ->
-                                val anchor = tapData.screenRect?.let {
-                                    ReaderLookupAnchor(rects = listOf(it))
+                            onDefinitionLookup = if (isTopLayer || isPreviousLayer) {
+                                { definitionKey, tapData ->
+                                    val anchorRects = tapData.screenCharRects
+                                        .takeIf { it.isNotEmpty() }
+                                        ?: tapData.screenRect?.let { listOf(it) }
+                                    val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
+                                    performRecursiveLookupFromDefinition(index, definitionKey, tapData, anchor)
                                 }
-                                performRecursiveLookupFromDefinition(index, definitionKey, tapData, anchor)
-                            },
-                            onRangeSelection = if (isTopLayer && index == 0 && hasSubtitleFile && audiobookSettings.lookupRangeSelectionEnabled) {
+                            } else null,
+                            onRangeSelection = if (actionState.showRangeSelection) {
                                 { beginCueRangeSelection(reopenLookupPopupAfterSelection = true) }
                             } else null,
-                            onPlayAudio = if (audiobookSettings.lookupPlaybackAudioEnabled) {
+                            onPlayAudio = if (actionState.showPlayAudio) {
                                 { groupedResult -> playLookupGroupAudio(index, groupedResult) }
                             } else null,
                             onAddToAnki = { groupedResult ->
                                 addLookupGroupToAnki(index, groupedResult)
                             },
-                            onCloseAll = if (isTopLayer && lookupPopupLayers.size > 1) {
+                            onCloseAll = if (isTopLayer && actionState.canCloseAll) {
                                 { closeLookupPopup() }
                             } else null,
                             onClose = {
@@ -2802,9 +2874,11 @@ private fun ReaderLookupPopupCard(
     groupedResults: List<GroupedLookupResult>,
     loading: Boolean,
     error: String?,
+    sourceTerm: String?,
     highlightedDefinitionKey: String?,
     highlightedDefinitionRects: List<Rect>,
     collapsedSections: Map<String, Boolean>,
+    actionState: LookupCardActionState,
     contentMaxHeightDp: Int,
     onToggleSection: ((String, Boolean) -> Unit)?,
     onDefinitionLookup: ((String, DefinitionLookupTapData) -> Unit)?,
@@ -2814,10 +2888,44 @@ private fun ReaderLookupPopupCard(
     onCloseAll: (() -> Unit)?,
     onClose: (() -> Unit)?
 ) {
+    val presentation = remember(groupedResults, highlightedDefinitionKey, highlightedDefinitionRects, collapsedSections) {
+        buildLookupPresentation(
+            ReaderLookupLayer(
+                loading = loading,
+                error = error,
+                groupedResults = groupedResults,
+                sourceTerm = null,
+                cue = null,
+                cueIndex = null,
+                anchorOffset = null,
+                anchor = null,
+                placeBelow = true,
+                preferSidePlacement = false,
+                selectedRange = null,
+                selectionText = null,
+                popupSentence = null,
+                highlightedDefinitionKey = highlightedDefinitionKey,
+                highlightedDefinitionRects = highlightedDefinitionRects,
+                highlightedDefinitionNodePathJson = null,
+                highlightedDefinitionOffset = null,
+                highlightedDefinitionLength = null,
+                collapsedSections = collapsedSections,
+                autoPlayNonce = 0L,
+                autoPlayedKey = null
+            )
+        )
+    }
     Column(
         modifier = Modifier.padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        if (!actionState.sourceTerm.isNullOrBlank()) {
+            Text(
+                text = stringResource(R.string.floating_lookup_from, actionState.sourceTerm),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2831,7 +2939,8 @@ private fun ReaderLookupPopupCard(
             if (error != null) {
                 Text(error, color = MaterialTheme.colorScheme.error)
             }
-            groupedResults.forEach { groupedResult ->
+            presentation.forEach { groupedPresentation ->
+                val groupedResult = groupedPresentation.groupedResult
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(10.dp),
@@ -2850,12 +2959,12 @@ private fun ReaderLookupPopupCard(
                                     .padding(end = 8.dp)
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                if (onRangeSelection != null) {
+                                if (actionState.showRangeSelection && onRangeSelection != null) {
                                     OutlinedButton(onClick = onRangeSelection) {
                                         Text("▦")
                                     }
                                 }
-                                if (onPlayAudio != null) {
+                                if (actionState.showPlayAudio && onPlayAudio != null) {
                                     OutlinedButton(onClick = { onPlayAudio(groupedResult) }) {
                                         Icon(
                                             imageVector = Icons.Outlined.Audiotrack,
@@ -2864,7 +2973,7 @@ private fun ReaderLookupPopupCard(
                                         )
                                     }
                                 }
-                                if (onAddToAnki != null) {
+                                if (actionState.showAddToAnki && onAddToAnki != null) {
                                     OutlinedButton(onClick = { onAddToAnki(groupedResult) }) {
                                         Text("+")
                                     }
@@ -2908,41 +3017,37 @@ private fun ReaderLookupPopupCard(
                             }
                         }
 
-                        groupedResult.dictionaries.forEach { dictionaryGroup ->
-                            val sectionKey = "readerPopup|${groupedResult.term}|${dictionaryGroup.dictionary}"
-                            val expanded = !(collapsedSections[sectionKey] ?: false)
+                        groupedPresentation.dictionaries.forEach { dictionaryPresentation ->
                             Card(modifier = Modifier.fillMaxWidth()) {
                                 Column(
                                     modifier = Modifier.padding(8.dp),
                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     DictionaryEntryHeader(
-                                        dictionaryName = dictionaryGroup.dictionary,
-                                        expanded = expanded,
+                                        dictionaryName = dictionaryPresentation.dictionaryName,
+                                        expanded = dictionaryPresentation.expanded,
                                         onToggleExpanded = {
-                                            onToggleSection?.invoke(sectionKey, expanded)
+                                            onToggleSection?.invoke(
+                                                dictionaryPresentation.sectionKey,
+                                                dictionaryPresentation.expanded
+                                            )
                                         }
                                     )
-                                    if (expanded) {
-                                        dictionaryGroup.definitions.forEachIndexed { definitionIndex, definition ->
-                                            val definitionKey = "$sectionKey|$definitionIndex"
+                                    if (dictionaryPresentation.expanded) {
+                                        dictionaryPresentation.definitions.forEach { definitionPresentation ->
                                             Card(modifier = Modifier.fillMaxWidth()) {
                                                 Column(
                                                     modifier = Modifier.padding(8.dp),
                                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                                 ) {
                                                     RichDefinitionView(
-                                                        definition = definition,
+                                                        definition = definitionPresentation.definitionHtml,
                                                         dictionaryName = null,
-                                                        dictionaryCss = dictionaryGroup.css,
-                                                        highlightedRects = if (highlightedDefinitionKey == definitionKey) {
-                                                            highlightedDefinitionRects
-                                                        } else {
-                                                            emptyList()
-                                                        },
+                                                        dictionaryCss = definitionPresentation.dictionaryCss,
+                                                        highlightedRects = definitionPresentation.highlightedRects,
                                                         onLookupTap = if (onDefinitionLookup != null) {
                                                             { tapData ->
-                                                                onDefinitionLookup(definitionKey, tapData)
+                                                                onDefinitionLookup(definitionPresentation.definitionKey, tapData)
                                                             }
                                                         } else null
                                                     )
@@ -2963,7 +3068,7 @@ private fun ReaderLookupPopupCard(
                 TextButton(onClick = onClose) {
                     Text(stringResource(R.string.common_close))
                 }
-                if (onCloseAll != null) {
+                if (actionState.canCloseAll && onCloseAll != null) {
                     TextButton(onClick = onCloseAll) {
                         Text(stringResource(R.string.common_close_all))
                     }
@@ -2995,11 +3100,29 @@ private fun ReaderLookupClickableSubtitle(
     text: AnnotatedString,
     selectedRange: IntRange?,
     style: androidx.compose.ui.text.TextStyle,
+    autoScrollProgress: Float? = null,
     modifier: Modifier = Modifier,
     onTextTap: (offset: Int, anchor: ReaderLookupAnchor) -> Unit
 ) {
     var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
     var textWindowOrigin by remember { mutableStateOf(Offset.Zero) }
+    var viewportWidthPx by remember { mutableStateOf(0) }
+    val scrollState = rememberScrollState()
+    val lineWidthPx = remember(textLayoutResult) {
+        textLayoutResult?.let { layout ->
+            if (layout.lineCount > 0) {
+                (layout.getLineRight(0) - layout.getLineLeft(0)).coerceAtLeast(0f)
+            } else {
+                0f
+            }
+        } ?: 0f
+    }
+    LaunchedEffect(autoScrollProgress, viewportWidthPx, lineWidthPx, text.text) {
+        val progress = autoScrollProgress ?: return@LaunchedEffect
+        val maxScroll = (lineWidthPx - viewportWidthPx.toFloat()).coerceAtLeast(0f)
+        val target = (maxScroll * progress.coerceIn(0f, 1f)).roundToInt()
+        scrollState.scrollTo(target)
+    }
 
     Text(
         text = text,
@@ -3008,18 +3131,33 @@ private fun ReaderLookupClickableSubtitle(
             .onGloballyPositioned { coordinates ->
                 val bounds = coordinates.boundsInWindow()
                 textWindowOrigin = bounds.topLeft
+                viewportWidthPx = coordinates.size.width
             }
+            .then(
+                if (autoScrollProgress != null) {
+                    Modifier.horizontalScroll(scrollState, enabled = false)
+                } else {
+                    Modifier
+                }
+            )
             .pointerInput(onTextTap) {
                 detectTapGestures { tapOffset ->
                     val layout = textLayoutResult ?: return@detectTapGestures
-                    var offset = layout.getOffsetForPosition(tapOffset)
+                    val textLength = text.length
+                    if (textLength <= 0) return@detectTapGestures
+                    val contentTapOffset = Offset(
+                        x = tapOffset.x + scrollState.value.toFloat(),
+                        y = tapOffset.y
+                    )
+                    var offset = layout.getOffsetForPosition(contentTapOffset)
+                        .coerceIn(0, textLength - 1)
                     if (offset > 0) {
                         val previousBox = layout.getBoundingBox(offset - 1)
                         if (
-                            tapOffset.x >= previousBox.left &&
-                            tapOffset.x <= previousBox.right &&
-                            tapOffset.y >= previousBox.top &&
-                            tapOffset.y <= previousBox.bottom
+                            contentTapOffset.x >= previousBox.left &&
+                            contentTapOffset.x <= previousBox.right &&
+                            contentTapOffset.y >= previousBox.top &&
+                            contentTapOffset.y <= previousBox.bottom
                         ) {
                             offset -= 1
                         }
@@ -3028,8 +3166,8 @@ private fun ReaderLookupClickableSubtitle(
                     val anchor = ReaderLookupAnchor(
                         rects = listOf(
                             Rect(
-                                left = textWindowOrigin.x + box.left,
-                                right = textWindowOrigin.x + box.right,
+                                left = textWindowOrigin.x + box.left - scrollState.value,
+                                right = textWindowOrigin.x + box.right - scrollState.value,
                                 top = textWindowOrigin.y + box.top,
                                 bottom = textWindowOrigin.y + box.bottom
                             )
@@ -3038,6 +3176,9 @@ private fun ReaderLookupClickableSubtitle(
                     onTextTap(offset, anchor)
                 }
             },
+        softWrap = autoScrollProgress == null,
+        maxLines = if (autoScrollProgress != null) 1 else Int.MAX_VALUE,
+        overflow = TextOverflow.Clip,
         onTextLayout = { textLayoutResult = it }
     )
 }
@@ -3501,7 +3642,7 @@ private fun buildLookupPopupCandidates(
     return ordered.mapNotNull(::candidate)
 }
 
-private val HOSHI_SENTENCE_DELIMITERS = setOf('。', '！', '？', '.', '!', '?', '\n', '\r')
+private val HOSHI_SENTENCE_DELIMITERS = setOf('\u3002', '\uFF01', '\uFF1F', '.', '!', '?', '\n', '\r')
 private data class SentenceBounds(val start: Int, val endExclusive: Int)
 
 private fun findSentenceBoundsLikeHoshi(
@@ -3527,7 +3668,7 @@ private fun findSentenceBoundsLikeHoshi(
                 if (next.isLetterOrDigit() || Character.getType(next) == Character.OTHER_LETTER.toInt()) {
                     break
                 }
-                if (next !in setOf('」', '』', '）', '】', '!', '?', '！', '？', '…')) {
+                if (next !in setOf('\u300D', '\u300F', '\uFF09', '\u3011', '!', '?', '\uFF01', '\uFF1F', '\u2026')) {
                     break
                 }
                 endExclusive += 1
@@ -3613,24 +3754,6 @@ private fun extractFullSentenceLikeHoshiFromCues(
     )
 }
 
-private fun computeBookLookupResults(
-    context: Context,
-    dictionaries: List<LoadedDictionary>,
-    candidates: List<String>
-): List<DictionarySearchResult> {
-    if (dictionaries.isEmpty() || candidates.isEmpty()) return emptyList()
-    val query = candidates
-        .map { it.trim() }
-        .firstOrNull { it.isNotBlank() }
-        ?: return emptyList()
-    return searchDictionarySql(
-        context = context,
-        dictionaries = dictionaries,
-        query = query,
-        maxResults = MAX_LOOKUP_RESULTS,
-        profile = DictionaryQueryProfile.FULL
-    )
-}
 
 private fun addLookupDefinitionToAnki(
     context: Context,
@@ -3643,41 +3766,21 @@ private fun addLookupDefinitionToAnki(
     dictionaryCss: String?,
     popupSelectionText: String? = null,
     sentenceOverride: String? = null
-) {
-    val persistedConfig = withAnkiStep("load-config") {
-        loadPersistedAnkiConfig(context)
-    }
-    val preparedExport = withAnkiStep("prepare-export") {
-        prepareAnkiExport(
-            context = context,
-            persistedConfig = persistedConfig,
-            audioUri = audioUri,
-            lookupAudioUri = lookupAudioUri
-        )
-    }
-
-    val card = MinedCard(
-        word = entry.term,
-        popupSelectionText = popupSelectionText,
-        sentence = sentenceOverride ?: cue.text,
-        bookTitle = bookTitle,
-        reading = entry.reading,
-        definitions = listOf(definition),
-        dictionaryName = entry.dictionary,
-        dictionaryCss = dictionaryCss,
-        pitch = entry.pitch,
-        frequency = entry.frequency,
+): AnkiExportResult {
+    return addLookupDefinitionToAnkiShared(
+        context = context,
+        cueText = cue.text,
         cueStartMs = cue.startMs,
         cueEndMs = cue.endMs,
         audioUri = audioUri,
         lookupAudioUri = lookupAudioUri,
-        audioTagOnly = true,
-        requireCueAudioClip = audioUri != null
+        bookTitle = bookTitle,
+        entry = entry,
+        definition = definition,
+        dictionaryCss = dictionaryCss,
+        popupSelectionText = popupSelectionText,
+        sentenceOverride = sentenceOverride
     )
-
-    withAnkiStep("export-note") {
-        exportToAnkiDroidApi(context, card, preparedExport.config)
-    }
 }
 
 private const val BOOK_READER_SRT_CACHE_DIR = "book_reader_srt_cache"
@@ -3852,7 +3955,7 @@ private fun appendParsedSrtBlock(
     out += ReaderSubtitleCue(startMs = start, endMs = end, text = cueText)
 }
 
-private fun formatAnkiFailure(error: Throwable): String {
+internal fun formatAnkiFailure(error: Throwable): String {
     val head = error.javaClass.simpleName.ifBlank { "Error" }
     val message = error.message?.trim().orEmpty()
     val cause = error.cause
@@ -3879,7 +3982,7 @@ private fun formatAnkiFailure(error: Throwable): String {
     }
 }
 
-private inline fun <T> withAnkiStep(step: String, block: () -> T): T {
+internal inline fun <T> withAnkiStep(step: String, block: () -> T): T {
     return try {
         block()
     } catch (cancelled: CancellationException) {
@@ -4273,6 +4376,15 @@ private tailrec fun Context.findHostActivity(): Activity? {
         else -> null
     }
 }
+
+
+
+
+
+
+
+
+
 
 
 

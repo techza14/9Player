@@ -65,6 +65,21 @@ internal data class PreparedAnkiExport(
     val requiresLookupAudio: Boolean
 )
 
+internal sealed interface AnkiExportResult {
+    data object Added : AnkiExportResult
+    data class NotAvailable(
+        val state: AnkiAvailabilityState,
+        val message: String
+    ) : AnkiExportResult
+    data class InvalidConfig(
+        val message: String
+    ) : AnkiExportResult
+    data class Failed(
+        val message: String,
+        val cause: Throwable? = null
+    ) : AnkiExportResult
+}
+
 private data class StagedAnkiAudio(
     val uri: Uri,
     val extension: String,
@@ -81,10 +96,7 @@ private val DICTIONARY_TOKEN_STRIP_REGEX = Regex("[\\s\\p{Punct}\\p{S}]")
 private const val ANKI_AUDIO_LOG_TAG = "AnkiAudio"
 
 internal fun loadAnkiCatalog(context: Context): AnkiCatalog {
-    if (!isAnkiInstalled(context)) error("AnkiDroid is not installed")
-    if (!hasAnkiReadWritePermission(context)) {
-        error("Anki access permission is required")
-    }
+    ankiAvailabilityErrorMessage(context, requirePermission = true)?.let(::error)
 
     val api = AddContentApi(context)
     val deckNames = (api.getDeckList() ?: emptyMap())
@@ -156,8 +168,7 @@ internal fun prepareAnkiExport(
     audioUri: Uri?,
     lookupAudioUri: Uri?
 ): PreparedAnkiExport {
-    if (!isAnkiInstalled(context)) error(context.getString(R.string.error_anki_not_installed))
-    if (!hasAnkiReadWritePermission(context)) error(context.getString(R.string.error_anki_permission_required))
+    ankiAvailabilityErrorMessage(context, requirePermission = true)?.let(::error)
     if (persistedConfig.modelName.isBlank()) error(context.getString(R.string.error_anki_model_missing))
 
     val catalog = loadAnkiCatalog(context)
@@ -190,8 +201,7 @@ internal fun exportToAnkiDroidApi(
     card: MinedCard,
     config: AnkiExportConfig
 ) {
-    if (!isAnkiInstalled(context)) error("AnkiDroid is not installed")
-    if (!hasAnkiReadWritePermission(context)) error("Anki access permission is required")
+    ankiAvailabilityErrorMessage(context, requirePermission = true)?.let(::error)
 
     val api = runCatching { AddContentApi(context) }.getOrElse { throwable ->
         error("Anki API init failed. ${throwableDetail(throwable)}")
@@ -260,6 +270,35 @@ internal fun exportToAnkiDroidApi(
             " Empty fields: ${emptyFields.joinToString(", ")}."
         }
         error("AnkiDroid rejected the note. Check model fields and templates.$detail")
+    }
+}
+
+internal fun exportToAnkiDroidApiResult(
+    context: Context,
+    card: MinedCard,
+    config: AnkiExportConfig
+): AnkiExportResult {
+    return try {
+        exportToAnkiDroidApi(context, card, config)
+        AnkiExportResult.Added
+    } catch (error: Throwable) {
+        classifyAnkiExportFailure(context, error)
+    }
+}
+
+internal fun prepareAnkiExportResult(
+    context: Context,
+    persistedConfig: PersistedAnkiConfig,
+    audioUri: Uri?,
+    lookupAudioUri: Uri?
+): Result<PreparedAnkiExport> {
+    return runCatching {
+        prepareAnkiExport(
+            context = context,
+            persistedConfig = persistedConfig,
+            audioUri = audioUri,
+            lookupAudioUri = lookupAudioUri
+        )
     }
 }
 
@@ -486,6 +525,59 @@ private fun buildStyledGlossary(
     """.trimIndent()
 }
 
+internal fun classifyAnkiExportFailure(
+    context: Context,
+    error: Throwable
+): AnkiExportResult {
+    val message = error.message?.trim().orEmpty()
+    return when {
+        message == context.getString(R.string.error_anki_not_installed) ||
+            message.contains("AnkiDroid is not installed", ignoreCase = true) -> {
+            AnkiExportResult.NotAvailable(AnkiAvailabilityState.NOT_INSTALLED, context.getString(R.string.error_anki_not_installed))
+        }
+        message == context.getString(R.string.error_anki_api_unavailable) ||
+            message.contains("API is unavailable", ignoreCase = true) -> {
+            AnkiExportResult.NotAvailable(AnkiAvailabilityState.API_UNAVAILABLE, context.getString(R.string.error_anki_api_unavailable))
+        }
+        message == context.getString(R.string.error_anki_permission_required) ||
+            (message.contains("permission", ignoreCase = true) && message.contains("Anki", ignoreCase = true)) -> {
+            AnkiExportResult.NotAvailable(AnkiAvailabilityState.PERMISSION_MISSING, context.getString(R.string.error_anki_permission_required))
+        }
+        message == context.getString(R.string.error_anki_model_missing) ||
+            message == context.getString(R.string.error_anki_fields_empty) ||
+            message == context.getString(R.string.error_anki_lookup_audio_missing) ||
+            message == context.getString(R.string.error_anki_cut_audio_missing) ||
+            message.startsWith("No Anki model configured", ignoreCase = true) ||
+            message.startsWith("Configured model not found", ignoreCase = true) ||
+            message.startsWith("All field variables are empty", ignoreCase = true) ||
+            message.startsWith("All rendered field values are empty", ignoreCase = true) -> {
+            AnkiExportResult.InvalidConfig(if (message.isBlank()) formatAnkiExportThrowable(error) else message)
+        }
+        else -> AnkiExportResult.Failed(formatAnkiExportThrowable(error), error)
+    }
+}
+
+internal fun ankiExportResultMessage(
+    context: Context,
+    result: AnkiExportResult
+): String {
+    return when (result) {
+        AnkiExportResult.Added -> context.getString(R.string.anki_toast_added)
+        is AnkiExportResult.NotAvailable -> result.message
+        is AnkiExportResult.InvalidConfig -> result.message
+        is AnkiExportResult.Failed -> result.message
+    }
+}
+
+private fun formatAnkiExportThrowable(error: Throwable): String {
+    val message = error.message?.trim().orEmpty()
+    return if (message.isBlank()) {
+        error.javaClass.simpleName
+    } else {
+        message
+    }
+}
+
 private fun attachAudio(
     api: AddContentApi,
     context: Context,
@@ -509,7 +601,7 @@ private fun attachAudio(
         if (grantReadPermission && uri.scheme.equals("content", ignoreCase = true)) {
             runCatching {
                 context.grantUriPermission(
-                    ANKI_PACKAGE_NAME,
+                    requireAnkiPackageName(context),
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
@@ -679,7 +771,7 @@ private fun attachLookupAudio(
         if (grantReadPermission && uri.scheme.equals("content", ignoreCase = true)) {
             runCatching {
                 context.grantUriPermission(
-                    ANKI_PACKAGE_NAME,
+                    requireAnkiPackageName(context),
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )

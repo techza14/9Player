@@ -9,6 +9,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <queries>
+        <package android:name="com.ichi2.anki" />
+        <package android:name="com.ichi2.anki.debug" />
+    </queries>
+
     <application
         android:name=".NinePlayerApp"
         android:allowBackup="true"
@@ -39,6 +44,12 @@
             android:name=".AudiobookSettingsActivity"
             android:exported="false"
             android:label="有声书"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Tset" />
+        <activity
+            android:name=".FloatingOverlayPreviewActivity"
+            android:exported="false"
+            android:label="悬浮窗预览"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <service

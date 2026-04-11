@@ -7,6 +7,7 @@
     <string name="common_back">&lt; Back</string>
     <string name="common_close">Close</string>
     <string name="common_close_all">Close all</string>
+    <string name="floating_lookup_from">From: %1$s</string>
     <string name="anki_toast_added">Added to Anki.</string>
     <string name="common_cancel">Cancel</string>
     <string name="common_confirm">Confirm</string>
@@ -47,6 +48,10 @@
     <string name="settings_language_subtitle">Switch app language</string>
     <string name="settings_guide_title">Guide</string>
     <string name="settings_guide_subtitle">Open the GitHub project page</string>
+    <string name="settings_export_diagnostics_title">Export diagnostics</string>
+    <string name="settings_export_diagnostics_subtitle">Export version, device info, recent logs, and a settings summary</string>
+    <string name="settings_export_diagnostics_subject">9Player diagnostics</string>
+    <string name="settings_export_diagnostics_failed">Failed to export diagnostics.</string>
     <string name="settings_version_title">Version</string>
     <string name="settings_version_subtitle">Tap to show version, tap 5 times for the easter egg</string>
     <string name="settings_version_toast">Current version: %1$s</string>
@@ -140,6 +145,7 @@
     <string name="status_duplicate_dictionary">This dictionary has already been imported. Do not import it again.</string>
     <string name="status_duplicate_dictionary_detected">Duplicate dictionary detected: %1$s</string>
     <string name="error_anki_not_installed">AnkiDroid is not installed.</string>
+    <string name="error_anki_api_unavailable">AnkiDroid is installed, but its API is unavailable. Open AnkiDroid once, enable the API if needed, then retry.</string>
     <string name="error_anki_permission_required">Anki permission not granted. Authorize in Settings &gt; Anki first.</string>
     <string name="error_anki_model_missing">No Anki model configured. Set a model in Settings &gt; Anki.</string>
     <string name="error_anki_model_not_found">Configured model not found: %1$s</string>
@@ -237,9 +243,18 @@
     <string name="audiobook_active_cue_current_middle">Current: center</string>
     <string name="audiobook_active_cue_current_top">Current: top</string>
     <string name="audiobook_overlay_title">Overlay</string>
-    <string name="audiobook_overlay_enable">Show playback bubble after leaving the app</string>
-    <string name="audiobook_overlay_enabled">Overlay enabled.</string>
-    <string name="audiobook_overlay_disabled">Overlay disabled.</string>
+    <string name="audiobook_overlay_bubble_enable">Show floating bubble after leaving the app</string>
+    <string name="audiobook_overlay_bubble_enabled">Floating bubble enabled.</string>
+    <string name="audiobook_overlay_enable">Enable floating overlay</string>
+    <string name="audiobook_overlay_disabled">Floating overlay disabled.</string>
+    <string name="audiobook_overlay_mode_value">Current mode: %1$s</string>
+    <string name="audiobook_overlay_mode_changed">Floating overlay changed to: %1$s</string>
+    <string name="audiobook_overlay_test_button">Test overlay</string>
+    <string name="audiobook_overlay_test_title">Test floating overlay</string>
+    <string name="audiobook_overlay_mode_subtitle">Floating subtitles</string>
+    <string name="audiobook_overlay_mode_bubble">Floating bubble</string>
+    <string name="audiobook_overlay_mode_both">Subtitles + bubble</string>
+    <string name="audiobook_overlay_bubble_disabled">Floating bubble disabled.</string>
     <string name="audiobook_overlay_permission_granted">Overlay permission: granted</string>
     <string name="audiobook_overlay_permission_denied">Overlay permission: not granted</string>
     <string name="audiobook_overlay_permission_button">Grant overlay permission</string>
@@ -247,6 +262,11 @@
     <string name="audiobook_overlay_size_reset_button">Reset default size</string>
     <string name="audiobook_overlay_size_reset">Bubble size reset to default.</string>
     <string name="audiobook_overlay_help">Bubble: tap to play/pause, double tap to show seek back/forward/bookmark.</string>
+    <string name="audiobook_overlay_subtitle_enable">Show floating subtitles</string>
+    <string name="audiobook_overlay_subtitle_enabled">Floating subtitles enabled.</string>
+    <string name="audiobook_overlay_subtitle_disabled">Floating subtitles disabled.</string>
+    <string name="audiobook_overlay_subtitle_help">Floating subtitles show the currently playing subtitle text.</string>
+    <string name="audiobook_overlay_subtitle_style">Subtitle style</string>
     <string name="audiobook_unknown_file">Unknown file</string>
     <string name="audiobook_import_stage_copy">Copying file...</string>
     <string name="audiobook_import_stage_validate">Validating database...</string>
@@ -288,6 +308,7 @@
     <string name="bookreader_subtitle_list_enabled">Switched to subtitle list.</string>
     <string name="bookreader_subtitle_single_enabled">Switched to single subtitle view.</string>
     <string name="bookreader_switch_to_subtitle">Switch to subtitles</string>
+    <string name="bookreader_replace_srt">Replace SRT</string>
     <string name="bookreader_switch_to_cover">Switch to cover</string>
     <string name="bookreader_switched_to_cover">Switched to cover.</string>
     <string name="bookreader_switched_to_subtitle">Switched to subtitles.</string>
@@ -377,6 +398,7 @@
     <string name="shizuku_bluetooth_disconnect_and_disable_failed">Failed to disconnect controller and disable Bluetooth.</string>
     <string name="anki_title">Anki</string>
     <string name="anki_not_installed">AnkiDroid is not installed.</string>
+    <string name="anki_api_unavailable">AnkiDroid is installed, but its API is unavailable. Open AnkiDroid once, enable the API if needed, then retry.</string>
     <string name="anki_authorize_first">Authorize Anki access first.</string>
     <string name="anki_default_deck">Default</string>
     <string name="anki_load_failed">Failed to load Anki decks/models</string>
@@ -384,6 +406,7 @@
     <string name="anki_access_denied">Anki access: not granted</string>
     <string name="anki_access_button_granted">Anki authorized</string>
     <string name="anki_access_button_request">Authorize Anki access</string>
+    <string name="anki_open_app_button">Open AnkiDroid</string>
     <string name="anki_refresh_catalog">Refresh decks/models</string>
     <string name="anki_error_prefix">Anki error: %1$s</string>
     <string name="anki_deck_label">Deck</string>

@@ -1,13 +1,24 @@
 package moe.tekuza.m9player
 
 object BookReaderFloatingBridge {
+    data class CueSnapshot(
+        val text: String,
+        val startMs: Long,
+        val endMs: Long,
+        val bookTitle: String?,
+        val audioUri: String?
+    )
+
     interface Controller {
         fun isPlaying(): Boolean
         fun isFavorite(): Boolean
         fun togglePlayPause()
+        fun setPlaying(play: Boolean)
         fun seekPrevious()
         fun seekNext()
         fun toggleFavorite()
+        fun showReader()
+        fun lookupCurrentSubtitleAt(offset: Int)
     }
 
     interface PlaybackStateListener {
@@ -18,16 +29,32 @@ object BookReaderFloatingBridge {
         fun onFavoriteStateChanged(isFavorite: Boolean)
     }
 
+    interface SubtitleStateListener {
+        fun onSubtitleChanged(text: String?)
+    }
+
+    interface PlaybackPositionListener {
+        fun onPlaybackPositionChanged(positionMs: Long)
+    }
+
     @Volatile
     private var controller: Controller? = null
     private val listeners = linkedSetOf<PlaybackStateListener>()
     private val favoriteListeners = linkedSetOf<FavoriteStateListener>()
+    private val subtitleListeners = linkedSetOf<SubtitleStateListener>()
+    private val playbackPositionListeners = linkedSetOf<PlaybackPositionListener>()
     @Volatile
     private var playingSnapshot: Boolean = false
     @Volatile
     private var favoriteSnapshot: Boolean = false
     @Volatile
     private var currentAudioUriSnapshot: String? = null
+    @Volatile
+    private var subtitleSnapshot: String? = null
+    @Volatile
+    private var cueSnapshot: CueSnapshot? = null
+    @Volatile
+    private var playbackPositionSnapshot: Long = 0L
 
     fun attach(controller: Controller) {
         synchronized(this) {
@@ -37,6 +64,8 @@ object BookReaderFloatingBridge {
         }
         notifyPlaybackState(playingSnapshot)
         notifyFavoriteState(favoriteSnapshot)
+        notifySubtitle(subtitleSnapshot)
+        notifyPlaybackPosition(playbackPositionSnapshot)
     }
 
     fun detach(controller: Controller) {
@@ -45,10 +74,14 @@ object BookReaderFloatingBridge {
                 this.controller = null
                 playingSnapshot = false
                 favoriteSnapshot = false
+                subtitleSnapshot = null
+                cueSnapshot = null
             }
         }
         notifyPlaybackState(playingSnapshot)
         notifyFavoriteState(favoriteSnapshot)
+        notifySubtitle(subtitleSnapshot)
+        notifyPlaybackPosition(0L)
     }
 
     fun addPlaybackStateListener(listener: PlaybackStateListener) {
@@ -77,6 +110,32 @@ object BookReaderFloatingBridge {
         }
     }
 
+    fun addSubtitleStateListener(listener: SubtitleStateListener) {
+        synchronized(this) {
+            subtitleListeners += listener
+        }
+        listener.onSubtitleChanged(subtitleSnapshot)
+    }
+
+    fun removeSubtitleStateListener(listener: SubtitleStateListener) {
+        synchronized(this) {
+            subtitleListeners -= listener
+        }
+    }
+
+    fun addPlaybackPositionListener(listener: PlaybackPositionListener) {
+        synchronized(this) {
+            playbackPositionListeners += listener
+        }
+        listener.onPlaybackPositionChanged(playbackPositionSnapshot)
+    }
+
+    fun removePlaybackPositionListener(listener: PlaybackPositionListener) {
+        synchronized(this) {
+            playbackPositionListeners -= listener
+        }
+    }
+
     fun notifyPlaybackState(isPlaying: Boolean) {
         val snapshot: List<PlaybackStateListener>
         synchronized(this) {
@@ -89,11 +148,56 @@ object BookReaderFloatingBridge {
     fun isPlaying(): Boolean = playingSnapshot
     fun isFavorite(): Boolean = favoriteSnapshot
     fun currentAudioUri(): String? = currentAudioUriSnapshot
+    fun currentSubtitle(): String? = subtitleSnapshot
+    fun currentCue(): CueSnapshot? = cueSnapshot
+    fun currentPlaybackPositionMs(): Long = playbackPositionSnapshot
 
     fun setCurrentAudioUri(audioUri: String?) {
         synchronized(this) {
             currentAudioUriSnapshot = audioUri?.takeIf { it.isNotBlank() }
         }
+    }
+
+    fun setCurrentCue(
+        text: String?,
+        startMs: Long?,
+        endMs: Long?,
+        bookTitle: String?,
+        audioUri: String?
+    ) {
+        synchronized(this) {
+            cueSnapshot = if (text.isNullOrBlank() || startMs == null || endMs == null) {
+                null
+            } else {
+                CueSnapshot(
+                    text = text,
+                    startMs = startMs,
+                    endMs = endMs,
+                    bookTitle = bookTitle?.takeIf { it.isNotBlank() },
+                    audioUri = audioUri?.takeIf { it.isNotBlank() }
+                )
+            }
+        }
+    }
+
+    fun notifySubtitle(text: String?) {
+        val normalized = text?.trim()?.takeIf { it.isNotEmpty() }
+        val snapshot: List<SubtitleStateListener>
+        synchronized(this) {
+            subtitleSnapshot = normalized
+            snapshot = subtitleListeners.toList()
+        }
+        snapshot.forEach { it.onSubtitleChanged(normalized) }
+    }
+
+    fun notifyPlaybackPosition(positionMs: Long) {
+        val normalized = positionMs.coerceAtLeast(0L)
+        val snapshot: List<PlaybackPositionListener>
+        synchronized(this) {
+            playbackPositionSnapshot = normalized
+            snapshot = playbackPositionListeners.toList()
+        }
+        snapshot.forEach { it.onPlaybackPositionChanged(normalized) }
     }
 
     fun notifyFavoriteState(isFavorite: Boolean) {
@@ -109,6 +213,10 @@ object BookReaderFloatingBridge {
         controller?.togglePlayPause()
     }
 
+    fun setPlaying(play: Boolean) {
+        controller?.setPlaying(play)
+    }
+
     fun seekPrevious() {
         controller?.seekPrevious()
     }
@@ -120,5 +228,32 @@ object BookReaderFloatingBridge {
     fun toggleFavorite() {
         controller?.toggleFavorite()
     }
+
+    fun showReader() {
+        controller?.showReader()
+    }
+
+    fun lookupCurrentSubtitleAt(offset: Int) {
+        controller?.lookupCurrentSubtitleAt(offset)
+    }
+}
+
+private const val TIMED_SUBTITLE_SCROLL_START_HOLD = 0.12f
+private const val TIMED_SUBTITLE_SCROLL_END_HOLD = 0.18f
+private const val TIMED_SUBTITLE_SCROLL_TARGET_MAX = 0.94f
+
+internal fun mapTimedSubtitleScrollProgress(linearProgress: Float): Float {
+    val progress = linearProgress.coerceIn(0f, 1f)
+    val motionEnd = (1f - TIMED_SUBTITLE_SCROLL_END_HOLD).coerceAtLeast(TIMED_SUBTITLE_SCROLL_START_HOLD + 0.01f)
+    if (progress <= TIMED_SUBTITLE_SCROLL_START_HOLD) return 0f
+    if (progress >= motionEnd) return TIMED_SUBTITLE_SCROLL_TARGET_MAX
+    val normalized = ((progress - TIMED_SUBTITLE_SCROLL_START_HOLD) / (motionEnd - TIMED_SUBTITLE_SCROLL_START_HOLD))
+        .coerceIn(0f, 1f)
+    val eased = if (normalized < 0.5f) {
+        4f * normalized * normalized * normalized
+    } else {
+        1f - ((-2f * normalized + 2f) * (-2f * normalized + 2f) * (-2f * normalized + 2f) / 2f)
+    }
+    return (TIMED_SUBTITLE_SCROLL_TARGET_MAX * eased).coerceIn(0f, TIMED_SUBTITLE_SCROLL_TARGET_MAX)
 }
 

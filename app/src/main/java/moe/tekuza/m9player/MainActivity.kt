@@ -21,6 +21,7 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -102,6 +103,7 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.documentfile.provider.DocumentFile
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -145,13 +147,17 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
         val settings = loadAudiobookSettingsConfig(this)
         floatingOverlayStartJob?.cancel()
-        if (isChangingConfigurations || !settings.floatingOverlayEnabled || !BookReaderFloatingBridge.isPlaying()) return
+        val overlayEnabled = settings.floatingOverlayEnabled || settings.floatingOverlaySubtitleEnabled
+        if (isChangingConfigurations || !overlayEnabled || !BookReaderFloatingBridge.isPlaying()) return
 
         floatingOverlayStartJob = lifecycleScope.launch {
             delay(150L)
             if (
                 !isAppProcessInForeground() &&
-                loadAudiobookSettingsConfig(this@MainActivity).floatingOverlayEnabled &&
+                run {
+                    val refreshed = loadAudiobookSettingsConfig(this@MainActivity)
+                    refreshed.floatingOverlayEnabled || refreshed.floatingOverlaySubtitleEnabled
+                } &&
                 BookReaderFloatingBridge.isPlaying()
             ) {
                 startAudiobookFloatingOverlayService(this@MainActivity)
@@ -281,6 +287,7 @@ private fun ReaderSyncScreen() {
 
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var pendingAnkiCard by remember { mutableStateOf<MinedCard?>(null) }
+    var awaitingExternalAnkiPermission by remember { mutableStateOf(false) }
     var ankiPermissionGranted by remember { mutableStateOf(hasAnkiReadWritePermission(context)) }
     var ankiDeckName by remember { mutableStateOf("Default") }
     var ankiModelName by remember { mutableStateOf("") }
@@ -486,6 +493,18 @@ private fun ReaderSyncScreen() {
                 exportStatus = "Anki access permission was denied."
             }
         }
+    val requestExternalAnkiPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            awaitingExternalAnkiPermission = false
+            ankiPermissionGranted = hasAnkiReadWritePermission(context)
+            if (ankiPermissionGranted) {
+                exportStatus = "Anki access permission granted."
+            } else {
+                pendingAnkiCard = null
+                exportStatus = ankiAvailabilityUiMessage(context, requirePermission = true)
+                    ?: "Anki access permission was denied."
+            }
+        }
 
     fun persistImportState() {
         val persistedBooks = readerBooks.map { book ->
@@ -550,16 +569,11 @@ private fun ReaderSyncScreen() {
     }
 
     fun refreshAnkiCatalog() {
-        if (!isAnkiInstalled(context)) {
-            ankiError = "AnkiDroid is not installed."
+        ankiAvailabilityUiMessage(context, requirePermission = true)?.let { availabilityMessage ->
+            ankiError = availabilityMessage
             ankiDecks = emptyList()
             ankiModels = emptyList()
             ankiModelFields = emptyList()
-            return
-        }
-
-        if (!ankiPermissionGranted) {
-            ankiError = "Please grant Anki access first."
             return
         }
 
@@ -567,25 +581,27 @@ private fun ReaderSyncScreen() {
             ankiLoading = true
             ankiError = null
             val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    loadResolvedAnkiCatalog(
-                        context = context,
-                        currentDeckName = ankiDeckName,
-                        currentModelName = ankiModelName,
-                        defaultDeckName = "Default"
-                    )
-                }
+                loadResolvedAnkiCatalogResult(
+                    context = context,
+                    currentDeckName = ankiDeckName,
+                    currentModelName = ankiModelName,
+                    defaultDeckName = "Default"
+                )
             }
             ankiLoading = false
 
-            result.onSuccess { resolvedCatalog ->
-                ankiDecks = resolvedCatalog.decks
-                ankiModels = resolvedCatalog.models
-                ankiDeckName = resolvedCatalog.selection.deckName
-                selectAnkiModel(resolvedCatalog.selection.modelName)
-                persistAnkiConfig()
-            }.onFailure { error ->
-                ankiError = error.message ?: "Failed to load Anki decks/models"
+            when (result) {
+                is AnkiCatalogLoadResult.Success -> {
+                    val resolvedCatalog = result.data
+                    ankiDecks = resolvedCatalog.decks
+                    ankiModels = resolvedCatalog.models
+                    ankiDeckName = resolvedCatalog.selection.deckName
+                    selectAnkiModel(resolvedCatalog.selection.modelName)
+                    persistAnkiConfig()
+                }
+                is AnkiCatalogLoadResult.Failure -> {
+                    ankiError = result.message
+                }
             }
         }
     }
@@ -930,16 +946,26 @@ private fun ReaderSyncScreen() {
     }
 
     fun tryExportCardToAnki(card: MinedCard) {
-        if (!isAnkiInstalled(context)) {
-            exportStatus = "AnkiDroid is not installed."
-            return
-        }
-
-        if (!ankiPermissionGranted) {
-            pendingAnkiCard = card
-            exportStatus = "Requesting Anki access permission..."
-            requestAnkiPermissionLauncher.launch(ANKI_READ_WRITE_PERMISSION)
-            return
+        when (detectAnkiAvailability(context, requirePermission = true)) {
+            AnkiAvailabilityState.PERMISSION_MISSING -> {
+                pendingAnkiCard = card
+                exportStatus = "Requesting Anki access permission..."
+                val launchedIntent = createAnkiPermissionRequestIntent(context)
+                if (launchedIntent != null) {
+                    awaitingExternalAnkiPermission = true
+                    requestExternalAnkiPermissionLauncher.launch(launchedIntent)
+                } else {
+                    requestAnkiPermissionLauncher.launch(ANKI_READ_WRITE_PERMISSION)
+                }
+                return
+            }
+            AnkiAvailabilityState.NOT_INSTALLED,
+            AnkiAvailabilityState.API_UNAVAILABLE -> {
+                exportStatus = ankiAvailabilityErrorMessage(context, requirePermission = true)
+                    ?: context.getString(R.string.error_anki_not_installed)
+                return
+            }
+            AnkiAvailabilityState.READY -> Unit
         }
 
         if (ankiModels.isEmpty()) {
@@ -957,13 +983,7 @@ private fun ReaderSyncScreen() {
             exportStatus = context.getString(R.string.status_anki_fields_empty)
             return
         }
-        val exportResult = runCatching {
-            exportToAnkiDroidApi(context, card, config)
-        }
-        exportStatus = exportResult.fold(
-            onSuccess = { "Sent to AnkiDroid." },
-            onFailure = { it.message ?: "Failed to export to AnkiDroid" }
-        )
+        exportStatus = ankiExportResultMessage(context, exportToAnkiDroidApiResult(context, card, config))
     }
 
     LaunchedEffect(ankiPermissionGranted) {
@@ -977,6 +997,29 @@ private fun ReaderSyncScreen() {
         if (!ankiPermissionGranted) return@LaunchedEffect
         pendingAnkiCard = null
         tryExportCardToAnki(card)
+    }
+
+    DisposableEffect(context, awaitingExternalAnkiPermission) {
+        val activity = context as? ComponentActivity
+        val observer = activity?.let {
+            androidx.lifecycle.LifecycleEventObserver { _, event ->
+                if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && awaitingExternalAnkiPermission) {
+                    awaitingExternalAnkiPermission = false
+                    ankiPermissionGranted = hasAnkiReadWritePermission(context)
+                    if (ankiPermissionGranted) {
+                        exportStatus = "Anki access permission granted."
+                    }
+                }
+            }
+        }
+        if (observer != null) {
+            activity.lifecycle.addObserver(observer)
+        }
+        onDispose {
+            if (observer != null) {
+                activity.lifecycle.removeObserver(observer)
+            }
+        }
     }
 
     LaunchedEffect(activeSection) {
@@ -1272,7 +1315,7 @@ private fun ReaderSyncScreen() {
 
     fun triggerMainCueLookup(cue: SubtitleCue, offset: Int) {
         if (loadedDictionaries.isEmpty()) {
-            exportStatus = "Import dictionary first."
+            exportStatus = context.getString(R.string.bookreader_lookup_no_dict)
             return
         }
 
@@ -1284,17 +1327,7 @@ private fun ReaderSyncScreen() {
         val selectedToken = selection?.text?.trim()?.takeIf { it.isNotBlank() }
         val candidates = listOfNotNull(selectedToken)
 
-        if (candidates.isEmpty()) {
-            mainLookupAutoPlayNonce += 1L
-            mainLookupAutoPlayedKey = null
-            mainLookupPopupVisible = true
-            mainLookupPopupTitle = selectedToken.orEmpty()
-            mainLookupPopupResults = emptyList()
-            mainLookupPopupSelectedKey = null
-            mainLookupPopupError = "No lookup candidate for this position."
-            mainLookupPopupLoading = false
-            return
-        }
+        if (candidates.isEmpty()) return
 
         mainLookupPopupVisible = true
         mainLookupAutoPlayNonce += 1L
@@ -1304,6 +1337,7 @@ private fun ReaderSyncScreen() {
         mainLookupPopupSelectedKey = null
         mainLookupPopupError = null
         mainLookupPopupLoading = true
+        mainLookupPopupCue = cue
         triggerLookupCandidates(candidates) { result ->
             result.onSuccess { hits ->
                 mainLookupPopupResults = hits
@@ -1315,7 +1349,7 @@ private fun ReaderSyncScreen() {
                 }
                 mainLookupPopupLoading = false
             }.onFailure { error ->
-                mainLookupPopupError = error.message ?: "Lookup failed"
+                mainLookupPopupError = error.message ?: context.getString(R.string.bookreader_lookup_failed)
                 mainLookupPopupLoading = false
             }
         }
@@ -1332,7 +1366,7 @@ private fun ReaderSyncScreen() {
 
     fun openMainLookupPopup(rawCandidates: List<String>) {
         if (loadedDictionaries.isEmpty()) {
-            exportStatus = "Import dictionary first."
+            exportStatus = context.getString(R.string.bookreader_lookup_no_dict)
             return
         }
 
@@ -1356,10 +1390,17 @@ private fun ReaderSyncScreen() {
                 mainLookupPopupSelectedKey = hits.firstOrNull()?.let { entryStableKey(it.entry) }
                 mainLookupPopupLoading = false
             }.onFailure { error ->
-                mainLookupPopupError = error.message ?: "Lookup failed"
+                mainLookupPopupError = error.message ?: context.getString(R.string.bookreader_lookup_failed)
                 mainLookupPopupLoading = false
             }
         }
+    }
+
+    fun closeMainLookupPopup() {
+        mainLookupPopupVisible = false
+        mainLookupPopupCue = null
+        mainLookupPopupSelectedRange = null
+        mainLookupPopupAudioUri = null
     }
 
     fun exportLookupGroupToAnki(
@@ -1388,8 +1429,7 @@ private fun ReaderSyncScreen() {
             .filter { it.isNotBlank() }
         val exportDefinitionHtml = exportDefinitions.joinToString("<br>").ifBlank { groupedResult.term }
         val settingsSnapshot = audiobookSettings
-        mainLookupPopupVisible = false
-        mainLookupPopupSelectedRange = null
+        closeMainLookupPopup()
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
@@ -2261,6 +2301,12 @@ private fun ReaderSyncScreen() {
                         runCatching { context.startActivity(intent) }
                             .onFailure { Toast.makeText(context, context.getString(R.string.settings_open_link_failed), Toast.LENGTH_SHORT).show() }
                     },
+                    onExportDiagnosticsClick = {
+                        runCatching { shareDiagnosticsReport(context) }
+                            .onFailure {
+                                Toast.makeText(context, context.getString(R.string.settings_export_diagnostics_failed), Toast.LENGTH_SHORT).show()
+                            }
+                    },
                     onVersionClick = {
                         val version = resolveAppVersionName(context)
                         Toast.makeText(context, context.getString(R.string.settings_version_toast, version), Toast.LENGTH_SHORT).show()
@@ -2391,10 +2437,7 @@ private fun ReaderSyncScreen() {
             Popup(
                 alignment = Alignment.TopCenter,
                 onDismissRequest = {
-                    mainLookupPopupVisible = false
-                    mainLookupPopupCue = null
-                    mainLookupPopupSelectedRange = null
-                    mainLookupPopupAudioUri = null
+                    closeMainLookupPopup()
                 },
                 properties = PopupProperties(
                     focusable = true,
@@ -2576,10 +2619,7 @@ private fun ReaderSyncScreen() {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(
                                 onClick = {
-                                    mainLookupPopupVisible = false
-                                    mainLookupPopupCue = null
-                                    mainLookupPopupSelectedRange = null
-                                    mainLookupPopupAudioUri = null
+                                    closeMainLookupPopup()
                                 }
                             ) {
                         Text(stringResource(R.string.common_close))
@@ -2664,6 +2704,126 @@ private fun resolveAppVersionName(context: Context): String {
             .orEmpty()
             .ifBlank { "unknown" }
     }.getOrDefault("unknown")
+}
+
+private fun resolveAppVersionCode(context: Context): Long {
+    return runCatching {
+        @Suppress("DEPRECATION")
+        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) packageInfo.longVersionCode else packageInfo.versionCode.toLong()
+    }.getOrDefault(-1L)
+}
+
+private fun shareDiagnosticsReport(context: Context) {
+    val report = buildDiagnosticsReport(context)
+    val reportFile = writeDiagnosticsReportFile(context, report)
+    val reportUri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        reportFile
+    )
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, context.getString(R.string.settings_export_diagnostics_subject))
+        putExtra(Intent.EXTRA_TEXT, report)
+        putExtra(Intent.EXTRA_STREAM, reportUri)
+        clipData = android.content.ClipData.newUri(context.contentResolver, reportFile.name, reportUri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    val chooser = Intent.createChooser(
+        shareIntent,
+        context.getString(R.string.settings_export_diagnostics_title)
+    ).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(chooser)
+}
+
+private fun writeDiagnosticsReportFile(context: Context, report: String): File {
+    val diagnosticsDir = File(context.cacheDir, "anki_media").apply { mkdirs() }
+    diagnosticsDir.listFiles()
+        ?.filter { it.name.startsWith("9player-diagnostics-") && it.extension.equals("txt", ignoreCase = true) }
+        ?.forEach { runCatching { it.delete() } }
+
+    return File(diagnosticsDir, "9player-diagnostics-${System.currentTimeMillis()}.txt").apply {
+        writeText(report, Charsets.UTF_8)
+    }
+}
+
+private fun buildDiagnosticsReport(context: Context): String {
+    val versionName = resolveAppVersionName(context)
+    val versionCode = resolveAppVersionCode(context)
+    val appLanguage = loadAppLanguageOption(context).displayLabel(context)
+    val audiobookSettings = loadAudiobookSettingsConfig(context)
+    val persistedImports = loadPersistedImports(context)
+    val persistedAnki = loadPersistedAnkiConfig(context)
+    val ankiResolvedPackage = resolveAnkiPackageName(context)
+    val recentLogs = loadRecentProcessLogs()
+
+    return buildString {
+        appendLine("9Player Diagnostics")
+        appendLine()
+        appendLine("[App]")
+        appendLine("VersionName=$versionName")
+        appendLine("VersionCode=$versionCode")
+        appendLine("Package=${context.packageName}")
+        appendLine()
+        appendLine("[Device]")
+        appendLine("Android=${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
+        appendLine("Brand=${Build.BRAND}")
+        appendLine("Manufacturer=${Build.MANUFACTURER}")
+        appendLine("Model=${Build.MODEL}")
+        appendLine("Device=${Build.DEVICE}")
+        appendLine()
+        appendLine("[Settings Summary]")
+        appendLine("AppLanguage=$appLanguage")
+        appendLine("ImportedBooks=${persistedImports.books.size}")
+        appendLine("ImportedDictionaries=${persistedImports.dictionaries.size}")
+        appendLine("AutoMoveToAudiobookFolder=${persistedImports.autoMoveToAudiobookFolder}")
+        appendLine("HomeLibraryView=${persistedImports.homeLibraryView}")
+        appendLine("FloatingOverlayEnabled=${audiobookSettings.floatingOverlayEnabled}")
+        appendLine("FloatingOverlaySubtitleEnabled=${audiobookSettings.floatingOverlaySubtitleEnabled}")
+        appendLine("FloatingOverlaySubtitleY=${audiobookSettings.floatingOverlaySubtitleY}")
+        appendLine("FloatingOverlayBubbleX=${audiobookSettings.floatingOverlayBubbleX}")
+        appendLine("FloatingOverlayBubbleY=${audiobookSettings.floatingOverlayBubbleY}")
+        appendLine("FloatingOverlaySizeDp=${audiobookSettings.floatingOverlaySizeDp}")
+        appendLine("FloatingSubtitleSizeSp=${audiobookSettings.floatingOverlaySubtitleSizeSp}")
+        appendLine("PausePlaybackOnLookup=${audiobookSettings.pausePlaybackOnLookup}")
+        appendLine("LookupAudioEnabled=${audiobookSettings.lookupPlaybackAudioEnabled}")
+        appendLine("LookupAudioAutoPlay=${audiobookSettings.lookupPlaybackAudioAutoPlay}")
+        appendLine("LookupAudioMode=${audiobookSettings.lookupAudioMode.storageValue}")
+        appendLine("LookupFullSentence=${audiobookSettings.lookupExportFullSentence}")
+        appendLine("LookupRangeSelection=${audiobookSettings.lookupRangeSelectionEnabled}")
+        appendLine()
+        appendLine("[Anki Diagnostics]")
+        appendLine("AvailabilityState=${detectAnkiAvailability(context, requirePermission = true)}")
+        appendLine("ResolvedPackage=${ankiResolvedPackage ?: "(null)"}")
+        appendLine("Installed=${isAnkiInstalled(context)}")
+        appendLine("ReadWritePermission=${hasAnkiReadWritePermission(context)}")
+        appendLine("Deck=${persistedAnki.deckName}")
+        appendLine("Model=${persistedAnki.modelName.ifBlank { "(blank)" }}")
+        appendLine("Tags=${persistedAnki.tags.ifBlank { "(blank)" }}")
+        appendLine("FieldTemplateCount=${persistedAnki.fieldTemplates.size}")
+        appendLine()
+        appendLine("[Recent Logs]")
+        appendLine(recentLogs.ifBlank { "(no recent logs captured)" })
+    }
+}
+
+private fun loadRecentProcessLogs(maxLines: Int = 200): String {
+    return runCatching {
+        val process = ProcessBuilder(
+            "logcat",
+            "-d",
+            "-t",
+            maxLines.toString(),
+            "--pid=${android.os.Process.myPid()}",
+            "*:V"
+        ).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().use { it.readText().trim() }
+        process.waitFor()
+        output
+    }.getOrDefault("")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

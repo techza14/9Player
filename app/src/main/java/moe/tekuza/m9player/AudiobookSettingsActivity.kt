@@ -76,7 +76,11 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
     var lookupAudioImportCopiedBytes by remember { mutableStateOf(0L) }
     var lookupAudioImportTotalBytes by remember { mutableStateOf<Long?>(null) }
     val scope = rememberCoroutineScope()
-    val overlayGranted = remember(config.floatingOverlayEnabled, statusText) {
+    val overlayGranted = remember(
+        config.floatingOverlayEnabled,
+        config.floatingOverlaySubtitleEnabled,
+        statusText
+    ) {
         canDrawOverlaysCompat(context)
     }
 
@@ -139,6 +143,20 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                     lookupAudioImporting = false
                 }
             }
+        }
+    val previewOverlayLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val modeName = result.data?.getStringExtra(FloatingOverlayPreviewActivity.EXTRA_RESULT_MODE)
+            val mode = modeName
+                ?.let { runCatching { FloatingOverlayMode.valueOf(it) }.getOrNull() }
+                ?: return@rememberLauncherForActivityResult
+            saveAudiobookFloatingOverlayMode(context, mode)
+            refreshConfig()
+            refreshAudiobookFloatingOverlayService(context)
+            statusText = context.getString(
+                R.string.audiobook_overlay_mode_changed,
+                overlayModeLabel(context, mode)
+            )
         }
 
     fun updateStep(seconds: Int) {
@@ -513,6 +531,7 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(stringResource(R.string.audiobook_overlay_title), style = MaterialTheme.typography.titleMedium)
+                val currentOverlayMode = config.floatingOverlayMode
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -523,19 +542,74 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                         modifier = Modifier.weight(1f).padding(end = 12.dp)
                     )
                     Switch(
-                        checked = config.floatingOverlayEnabled,
+                        checked = currentOverlayMode != FloatingOverlayMode.OFF,
                         onCheckedChange = { checked ->
-                            saveAudiobookFloatingOverlayEnabled(context, checked)
+                            val nextMode = if (checked) {
+                                currentOverlayMode.takeIf { it != FloatingOverlayMode.OFF }
+                                    ?: FloatingOverlayMode.SUBTITLE
+                            } else {
+                                FloatingOverlayMode.OFF
+                            }
+                            saveAudiobookFloatingOverlayMode(context, nextMode)
                             refreshConfig()
+                            refreshAudiobookFloatingOverlayService(context)
                             statusText = if (checked) {
-                                context.getString(R.string.audiobook_overlay_enabled)
+                                context.getString(
+                                    R.string.audiobook_overlay_mode_changed,
+                                    overlayModeLabel(context, nextMode)
+                                )
                             } else {
                                 context.getString(R.string.audiobook_overlay_disabled)
                             }
                         }
                     )
                 }
-                if (config.floatingOverlayEnabled) {
+                Text(
+                    stringResource(
+                        R.string.audiobook_overlay_mode_value,
+                        overlayModeLabel(context, currentOverlayMode)
+                    )
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            previewOverlayLauncher.launch(
+                                Intent(context, FloatingOverlayPreviewActivity::class.java).apply {
+                                    putExtra(
+                                        FloatingOverlayPreviewActivity.EXTRA_INITIAL_MODE,
+                                        currentOverlayMode.takeIf { it != FloatingOverlayMode.OFF }?.name
+                                            ?: FloatingOverlayMode.SUBTITLE.name
+                                    )
+                                }
+                            )
+                        }
+                    ) {
+                        Text(stringResource(R.string.audiobook_overlay_test_button))
+                    }
+                }
+                if (currentOverlayMode != FloatingOverlayMode.OFF) {
+                    Text(
+                        if (overlayGranted) {
+                            stringResource(R.string.audiobook_overlay_permission_granted)
+                        } else {
+                            stringResource(R.string.audiobook_overlay_permission_denied)
+                        }
+                    )
+                    if (!overlayGranted) {
+                        Button(
+                            onClick = {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                context.startActivity(intent)
+                            }
+                        ) {
+                            Text(stringResource(R.string.audiobook_overlay_permission_button))
+                        }
+                    }
+                }
+                if (currentOverlayMode.showsBubble) {
                     Text(
                         stringResource(
                             R.string.audiobook_overlay_size_value,
@@ -573,27 +647,10 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                     ) {
                         Text(stringResource(R.string.audiobook_overlay_size_reset_button))
                     }
-                    Text(
-                        if (overlayGranted) {
-                            stringResource(R.string.audiobook_overlay_permission_granted)
-                        } else {
-                            stringResource(R.string.audiobook_overlay_permission_denied)
-                        }
-                    )
-                    if (!overlayGranted) {
-                        Button(
-                            onClick = {
-                                val intent = Intent(
-                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:${context.packageName}")
-                                )
-                                context.startActivity(intent)
-                            }
-                        ) {
-                            Text(stringResource(R.string.audiobook_overlay_permission_button))
-                        }
-                    }
                     Text(stringResource(R.string.audiobook_overlay_help))
+                }
+                if (currentOverlayMode.showsSubtitle) {
+                    Text(stringResource(R.string.audiobook_overlay_subtitle_help))
                 }
             }
         }
@@ -601,6 +658,15 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
         statusText?.let {
             Text(it)
         }
+    }
+}
+
+internal fun overlayModeLabel(context: android.content.Context, mode: FloatingOverlayMode): String {
+    return when (mode) {
+        FloatingOverlayMode.OFF -> context.getString(R.string.audiobook_overlay_disabled)
+        FloatingOverlayMode.SUBTITLE -> context.getString(R.string.audiobook_overlay_mode_subtitle)
+        FloatingOverlayMode.BUBBLE -> context.getString(R.string.audiobook_overlay_mode_bubble)
+        FloatingOverlayMode.BOTH -> context.getString(R.string.audiobook_overlay_mode_both)
     }
 }
 
