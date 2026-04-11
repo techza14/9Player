@@ -7,6 +7,7 @@
     <string name="common_back">&lt; 戻る</string>
     <string name="common_close">閉じる</string>
     <string name="common_close_all">すべて閉じる</string>
+    <string name="floating_lookup_from">元: %1$s</string>
     <string name="anki_toast_added">Anki に追加しました。</string>
     <string name="common_cancel">キャンセル</string>
     <string name="common_confirm">確認</string>
@@ -47,6 +48,10 @@
     <string name="settings_language_subtitle">アプリの表示言語を切り替え</string>
     <string name="settings_guide_title">使い方</string>
     <string name="settings_guide_subtitle">GitHub プロジェクトページを開く</string>
+    <string name="settings_export_diagnostics_title">診断を書き出す</string>
+    <string name="settings_export_diagnostics_subtitle">バージョン、端末情報、最近のログ、設定概要を書き出します</string>
+    <string name="settings_export_diagnostics_subject">9Player 診断情報</string>
+    <string name="settings_export_diagnostics_failed">診断の書き出しに失敗しました。</string>
     <string name="settings_version_title">現在のバージョン</string>
     <string name="settings_version_subtitle">タップで表示、5回連続タップでイースターエッグ</string>
     <string name="settings_version_toast">現在のバージョン：%1$s</string>
@@ -140,6 +145,7 @@
     <string name="status_duplicate_dictionary">この辞書は既にインポートされています。重複インポートしないでください。</string>
     <string name="status_duplicate_dictionary_detected">重複辞書を検出しました：%1$s</string>
     <string name="error_anki_not_installed">AnkiDroid がインストールされていません。</string>
+    <string name="error_anki_api_unavailable">AnkiDroid はインストールされていますが、API を利用できません。AnkiDroid を一度開き、必要なら API を有効にしてから再試行してください。</string>
     <string name="error_anki_permission_required">Anki 権限がありません。まず 設定 &gt; Anki で許可してください。</string>
     <string name="error_anki_model_missing">Anki モデルが設定されていません。設定 &gt; Anki で設定してください。</string>
     <string name="error_anki_model_not_found">設定されたモデルが見つかりません：%1$s</string>
@@ -237,9 +243,18 @@
     <string name="audiobook_active_cue_current_middle">現在：中央</string>
     <string name="audiobook_active_cue_current_top">現在：上部</string>
     <string name="audiobook_overlay_title">フローティング</string>
-    <string name="audiobook_overlay_enable">アプリ終了後に再生バブルを表示</string>
-    <string name="audiobook_overlay_enabled">フローティングを有効にしました。</string>
+    <string name="audiobook_overlay_enable">フローティングを有効化</string>
     <string name="audiobook_overlay_disabled">フローティングを無効にしました。</string>
+    <string name="audiobook_overlay_mode_value">現在のモード：%1$s</string>
+    <string name="audiobook_overlay_mode_changed">フローティングを切り替えました：%1$s</string>
+    <string name="audiobook_overlay_test_button">フローティングをテスト</string>
+    <string name="audiobook_overlay_test_title">フローティングをテスト</string>
+    <string name="audiobook_overlay_mode_subtitle">フローティング字幕</string>
+    <string name="audiobook_overlay_mode_bubble">フローティングバブル</string>
+    <string name="audiobook_overlay_mode_both">字幕 + バブル</string>
+    <string name="audiobook_overlay_bubble_enable">アプリ終了後にフローティングバブルを表示</string>
+    <string name="audiobook_overlay_bubble_enabled">フローティングバブルを有効にしました。</string>
+    <string name="audiobook_overlay_bubble_disabled">フローティングバブルを無効にしました。</string>
     <string name="audiobook_overlay_permission_granted">フローティング権限：許可済み</string>
     <string name="audiobook_overlay_permission_denied">フローティング権限：未許可</string>
     <string name="audiobook_overlay_permission_button">フローティング権限を許可</string>
@@ -247,6 +262,11 @@
     <string name="audiobook_overlay_size_reset_button">デフォルトサイズに戻す</string>
     <string name="audiobook_overlay_size_reset">バブルサイズをデフォルトに戻しました。</string>
     <string name="audiobook_overlay_help">バブル：タップで再生/一時停止、ダブルタップで戻る/進む/お気に入りを表示。</string>
+    <string name="audiobook_overlay_subtitle_enable">フローティング字幕を表示</string>
+    <string name="audiobook_overlay_subtitle_enabled">フローティング字幕を有効にしました。</string>
+    <string name="audiobook_overlay_subtitle_disabled">フローティング字幕を無効にしました。</string>
+    <string name="audiobook_overlay_subtitle_help">フローティング字幕には現在再生中の字幕テキストが表示されます。</string>
+    <string name="audiobook_overlay_subtitle_style">字幕スタイル</string>
     <string name="audiobook_unknown_file">不明なファイル</string>
     <string name="audiobook_import_stage_copy">ファイルをコピー中...</string>
     <string name="audiobook_import_stage_validate">データベースを検証中...</string>
@@ -288,6 +308,7 @@
     <string name="bookreader_subtitle_list_enabled">字幕-一覧表示に切り替えました。</string>
     <string name="bookreader_subtitle_single_enabled">字幕-単文表示に切り替えました。</string>
     <string name="bookreader_switch_to_subtitle">字幕に切り替え</string>
+    <string name="bookreader_replace_srt">SRT を差し替え</string>
     <string name="bookreader_switch_to_cover">表紙に切り替え</string>
     <string name="bookreader_switched_to_cover">表紙に切り替えました。</string>
     <string name="bookreader_switched_to_subtitle">字幕に切り替えました。</string>
@@ -377,6 +398,7 @@
     <string name="shizuku_bluetooth_disconnect_and_disable_failed">コントローラーの切断と Bluetooth の無効化に失敗しました。</string>
     <string name="anki_title">Anki</string>
     <string name="anki_not_installed">AnkiDroid がインストールされていません。</string>
+    <string name="anki_api_unavailable">AnkiDroid はインストールされていますが、API を利用できません。AnkiDroid を一度開き、必要なら API を有効にしてから再試行してください。</string>
     <string name="anki_authorize_first">先に Anki アクセスを許可してください。</string>
     <string name="anki_default_deck">デフォルト</string>
     <string name="anki_load_failed">Anki のデッキ/テンプレート読み込みに失敗しました</string>
@@ -384,6 +406,7 @@
     <string name="anki_access_denied">Anki アクセス：未許可</string>
     <string name="anki_access_button_granted">Anki 認可済み</string>
     <string name="anki_access_button_request">Anki アクセスを許可</string>
+    <string name="anki_open_app_button">AnkiDroid を開く</string>
     <string name="anki_refresh_catalog">デッキ/テンプレートを更新</string>
     <string name="anki_error_prefix">Anki エラー：%1$s</string>
     <string name="anki_deck_label">デッキ</string>

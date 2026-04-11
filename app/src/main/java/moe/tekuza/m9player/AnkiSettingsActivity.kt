@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -139,10 +140,19 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
     }
     var ankiLoading by remember { mutableStateOf(false) }
     var ankiError by remember { mutableStateOf<String?>(null) }
+    var awaitingExternalAnkiPermission by remember { mutableStateOf(false) }
 
     val requestAnkiPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             ankiPermissionGranted = granted || hasAnkiReadWritePermission(context)
+        }
+    val requestExternalAnkiPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            awaitingExternalAnkiPermission = false
+            ankiPermissionGranted = hasAnkiReadWritePermission(context)
+            if (!ankiPermissionGranted) {
+                ankiError = ankiAvailabilityUiMessage(context, requirePermission = true)
+            }
         }
 
     fun persistAnkiConfig() {
@@ -192,16 +202,12 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
     }
 
     fun refreshAnkiCatalog() {
-        if (!isAnkiInstalled(context)) {
-            ankiError = context.getString(R.string.anki_not_installed)
+        val availabilityMessage = ankiAvailabilityUiMessage(context, requirePermission = true)
+        if (availabilityMessage != null) {
+            ankiError = availabilityMessage
             ankiDecks = emptyList()
             ankiModels = emptyList()
             ankiModelFields = emptyList()
-            return
-        }
-
-        if (!ankiPermissionGranted) {
-            ankiError = context.getString(R.string.anki_authorize_first)
             return
         }
 
@@ -209,24 +215,26 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
             ankiLoading = true
             ankiError = null
             val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    loadResolvedAnkiCatalog(
-                        context = context,
-                        currentDeckName = ankiDeckName,
-                        currentModelName = ankiModelName,
-                        defaultDeckName = context.getString(R.string.anki_default_deck)
-                    )
-                }
+                loadResolvedAnkiCatalogResult(
+                    context = context,
+                    currentDeckName = ankiDeckName,
+                    currentModelName = ankiModelName,
+                    defaultDeckName = context.getString(R.string.anki_default_deck)
+                )
             }
             ankiLoading = false
 
-            result.onSuccess { resolvedCatalog ->
-                ankiDecks = resolvedCatalog.decks
-                ankiModels = resolvedCatalog.models
-                ankiDeckName = resolvedCatalog.selection.deckName
-                selectAnkiModel(resolvedCatalog.selection.modelName)
-            }.onFailure { error ->
-                ankiError = error.message ?: context.getString(R.string.anki_load_failed)
+            when (result) {
+                is AnkiCatalogLoadResult.Success -> {
+                    val resolvedCatalog = result.data
+                    ankiDecks = resolvedCatalog.decks
+                    ankiModels = resolvedCatalog.models
+                    ankiDeckName = resolvedCatalog.selection.deckName
+                    selectAnkiModel(resolvedCatalog.selection.modelName)
+                }
+                is AnkiCatalogLoadResult.Failure -> {
+                    ankiError = result.message
+                }
             }
         }
     }
@@ -256,8 +264,31 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
             clearExisting = true,
             modelTemplates = persistedAnki.fieldTemplates
         )
+    }
+
+    LaunchedEffect(ankiPermissionGranted) {
         if (ankiPermissionGranted) {
             refreshAnkiCatalog()
+        }
+    }
+
+    DisposableEffect(context, awaitingExternalAnkiPermission) {
+        val activity = context as? AppCompatActivity
+        val observer = activity?.let {
+            androidx.lifecycle.LifecycleEventObserver { _, event ->
+                if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && awaitingExternalAnkiPermission) {
+                    awaitingExternalAnkiPermission = false
+                    ankiPermissionGranted = hasAnkiReadWritePermission(context)
+                }
+            }
+        }
+        if (observer != null) {
+            activity.lifecycle.addObserver(observer)
+        }
+        onDispose {
+            if (observer != null) {
+                activity.lifecycle.removeObserver(observer)
+            }
         }
     }
 
@@ -284,28 +315,45 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    if (ankiPermissionGranted) {
-                        stringResource(R.string.anki_access_granted)
-                    } else {
-                        stringResource(R.string.anki_access_denied)
-                    }
-                )
-                OutlinedButton(
-                    onClick = {
-                        if (!isAnkiInstalled(context)) {
-                            ankiError = context.getString(R.string.anki_not_installed)
-                        } else if (!ankiPermissionGranted) {
-                            requestAnkiPermissionLauncher.launch(ANKI_READ_WRITE_PERMISSION)
+                val availabilityState = detectAnkiAvailability(context, requirePermission = true)
+                val statusText = when (availabilityState) {
+                    AnkiAvailabilityState.NOT_INSTALLED -> stringResource(R.string.anki_not_installed)
+                    AnkiAvailabilityState.API_UNAVAILABLE -> stringResource(R.string.anki_api_unavailable)
+                    AnkiAvailabilityState.PERMISSION_MISSING -> stringResource(R.string.anki_authorize_first)
+                    AnkiAvailabilityState.READY -> stringResource(R.string.anki_access_granted)
+                }
+
+                Text(statusText)
+
+                if (availabilityState == AnkiAvailabilityState.PERMISSION_MISSING) {
+                    OutlinedButton(
+                        onClick = {
+                            val launchedIntent = createAnkiPermissionRequestIntent(context)
+                            if (launchedIntent != null) {
+                                awaitingExternalAnkiPermission = true
+                                requestExternalAnkiPermissionLauncher.launch(launchedIntent)
+                            } else {
+                                requestAnkiPermissionLauncher.launch(ANKI_READ_WRITE_PERMISSION)
+                            }
                         }
+                    ) {
+                        Text(stringResource(R.string.anki_access_button_request))
                     }
-                ) {
-                    Text(if (ankiPermissionGranted) stringResource(R.string.anki_access_button_granted) else stringResource(R.string.anki_access_button_request))
+                } else if (availabilityState == AnkiAvailabilityState.API_UNAVAILABLE) {
+                    OutlinedButton(
+                        onClick = {
+                            if (!openAnkiDroidApp(context)) {
+                                ankiError = context.getString(R.string.anki_not_installed)
+                            }
+                        }
+                    ) {
+                        Text(stringResource(R.string.anki_open_app_button))
+                    }
                 }
 
                 OutlinedButton(
                     onClick = { refreshAnkiCatalog() },
-                    enabled = ankiPermissionGranted && !ankiLoading
+                    enabled = availabilityState == AnkiAvailabilityState.READY && !ankiLoading
                 ) {
                     Text(if (ankiLoading) stringResource(R.string.common_loading) else stringResource(R.string.anki_refresh_catalog))
                 }

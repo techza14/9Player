@@ -39,6 +39,7 @@ private val lookupAudioLock = Any()
 private var activeLookupPlayer: MediaPlayer? = null
 private var activeLookupPlayerCleanup: (() -> Unit)? = null
 private var activeLookupTts: TextToSpeech? = null
+private var activeLookupAudioKey: String? = null
 
 private val lookupAudioDbCacheLock = Any()
 private var cachedLookupAudioDbUri: String? = null
@@ -61,11 +62,19 @@ internal fun playLookupAudioForTerm(
         postLookupAudioError(onError, context.getString(R.string.lookup_audio_empty_term))
         return false
     }
+    val lookupKey = "${normalizedTerm}|${reading?.trim().orEmpty()}|${settings.lookupAudioMode.storageValue}"
+    synchronized(lookupAudioLock) {
+        if ((activeLookupPlayer != null || activeLookupTts != null) && activeLookupAudioKey == lookupKey) {
+            stopLookupAudioPlaybackLocked()
+            return true
+        }
+    }
 
     return when (settings.lookupAudioMode) {
         LookupAudioMode.LOCAL_TTS -> playLookupAudioWithTts(
             context = context,
             term = normalizedTerm,
+            lookupKey = lookupKey,
             onError = onError
         )
 
@@ -90,6 +99,7 @@ internal fun playLookupAudioForTerm(
                     playLookupAudioFromUri(
                         context = context,
                         uri = prepared.uri,
+                        lookupKey = lookupKey,
                         onError = onError,
                         cleanup = prepared.cleanup
                     )
@@ -133,6 +143,7 @@ internal fun prepareLookupAudioForAnkiExport(
 private fun playLookupAudioFromUri(
     context: Context,
     uri: Uri,
+    lookupKey: String,
     onError: (String) -> Unit,
     cleanup: () -> Unit = {}
 ): Boolean {
@@ -141,6 +152,7 @@ private fun playLookupAudioFromUri(
         stopLookupAudioPlaybackLocked()
         activeLookupPlayer = player
         activeLookupPlayerCleanup = cleanup
+        activeLookupAudioKey = lookupKey
     }
 
     return runCatching {
@@ -158,6 +170,7 @@ private fun playLookupAudioFromUri(
             val completionCleanup = synchronized(lookupAudioLock) {
                 if (activeLookupPlayer === completed) {
                     activeLookupPlayer = null
+                    activeLookupAudioKey = null
                     activeLookupPlayerCleanup.also {
                         activeLookupPlayerCleanup = null
                     }
@@ -172,6 +185,7 @@ private fun playLookupAudioFromUri(
             val errorCleanup = synchronized(lookupAudioLock) {
                 if (activeLookupPlayer === failed) {
                     activeLookupPlayer = null
+                    activeLookupAudioKey = null
                     activeLookupPlayerCleanup.also {
                         activeLookupPlayerCleanup = null
                     }
@@ -189,6 +203,7 @@ private fun playLookupAudioFromUri(
         val startupCleanup = synchronized(lookupAudioLock) {
             if (activeLookupPlayer === player) {
                 activeLookupPlayer = null
+                activeLookupAudioKey = null
                 activeLookupPlayerCleanup.also {
                     activeLookupPlayerCleanup = null
                 }
@@ -205,6 +220,7 @@ private fun playLookupAudioFromUri(
 private fun playLookupAudioWithTts(
     context: Context,
     term: String,
+    lookupKey: String,
     onError: (String) -> Unit
 ): Boolean {
     var ttsRef: TextToSpeech? = null
@@ -255,6 +271,7 @@ private fun playLookupAudioWithTts(
     synchronized(lookupAudioLock) {
         stopLookupAudioPlaybackLocked()
         activeLookupTts = tts
+        activeLookupAudioKey = lookupKey
     }
     return true
 }
@@ -708,6 +725,7 @@ private fun stopLookupAudioPlaybackLocked() {
         runCatching { player.release() }
     }
     activeLookupPlayer = null
+    activeLookupAudioKey = null
     runCatching { cleanup?.invoke() }
 
     activeLookupTts?.let { tts ->
@@ -721,6 +739,7 @@ private fun clearLookupTts(target: TextToSpeech) {
     synchronized(lookupAudioLock) {
         if (activeLookupTts === target) {
             activeLookupTts = null
+            activeLookupAudioKey = null
         }
     }
     runCatching { target.stop() }

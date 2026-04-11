@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoStories
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.LibraryAdd
@@ -37,6 +38,7 @@ internal fun SettingsPanel(
     onAnkiClick: () -> Unit,
     onLanguageClick: () -> Unit,
     onGuideClick: () -> Unit,
+    onExportDiagnosticsClick: () -> Unit,
     onVersionClick: () -> Unit
 ) {
     Column(
@@ -94,6 +96,12 @@ internal fun SettingsPanel(
                 icon = Icons.Outlined.Link,
                 title = stringResource(R.string.settings_guide_title),
                 onClick = onGuideClick
+            )
+            SettingsListItem(
+                icon = Icons.Outlined.Description,
+                title = stringResource(R.string.settings_export_diagnostics_title),
+                subtitle = stringResource(R.string.settings_export_diagnostics_subtitle),
+                onClick = onExportDiagnosticsClick
             )
             SettingsListItem(
                 icon = Icons.Outlined.Info,

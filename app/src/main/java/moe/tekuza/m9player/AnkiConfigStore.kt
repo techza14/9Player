@@ -22,6 +22,11 @@ internal data class ResolvedAnkiCatalogData(
     val selection: ResolvedAnkiCatalogSelection
 )
 
+internal sealed interface AnkiCatalogLoadResult {
+    data class Success(val data: ResolvedAnkiCatalogData) : AnkiCatalogLoadResult
+    data class Failure(val message: String, val cause: Throwable? = null) : AnkiCatalogLoadResult
+}
+
 private const val ANKI_PREFS_NAME = "anki_export_config"
 private const val ANKI_KEY_STATE = "anki_state_json"
 
@@ -151,6 +156,41 @@ internal fun loadResolvedAnkiCatalog(
             defaultDeckName = defaultDeckName
         )
     )
+}
+
+internal fun loadResolvedAnkiCatalogResult(
+    context: Context,
+    currentDeckName: String,
+    currentModelName: String,
+    defaultDeckName: String
+): AnkiCatalogLoadResult {
+    return try {
+        AnkiCatalogLoadResult.Success(
+            loadResolvedAnkiCatalog(
+                context = context,
+                currentDeckName = currentDeckName,
+                currentModelName = currentModelName,
+                defaultDeckName = defaultDeckName
+            )
+        )
+    } catch (error: Throwable) {
+        AnkiCatalogLoadResult.Failure(
+            message = explainAnkiCatalogLoadFailure(context, error),
+            cause = error
+        )
+    }
+}
+
+private fun explainAnkiCatalogLoadFailure(context: Context, error: Throwable): String {
+    return when (val result = classifyAnkiExportFailure(context, error)) {
+        is AnkiExportResult.NotAvailable -> result.message
+        is AnkiExportResult.InvalidConfig -> result.message
+        is AnkiExportResult.Failed -> {
+            val message = error.message?.trim().orEmpty()
+            if (message.isBlank()) context.getString(R.string.anki_load_failed) else message
+        }
+        AnkiExportResult.Added -> context.getString(R.string.anki_load_failed)
+    }
 }
 
 internal fun buildCurrentAnkiExportConfigOrNull(

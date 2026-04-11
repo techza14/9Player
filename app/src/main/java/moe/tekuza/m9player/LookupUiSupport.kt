@@ -1,6 +1,5 @@
 package moe.tekuza.m9player
 
-import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.view.View
@@ -34,15 +33,23 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import org.json.JSONArray
+import org.json.JSONObject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 
 internal data class MetaBadge(val label: String, val value: String)
 internal data class PitchBadgeGroup(val label: String, val reading: String?, val values: List<String>)
 private data class RubyPart(val base: String, val ruby: String?)
 internal data class DefinitionLookupTapData(
     val text: String,
+    val scanText: String,
     val sentence: String,
     val offset: Int,
     val nodeText: String,
+    val nodePathJson: String,
+    val hostView: WebView?,
     val screenRect: Rect?,
     val localRects: List<Rect>,
     val localCharRects: List<Rect>,
@@ -56,7 +63,6 @@ private class DefinitionLookupViewTag(
     var lastLookupEnabled: Boolean? = null
 }
 
-private const val LOOKUP_TAP_LOG_TAG = "LookupTap"
 
 @Composable
 internal fun DictionaryEntryHeader(
@@ -592,7 +598,7 @@ internal fun RichDefinitionView(
     }
 }
 
-private fun buildDefinitionHtml(
+internal fun buildDefinitionHtml(
     definitionHtml: String,
     indexLabel: String,
     dictionaryName: String?,
@@ -668,6 +674,182 @@ private fun buildDefinitionHtml(
                 }
                 return rectList[0];
             }
+            function resolveOffsetByPointInTextNode(node, fallbackOffset, x, y) {
+                const text = node && node.textContent ? node.textContent : '';
+                if (!text.length) return 0;
+                const maxIndex = Math.max(0, text.length - 1);
+                let bestOffset = Math.max(0, Math.min(fallbackOffset || 0, maxIndex));
+                let bestDistance = Number.POSITIVE_INFINITY;
+                for (let i = 0; i < text.length; i += 1) {
+                    const charRange = document.createRange();
+                    charRange.setStart(node, i);
+                    charRange.setEnd(node, Math.min(i + 1, text.length));
+                    const rect = charRange.getBoundingClientRect();
+                    if (!rect || (!rect.width && !rect.height)) continue;
+                    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                        return i;
+                    }
+                    const cx = (rect.left + rect.right) / 2;
+                    const cy = (rect.top + rect.bottom) / 2;
+                    const dx = cx - x;
+                    const dy = cy - y;
+                    const dist = dx * dx + dy * dy;
+                    if (dist < bestDistance) {
+                        bestDistance = dist;
+                        bestOffset = i;
+                    }
+                }
+                return bestOffset;
+            }
+            function getNodePath(node) {
+                const path = [];
+                let current = node;
+                while (current && current !== document.body) {
+                    const parent = current.parentNode;
+                    if (!parent) break;
+                    path.unshift(Array.prototype.indexOf.call(parent.childNodes, current));
+                    current = parent;
+                }
+                return path;
+            }
+            function resolveNodePath(path) {
+                let current = document.body;
+                if (!Array.isArray(path)) return null;
+                for (const index of path) {
+                    if (!current || !current.childNodes || index < 0 || index >= current.childNodes.length) {
+                        return null;
+                    }
+                    current = current.childNodes[index];
+                }
+                return current;
+            }
+            function createTextWalker() {
+                return document.createTreeWalker(
+                    document.body,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode(node) {
+                            const text = node && node.textContent;
+                            return text && text.length > 0
+                                ? NodeFilter.FILTER_ACCEPT
+                                : NodeFilter.FILTER_REJECT;
+                        }
+                    }
+                );
+            }
+            function getNextTextNode(node) {
+                const walker = createTextWalker();
+                let current = walker.nextNode();
+                let found = false;
+                while (current) {
+                    if (found) return current;
+                    if (current === node) found = true;
+                    current = walker.nextNode();
+                }
+                return null;
+            }
+            function collectLookupCharacters(startNode, startOffset, maxChars, stopAtBoundary) {
+                if (!startNode || startNode.nodeType !== Node.TEXT_NODE) {
+                    return { text: '', charRects: [], localRects: [] };
+                }
+                let node = startNode;
+                let offset = startOffset;
+                let remaining = Math.max(1, maxChars || 1);
+                const textParts = [];
+                const charRects = [];
+                while (node && remaining > 0) {
+                    const text = node.textContent || '';
+                    for (let i = offset; i < text.length && remaining > 0; i += 1) {
+                        const ch = text[i];
+                        if (stopAtBoundary && isScanBoundary(ch)) {
+                            remaining = 0;
+                            break;
+                        }
+                        textParts.push(ch);
+                        const charRange = document.createRange();
+                        charRange.setStart(node, i);
+                        charRange.setEnd(node, Math.min(i + 1, text.length));
+                        const rect = charRange.getBoundingClientRect();
+                        if (rect && (rect.width > 0 || rect.height > 0)) {
+                            charRects.push({
+                                left: rect.left || 0,
+                                top: rect.top || 0,
+                                right: rect.right || 0,
+                                bottom: rect.bottom || 0
+                            });
+                        }
+                        remaining -= 1;
+                    }
+                    node = getNextTextNode(node);
+                    offset = 0;
+                }
+                return {
+                    text: textParts.join(''),
+                    charRects,
+                    localRects: mergeRectsByLine(charRects)
+                };
+            }
+            function mergeRectsByLine(rects) {
+                if (!rects || rects.length === 0) return [];
+                const sorted = rects.slice().sort((a, b) => {
+                    if (a.top !== b.top) return a.top - b.top;
+                    return a.left - b.left;
+                });
+                const result = [];
+                const verticalTolerance = 2;
+                let current = Object.assign({}, sorted[0]);
+                for (let i = 1; i < sorted.length; i += 1) {
+                    const rect = sorted[i];
+                    const sameLine =
+                        Math.abs(rect.top - current.top) <= verticalTolerance &&
+                        Math.abs(rect.bottom - current.bottom) <= verticalTolerance;
+                    if (sameLine) {
+                        current = {
+                            left: Math.min(current.left, rect.left),
+                            top: Math.min(current.top, rect.top),
+                            right: Math.max(current.right, rect.right),
+                            bottom: Math.max(current.bottom, rect.bottom)
+                        };
+                    } else {
+                        result.push(current);
+                        current = Object.assign({}, rect);
+                    }
+                }
+                result.push(current);
+                return result;
+            }
+            function collectLookupSegments(startNode, startOffset, maxChars, stopAtBoundary) {
+                if (!startNode || startNode.nodeType !== Node.TEXT_NODE) return [];
+                let node = startNode;
+                let offset = startOffset;
+                let remaining = Math.max(1, maxChars || 1);
+                const segments = [];
+                while (node && remaining > 0) {
+                    const text = node.textContent || '';
+                    let segmentStart = -1;
+                    let segmentEnd = -1;
+                    for (let i = offset; i < text.length && remaining > 0; i += 1) {
+                        const ch = text[i];
+                        if (stopAtBoundary && isScanBoundary(ch)) {
+                            remaining = 0;
+                            break;
+                        }
+                        if (segmentStart < 0) segmentStart = i;
+                        segmentEnd = i + 1;
+                        remaining -= 1;
+                    }
+                    if (segmentStart >= 0 && segmentEnd > segmentStart) {
+                        segments.push({
+                            node,
+                            start: segmentStart,
+                            end: segmentEnd
+                        });
+                    }
+                    node = getNextTextNode(node);
+                    offset = 0;
+                }
+                return segments;
+            }
             const sentenceDelimiters = '。！？.!?\\n\\r';
             const trailingSentenceChars = '」』）】!?！？…';
             function extractSentence(text, anchorOffset) {
@@ -704,9 +886,11 @@ private fun buildDefinitionHtml(
                 let targetRect = null;
                 let safeOffset = 0;
                 let selectionEndExclusive = 0;
+                let scanData = null;
                 const textLength = text.length;
                 if (textLength > 0) {
                     safeOffset = Math.max(0, Math.min(range.startOffset || 0, textLength - 1));
+                    safeOffset = resolveOffsetByPointInTextNode(node, safeOffset, e.clientX, e.clientY);
                     if (safeOffset > 0) {
                         const previousCharRange = document.createRange();
                         previousCharRange.setStart(node, safeOffset - 1);
@@ -723,6 +907,7 @@ private fun buildDefinitionHtml(
                         }
                     }
                     selectionEndExclusive = resolveSelectionEnd(text, safeOffset);
+                    scanData = collectLookupCharacters(node, safeOffset, 16, true);
                     if (selectionEndExclusive > safeOffset) {
                         const selectionRange = document.createRange();
                         selectionRange.setStart(node, safeOffset);
@@ -752,44 +937,19 @@ private fun buildDefinitionHtml(
                 if (!targetRect) {
                     targetRect = {left: e.clientX || 0, top: e.clientY || 0, right: e.clientX || 0, bottom: e.clientY || 0};
                 }
-                const localRects = (() => {
-                    if (selectionEndExclusive > safeOffset) {
-                        const selectionRange = document.createRange();
-                        selectionRange.setStart(node, safeOffset);
-                        selectionRange.setEnd(node, selectionEndExclusive);
-                        return Array.from(selectionRange.getClientRects() || [])
-                            .filter(r => r.width > 0 || r.height > 0)
-                            .map(r => ({ left: r.left || 0, top: r.top || 0, right: r.right || 0, bottom: r.bottom || 0 }));
-                    }
-                    if (targetRect) {
-                        return [{ left: targetRect.left || 0, top: targetRect.top || 0, right: targetRect.right || 0, bottom: targetRect.bottom || 0 }];
-                    }
-                    return [];
-                })();
-                const charRects = (() => {
-                    if (!(selectionEndExclusive > safeOffset)) return [];
-                    const result = [];
-                    for (let i = safeOffset; i < selectionEndExclusive; i += 1) {
-                        const charRange = document.createRange();
-                        charRange.setStart(node, i);
-                        charRange.setEnd(node, i + 1);
-                        const rect = charRange.getBoundingClientRect();
-                        if (rect && (rect.width > 0 || rect.height > 0)) {
-                            result.push({
-                                left: rect.left || 0,
-                                top: rect.top || 0,
-                                right: rect.right || 0,
-                                bottom: rect.bottom || 0
-                            });
-                        }
-                    }
-                    return result;
-                })();
+                const localRects = scanData && scanData.localRects.length > 0
+                    ? scanData.localRects
+                    : (targetRect ? [{ left: targetRect.left || 0, top: targetRect.top || 0, right: targetRect.right || 0, bottom: targetRect.bottom || 0 }] : []);
+                const charRects = scanData ? scanData.charRects : [];
+                const scanText = scanData && scanData.text ? scanData.text : text.slice(safeOffset, selectionEndExclusive).trim();
+                const nodePath = JSON.stringify(getNodePath(node));
                 window.NineLookup.onTap(
                     text,
+                    scanText,
                     extractSentence(text, safeOffset),
                     safeOffset,
                     node.textContent || '',
+                    nodePath,
                     JSON.stringify(localRects),
                     JSON.stringify(charRects),
                     targetRect.left || 0,
@@ -798,6 +958,54 @@ private fun buildDefinitionHtml(
                     targetRect.bottom || 0
                 );
             }, true);
+            window.__nineLookupResolveMatchedRects = function(nodePath, startOffset, matchedLength) {
+                const node = resolveNodePath(nodePath);
+                if (!node || node.nodeType !== Node.TEXT_NODE) return null;
+                const text = node.textContent || '';
+                if (!text.length) return null;
+                const safeStart = Math.max(0, Math.min(startOffset || 0, text.length - 1));
+                const collected = collectLookupCharacters(node, safeStart, Math.max(1, matchedLength || 1), false);
+                return {
+                    localRects: collected.localRects,
+                    localCharRects: collected.charRects
+                };
+            };
+            window.__nineLookupClearMatchedHighlight = function() {
+                const highlights = Array.from(document.querySelectorAll('span.nine-lookup-highlight'));
+                highlights.forEach(span => {
+                    const parent = span.parentNode;
+                    if (!parent) return;
+                    while (span.firstChild) {
+                        parent.insertBefore(span.firstChild, span);
+                    }
+                    parent.removeChild(span);
+                    parent.normalize();
+                });
+                return true;
+            };
+            window.__nineLookupApplyMatchedHighlight = function(nodePath, startOffset, matchedLength) {
+                window.__nineLookupClearMatchedHighlight();
+                const node = resolveNodePath(nodePath);
+                if (!node || node.nodeType !== Node.TEXT_NODE) return false;
+                const text = node.textContent || '';
+                if (!text.length) return false;
+                const safeStart = Math.max(0, Math.min(startOffset || 0, text.length - 1));
+                const segments = collectLookupSegments(node, safeStart, Math.max(1, matchedLength || 1), false);
+                if (!segments.length) return false;
+                for (let i = segments.length - 1; i >= 0; i -= 1) {
+                    const segment = segments[i];
+                    const range = document.createRange();
+                    range.setStart(segment.node, segment.start);
+                    range.setEnd(segment.node, segment.end);
+                    const wrapper = document.createElement('span');
+                    wrapper.className = 'nine-lookup-highlight';
+                    wrapper.style.background = 'rgba(161, 161, 170, 0.22)';
+                    wrapper.style.borderRadius = '4px';
+                    wrapper.style.boxShadow = 'inset 0 0 0 1px rgba(161, 161, 170, 0.40)';
+                    range.surroundContents(wrapper);
+                }
+                return true;
+            };
         })();
         </script>
         """.trimIndent()
@@ -810,6 +1018,7 @@ private fun buildDefinitionHtml(
                 body { margin: 0; padding: 0; font-size: 14px; line-height: 1.4; color: $bodyTextColorCss; }
                 img { max-width: 100%; height: auto; }
                 .yomitan-glossary { text-align: left; }
+                .nine-lookup-highlight { background: rgba(161, 161, 170, 0.22); border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(161, 161, 170, 0.40); }
                 .yomitan-glossary ol { margin: 0; padding-left: 1.1em; }
                 .yomitan-glossary li { margin: 0; }
                 $customCss
@@ -878,14 +1087,15 @@ private fun colorToCssHex(color: Color): String {
     return String.format("#%06X", rgb)
 }
 
-private class DefinitionLookupBridge(
+internal class DefinitionLookupBridge(
     var onLookupTap: ((DefinitionLookupTapData) -> Unit)?
 ) {
     var hostView: WebView? = null
 
     @JavascriptInterface
-    fun onTap(text: String?, sentence: String?, offset: Int, nodeText: String?, localRectsJson: String?, localCharRectsJson: String?, left: Float, top: Float, right: Float, bottom: Float) {
-        val value = text?.trim().orEmpty()
+    fun onTap(text: String?, scanText: String?, sentence: String?, offset: Int, nodeText: String?, nodePathJson: String?, localRectsJson: String?, localCharRectsJson: String?, left: Float, top: Float, right: Float, bottom: Float) {
+        val value = text.orEmpty()
+        val scanValue = scanText?.trim().orEmpty()
         if (value.isBlank()) return
         val localRect = Rect(left, top, right, bottom)
         val localRects = parseRectListJson(localRectsJson).ifEmpty { listOf(localRect) }
@@ -911,16 +1121,15 @@ private class DefinitionLookupBridge(
                 )
             }
         }.orEmpty()
-        Log.d(
-            LOOKUP_TAP_LOG_TAG,
-            "bridge onTap text=${value.take(20)} offset=$offset hasHandler=${onLookupTap != null} localRects=${localRects.size} charRects=${localCharRects.size}"
-        )
         onLookupTap?.invoke(
             DefinitionLookupTapData(
                 text = value,
+                scanText = scanValue,
                 sentence = sentence?.trim().orEmpty(),
                 offset = offset,
                 nodeText = nodeText.orEmpty(),
+                nodePathJson = nodePathJson.orEmpty(),
+                hostView = hostView,
                 screenRect = screenRect,
                 localRects = localRects,
                 localCharRects = localCharRects,
@@ -928,6 +1137,168 @@ private class DefinitionLookupBridge(
             )
         )
     }
+}
+
+internal data class DefinitionResolvedRects(
+    val localRects: List<Rect>,
+    val localCharRects: List<Rect>,
+    val screenRects: List<Rect>,
+    val screenCharRects: List<Rect>
+)
+
+internal suspend fun resolveDefinitionMatchedRects(
+    tapData: DefinitionLookupTapData,
+    matchedLength: Int
+): DefinitionResolvedRects? {
+    val webView = tapData.hostView ?: return null
+    val nodePathJson = tapData.nodePathJson.takeIf { it.isNotBlank() } ?: return null
+    val js = """
+        (function() {
+            if (!window.__nineLookupResolveMatchedRects) return null;
+            const result = window.__nineLookupResolveMatchedRects($nodePathJson, ${tapData.offset}, ${matchedLength.coerceAtLeast(1)});
+            return result ? JSON.stringify(result) : null;
+        })();
+    """.trimIndent()
+    val raw = withContext(Dispatchers.Main.immediate) {
+        suspendCancellableCoroutine<String?> { continuation ->
+            webView.evaluateJavascript(js) { value ->
+                if (continuation.isActive) continuation.resume(value)
+            }
+        }
+    }
+    val decoded = decodeEvaluateJavascriptJson(raw) ?: return null
+    val json = runCatching { JSONObject(decoded) }.getOrNull() ?: return null
+    val localRects = parseRectListJson(json.optJSONArray("localRects")?.toString())
+    val localCharRects = parseRectListJson(json.optJSONArray("localCharRects")?.toString())
+    val location = IntArray(2)
+    webView.getLocationOnScreen(location)
+    val screenRects = localRects.map { rect ->
+        Rect(
+            left = location[0].toFloat() + rect.left,
+            top = location[1].toFloat() + rect.top,
+            right = location[0].toFloat() + rect.right,
+            bottom = location[1].toFloat() + rect.bottom
+        )
+    }
+    val screenCharRects = localCharRects.map { rect ->
+        Rect(
+            left = location[0].toFloat() + rect.left,
+            top = location[1].toFloat() + rect.top,
+            right = location[0].toFloat() + rect.right,
+            bottom = location[1].toFloat() + rect.bottom
+        )
+    }
+    return DefinitionResolvedRects(
+        localRects = localRects,
+        localCharRects = localCharRects,
+        screenRects = screenRects,
+        screenCharRects = screenCharRects
+    )
+}
+
+internal suspend fun applyDefinitionMatchedHighlight(
+    tapData: DefinitionLookupTapData,
+    matchedLength: Int
+): Boolean {
+    val webView = tapData.hostView ?: return false
+    val nodePathJson = tapData.nodePathJson.takeIf { it.isNotBlank() } ?: return false
+    val js = """
+        (function() {
+            if (!window.__nineLookupApplyMatchedHighlight) return false;
+            return !!window.__nineLookupApplyMatchedHighlight($nodePathJson, ${tapData.offset}, ${matchedLength.coerceAtLeast(1)});
+        })();
+    """.trimIndent()
+    val raw = withContext(Dispatchers.Main.immediate) {
+        suspendCancellableCoroutine<String?> { continuation ->
+            webView.evaluateJavascript(js) { value ->
+                if (continuation.isActive) continuation.resume(value)
+            }
+        }
+    }
+    return decodeEvaluateJavascriptJson(raw)?.toBooleanStrictOrNull() ?: false
+}
+
+internal fun rebuildRectsFromCharacterRectsShared(
+    charRects: List<Rect>,
+    matchedLength: Int
+): List<Rect> {
+    if (charRects.isEmpty()) return emptyList()
+    val safeMatchedLength = matchedLength.coerceAtLeast(1).coerceAtMost(charRects.size)
+    val selectedRects = charRects.take(safeMatchedLength).filter {
+        (it.right - it.left) > 0f || (it.bottom - it.top) > 0f
+    }
+    if (selectedRects.isEmpty()) return emptyList()
+    return mergeRectsByLineShared(selectedRects)
+}
+
+internal fun sanitizeResolvedHighlightRectsShared(
+    rebuiltRects: List<Rect>,
+    sourceRects: List<Rect>
+): List<Rect> {
+    if (rebuiltRects.isEmpty()) return emptyList()
+    if (sourceRects.isEmpty()) return rebuiltRects
+    val rebuiltBounds = mergeRectBoundsShared(rebuiltRects) ?: return emptyList()
+    val sourceBounds = mergeRectBoundsShared(sourceRects) ?: return rebuiltRects
+    val expandedSource = Rect(
+        left = sourceBounds.left - 24f,
+        top = sourceBounds.top - 24f,
+        right = sourceBounds.right + 24f,
+        bottom = sourceBounds.bottom + 24f
+    )
+    val intersects =
+        rebuiltBounds.right >= expandedSource.left &&
+            rebuiltBounds.left <= expandedSource.right &&
+            rebuiltBounds.bottom >= expandedSource.top &&
+            rebuiltBounds.top <= expandedSource.bottom
+    return if (intersects) rebuiltRects else emptyList()
+}
+
+private fun mergeRectBoundsShared(rects: List<Rect>): Rect? {
+    val validRects = rects.filter { !it.isEmpty }
+    if (validRects.isEmpty()) return null
+    return Rect(
+        left = validRects.minOf { it.left },
+        top = validRects.minOf { it.top },
+        right = validRects.maxOf { it.right },
+        bottom = validRects.maxOf { it.bottom }
+    )
+}
+
+internal fun mergeRectsByLineShared(rects: List<Rect>): List<Rect> {
+    if (rects.isEmpty()) return emptyList()
+    val sorted = rects.sortedWith(compareBy<Rect> { it.top }.thenBy { it.left })
+    val result = mutableListOf<Rect>()
+    val verticalTolerance = 2f
+    var current = sorted.first()
+    for (index in 1 until sorted.size) {
+        val rect = sorted[index]
+        if (kotlin.math.abs(rect.top - current.top) <= verticalTolerance &&
+            kotlin.math.abs(rect.bottom - current.bottom) <= verticalTolerance
+        ) {
+            current = Rect(
+                left = minOf(current.left, rect.left),
+                top = minOf(current.top, rect.top),
+                right = maxOf(current.right, rect.right),
+                bottom = maxOf(current.bottom, rect.bottom)
+            )
+        } else {
+            result += current
+            current = rect
+        }
+    }
+    result += current
+    return result
+}
+
+private fun decodeEvaluateJavascriptJson(raw: String?): String? {
+    if (raw == null || raw == "null") return null
+    return runCatching {
+        if (raw.startsWith("\"")) {
+            JSONArray("[$raw]").getString(0)
+        } else {
+            raw
+        }
+    }.getOrNull()
 }
 
 private fun parseRectListJson(json: String?): List<Rect> {

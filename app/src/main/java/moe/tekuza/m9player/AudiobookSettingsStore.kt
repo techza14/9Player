@@ -6,9 +6,13 @@ import android.net.Uri
 private const val AUDIOBOOK_SETTINGS_PREFS = "audiobook_settings_prefs"
 private const val AUDIOBOOK_SKIP_MILLIS_KEY = "audiobook_skip_millis"
 private const val AUDIOBOOK_FLOATING_OVERLAY_ENABLED_KEY = "audiobook_floating_overlay_enabled"
-private const val AUDIOBOOK_FLOATING_OVERLAY_X_KEY = "audiobook_floating_overlay_x"
-private const val AUDIOBOOK_FLOATING_OVERLAY_Y_KEY = "audiobook_floating_overlay_y"
+private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_ENABLED_KEY = "audiobook_floating_overlay_subtitle_enabled"
+private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_Y_KEY = "audiobook_floating_overlay_subtitle_y"
+private const val AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_X_KEY = "audiobook_floating_overlay_bubble_x"
+private const val AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_Y_KEY = "audiobook_floating_overlay_bubble_y"
 private const val AUDIOBOOK_FLOATING_OVERLAY_SIZE_DP_KEY = "audiobook_floating_overlay_size_dp"
+private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_SIZE_SP_KEY = "audiobook_floating_overlay_subtitle_size_sp"
+private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_COLOR_KEY = "audiobook_floating_overlay_subtitle_color"
 private const val AUDIOBOOK_PAUSE_ON_LOOKUP_KEY = "audiobook_pause_on_lookup"
 private const val AUDIOBOOK_ACTIVE_CUE_AT_TOP_KEY = "audiobook_active_cue_at_top"
 private const val AUDIOBOOK_LOOKUP_AUDIO_ENABLED_KEY = "audiobook_lookup_audio_enabled"
@@ -21,6 +25,12 @@ private const val DEFAULT_AUDIOBOOK_SKIP_MILLIS = 10_000L
 internal const val DEFAULT_FLOATING_OVERLAY_SIZE_DP = 58
 internal const val MIN_FLOATING_OVERLAY_SIZE_DP = 36
 internal const val MAX_FLOATING_OVERLAY_SIZE_DP = 72
+internal const val DEFAULT_FLOATING_OVERLAY_SUBTITLE_SIZE_SP = 26
+internal const val MIN_FLOATING_OVERLAY_SUBTITLE_SIZE_SP = 18
+internal const val MAX_FLOATING_OVERLAY_SUBTITLE_SIZE_SP = 40
+internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE = 0xFFFFFFFF.toInt()
+internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_YELLOW = 0xFFFFF59D.toInt()
+internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_GREEN = 0xFFA5D6A7.toInt()
 
 internal enum class LookupAudioMode(val storageValue: String) {
     LOCAL_TTS("local_tts"),
@@ -33,9 +43,23 @@ internal enum class LookupAudioMode(val storageValue: String) {
     }
 }
 
+internal enum class FloatingOverlayMode {
+    OFF,
+    SUBTITLE,
+    BUBBLE,
+    BOTH;
+
+    val showsSubtitle: Boolean
+        get() = this == SUBTITLE || this == BOTH
+
+    val showsBubble: Boolean
+        get() = this == BUBBLE || this == BOTH
+}
+
 internal data class AudiobookSettingsConfig(
     val seekStepMillis: Long = DEFAULT_AUDIOBOOK_SKIP_MILLIS,
     val floatingOverlayEnabled: Boolean = false,
+    val floatingOverlaySubtitleEnabled: Boolean = false,
     val pausePlaybackOnLookup: Boolean = false,
     val activeCueDisplayAtTop: Boolean = false,
     val lookupPlaybackAudioEnabled: Boolean = false,
@@ -45,9 +69,20 @@ internal data class AudiobookSettingsConfig(
     val lookupAudioMode: LookupAudioMode = LookupAudioMode.LOCAL_TTS,
     val lookupLocalAudioUri: Uri? = null,
     val floatingOverlaySizeDp: Int = DEFAULT_FLOATING_OVERLAY_SIZE_DP,
-    val floatingOverlayX: Int = 24,
-    val floatingOverlayY: Int = 0
-)
+    val floatingOverlaySubtitleSizeSp: Int = DEFAULT_FLOATING_OVERLAY_SUBTITLE_SIZE_SP,
+    val floatingOverlaySubtitleColor: Int = FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE,
+    val floatingOverlaySubtitleY: Int = 0,
+    val floatingOverlayBubbleX: Int = 24,
+    val floatingOverlayBubbleY: Int = 0
+) {
+    val floatingOverlayMode: FloatingOverlayMode
+        get() = when {
+            floatingOverlayEnabled && floatingOverlaySubtitleEnabled -> FloatingOverlayMode.BOTH
+            floatingOverlaySubtitleEnabled -> FloatingOverlayMode.SUBTITLE
+            floatingOverlayEnabled -> FloatingOverlayMode.BUBBLE
+            else -> FloatingOverlayMode.OFF
+        }
+}
 
 internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsConfig {
     val prefs = context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
@@ -60,6 +95,10 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
         seekStepMillis = prefs.getLong(AUDIOBOOK_SKIP_MILLIS_KEY, DEFAULT_AUDIOBOOK_SKIP_MILLIS)
             .coerceIn(1_000L, 300_000L),
         floatingOverlayEnabled = prefs.getBoolean(AUDIOBOOK_FLOATING_OVERLAY_ENABLED_KEY, false),
+        floatingOverlaySubtitleEnabled = prefs.getBoolean(
+            AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_ENABLED_KEY,
+            false
+        ),
         pausePlaybackOnLookup = prefs.getBoolean(AUDIOBOOK_PAUSE_ON_LOOKUP_KEY, false),
         activeCueDisplayAtTop = prefs.getBoolean(AUDIOBOOK_ACTIVE_CUE_AT_TOP_KEY, false),
         lookupPlaybackAudioEnabled = prefs.getBoolean(AUDIOBOOK_LOOKUP_AUDIO_ENABLED_KEY, false),
@@ -72,8 +111,20 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
             AUDIOBOOK_FLOATING_OVERLAY_SIZE_DP_KEY,
             DEFAULT_FLOATING_OVERLAY_SIZE_DP
         ).coerceIn(MIN_FLOATING_OVERLAY_SIZE_DP, MAX_FLOATING_OVERLAY_SIZE_DP),
-        floatingOverlayX = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_X_KEY, 24),
-        floatingOverlayY = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_Y_KEY, 0)
+        floatingOverlaySubtitleSizeSp = prefs.getInt(
+            AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_SIZE_SP_KEY,
+            DEFAULT_FLOATING_OVERLAY_SUBTITLE_SIZE_SP
+        ).coerceIn(
+            MIN_FLOATING_OVERLAY_SUBTITLE_SIZE_SP,
+            MAX_FLOATING_OVERLAY_SUBTITLE_SIZE_SP
+        ),
+        floatingOverlaySubtitleColor = prefs.getInt(
+            AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_COLOR_KEY,
+            FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE
+        ),
+        floatingOverlaySubtitleY = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_Y_KEY, 0),
+        floatingOverlayBubbleX = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_X_KEY, 24),
+        floatingOverlayBubbleY = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_Y_KEY, 0)
     )
 }
 
@@ -91,6 +142,21 @@ internal fun saveAudiobookFloatingOverlayEnabled(context: Context, enabled: Bool
         .apply()
 }
 
+internal fun saveAudiobookFloatingOverlaySubtitleEnabled(context: Context, enabled: Boolean) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_ENABLED_KEY, enabled)
+        .apply()
+}
+
+internal fun saveAudiobookFloatingOverlayMode(context: Context, mode: FloatingOverlayMode) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(AUDIOBOOK_FLOATING_OVERLAY_ENABLED_KEY, mode.showsBubble)
+        .putBoolean(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_ENABLED_KEY, mode.showsSubtitle)
+        .apply()
+}
+
 internal fun saveAudiobookPausePlaybackOnLookup(context: Context, enabled: Boolean) {
     context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
         .edit()
@@ -105,11 +171,18 @@ internal fun saveAudiobookActiveCueDisplayAtTop(context: Context, enabled: Boole
         .apply()
 }
 
-internal fun saveAudiobookFloatingOverlayPosition(context: Context, x: Int, y: Int) {
+internal fun saveAudiobookFloatingOverlaySubtitlePosition(context: Context, y: Int) {
     context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
         .edit()
-        .putInt(AUDIOBOOK_FLOATING_OVERLAY_X_KEY, x)
-        .putInt(AUDIOBOOK_FLOATING_OVERLAY_Y_KEY, y)
+        .putInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_Y_KEY, y)
+        .apply()
+}
+
+internal fun saveAudiobookFloatingOverlayBubblePosition(context: Context, x: Int, y: Int) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_X_KEY, x)
+        .putInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_Y_KEY, y)
         .apply()
 }
 
@@ -120,6 +193,26 @@ internal fun saveAudiobookFloatingOverlaySizeDp(context: Context, sizeDp: Int) {
             AUDIOBOOK_FLOATING_OVERLAY_SIZE_DP_KEY,
             sizeDp.coerceIn(MIN_FLOATING_OVERLAY_SIZE_DP, MAX_FLOATING_OVERLAY_SIZE_DP)
         )
+        .apply()
+}
+
+internal fun saveAudiobookFloatingOverlaySubtitleSizeSp(context: Context, sizeSp: Int) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putInt(
+            AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_SIZE_SP_KEY,
+            sizeSp.coerceIn(
+                MIN_FLOATING_OVERLAY_SUBTITLE_SIZE_SP,
+                MAX_FLOATING_OVERLAY_SUBTITLE_SIZE_SP
+            )
+        )
+        .apply()
+}
+
+internal fun saveAudiobookFloatingOverlaySubtitleColor(context: Context, color: Int) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_COLOR_KEY, color)
         .apply()
 }
 

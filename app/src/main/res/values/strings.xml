@@ -8,6 +8,7 @@
     <string name="common_back">&lt; 返回</string>
     <string name="common_close">关闭</string>
     <string name="common_close_all">全部关闭</string>
+    <string name="floating_lookup_from">来自：%1$s</string>
     <string name="anki_toast_added">已添加到 Anki。</string>
     <string name="common_cancel">取消</string>
     <string name="common_confirm">确认</string>
@@ -50,6 +51,10 @@
     <string name="settings_language_subtitle">切换应用界面语言</string>
     <string name="settings_guide_title">使用说明</string>
     <string name="settings_guide_subtitle">打开 GitHub 项目主页</string>
+    <string name="settings_export_diagnostics_title">导出诊断</string>
+    <string name="settings_export_diagnostics_subtitle">导出版本、设备、最近日志和当前设置摘要</string>
+    <string name="settings_export_diagnostics_subject">9Player 诊断信息</string>
+    <string name="settings_export_diagnostics_failed">导出诊断失败。</string>
     <string name="settings_version_title">当前版本</string>
     <string name="settings_version_subtitle">点击显示版本，连续点击 5 次显示彩蛋</string>
     <string name="settings_version_toast">当前版本：%1$s</string>
@@ -143,6 +148,7 @@
     <string name="status_duplicate_dictionary">该辞典已导入，请勿重复导入。</string>
     <string name="status_duplicate_dictionary_detected">检测到重复辞典：%1$s</string>
     <string name="error_anki_not_installed">AnkiDroid is not installed.</string>
+    <string name="error_anki_api_unavailable">AnkiDroid is installed, but its API is unavailable. Open AnkiDroid once, enable the API if needed, then retry.</string>
     <string name="error_anki_permission_required">Anki permission not granted. Authorize in 设置 &gt; Anki first.</string>
     <string name="error_anki_model_missing">No Anki model configured. Set model in 设置 &gt; Anki.</string>
     <string name="error_anki_model_not_found">Configured model not found: %1$s</string>
@@ -244,9 +250,18 @@
     <string name="audiobook_active_cue_current_middle">当前：中间</string>
     <string name="audiobook_active_cue_current_top">当前：上方</string>
     <string name="audiobook_overlay_title">悬浮窗</string>
-    <string name="audiobook_overlay_enable">退出 App 后显示播放悬浮球</string>
-    <string name="audiobook_overlay_enabled">已开启悬浮窗功能。</string>
-    <string name="audiobook_overlay_disabled">已关闭悬浮窗功能。</string>
+    <string name="audiobook_overlay_enable">开启悬浮窗</string>
+    <string name="audiobook_overlay_disabled">已关闭悬浮窗。</string>
+    <string name="audiobook_overlay_mode_value">当前模式：%1$s</string>
+    <string name="audiobook_overlay_mode_changed">已切换悬浮窗：%1$s</string>
+    <string name="audiobook_overlay_test_button">测试悬浮窗</string>
+    <string name="audiobook_overlay_test_title">测试悬浮窗</string>
+    <string name="audiobook_overlay_mode_subtitle">悬浮字幕</string>
+    <string name="audiobook_overlay_mode_bubble">悬浮球</string>
+    <string name="audiobook_overlay_mode_both">悬浮字幕 + 悬浮球</string>
+    <string name="audiobook_overlay_bubble_enable">退出 App 后显示悬浮球</string>
+    <string name="audiobook_overlay_bubble_enabled">已开启悬浮球。</string>
+    <string name="audiobook_overlay_bubble_disabled">已关闭悬浮球。</string>
     <string name="audiobook_overlay_permission_granted">悬浮窗权限：已授予</string>
     <string name="audiobook_overlay_permission_denied">悬浮窗权限：未授予</string>
     <string name="audiobook_overlay_permission_button">授予悬浮窗权限</string>
@@ -254,6 +269,11 @@
     <string name="audiobook_overlay_size_reset_button">恢复默认大小</string>
     <string name="audiobook_overlay_size_reset">已恢复默认悬浮球大小。</string>
     <string name="audiobook_overlay_help">悬浮球：单击播放/暂停，双击展开前进/后退/收藏。</string>
+    <string name="audiobook_overlay_subtitle_enable">显示悬浮字幕</string>
+    <string name="audiobook_overlay_subtitle_enabled">已开启悬浮字幕。</string>
+    <string name="audiobook_overlay_subtitle_disabled">已关闭悬浮字幕。</string>
+    <string name="audiobook_overlay_subtitle_help">悬浮字幕会显示当前播放到的字幕文本。</string>
+    <string name="audiobook_overlay_subtitle_style">字幕样式</string>
     <string name="audiobook_unknown_file">未知文件</string>
     <string name="audiobook_import_stage_copy">复制文件...</string>
     <string name="audiobook_import_stage_validate">校验数据库...</string>
@@ -296,6 +316,7 @@
     <string name="bookreader_subtitle_list_enabled">已切换到字幕-列表显示。</string>
     <string name="bookreader_subtitle_single_enabled">已切换到字幕-单句显示。</string>
     <string name="bookreader_switch_to_subtitle">切换到字幕</string>
+    <string name="bookreader_replace_srt">更换 SRT</string>
     <string name="bookreader_switch_to_cover">切换到封面</string>
     <string name="bookreader_switched_to_cover">已切换到封面。</string>
     <string name="bookreader_switched_to_subtitle">已切换到字幕。</string>
@@ -388,6 +409,7 @@
 
     <string name="anki_title">Anki</string>
     <string name="anki_not_installed">未安装 AnkiDroid。</string>
+    <string name="anki_api_unavailable">已安装 AnkiDroid，但目前无法访问其 API。请先打开一次 AnkiDroid，必要时启用 API 后再重试。</string>
     <string name="anki_authorize_first">请先授权 Anki 访问。</string>
     <string name="anki_default_deck">默认</string>
     <string name="anki_load_failed">加载 Anki 牌组/模板失败</string>
@@ -395,6 +417,7 @@
     <string name="anki_access_denied">Anki 访问：未授权</string>
     <string name="anki_access_button_granted">Anki 已授权</string>
     <string name="anki_access_button_request">授权 Anki 访问</string>
+    <string name="anki_open_app_button">打开 AnkiDroid</string>
     <string name="anki_refresh_catalog">刷新牌组/模板</string>
     <string name="anki_error_prefix">Anki 错误：%1$s</string>
     <string name="anki_deck_label">牌组</string>
