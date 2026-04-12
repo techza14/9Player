@@ -82,6 +82,7 @@ companion object {
         const val ACTION_REFRESH = "moe.tekuza.m9player.action.REFRESH_FLOATING_OVERLAY"
         private const val FLOATING_LOOKUP_LOG_TAG = "FloatingLookupPos"
         private const val FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG = "FloatingLookupHighlight"
+        private const val FLOATING_LOOKUP_TAP_LOG_TAG = "FloatingLookupTap"
         private const val FLOATING_BUBBLE_LOG_TAG = "FloatingBubblePos"
         private const val SINGLE_FLOATING_HOST_KEY = -1
 }
@@ -844,23 +845,26 @@ companion object {
         val windowSize = IntSize(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
         val activeIndex = floatingLookupSession.lastIndex
         val activeLayer = floatingLookupSession.getOrNull(activeIndex) ?: return
-        val sizeSpec = computeFloatingLookupPopupSizeSpec(
-            windowSize = windowSize,
-            anchor = activeLayer.anchor,
-            placeBelow = activeLayer.placeBelow,
-            preferSidePlacement = activeLayer.preferSidePlacement
-        )
-        val card = createFloatingLookupCard(
-            layerIndex = activeIndex,
-            layer = activeLayer,
-            mode = FloatingCardMode.Results,
-            maxLookupHeightPx = sizeSpec.contentMaxHeightPx
-        )
-        card.layoutParams = FrameLayout.LayoutParams(
-            sizeSpec.widthPx,
-            FrameLayout.LayoutParams.WRAP_CONTENT
-        )
-        val cards = listOf(Triple(activeIndex, activeLayer, card))
+        val cards = floatingLookupSession.layers.mapIndexed { index, item ->
+            val sizeSpec = computeFloatingLookupPopupSizeSpec(
+                windowSize = windowSize,
+                anchor = item.anchor,
+                placeBelow = item.placeBelow,
+                preferSidePlacement = item.preferSidePlacement
+            )
+            val card = createFloatingLookupCard(
+                layerIndex = index,
+                layer = item,
+                mode = FloatingCardMode.Results,
+                maxLookupHeightPx = sizeSpec.contentMaxHeightPx
+            ).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    sizeSpec.widthPx,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+            Triple(index, item, card)
+        }
         renderFloatingLookupWindows(cards)
         maybeAutoPlayFloatingLookup(activeIndex, activeLayer)
     }
@@ -870,91 +874,80 @@ companion object {
     ) {
         if (cards.isEmpty()) return
         val layout = floatingLayoutConfig()
-        val hostKey = SINGLE_FLOATING_HOST_KEY
         val activeIndex = floatingLookupSession.lastIndex
-        val activeLayer = floatingLookupSession.getOrNull(activeIndex) ?: return
         val orderedCards = cards.sortedBy { it.first }
-
+        val visibleLayers = orderedCards.map { it.first }.toSet()
         floatingLookupHostViews.keys
-            .filterNot { it == hostKey }
+            .filterNot { it in visibleLayers }
+            .toList()
             .forEach { removeFloatingLookupHost(it) }
-        val signature = orderedCards.map { (_, layer, _) -> floatingHostSignature(layer) }.hashCode()
-        val existingHost = floatingLookupHostViews[hostKey]
-        val existingSignature = floatingLookupHostSignatures[hostKey]
-        val reuseHost = existingHost != null && existingSignature == signature
 
-        val host = if (reuseHost) {
-            existingHost
-        } else {
-            val stack = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                clipChildren = false
-                clipToPadding = false
-                orderedCards.forEach { (_, _, card) -> addView(card) }
+        orderedCards.forEach { (layerIndex, layer, card) ->
+            val signature = floatingHostSignature(layer)
+            val existingHost = floatingLookupHostViews[layerIndex]
+            val existingSignature = floatingLookupHostSignatures[layerIndex]
+            val reuseHost = existingHost != null && existingSignature == signature
+            val host = if (reuseHost) existingHost else {
+                FloatingLookupHostLayout(this).apply {
+                    clipChildren = false
+                    clipToPadding = false
+                    addView(card)
+                }
             }
-            FloatingLookupHostLayout(this).apply {
-                clipChildren = false
-                clipToPadding = false
-                addView(stack)
+            updateFloatingLookupHostInteraction(host, layerIndex, allowDefinitionLookup = true)
+            val preferredWidth = card.layoutParams?.width?.takeIf { it > 0 }
+                ?: (320 * resources.displayMetrics.density).toInt()
+            ensureFloatingHostMeasured(host, preferredWidth)
+            val popupSize = IntSize(host.measuredWidth, host.measuredHeight)
+            val sourceRects = layerAnchorRects(layer)
+            val avoidRects = buildFloatingAvoidRects(layerIndex, layout.gapPx)
+            Log.d(FLOATING_LOOKUP_LOG_TAG, "avoid layer=$layerIndex rects=${formatFloatingRectsForLog(avoidRects)}")
+            val sizeSpec = computeFloatingLookupPopupSizeSpec(
+                windowSize = layout.panelSize,
+                anchor = layer.anchor,
+                placeBelow = layer.placeBelow,
+                preferSidePlacement = layer.preferSidePlacement
+            )
+            val candidate = calculateFloatingCardPosition(
+                sourceRects = sourceRects,
+                avoidRects = avoidRects,
+                windowSize = layout.panelSize,
+                popupContentSize = popupSize,
+                placeBelow = layer.placeBelow,
+                preferSidePlacement = layer.preferSidePlacement,
+                preferredDirection = sizeSpec.preferredDirection,
+                strictNoOverlap = layerIndex > 0,
+                gapPx = layout.gapPx,
+                screenPaddingPx = layout.screenPaddingPx
+            ) ?: run {
+                Log.d(
+                    FLOATING_LOOKUP_LOG_TAG,
+                    "rejectShow layer=$layerIndex reason=no_candidate"
+                )
+                if (layerIndex == activeIndex && activeIndex > 0) {
+                    truncateFloatingLookupLayersTo(activeIndex - 1)
+                }
+                return@forEach
             }
-        }
-        updateFloatingLookupHostInteraction(host, activeIndex, allowDefinitionLookup = true)
-        val preferredWidth = orderedCards
-            .mapNotNull { (_, _, card) -> card.layoutParams?.width?.takeIf { it > 0 } }
-            .maxOrNull()
-            ?: (320 * resources.displayMetrics.density).toInt()
-        ensureFloatingHostMeasured(host, preferredWidth)
-        val popupSize = IntSize(host.measuredWidth, host.measuredHeight)
-        val sourceRects = layerAnchorRects(activeLayer)
-        val avoidRects = buildFloatingAvoidRects(activeIndex, layout.gapPx)
-        Log.d(FLOATING_LOOKUP_LOG_TAG, "avoid layer=$activeIndex rects=${formatFloatingRectsForLog(avoidRects)}")
-        val sizeSpec = computeFloatingLookupPopupSizeSpec(
-            windowSize = layout.panelSize,
-            anchor = activeLayer.anchor,
-            placeBelow = activeLayer.placeBelow,
-            preferSidePlacement = activeLayer.preferSidePlacement
-        )
-        val candidate = calculateFloatingCardPosition(
-            sourceRects = sourceRects,
-            avoidRects = avoidRects,
-            windowSize = layout.panelSize,
-            popupContentSize = popupSize,
-            placeBelow = activeLayer.placeBelow,
-            preferSidePlacement = activeLayer.preferSidePlacement,
-            preferredDirection = sizeSpec.preferredDirection,
-            strictNoOverlap = activeIndex > 0,
-            gapPx = layout.gapPx,
-            screenPaddingPx = layout.screenPaddingPx
-        ) ?: run {
-            val sourceBounds = rectBounds(sourceRects)
-            if (sourceBounds != null) {
-                val maxX = (layout.panelSize.width - popupSize.width - layout.screenPaddingPx).coerceAtLeast(layout.screenPaddingPx)
-                val maxY = (layout.panelSize.height - popupSize.height - layout.screenPaddingPx).coerceAtLeast(layout.screenPaddingPx)
-                val x = ((sourceBounds.left + sourceBounds.right) / 2 - popupSize.width / 2).coerceIn(layout.screenPaddingPx, maxX)
-                val yPref = if (activeLayer.placeBelow) sourceBounds.bottom + layout.gapPx else sourceBounds.top - popupSize.height - layout.gapPx
-                IntOffset(x, yPref.coerceIn(layout.screenPaddingPx, maxY))
-            } else {
-                IntOffset(layout.screenPaddingPx, layout.screenPaddingPx)
+            val shown = showFloatingLookupHost(
+                layerIndex = layerIndex,
+                layer = layer,
+                host = host,
+                position = candidate,
+                signature = signature,
+                sourceRectsOverride = sourceRects,
+                avoidRectsOverride = avoidRects
+            )
+            if (!shown && layerIndex == activeIndex) {
+                if (activeIndex > 0) {
+                    truncateFloatingLookupLayersTo(activeIndex - 1)
+                }
+                return
             }
-        }
-        val shown = showFloatingLookupHost(
-            layerIndex = activeIndex,
-            layer = activeLayer,
-            host = host,
-            position = candidate,
-            signature = signature,
-            sourceRectsOverride = sourceRects,
-            avoidRectsOverride = avoidRects
-        )
-        if (!shown) {
-            if (activeIndex > 0) {
-                truncateFloatingLookupLayersTo(activeIndex - 1)
+            host.visibility = View.VISIBLE
+            if (reuseHost) {
+                refreshFloatingLookupHostHighlight(layerIndex, host, layer)
             }
-            return
-        }
-        host.visibility = View.VISIBLE
-        if (reuseHost) {
-            refreshFloatingLookupHostHighlight(activeIndex, host, activeLayer)
         }
     }
 
@@ -1000,7 +993,7 @@ companion object {
     ): Boolean {
         val wm = windowManager ?: return false
         val layout = floatingLayoutConfig()
-        val storageKey = SINGLE_FLOATING_HOST_KEY
+        val storageKey = layerIndex
         val hostPosition = position ?: floatingLookupCardPositions[storageKey]
             ?: IntOffset((24 * resources.displayMetrics.density).toInt(), (120 * resources.displayMetrics.density).toInt())
         val sourceRects = sourceRectsOverride ?: layerAnchorRects(layer)
@@ -1294,7 +1287,7 @@ companion object {
     }
 
     private fun attachFloatingLookupHostSizeObserver(layerIndex: Int, host: View) {
-        val storageKey = SINGLE_FLOATING_HOST_KEY
+        val storageKey = layerIndex
         floatingLookupHostSizeListeners.remove(storageKey)?.let { existing ->
             host.removeOnLayoutChangeListener(existing)
         }
@@ -1321,7 +1314,7 @@ companion object {
         reason: String = "unspecified"
     ) {
         if (layerIndex < 0) return
-        val storageKey = SINGLE_FLOATING_HOST_KEY
+        val storageKey = layerIndex
         floatingLookupRepositionJobs.remove(storageKey)?.cancel()
         floatingLookupRepositionJobs[storageKey] = serviceScope.launch {
             delay(delayMs)
@@ -1333,9 +1326,8 @@ companion object {
 
     private fun repositionFloatingLookupHost(layerIndex: Int) {
         val wm = windowManager ?: return
-        val activeIndex = floatingLookupSession.lastIndex
-        val layer = floatingLookupSession.getOrNull(activeIndex) ?: return
-        val storageKey = SINGLE_FLOATING_HOST_KEY
+        val layer = floatingLookupSession.getOrNull(layerIndex) ?: return
+        val storageKey = layerIndex
         val host = floatingLookupHostViews[storageKey] ?: return
         val layout = floatingLayoutConfig()
         val density = resources.displayMetrics.density
@@ -1345,7 +1337,7 @@ companion object {
         ensureFloatingHostMeasured(host, measureWidth, force = true)
         val popupSize = IntSize(host.measuredWidth, host.measuredHeight)
         val sourceRects = layerAnchorRects(layer)
-        val finalAvoidRects = buildFloatingAvoidRects(activeIndex, layout.gapPx)
+        val finalAvoidRects = buildFloatingAvoidRects(layerIndex, layout.gapPx)
         val candidate = calculateFloatingCardPosition(
             sourceRects = sourceRects,
             avoidRects = finalAvoidRects,
@@ -1359,18 +1351,18 @@ companion object {
                 placeBelow = layer.placeBelow,
                 preferSidePlacement = layer.preferSidePlacement
             ).preferredDirection,
-            strictNoOverlap = activeIndex > 0,
+            strictNoOverlap = layerIndex > 0,
             gapPx = layout.gapPx,
             screenPaddingPx = layout.screenPaddingPx
         ) ?: run {
             Log.d(
                 FLOATING_LOOKUP_LOG_TAG,
-                "skipRelayout layer=$activeIndex reason=no_candidate_keep_current"
+                "skipRelayout layer=$layerIndex reason=no_candidate_keep_current"
             )
             return
         }
         val relayoutEvaluation = evaluateFloatingPlacement(
-            layerIndex = activeIndex,
+            layerIndex = layerIndex,
             sourceRects = sourceRects,
             avoidRects = finalAvoidRects,
             popupPosition = candidate,
@@ -1381,7 +1373,7 @@ companion object {
         if (!relayoutEvaluation.acceptable) {
             Log.d(
                 FLOATING_LOOKUP_LOG_TAG,
-                "skipRelayout layer=$activeIndex pos=${candidate.x},${candidate.y} guardOverlap=${relayoutEvaluation.metrics.guardOverlap} avoidOverlap=${relayoutEvaluation.metrics.avoidOverlap} distance=${relayoutEvaluation.sourceDistance} maxDistance=${relayoutEvaluation.maxAcceptDistancePx}"
+                "skipRelayout layer=$layerIndex pos=${candidate.x},${candidate.y} guardOverlap=${relayoutEvaluation.metrics.guardOverlap} avoidOverlap=${relayoutEvaluation.metrics.avoidOverlap} distance=${relayoutEvaluation.sourceDistance} maxDistance=${relayoutEvaluation.maxAcceptDistancePx}"
             )
             return
         }
@@ -1389,8 +1381,8 @@ companion object {
         if (currentPosition == candidate) return
         runCatching { wm.updateViewLayout(host, createFloatingLookupWindowLayoutParams(candidate)) }
         floatingLookupCardPositions[storageKey] = candidate
-        Log.d(FLOATING_LOOKUP_LOG_TAG, "relayout layer=$activeIndex pos=${candidate.x},${candidate.y}")
-        refreshFloatingLookupHostHighlight(activeIndex, host, layer)
+        Log.d(FLOATING_LOOKUP_LOG_TAG, "relayout layer=$layerIndex pos=${candidate.x},${candidate.y}")
+        refreshFloatingLookupHostHighlight(layerIndex, host, layer)
     }
 
     private fun ensureFloatingHostMeasured(host: View, width: Int, force: Boolean = false) {
@@ -2188,6 +2180,10 @@ companion object {
             }
         }
         val bridge = DefinitionLookupBridge { tapData ->
+            Log.d(
+                FLOATING_LOOKUP_TAP_LOG_TAG,
+                "bridge onTap layer=$layerIndex key=$definitionKey scanLen=${tapData.scanText.length} textLen=${tapData.text.length} screenChars=${tapData.screenCharRects.size}"
+            )
             performFloatingRecursiveLookup(layerIndex, definitionKey, tapData)
         }
         val html = buildDefinitionHtml(
@@ -2220,6 +2216,46 @@ companion object {
             settings.setSupportZoom(false)
             setOnLongClickListener { true }
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            setOnTouchListener(object : View.OnTouchListener {
+                private var downX = 0f
+                private var downY = 0f
+                private var moved = false
+                override fun onTouch(v: View?, event: MotionEvent?): Boolean {
+                    if (!enableLookupTap || event == null) return false
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            downX = event.x
+                            downY = event.y
+                            moved = false
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            if (
+                                kotlin.math.abs(event.x - downX) > 14f ||
+                                kotlin.math.abs(event.y - downY) > 14f
+                            ) {
+                                moved = true
+                            }
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            if (!moved) {
+                                val effectiveScale = this@apply.scale.takeIf { it.isFinite() && it > 0f } ?: 1f
+                                val clientX = event.x / effectiveScale
+                                val clientY = event.y / effectiveScale
+                                evaluateJavascript(
+                                    "(function(){try{if(!window.__nineLookupHandleTap){return 'missing_handle';} window.__nineLookupHandleTap($clientX,$clientY,true); return 'ok';}catch(e){return 'error:' + (e && e.message ? e.message : 'unknown');}})();"
+                                ) { result ->
+                                    val normalized = (result ?: "").trim('"')
+                                    Log.d(
+                                        FLOATING_LOOKUP_TAP_LOG_TAG,
+                                        "native jsResult=$normalized x=$clientX y=$clientY"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    return false
+                }
+            })
             webViewClient = object : android.webkit.WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
@@ -2656,8 +2692,13 @@ companion object {
                     "setHighlight layer=$sourceLayerIndex key=$definitionKey len=$matchedLength localRects=${finalLocalHighlightRects.size} screenRects=${finalScreenHighlightRects.size}"
                 )
                 val layerAnchorRects = currentLayer.anchor?.rects?.takeIf { it.isNotEmpty() }
-                val popupAnchorRects = layerAnchorRects ?: resolvedAnchorRects
-                val popupAnchorSource = if (layerAnchorRects != null) "sourceLayer" else anchorSource
+                // Book-like recursive behavior: always prefer the current tap-derived anchor.
+                val popupAnchorRects = resolvedAnchorRects ?: layerAnchorRects
+                val popupAnchorSource = when {
+                    resolvedAnchorRects != null -> anchorSource
+                    layerAnchorRects != null -> "sourceLayer"
+                    else -> "none"
+                }
                 Log.d(
                     FLOATING_LOOKUP_LOG_TAG,
                     "anchor layer=$sourceLayerIndex source=$popupAnchorSource rects=${popupAnchorRects?.size ?: 0}"

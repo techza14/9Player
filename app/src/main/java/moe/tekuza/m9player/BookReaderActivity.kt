@@ -17,6 +17,7 @@ import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Html
 import android.util.Base64
+import android.util.Log
 import android.app.Activity
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -151,6 +152,8 @@ private const val BOOK_READER_PENDING_INTENT_REQUEST_CODE = 21_002
 private const val BOOK_READER_SLEEP_OPTIONS_PREFS = "book_reader_sleep_options_prefs"
 private const val BOOK_READER_SLEEP_EXIT_CONTROL_KEY = "sleep_exit_control"
 private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
+private const val BOOK_LOOKUP_POS_LOG_TAG = "BookLookupPos"
+private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
 class BookReaderActivity : AppCompatActivity() {
     private var gamepadKeyHandler: ((KeyEvent) -> Boolean)? = null
     private var lastMotionHorizontalKeyCode: Int? = null
@@ -499,6 +502,7 @@ private fun BookReaderScreen(
     var lastGamepadCollectCueIndex by remember { mutableStateOf<Int?>(null) }
     var pendingSingleTapBaseCueIndex by remember { mutableStateOf<Int?>(null) }
     var pendingSingleTapJob by remember { mutableStateOf<Job?>(null) }
+    var liveSelectedRangeAnchor by remember { mutableStateOf<ReaderLookupAnchor?>(null) }
 
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
@@ -773,6 +777,22 @@ private fun BookReaderScreen(
         dragPreviewPositionMs ?: positionMs
     }
     val activeCueIndex = remember(previewPositionMs, cues) { findBookDisplayCueIndexAtTime(cues, previewPositionMs) }
+    val rootLookupLayer = lookupSession.getOrNull(0)
+    val visibleSelectedRange = remember(rootLookupLayer, activeCueIndex) {
+        val root = rootLookupLayer
+        if (root == null) {
+            null
+        } else if (root.cueIndex == null || root.cueIndex == activeCueIndex) {
+            root.selectedRange
+        } else {
+            null
+        }
+    }
+    LaunchedEffect(activeCueIndex, visibleSelectedRange, lyricsMode) {
+        if (visibleSelectedRange == null) {
+            liveSelectedRangeAnchor = null
+        }
+    }
     val activeCue = cues.getOrNull(activeCueIndex)
     val activeCueScrollProgress = remember(activeCue, previewPositionMs) {
         activeCue?.let { cue ->
@@ -1515,8 +1535,13 @@ private fun BookReaderScreen(
         lookupSession.clear()
         val dictionariesSnapshot = loadedDictionaries
         val cueIndex = cues.indexOf(cue).takeIf { it >= 0 }
-        val estimatedAnchorY = anchor.boundingRectOrNull()?.bottom ?: (view.height * 0.56f)
+        val anchorBounds = anchor.boundingRectOrNull()
+        val estimatedAnchorY = anchorBounds?.bottom ?: (view.height * 0.56f)
         val shouldPlaceBelow = estimatedAnchorY <= (view.height / 2f)
+        Log.d(
+            BOOK_LOOKUP_ANCHOR_LOG_TAG,
+            "trigger cueIndex=$cueIndex offset=$offset anchor=${formatRectForLog(anchorBounds)} placeBelow=$shouldPlaceBelow"
+        )
         val requestNonce = lookupPopupRequestNonce + 1L
         lookupPopupRequestNonce = requestNonce
         if (dictionariesSnapshot.isEmpty()) {
@@ -1543,6 +1568,10 @@ private fun BookReaderScreen(
         val selectionRange = selection?.range
         val selectedToken = selection?.text?.trim()?.takeIf { it.isNotBlank() }
         val candidates = listOfNotNull(selectedToken)
+        Log.d(
+            BOOK_LOOKUP_ANCHOR_LOG_TAG,
+            "triggerSelection cueIndex=$cueIndex selectedRange=${formatRangeForLog(selectionRange)} candidates=${candidates.joinToString("|")}"
+        )
 
         if (candidates.isEmpty()) {
             return
@@ -1592,6 +1621,10 @@ private fun BookReaderScreen(
                     selectedRange = selectedRange,
                     selectionText = selectionText
                 ))
+                Log.d(
+                    BOOK_LOOKUP_POS_LOG_TAG,
+                    "push layer=${lookupSession.lastIndex} source=subtitle term=${selectionText ?: selectedToken.orEmpty()} anchor=${formatRectForLog(anchorBounds)} placeBelow=$shouldPlaceBelow"
+                )
             }.onFailure {
                 if (lookupPopupRequestNonce != requestNonce) return@onFailure
                 lookupSession.push(buildLookupLayer(
@@ -1607,6 +1640,10 @@ private fun BookReaderScreen(
                     selectedRange = null,
                     selectionText = selectedToken
                 ))
+                Log.d(
+                    BOOK_LOOKUP_POS_LOG_TAG,
+                    "pushError layer=${lookupSession.lastIndex} source=subtitle anchor=${formatRectForLog(anchorBounds)} placeBelow=$shouldPlaceBelow"
+                )
             }
         }
     }
@@ -1642,26 +1679,44 @@ private fun BookReaderScreen(
         tapData: DefinitionLookupTapData,
         anchor: ReaderLookupAnchor?
     ) {
-        val currentLayer = lookupSession.getOrNull(sourceLayerIndex) ?: return
-        val cue = currentLayer.cue ?: return
+        val currentLayer = lookupSession.getOrNull(sourceLayerIndex) ?: run {
+            Log.d(BOOK_LOOKUP_ANCHOR_LOG_TAG, "recursiveAbort reason=no_source_layer index=$sourceLayerIndex")
+            return
+        }
+        val cue = currentLayer.cue ?: run {
+            Log.d(BOOK_LOOKUP_ANCHOR_LOG_TAG, "recursiveAbort reason=no_cue index=$sourceLayerIndex")
+            return
+        }
         val cueIndex = currentLayer.cueIndex
         val selection = selectLookupScanText(tapData.scanText.ifBlank { tapData.text }, 0) ?: run {
+            Log.d(
+                BOOK_LOOKUP_ANCHOR_LOG_TAG,
+                "recursiveAbort reason=no_selection scan='${tapData.scanText.take(24)}' text='${tapData.text.take(24)}'"
+            )
             truncateLookupLayersTo(sourceLayerIndex)
             return
         }
         val term = selection.text.trim().takeIf { it.isNotBlank() } ?: run {
+            Log.d(BOOK_LOOKUP_ANCHOR_LOG_TAG, "recursiveAbort reason=blank_term")
             truncateLookupLayersTo(sourceLayerIndex)
             return
         }
         val dictionariesSnapshot = loadedDictionaries
-        val estimatedAnchorY = anchor.boundingRectOrNull()?.bottom
-            ?: currentLayer.anchor.boundingRectOrNull()?.bottom
+        val tapAnchorBounds = anchor.boundingRectOrNull()
+        val currentAnchorBounds = currentLayer.anchor.boundingRectOrNull()
+        val estimatedAnchorY = tapAnchorBounds?.bottom
+            ?: currentAnchorBounds?.bottom
             ?: (view.height * 0.56f)
         val shouldPlaceBelow = estimatedAnchorY <= (view.height / 2f)
+        Log.d(
+            BOOK_LOOKUP_ANCHOR_LOG_TAG,
+            "recursiveStart sourceLayer=$sourceLayerIndex term=$term tapAnchor=${formatRectForLog(tapAnchorBounds)} currentAnchor=${formatRectForLog(currentAnchorBounds)} placeBelow=$shouldPlaceBelow"
+        )
         val requestNonce = lookupPopupRequestNonce + 1L
         lookupPopupRequestNonce = requestNonce
 
         if (dictionariesSnapshot.isEmpty()) {
+            Log.d(BOOK_LOOKUP_ANCHOR_LOG_TAG, "recursiveAbort reason=no_dictionary")
             Toast.makeText(context, context.getString(R.string.bookreader_lookup_no_dict), Toast.LENGTH_SHORT).show()
             return
         }
@@ -1678,7 +1733,10 @@ private fun BookReaderScreen(
             }
             result.onSuccess { hits ->
                 if (lookupPopupRequestNonce != requestNonce) return@onSuccess
-                if (hits.isEmpty()) return@onSuccess
+                if (hits.isEmpty()) {
+                    Log.d(BOOK_LOOKUP_ANCHOR_LOG_TAG, "recursiveAbort reason=no_hits term=$term")
+                    return@onSuccess
+                }
                 val resolvedRects = resolveDefinitionMatchedRects(tapData, hits.first().matchedLength)
                 val adjustedHighlightRects = if (resolvedRects != null) {
                     resolvedRects.localCharRects
@@ -1693,12 +1751,13 @@ private fun BookReaderScreen(
                         matchedLength = hits.first().matchedLength
                     )
                 }
+                val tapScreenAnchorRects = tapData.resolveScreenAnchorRects()
                 val adjustedAnchorRects = resolvedRects?.screenCharRects
                     ?.let { rebuildRectsFromCharacterRectsShared(it, hits.first().matchedLength) }
                     ?.takeIf { it.isNotEmpty() }
                     ?: rebuildDefinitionAnchorRectsByMatchedLength(
-                        charRects = tapData.screenCharRects,
-                        fallbackRect = anchor.boundingRectOrNull() ?: tapData.screenRect,
+                        charRects = tapScreenAnchorRects,
+                        fallbackRect = anchor.boundingRectOrNull() ?: tapScreenAnchorRects.firstOrNull(),
                         matchedLength = hits.first().matchedLength
                     )
                 val adjustedAnchor = if (adjustedAnchorRects.isNotEmpty()) {
@@ -1706,6 +1765,7 @@ private fun BookReaderScreen(
                 } else {
                     anchor ?: currentLayer.anchor
                 }
+                val adjustedAnchorBounds = adjustedAnchor.boundingRectOrNull()
                 truncateLookupLayersTo(sourceLayerIndex)
                 if (lookupSession.getOrNull(sourceLayerIndex) != null) {
                     lookupSession.replaceAt(sourceLayerIndex) { it.copy(
@@ -1735,6 +1795,10 @@ private fun BookReaderScreen(
                         )
                     }
                 ))
+                Log.d(
+                    BOOK_LOOKUP_POS_LOG_TAG,
+                    "push layer=${lookupSession.lastIndex} source=recursive term=$term anchor=${formatRectForLog(adjustedAnchorBounds)} placeBelow=$shouldPlaceBelow fromLayer=$sourceLayerIndex"
+                )
             }.onFailure {
                 if (lookupPopupRequestNonce != requestNonce) return@onFailure
                 Toast.makeText(
@@ -1742,6 +1806,10 @@ private fun BookReaderScreen(
                     (it.message ?: context.getString(R.string.bookreader_lookup_failed)).take(200),
                     Toast.LENGTH_LONG
                 ).show()
+                Log.d(
+                    BOOK_LOOKUP_POS_LOG_TAG,
+                    "recursiveFail sourceLayer=$sourceLayerIndex term=$term"
+                )
             }
         }
     }
@@ -2428,9 +2496,9 @@ private fun BookReaderScreen(
                                             ReaderLookupClickableSubtitle(
                                                 text = buildHighlightedText(
                                                     cue.text,
-                                                    if (isActive) activeLookupLayer?.selectedRange else null
+                                                    if (isActive) visibleSelectedRange else null
                                                 ),
-                                                selectedRange = if (isActive) activeLookupLayer?.selectedRange else null,
+                                                selectedRange = if (isActive) visibleSelectedRange else null,
                                                 style = if (isActive) {
                                                     activeSubtitleStyle
                                                 } else {
@@ -2438,6 +2506,9 @@ private fun BookReaderScreen(
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
                                                 },
+                                                onSelectedRangeAnchorChanged = if (isActive) {
+                                                    { anchor -> liveSelectedRangeAnchor = anchor }
+                                                } else null,
                                                 onTextTap = { offset, anchor ->
                                                     if (cueRangeSelectionMode) {
                                                         handleCueRangeTap(index)
@@ -2467,9 +2538,12 @@ private fun BookReaderScreen(
                                     }
                                 ) {
                                     ReaderLookupClickableSubtitle(
-                                        text = buildHighlightedText(activeCue.text, activeLookupLayer?.selectedRange),
-                                        selectedRange = activeLookupLayer?.selectedRange,
+                                        text = buildHighlightedText(activeCue.text, visibleSelectedRange),
+                                        selectedRange = visibleSelectedRange,
                                         style = activeSubtitleStyle,
+                                        onSelectedRangeAnchorChanged = { anchor ->
+                                            liveSelectedRangeAnchor = anchor
+                                        },
                                         onTextTap = { offset, anchor ->
                                             if (cueRangeSelectionMode) {
                                                 handleCueRangeTap(activeCueIndex)
@@ -2737,10 +2811,27 @@ private fun BookReaderScreen(
         lookupSession.layers.forEachIndexed { index, layer ->
             val isTopLayer = index == lookupSession.lastIndex
             val isPreviousLayer = index == lookupSession.lastIndex - 1
+            val effectiveAnchor = remember(
+                index,
+                layer.anchor,
+                layer.selectionText,
+                layer.cueIndex,
+                layer.selectedRange,
+                activeCueIndex,
+                liveSelectedRangeAnchor
+            ) {
+                val runtimeAnchor =
+                    if (index == 0 && liveSelectedRangeAnchor != null) {
+                        liveSelectedRangeAnchor
+                    } else {
+                        layer.anchor
+                    }
+                runtimeAnchor
+            }
             val popupSizeSpec = remember(
                 configuration.screenWidthDp,
                 configuration.screenHeightDp,
-                layer.anchor,
+                effectiveAnchor,
                 layer.placeBelow,
                 layer.preferSidePlacement,
                 density.density
@@ -2748,22 +2839,24 @@ private fun BookReaderScreen(
                 computeLookupPopupSizeSpec(
                     screenWidthDp = configuration.screenWidthDp,
                     screenHeightDp = configuration.screenHeightDp,
-                    anchor = layer.anchor,
+                    anchor = effectiveAnchor,
                     placeBelow = layer.placeBelow,
                     preferSidePlacement = layer.preferSidePlacement,
                     density = density.density
                 )
             }
             val positionProvider = remember(
-                layer.anchor,
+                effectiveAnchor,
                 layer.placeBelow,
                 layer.preferSidePlacement,
                 popupSizeSpec.preferredDirection,
                 lookupPopupGapPx,
-                lookupPopupScreenPaddingPx
+                lookupPopupScreenPaddingPx,
+                popupSizeSpec.widthDp,
+                popupSizeSpec.contentMaxHeightDp
             ) {
                 ReaderLookupPopupPositionProvider(
-                    anchor = layer.anchor,
+                    anchor = effectiveAnchor,
                     placeBelow = layer.placeBelow,
                     preferSidePlacement = layer.preferSidePlacement,
                     preferredDirection = popupSizeSpec.preferredDirection,
@@ -2835,9 +2928,12 @@ private fun BookReaderScreen(
                             } else null,
                             onDefinitionLookup = if (isTopLayer || isPreviousLayer) {
                                 { definitionKey, tapData ->
-                                    val anchorRects = tapData.screenCharRects
+                                    Log.d(
+                                        BOOK_LOOKUP_ANCHOR_LOG_TAG,
+                                        "cardTap layer=$index key=$definitionKey scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
+                                    )
+                                    val anchorRects = tapData.resolveScreenAnchorRects()
                                         .takeIf { it.isNotEmpty() }
-                                        ?: tapData.screenRect?.let { listOf(it) }
                                     val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
                                     performRecursiveLookupFromDefinition(index, definitionKey, tapData, anchor)
                                 }
@@ -3102,6 +3198,7 @@ private fun ReaderLookupClickableSubtitle(
     style: androidx.compose.ui.text.TextStyle,
     autoScrollProgress: Float? = null,
     modifier: Modifier = Modifier,
+    onSelectedRangeAnchorChanged: ((ReaderLookupAnchor?) -> Unit)? = null,
     onTextTap: (offset: Int, anchor: ReaderLookupAnchor) -> Unit
 ) {
     var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -3122,6 +3219,43 @@ private fun ReaderLookupClickableSubtitle(
         val maxScroll = (lineWidthPx - viewportWidthPx.toFloat()).coerceAtLeast(0f)
         val target = (maxScroll * progress.coerceIn(0f, 1f)).roundToInt()
         scrollState.scrollTo(target)
+    }
+
+    LaunchedEffect(selectedRange, textLayoutResult, textWindowOrigin, scrollState.value, text.text) {
+        val callback = onSelectedRangeAnchorChanged ?: return@LaunchedEffect
+        val layout = textLayoutResult ?: run {
+            callback(null)
+            return@LaunchedEffect
+        }
+        val range = selectedRange ?: run {
+            callback(null)
+            return@LaunchedEffect
+        }
+        val textLength = text.length
+        if (textLength <= 0) {
+            callback(null)
+            return@LaunchedEffect
+        }
+        val start = range.first.coerceIn(0, textLength - 1)
+        val end = range.last.coerceIn(start, textLength - 1)
+        val localRects = buildList {
+            for (i in start..end) {
+                val box = layout.getBoundingBox(i)
+                if (!box.isEmpty) {
+                    add(
+                        Rect(
+                            left = textWindowOrigin.x + box.left - scrollState.value,
+                            top = textWindowOrigin.y + box.top,
+                            right = textWindowOrigin.x + box.right - scrollState.value,
+                            bottom = textWindowOrigin.y + box.bottom
+                        )
+                    )
+                }
+            }
+        }
+        callback(
+            if (localRects.isEmpty()) null else ReaderLookupAnchor(rects = mergeRectsByLine(localRects))
+        )
     }
 
     Text(
@@ -3172,6 +3306,10 @@ private fun ReaderLookupClickableSubtitle(
                                 bottom = textWindowOrigin.y + box.bottom
                             )
                         )
+                    )
+                    Log.d(
+                        BOOK_LOOKUP_ANCHOR_LOG_TAG,
+                        "tap offset=$offset tap=${tapOffset.x.roundToInt()},${tapOffset.y.roundToInt()} box=${formatRectForLog(anchor.boundingRectOrNull())} scrollX=${scrollState.value}"
                     )
                     onTextTap(offset, anchor)
                 }
@@ -3369,10 +3507,71 @@ private fun mergeRects(rects: List<Rect>): Rect {
     )
 }
 
+private fun formatRectForLog(rect: Rect?): String {
+    if (rect == null) return "null"
+    return "${rect.left.roundToInt()},${rect.top.roundToInt()},${rect.right.roundToInt()},${rect.bottom.roundToInt()}"
+}
+
+private fun formatRangeForLog(range: IntRange?): String {
+    return range?.let { "${it.first}..${it.last}" } ?: "null"
+}
+
+private fun formatIntRectForLog(rect: IntRect): String {
+    return "${rect.left},${rect.top},${rect.right},${rect.bottom}"
+}
+
+private fun formatIntRectsForLog(rects: List<IntRect>): String {
+    if (rects.isEmpty()) return "[]"
+    return rects.joinToString(prefix = "[", postfix = "]") { formatIntRectForLog(it) }
+}
+
 private fun ReaderLookupAnchor?.boundingRectOrNull(): Rect? {
     val rects = this?.rects?.filter { !it.isEmpty } ?: return null
     if (rects.isEmpty()) return null
     return mergeRects(rects)
+}
+
+private fun ReaderLookupAnchor?.expandForSelectionText(selectionText: String?): ReaderLookupAnchor? {
+    val anchor = this ?: return null
+    val rects = anchor.rects.filter { !it.isEmpty }
+    if (rects.size != 1) return anchor
+    val text = selectionText?.trim().orEmpty()
+    val textLength = text.length.coerceAtMost(12)
+    if (textLength <= 1) return anchor
+    val rect = rects.first()
+    val charWidth = (rect.right - rect.left).coerceAtLeast(1f)
+    val horizontalExtra = ((textLength - 1) * charWidth * 0.5f).coerceAtLeast(0f)
+    val expanded = Rect(
+        left = rect.left - horizontalExtra - 4f,
+        top = rect.top - 3f,
+        right = rect.right + horizontalExtra + 4f,
+        bottom = rect.bottom + 3f
+    )
+    return ReaderLookupAnchor(rects = listOf(expanded))
+}
+
+private fun DefinitionLookupTapData.resolveScreenAnchorRects(): List<Rect> {
+    val fromChars = screenCharRects.filter { !it.isEmpty }
+    val fromRect = screenRect?.takeIf { !it.isEmpty }?.let { listOf(it) }.orEmpty()
+    val host = hostView ?: return emptyList()
+    val location = IntArray(2)
+    host.getLocationOnScreen(location)
+    val fallbackLocalRects = if (localCharRects.isNotEmpty()) localCharRects else localRects
+    val fromLocal = fallbackLocalRects
+        .filter { !it.isEmpty }
+        .map { rect ->
+            Rect(
+                left = location[0].toFloat() + rect.left,
+                top = location[1].toFloat() + rect.top,
+                right = location[0].toFloat() + rect.right,
+                bottom = location[1].toFloat() + rect.bottom
+            )
+        }
+    // Prefer the JS-provided character-level screen rects when available.
+    // They are usually the most precise anchor for recursive lookup positioning.
+    if (fromChars.isNotEmpty()) return fromChars
+    if (fromLocal.isNotEmpty()) return fromLocal
+    return fromRect
 }
 
 private class ReaderLookupPopupPositionProvider(
@@ -3389,7 +3588,7 @@ private class ReaderLookupPopupPositionProvider(
         layoutDirection: androidx.compose.ui.unit.LayoutDirection,
         popupContentSize: IntSize
     ): IntOffset {
-        val guardPx = maxOf(gapPx * 3, screenPaddingPx * 2)
+        val effectiveGapPx = gapPx.coerceIn(8, 20)
         val sourceRects = anchor?.rects
             ?.filter { !it.isEmpty }
             ?.map {
@@ -3409,21 +3608,19 @@ private class ReaderLookupPopupPositionProvider(
                     bottom = (windowSize.height * 0.56f).toInt()
                 )
             )
-        val guardRects = sourceRects.map { expandRect(it, guardPx) }
         val sourceBoundsRect = IntRect(
             left = sourceRects.minOf { it.left },
             top = sourceRects.minOf { it.top },
             right = sourceRects.maxOf { it.right },
             bottom = sourceRects.maxOf { it.bottom }
         )
-        val guardBoundsRect = IntRect(
-            left = guardRects.minOf { it.left },
-            top = guardRects.minOf { it.top },
-            right = guardRects.maxOf { it.right },
-            bottom = guardRects.maxOf { it.bottom }
-        )
+        val blockedRects = listOf(sourceBoundsRect)
         val maxX = (windowSize.width - popupContentSize.width - screenPaddingPx).coerceAtLeast(screenPaddingPx)
         val maxY = (windowSize.height - popupContentSize.height - screenPaddingPx).coerceAtLeast(screenPaddingPx)
+        Log.d(
+            BOOK_LOOKUP_POS_LOG_TAG,
+            "calc sourceRects=${formatIntRectsForLog(sourceRects)} blockedRects=${formatIntRectsForLog(blockedRects)} popup=${popupContentSize.width}x${popupContentSize.height} placeBelow=$placeBelow side=$preferSidePlacement preferred=$preferredDirection"
+        )
 
         fun fitsScreen(candidate: IntOffset): Boolean {
             return candidate.x in screenPaddingPx..maxX && candidate.y in screenPaddingPx..maxY
@@ -3438,133 +3635,144 @@ private class ReaderLookupPopupPositionProvider(
 
         fun isNonOverlapping(candidate: IntOffset): Boolean {
             val candidateRect = popupRect(candidate, popupContentSize)
-            return guardRects.none { rectsOverlap(it, candidateRect) }
+            return blockedRects.none { rectsOverlap(it, candidateRect) }
         }
 
-        fun orderedCandidates(requireFit: Boolean): List<Pair<IntRect, IntOffset>> {
-            return sourceRects.zip(guardRects)
-                .flatMap { (sourceRect, guardRect) ->
-                    buildLookupPopupCandidates(
-                        anchorLeft = guardRect.left,
-                        anchorRight = guardRect.right,
-                        anchorTop = guardRect.top,
-                        anchorBottom = guardRect.bottom,
-                        popupContentSize = popupContentSize,
-                        maxX = maxX,
-                        maxY = maxY,
-                        preferSidePlacement = preferSidePlacement,
-                        placeBelow = placeBelow,
-                        gapPx = gapPx,
-                        screenPaddingPx = screenPaddingPx,
-                        requireFit = requireFit
-                    ).map { candidate -> sourceRect to candidate }
+        fun directionPriority(direction: LookupPopupDirection): Int {
+            val baseOrder = if (preferSidePlacement) {
+                if (placeBelow) {
+                    listOf(LookupPopupDirection.RIGHT, LookupPopupDirection.LEFT, LookupPopupDirection.BELOW, LookupPopupDirection.ABOVE)
+                } else {
+                    listOf(LookupPopupDirection.RIGHT, LookupPopupDirection.LEFT, LookupPopupDirection.ABOVE, LookupPopupDirection.BELOW)
                 }
-        }
-
-        fun bestNonOverlappingCandidate(requireFit: Boolean): IntOffset? {
-            return orderedCandidates(requireFit)
-                .filter { (_, candidate) ->
-                    isNonOverlapping(candidate)
+            } else {
+                if (placeBelow) {
+                    listOf(LookupPopupDirection.BELOW, LookupPopupDirection.ABOVE, LookupPopupDirection.RIGHT, LookupPopupDirection.LEFT)
+                } else {
+                    listOf(LookupPopupDirection.ABOVE, LookupPopupDirection.BELOW, LookupPopupDirection.RIGHT, LookupPopupDirection.LEFT)
                 }
-                .minWithOrNull(
-                    compareBy<Pair<IntRect, IntOffset>> { (sourceRect, candidate) ->
-                        val direction = candidateDirection(sourceRect, candidate, popupContentSize)
-                        if (direction == preferredDirection) 0 else 1
-                    }.thenBy { (sourceRect, candidate) ->
-                        rectDistance(sourceRect, popupRect(candidate, popupContentSize))
-                    }
-                )?.second
+            }
+            val order = listOf(preferredDirection) + baseOrder.filter { it != preferredDirection }
+            return order.indexOf(direction).takeIf { it >= 0 } ?: Int.MAX_VALUE
         }
 
-        bestNonOverlappingCandidate(requireFit = true)?.let { return it }
+        fun buildAdjacentCandidates(): List<Pair<LookupPopupDirection, IntOffset>> {
+            val forbidden = sourceBoundsRect
+            val popupW = popupContentSize.width
+            val popupH = popupContentSize.height
+            val forbiddenW = (forbidden.right - forbidden.left).coerceAtLeast(1)
+            val forbiddenH = (forbidden.bottom - forbidden.top).coerceAtLeast(1)
+            val xVariants = listOf(
+                forbidden.left,
+                forbidden.right - popupW,
+                forbidden.left + ((forbiddenW - popupW) / 2)
+            )
+            val yVariants = listOf(
+                forbidden.top,
+                forbidden.bottom - popupH,
+                forbidden.top + ((forbiddenH - popupH) / 2)
+            )
+            val belowY = forbidden.bottom + effectiveGapPx
+            val aboveY = forbidden.top - popupH - effectiveGapPx
+            val rightX = forbidden.right + effectiveGapPx
+            val leftX = forbidden.left - popupW - effectiveGapPx
+            return buildList {
+                xVariants.forEach { x ->
+                    add(LookupPopupDirection.BELOW to IntOffset(x, belowY))
+                    add(LookupPopupDirection.ABOVE to IntOffset(x, aboveY))
+                }
+                yVariants.forEach { y ->
+                    add(LookupPopupDirection.RIGHT to IntOffset(rightX, y))
+                    add(LookupPopupDirection.LEFT to IntOffset(leftX, y))
+                }
+            }
+        }
 
-        val clampedCandidates = orderedCandidates(requireFit = false)
-            .map { (sourceRect, candidate) -> sourceRect to clampToScreen(candidate) }
+        fun returnWithLog(reason: String, candidate: IntOffset): IntOffset {
+            val popup = popupRect(candidate, popupContentSize)
+            val sourceOverlap = sourceRects.sumOf { overlapArea(it, popup) }
+            val blockedOverlap = blockedRects.sumOf { overlapArea(it, popup) }
+            Log.d(
+                BOOK_LOOKUP_POS_LOG_TAG,
+                "show reason=$reason pos=${candidate.x},${candidate.y} sourceOverlap=$sourceOverlap blockedOverlap=$blockedOverlap sourceBounds=${formatIntRectForLog(sourceBoundsRect)} popupRect=${formatIntRectForLog(popup)}"
+            )
+            return candidate
+        }
+
+        val adjacent = buildAdjacentCandidates()
+        val bestAdjacent = adjacent
+            .minWithOrNull(
+                compareBy<Pair<LookupPopupDirection, IntOffset>> { (direction, _) ->
+                    directionPriority(direction)
+                }.thenBy { (_, candidate) ->
+                    if (fitsScreen(candidate) && isNonOverlapping(candidate)) 0 else 1
+                }.thenBy { (_, candidate) ->
+                    rectDistance(sourceBoundsRect, popupRect(candidate, popupContentSize))
+                }
+            )
+        if (bestAdjacent != null) {
+            val candidate = bestAdjacent.second
+            if (fitsScreen(candidate) && isNonOverlapping(candidate)) {
+                return returnWithLog("adjacent_fit", candidate)
+            }
+        }
+
+        val clampedAdjacent = adjacent
+            .map { (direction, candidate) -> direction to clampToScreen(candidate) }
             .distinctBy { (_, candidate) -> candidate }
             .filter { (_, candidate) -> fitsScreen(candidate) && isNonOverlapping(candidate) }
             .minWithOrNull(
-                compareBy<Pair<IntRect, IntOffset>> { (sourceRect, candidate) ->
-                    val direction = candidateDirection(sourceRect, candidate, popupContentSize)
-                    if (direction == preferredDirection) 0 else 1
-                }.thenBy { (sourceRect, candidate) ->
-                    rectDistance(sourceRect, popupRect(candidate, popupContentSize))
+                compareBy<Pair<LookupPopupDirection, IntOffset>> { (direction, _) ->
+                    directionPriority(direction)
+                }.thenBy { (_, candidate) ->
+                    rectDistance(sourceBoundsRect, popupRect(candidate, popupContentSize))
                 }
-            )
-            ?.second
-        if (clampedCandidates != null) return clampedCandidates
+            )?.second
+        if (clampedAdjacent != null) return returnWithLog("adjacent_clamped_fit", clampedAdjacent)
 
-        val alignedX = sourceBoundsRect.left.coerceIn(screenPaddingPx, maxX)
-        val alignedY = sourceBoundsRect.top.coerceIn(screenPaddingPx, maxY)
-        val forcedVertical = if (placeBelow) {
-            listOf(
-                IntOffset(alignedX, guardBoundsRect.bottom + gapPx),
-                IntOffset(alignedX, guardBoundsRect.top - popupContentSize.height - gapPx)
-            )
-        } else {
-            listOf(
-                IntOffset(alignedX, guardBoundsRect.top - popupContentSize.height - gapPx),
-                IntOffset(alignedX, guardBoundsRect.bottom + gapPx)
-            )
+        val nearestNonOverlap = run {
+            val step = maxOf(32, popupContentSize.height / 12)
+            val left = screenPaddingPx
+            val right = maxX
+            val top = screenPaddingPx
+            val bottom = maxY
+            var best: IntOffset? = null
+            var bestDistance = Int.MAX_VALUE
+            var y = top
+            while (y <= bottom) {
+                var x = left
+                while (x <= right) {
+                    val candidate = IntOffset(x, y)
+                    if (fitsScreen(candidate) && isNonOverlapping(candidate)) {
+                        val distance = rectDistance(sourceBoundsRect, popupRect(candidate, popupContentSize))
+                        if (distance < bestDistance) {
+                            best = candidate
+                            bestDistance = distance
+                        }
+                    }
+                    x += step
+                }
+                y += step
+            }
+            best
         }
-        val forcedSide = listOf(
-            IntOffset(guardBoundsRect.right + gapPx, alignedY),
-            IntOffset(guardBoundsRect.left - popupContentSize.width - gapPx, alignedY)
+        if (nearestNonOverlap != null) return returnWithLog("nearest_non_overlap_fit", nearestNonOverlap)
+
+        val rawCandidates = adjacent.map { it.second }
+        val clampedCandidates = rawCandidates.map(::clampToScreen).distinct()
+        val fitCount = clampedCandidates.count { fitsScreen(it) }
+        val nonOverlapCount = clampedCandidates.count { isNonOverlapping(it) }
+        val fitAndNonOverlapCount = clampedCandidates.count { fitsScreen(it) && isNonOverlapping(it) }
+        Log.d(
+            BOOK_LOOKUP_POS_LOG_TAG,
+            "reject reason=no_adjacent_candidate raw=${rawCandidates.size} clamped=${clampedCandidates.size} fit=$fitCount nonOverlap=$nonOverlapCount fitAndNonOverlap=$fitAndNonOverlapCount sourceBounds=${formatIntRectForLog(sourceBoundsRect)}"
         )
-        val forcedOrdered = if (preferSidePlacement) forcedSide + forcedVertical else forcedVertical + forcedSide
-        val preferredFitFallback = forcedOrdered
-            .map(::clampToScreen)
-            .firstOrNull {
-                val direction = candidateDirection(sourceBoundsRect, it, popupContentSize)
-                direction == preferredDirection && fitsScreen(it) && isNonOverlapping(it)
-            }
-        if (preferredFitFallback != null) return preferredFitFallback
-        val fullyFitFallback = forcedOrdered
-            .map(::clampToScreen)
-            .firstOrNull { fitsScreen(it) && isNonOverlapping(it) }
-        if (fullyFitFallback != null) return fullyFitFallback
-
-        val emergencyCandidates = listOf(
-            IntOffset(screenPaddingPx, screenPaddingPx),
-            IntOffset(maxX, screenPaddingPx),
-            IntOffset(screenPaddingPx, maxY),
-            IntOffset(maxX, maxY)
-        ).distinct()
-        val emergencyFit = emergencyCandidates
-            .filter { fitsScreen(it) && isNonOverlapping(it) }
-            .minByOrNull { rectDistance(sourceBoundsRect, popupRect(it, popupContentSize)) }
-        if (emergencyFit != null) return emergencyFit
-
-        val preferredForced = clampToScreen(
-            if (placeBelow) {
-                IntOffset(alignedX, guardBoundsRect.bottom + gapPx)
-            } else {
-                IntOffset(alignedX, guardBoundsRect.top - popupContentSize.height - gapPx)
-            }
+        // No hard-fallback: keep popup outside screen when there is no valid candidate.
+        return IntOffset(
+            x = windowSize.width + screenPaddingPx,
+            y = windowSize.height + screenPaddingPx
         )
-        return forcedOrdered
-            .map(::clampToScreen)
-            .firstOrNull { isNonOverlapping(it) }
-            ?: preferredForced
     }
-}
-
-private fun candidateDirection(sourceRect: IntRect, candidate: IntOffset, popupContentSize: IntSize): LookupPopupDirection {
-    val candidateRect = popupRect(candidate, popupContentSize)
-    return when {
-        candidateRect.left >= sourceRect.right -> LookupPopupDirection.RIGHT
-        candidateRect.right <= sourceRect.left -> LookupPopupDirection.LEFT
-        candidateRect.top >= sourceRect.bottom -> LookupPopupDirection.BELOW
-        else -> LookupPopupDirection.ABOVE
-    }
-}
-
-private fun expandRect(rect: IntRect, padding: Int): IntRect {
-    return IntRect(
-        left = rect.left - padding,
-        top = rect.top - padding,
-        right = rect.right + padding,
-        bottom = rect.bottom + padding
-    )
 }
 
 private fun popupRect(position: IntOffset, popupContentSize: IntSize): IntRect {
@@ -3578,6 +3786,15 @@ private fun popupRect(position: IntOffset, popupContentSize: IntSize): IntRect {
 
 private fun rectsOverlap(a: IntRect, b: IntRect): Boolean {
     return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+}
+
+private fun overlapArea(a: IntRect, b: IntRect): Int {
+    val left = maxOf(a.left, b.left)
+    val top = maxOf(a.top, b.top)
+    val right = minOf(a.right, b.right)
+    val bottom = minOf(a.bottom, b.bottom)
+    if (right <= left || bottom <= top) return 0
+    return (right - left) * (bottom - top)
 }
 
 private fun rectDistance(a: IntRect, b: IntRect): Int {
@@ -4376,20 +4593,3 @@ private tailrec fun Context.findHostActivity(): Activity? {
         else -> null
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

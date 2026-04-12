@@ -2,7 +2,11 @@ package moe.tekuza.m9player
 
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import android.view.MotionEvent
 import android.view.View
+import android.util.Log
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -55,6 +59,8 @@ internal data class DefinitionLookupTapData(
     val localCharRects: List<Rect>,
     val screenCharRects: List<Rect>
 )
+
+private const val BOOK_LOOKUP_TAP_LOG_TAG = "BookLookupTap"
 
 private class DefinitionLookupViewTag(
     val bridge: DefinitionLookupBridge
@@ -544,6 +550,48 @@ internal fun RichDefinitionView(
                         settings.setSupportZoom(false)
                         setOnLongClickListener { true }
                         setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                        setOnTouchListener(object : View.OnTouchListener {
+                            private var downX = 0f
+                            private var downY = 0f
+                            private var moved = false
+                            override fun onTouch(v: View?, event: MotionEvent?): Boolean {
+                                if (event == null) return false
+                                when (event.actionMasked) {
+                                    MotionEvent.ACTION_DOWN -> {
+                                        downX = event.x
+                                        downY = event.y
+                                        moved = false
+                                    }
+                                    MotionEvent.ACTION_MOVE -> {
+                                        if (
+                                            kotlin.math.abs(event.x - downX) > 14f ||
+                                            kotlin.math.abs(event.y - downY) > 14f
+                                        ) {
+                                            moved = true
+                                        }
+                                    }
+                                    MotionEvent.ACTION_UP -> {
+                                        if (!moved) {
+                                            val effectiveScale = this@apply.scale.takeIf { it.isFinite() && it > 0f } ?: 1f
+                                            val clientX = event.x / effectiveScale
+                                            val clientY = event.y / effectiveScale
+                                            evaluateJavascript(
+                                                "(function(){try{if(!window.__nineLookupHandleTap){return 'missing_handle';} window.__nineLookupHandleTap($clientX,$clientY,true); return 'ok';}catch(e){return 'error:' + (e && e.message ? e.message : 'unknown');}})();"
+                                            ) { result ->
+                                                val decodedResult = decodeEvaluateJavascriptJson(result) ?: result.orEmpty()
+                                                if (decodedResult != "ok") {
+                                                    Log.d(
+                                                        BOOK_LOOKUP_TAP_LOG_TAG,
+                                                        "native jsResult=$decodedResult x=$clientX y=$clientY"
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                return false
+                            }
+                        })
                         addJavascriptInterface(bridge, "NineLookup")
                     }
                 },
@@ -635,19 +683,60 @@ internal fun buildDefinitionHtml(
         (function() {
             if (window.__nineLookupInstalled) return;
             window.__nineLookupInstalled = true;
+            if (window.NineLookup && window.NineLookup.onDebug) {
+                window.NineLookup.onDebug('installed');
+            }
             const scanDelimiters = '。、「」『』【】〔〕（）()［］[]｛｝{}〈〉《》＜＞…？！!?：:；;，,．。/\\\\\\n\\r';
             const maxScanLength = 16;
+            function isFuriganaNode(node) {
+                const el = node && node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+                return !!(el && el.closest && el.closest('rt, rp'));
+            }
+            function pointInsideRect(rect, x, y) {
+                return rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+            }
             function resolveCaretRange(x, y) {
                 if (document.caretRangeFromPoint) {
-                    return document.caretRangeFromPoint(x, y);
+                    const range = document.caretRangeFromPoint(x, y);
+                    if (range) return range;
                 }
                 if (document.caretPositionFromPoint) {
                     const position = document.caretPositionFromPoint(x, y);
-                    if (!position) return null;
-                    const range = document.createRange();
-                    range.setStart(position.offsetNode, position.offset);
-                    range.setEnd(position.offsetNode, position.offset);
-                    return range;
+                    if (position) {
+                        const range = document.createRange();
+                        range.setStart(position.offsetNode, position.offset);
+                        range.setEnd(position.offsetNode, position.offset);
+                        return range;
+                    }
+                }
+                const element = document.elementFromPoint(x, y);
+                if (!element) return null;
+                const root = element.closest('p, div, span, ruby, a, li, td, th, body') || document.body;
+                const walker = document.createTreeWalker(
+                    root,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: function(n) {
+                            if (!n || !n.textContent || !n.textContent.trim()) return NodeFilter.FILTER_REJECT;
+                            return isFuriganaNode(n) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+                        }
+                    }
+                );
+                const probe = document.createRange();
+                let node = null;
+                while ((node = walker.nextNode())) {
+                    const text = node.textContent || '';
+                    for (let i = 0; i < text.length; i += 1) {
+                        probe.setStart(node, i);
+                        probe.setEnd(node, Math.min(i + 1, text.length));
+                        const rects = Array.from(probe.getClientRects() || []);
+                        if (rects.some(r => pointInsideRect(r, x, y))) {
+                            const range = document.createRange();
+                            range.setStart(node, i);
+                            range.setEnd(node, i);
+                            return range;
+                        }
+                    }
                 }
                 return null;
             }
@@ -852,6 +941,32 @@ internal fun buildDefinitionHtml(
             }
             const sentenceDelimiters = '。！？.!?\\n\\r';
             const trailingSentenceChars = '」』）】!?！？…';
+            let touchStartX = 0;
+            let touchStartY = 0;
+            let touchMoved = false;
+            let suppressClickUntil = 0;
+            const touchMoveThreshold = 18;
+            const suppressClickDurationMs = 140;
+            document.addEventListener('touchstart', function(e) {
+                const t = e.touches && e.touches[0];
+                if (!t) return;
+                touchStartX = t.clientX;
+                touchStartY = t.clientY;
+                touchMoved = false;
+            }, true);
+            document.addEventListener('touchmove', function(e) {
+                const t = e.touches && e.touches[0];
+                if (!t) return;
+                if (
+                    Math.abs((t.clientX || 0) - touchStartX) > touchMoveThreshold ||
+                    Math.abs((t.clientY || 0) - touchStartY) > touchMoveThreshold
+                ) {
+                    touchMoved = true;
+                }
+            }, { capture: true, passive: true });
+            let lastTapX = -1;
+            let lastTapY = -1;
+            let lastTapTs = 0;
             function extractSentence(text, anchorOffset) {
                 if (!text) return '';
                 const safeOffset = Math.max(0, Math.min(anchorOffset || 0, Math.max(0, text.length - 1)));
@@ -875,10 +990,27 @@ internal fun buildDefinitionHtml(
                 const sentence = text.slice(start, end).trim();
                 return sentence || text.trim();
             }
-            document.addEventListener('click', function(e) {
+            function handleLookupTap(clientX, clientY, fromTouch) {
                 if (!window.NineLookup || !window.NineLookup.onTap) return;
-                const range = resolveCaretRange(e.clientX, e.clientY);
-                if (!range) return;
+                if (Date.now() < suppressClickUntil) return;
+                const now = Date.now();
+                if (
+                    Math.abs(clientX - lastTapX) <= 2 &&
+                    Math.abs(clientY - lastTapY) <= 2 &&
+                    (now - lastTapTs) <= 320
+                ) {
+                    return;
+                }
+                lastTapX = clientX;
+                lastTapY = clientY;
+                lastTapTs = now;
+                const range = resolveCaretRange(clientX, clientY);
+                if (!range) {
+                    if (window.NineLookup && window.NineLookup.onDebug) {
+                        window.NineLookup.onDebug('range=null');
+                    }
+                    return;
+                }
                 const node = range.startContainer;
                 if (!node || node.nodeType !== Node.TEXT_NODE) return;
                 const text = node.textContent || '';
@@ -890,7 +1022,7 @@ internal fun buildDefinitionHtml(
                 const textLength = text.length;
                 if (textLength > 0) {
                     safeOffset = Math.max(0, Math.min(range.startOffset || 0, textLength - 1));
-                    safeOffset = resolveOffsetByPointInTextNode(node, safeOffset, e.clientX, e.clientY);
+                    safeOffset = resolveOffsetByPointInTextNode(node, safeOffset, clientX, clientY);
                     if (safeOffset > 0) {
                         const previousCharRange = document.createRange();
                         previousCharRange.setStart(node, safeOffset - 1);
@@ -898,10 +1030,10 @@ internal fun buildDefinitionHtml(
                         const previousCharRect = previousCharRange.getBoundingClientRect();
                         if (
                             previousCharRect &&
-                            e.clientX >= previousCharRect.left &&
-                            e.clientX <= previousCharRect.right &&
-                            e.clientY >= previousCharRect.top &&
-                            e.clientY <= previousCharRect.bottom
+                            clientX >= previousCharRect.left &&
+                            clientX <= previousCharRect.right &&
+                            clientY >= previousCharRect.top &&
+                            clientY <= previousCharRect.bottom
                         ) {
                             safeOffset -= 1;
                         }
@@ -913,7 +1045,7 @@ internal fun buildDefinitionHtml(
                         selectionRange.setStart(node, safeOffset);
                         selectionRange.setEnd(node, selectionEndExclusive);
                         const rects = Array.from(selectionRange.getClientRects() || []).filter(r => r.width > 0 || r.height > 0);
-                        const rect = pickRectForPoint(rects, e.clientX, e.clientY) || selectionRange.getBoundingClientRect();
+                        const rect = pickRectForPoint(rects, clientX, clientY) || selectionRange.getBoundingClientRect();
                         if (rect && (rect.width > 0 || rect.height > 0)) {
                             targetRect = rect;
                         }
@@ -935,7 +1067,7 @@ internal fun buildDefinitionHtml(
                     }
                 }
                 if (!targetRect) {
-                    targetRect = {left: e.clientX || 0, top: e.clientY || 0, right: e.clientX || 0, bottom: e.clientY || 0};
+                    targetRect = {left: clientX || 0, top: clientY || 0, right: clientX || 0, bottom: clientY || 0};
                 }
                 const localRects = scanData && scanData.localRects.length > 0
                     ? scanData.localRects
@@ -957,6 +1089,22 @@ internal fun buildDefinitionHtml(
                     targetRect.right || 0,
                     targetRect.bottom || 0
                 );
+                if (fromTouch) {
+                    suppressClickUntil = Date.now() + 260;
+                }
+            }
+            window.__nineLookupHandleTap = handleLookupTap;
+            document.addEventListener('touchend', function(e) {
+                if (touchMoved) {
+                    suppressClickUntil = Date.now() + suppressClickDurationMs;
+                    return;
+                }
+                const t = e.changedTouches && e.changedTouches[0];
+                if (!t) return;
+                handleLookupTap(t.clientX || 0, t.clientY || 0, true);
+            }, true);
+            document.addEventListener('click', function(e) {
+                handleLookupTap(e.clientX || 0, e.clientY || 0, false);
             }, true);
             window.__nineLookupResolveMatchedRects = function(nodePath, startOffset, matchedLength) {
                 const node = resolveNodePath(nodePath);
@@ -1091,51 +1239,57 @@ internal class DefinitionLookupBridge(
     var onLookupTap: ((DefinitionLookupTapData) -> Unit)?
 ) {
     var hostView: WebView? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    @JavascriptInterface
+    fun onDebug(message: String?) {
+        Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "js ${message.orEmpty()}")
+    }
 
     @JavascriptInterface
     fun onTap(text: String?, scanText: String?, sentence: String?, offset: Int, nodeText: String?, nodePathJson: String?, localRectsJson: String?, localCharRectsJson: String?, left: Float, top: Float, right: Float, bottom: Float) {
-        val value = text.orEmpty()
-        val scanValue = scanText?.trim().orEmpty()
-        if (value.isBlank()) return
-        val localRect = Rect(left, top, right, bottom)
-        val localRects = parseRectListJson(localRectsJson).ifEmpty { listOf(localRect) }
-        val localCharRects = parseRectListJson(localCharRectsJson)
-        val location = IntArray(2)
-        val screenRect = hostView?.let { view ->
-            view.getLocationOnScreen(location)
-            Rect(
-                left = location[0].toFloat() + left,
-                top = location[1].toFloat() + top,
-                right = location[0].toFloat() + right,
-                bottom = location[1].toFloat() + bottom
+        try {
+            val value = text.orEmpty()
+            val scanValue = scanText?.trim().orEmpty()
+            if (value.isBlank()) return
+            val localRect = Rect(left, top, right, bottom)
+            val localRects = parseRectListJson(localRectsJson).ifEmpty { listOf(localRect) }
+            val localCharRects = parseRectListJson(localCharRectsJson)
+            Log.d(
+                BOOK_LOOKUP_TAP_LOG_TAG,
+                "bridge onTap textLen=${value.length} scanLen=${scanValue.length} offset=$offset localRects=${localRects.size} localChars=${localCharRects.size} onMain=${Looper.myLooper() == Looper.getMainLooper()}"
             )
-        }
-        val screenCharRects = hostView?.let { view ->
-            view.getLocationOnScreen(location)
-            localCharRects.map { rect ->
-                Rect(
-                    left = location[0].toFloat() + rect.left,
-                    top = location[1].toFloat() + rect.top,
-                    right = location[0].toFloat() + rect.right,
-                    bottom = location[1].toFloat() + rect.bottom
-                )
+            val dispatch = Runnable {
+                try {
+                    val host = hostView
+                    val screenRect = host?.cssRectToScreenRect(localRect)
+                    val screenCharRects = host?.cssRectsToScreenRects(localCharRects).orEmpty()
+                    val data = DefinitionLookupTapData(
+                        text = value,
+                        scanText = scanValue,
+                        sentence = sentence?.trim().orEmpty(),
+                        offset = offset,
+                        nodeText = nodeText.orEmpty(),
+                        nodePathJson = nodePathJson.orEmpty(),
+                        hostView = host,
+                        screenRect = screenRect,
+                        localRects = localRects,
+                        localCharRects = localCharRects,
+                        screenCharRects = screenCharRects
+                    )
+                    onLookupTap?.invoke(data)
+                } catch (t: Throwable) {
+                    Log.e(BOOK_LOOKUP_TAP_LOG_TAG, "bridge dispatch failed", t)
+                }
             }
-        }.orEmpty()
-        onLookupTap?.invoke(
-            DefinitionLookupTapData(
-                text = value,
-                scanText = scanValue,
-                sentence = sentence?.trim().orEmpty(),
-                offset = offset,
-                nodeText = nodeText.orEmpty(),
-                nodePathJson = nodePathJson.orEmpty(),
-                hostView = hostView,
-                screenRect = screenRect,
-                localRects = localRects,
-                localCharRects = localCharRects,
-                screenCharRects = screenCharRects
-            )
-        )
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                dispatch.run()
+            } else {
+                hostView?.post(dispatch) ?: mainHandler.post(dispatch)
+            }
+        } catch (t: Throwable) {
+            Log.e(BOOK_LOOKUP_TAP_LOG_TAG, "bridge onTap failed", t)
+        }
     }
 }
 
@@ -1145,6 +1299,24 @@ internal data class DefinitionResolvedRects(
     val screenRects: List<Rect>,
     val screenCharRects: List<Rect>
 )
+
+private fun WebView.cssRectToScreenRect(rect: Rect, locationCache: IntArray? = null): Rect {
+    val location = locationCache ?: IntArray(2).also { getLocationOnScreen(it) }
+    val effectiveScale = scale.takeIf { it.isFinite() && it > 0f } ?: 1f
+    return Rect(
+        left = location[0].toFloat() + rect.left * effectiveScale,
+        top = location[1].toFloat() + rect.top * effectiveScale,
+        right = location[0].toFloat() + rect.right * effectiveScale,
+        bottom = location[1].toFloat() + rect.bottom * effectiveScale
+    )
+}
+
+private fun WebView.cssRectsToScreenRects(rects: List<Rect>): List<Rect> {
+    if (rects.isEmpty()) return emptyList()
+    val location = IntArray(2)
+    getLocationOnScreen(location)
+    return rects.map { cssRectToScreenRect(it, location) }
+}
 
 internal suspend fun resolveDefinitionMatchedRects(
     tapData: DefinitionLookupTapData,
@@ -1170,24 +1342,8 @@ internal suspend fun resolveDefinitionMatchedRects(
     val json = runCatching { JSONObject(decoded) }.getOrNull() ?: return null
     val localRects = parseRectListJson(json.optJSONArray("localRects")?.toString())
     val localCharRects = parseRectListJson(json.optJSONArray("localCharRects")?.toString())
-    val location = IntArray(2)
-    webView.getLocationOnScreen(location)
-    val screenRects = localRects.map { rect ->
-        Rect(
-            left = location[0].toFloat() + rect.left,
-            top = location[1].toFloat() + rect.top,
-            right = location[0].toFloat() + rect.right,
-            bottom = location[1].toFloat() + rect.bottom
-        )
-    }
-    val screenCharRects = localCharRects.map { rect ->
-        Rect(
-            left = location[0].toFloat() + rect.left,
-            top = location[1].toFloat() + rect.top,
-            right = location[0].toFloat() + rect.right,
-            bottom = location[1].toFloat() + rect.bottom
-        )
-    }
+    val screenRects = webView.cssRectsToScreenRects(localRects)
+    val screenCharRects = webView.cssRectsToScreenRects(localCharRects)
     return DefinitionResolvedRects(
         localRects = localRects,
         localCharRects = localCharRects,
