@@ -1,1 +1,0 @@
-C:\Users\08321\AndroidStudioProjects\9player\app\src\main\rust\mdict_native\target\x86_64-linux-android\release\libmdict_native.a: C:\Users\08321\AndroidStudioProjects\9player\app\src\main\rust\mdict_native\src\lib.rs
