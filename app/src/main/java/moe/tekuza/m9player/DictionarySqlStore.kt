@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.database.sqlite.SQLiteStatement
 import android.net.Uri
+import android.util.Log
 import android.util.JsonReader
 import android.util.JsonToken
 import org.json.JSONObject
@@ -17,10 +18,8 @@ import java.io.DataOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.InputStreamReader
 import java.io.StringReader
 import java.util.Locale
-import java.util.zip.ZipInputStream
 import kotlin.math.max
 
 private const val DB_NAME = "dictionary_store.db"
@@ -38,12 +37,19 @@ private const val DICTIONARY_TERM_INDEX_MAGIC = 0x54494458 // "TIDX"
 private const val DICTIONARY_TERM_INDEX_VERSION = 1
 private const val DICTIONARY_TERM_INDEX_CACHE_LIMIT = 48
 private const val LOOKUP_QUERY_CACHE_LIMIT = 180
+private const val LOOKUP_QUERY_CACHE_SCHEMA_VERSION = 3
 private const val FAST_IMPORT_ALIAS_FROM_DEFINITION = false
 private const val IMPORT_PROGRESS_STEP = 3
+private const val DICTIONARY_LOOKUP_TAG = "DictionaryLookup"
 
 internal enum class DictionaryQueryProfile {
     FAST,
     FULL
+}
+
+private enum class DictionaryImportType {
+    ZIP,
+    MDX
 }
 
 private val SAFE_LOCKING_MODE_REGEX = Regex("^[A-Za-z_]+$")
@@ -54,7 +60,6 @@ private val LOOKS_LIKE_HTML_REGEX = Regex("<\\s*/?\\s*[a-zA-Z][^>]*>")
 private val CAMEL_CASE_BOUNDARY_REGEX = Regex("([a-z])([A-Z])")
 private val STRUCTURED_DATA_KEY_SANITIZE_REGEX = Regex("[^a-z0-9_-]")
 private val KANJI_TOKEN_REGEX = Regex("[\\u4E00-\\u9FFF\\u3400-\\u4DBF\\uF900-\\uFAFF\\u3005\\u3006\\u30F6]{1,12}")
-private val TERM_BANK_FILE_REGEX = Regex("term_bank_\\d+\\.json")
 
 private const val TABLE_DICTIONARIES = "dictionaries"
 private const val TABLE_ENTRIES = "entries"
@@ -123,13 +128,6 @@ private val dictionaryTermIndexCache =
         }
     }
 
-private data class SqlZipScanResult(
-    val dictionaryName: String,
-    val termBankPaths: List<String>,
-    val stylesCss: String?,
-    val firstDslPath: String?,
-    val firstJsonPath: String?
-)
 
 private class DictionaryDbHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
     override fun onCreate(db: SQLiteDatabase) {
@@ -476,12 +474,14 @@ private fun saveDictionaryLookupQueryCache(
 }
 
 private fun buildLookupCacheDictionariesKey(dictionaries: List<LoadedDictionary>): String {
-    return dictionaries
+    val base = dictionaries
         .mapNotNull { dictionary ->
             val cacheKey = dictionary.cacheKey.takeIf { it.isNotBlank() } ?: return@mapNotNull null
             "$cacheKey:${dictionary.entryCount}"
         }
         .joinToString("|")
+    if (base.isBlank()) return ""
+    return "$base|lookupSchema=$LOOKUP_QUERY_CACHE_SCHEMA_VERSION"
 }
 
 private data class DictionarySqlLookupConfig(
@@ -646,6 +646,7 @@ internal fun deleteDictionaryFromSqlite(context: Context, cacheKey: String): Boo
         clearDictionaryLookupQueryCache()
         clearDictionaryTermIndexCache(cacheKey)
         HoshiNativeBridge.clearLookupCache()
+        MdictNativeBridge.clearLookupCache()
     }
     return metaDeleted || storageDeleted
 }
@@ -658,19 +659,38 @@ internal fun importDictionaryToSqlite(
     cacheKey: String,
     onProgress: ((DictionaryImportProgress) -> Unit)? = null
 ): LoadedDictionary {
-    val lower = displayName.lowercase(Locale.US)
-    check(lower.endsWith(".zip")) { "仅支持 ZIP 辞典（hoshidicts）" }
-    val imported = importDictionaryZipWithHoshi(
-        context = context,
-        contentResolver = contentResolver,
-        uri = uri,
-        displayName = displayName,
-        cacheKey = cacheKey,
-        onProgress = onProgress
-    )
+    val imported = when (detectDictionaryImportType(displayName)) {
+        DictionaryImportType.ZIP -> importDictionaryZipWithHoshi(
+            context = context,
+            contentResolver = contentResolver,
+            uri = uri,
+            displayName = displayName,
+            cacheKey = cacheKey,
+            onProgress = onProgress
+        )
+
+        DictionaryImportType.MDX -> importDictionaryMdxWithNative(
+            context = context,
+            contentResolver = contentResolver,
+            uri = uri,
+            displayName = displayName,
+            cacheKey = cacheKey,
+            onProgress = onProgress
+        )
+    }
     clearDictionaryLookupQueryCache()
     HoshiNativeBridge.clearLookupCache()
+    MdictNativeBridge.clearLookupCache()
     return imported
+}
+
+private fun detectDictionaryImportType(displayName: String): DictionaryImportType {
+    val lower = displayName.trim().lowercase(Locale.US)
+    return when {
+        lower.endsWith(".zip") -> DictionaryImportType.ZIP
+        lower.endsWith(".mdx") -> DictionaryImportType.MDX
+        else -> error("仅支持 ZIP 或 MDX 辞典")
+    }
 }
 
 internal fun searchDictionarySql(
@@ -682,6 +702,10 @@ internal fun searchDictionarySql(
 ): List<DictionarySearchResult> {
     val normalizedQuery = normalizeLookupSql(query)
     if (normalizedQuery.isBlank() || dictionaries.isEmpty()) return emptyList()
+    Log.d(
+        DICTIONARY_LOOKUP_TAG,
+        "search start query=$query normalized=$normalizedQuery dicts=${dictionaries.size} profile=$profile"
+    )
     val dictionariesKey = buildLookupCacheDictionariesKey(dictionaries)
     if (dictionariesKey.isBlank()) return emptyList()
     val lookupCacheKey = DictionaryLookupQueryCacheKey(
@@ -692,18 +716,408 @@ internal fun searchDictionarySql(
     )
     val cached = loadDictionaryLookupQueryCache(lookupCacheKey)
     if (cached != null) {
+        Log.d(DICTIONARY_LOOKUP_TAG, "search cacheHit count=${cached.size} query=$normalizedQuery")
         return cached
     }
 
-    val results = searchDictionaryWithHoshi(
+    val hoshiResults = searchDictionaryWithHoshi(
         context = context,
         dictionaries = dictionaries,
         query = query,
         maxResults = maxResults,
         profile = profile
     )
+    val mdictNativeResults = searchDictionaryWithMdictNative(
+        context = context,
+        dictionaries = dictionaries,
+        query = query,
+        maxResults = maxResults,
+        profile = profile
+    )
+    val mdxOnly = dictionaries.isNotEmpty() && dictionaries.all { it.format.contains("MDX", ignoreCase = true) }
+    val sqliteResults = if (mdxOnly && mdictNativeResults.isNotEmpty()) {
+        emptyList()
+    } else {
+        searchDictionaryWithSqlite(
+            context = context,
+            dictionaries = dictionaries,
+            query = query,
+            maxResults = maxResults,
+            profile = profile
+        )
+    }
+    val merged = linkedMapOf<String, DictionarySearchResult>()
+    (hoshiResults + mdictNativeResults + sqliteResults).forEach { result ->
+        val key = entryStableKey(result.entry)
+        val existing = merged[key]
+        if (existing == null || result.score > existing.score) {
+            merged[key] = result
+        }
+    }
+    val results = merged.values
+        .sortedWith(
+            compareByDescending<DictionarySearchResult> { it.score }
+                .thenBy { it.entry.term.length }
+                .thenBy { it.entry.term }
+        )
+        .take(maxResults)
+    Log.d(
+        DICTIONARY_LOOKUP_TAG,
+        "search done hoshi=${hoshiResults.size} mdictNative=${mdictNativeResults.size} sqlite=${sqliteResults.size} merged=${results.size} query=$normalizedQuery"
+    )
     saveDictionaryLookupQueryCache(lookupCacheKey, results)
     return results
+}
+
+private fun searchDictionaryWithMdictNative(
+    context: Context,
+    dictionaries: List<LoadedDictionary>,
+    query: String,
+    maxResults: Int,
+    profile: DictionaryQueryProfile
+): List<DictionarySearchResult> {
+    if (!MdictNativeBridge.isAvailable) return emptyList()
+    val trimmedQuery = query.trim()
+    if (trimmedQuery.isBlank()) return emptyList()
+
+    val scanLength = when (profile) {
+        DictionaryQueryProfile.FAST -> 8
+        DictionaryQueryProfile.FULL -> 16
+    }
+    val lookupLimit = when (profile) {
+        DictionaryQueryProfile.FAST -> maxResults.coerceIn(8, 48)
+        DictionaryQueryProfile.FULL -> (maxResults * 2).coerceIn(16, 96)
+    }
+
+    val merged = linkedMapOf<String, DictionarySearchResult>()
+    dictionaries.forEachIndexed { order, dictionary ->
+        val isMdx = dictionary.format.contains("MDX", ignoreCase = true)
+        if (!isMdx) return@forEachIndexed
+        val cacheKey = dictionary.cacheKey.takeIf { it.isNotBlank() } ?: return@forEachIndexed
+        val entriesFile = File(dictionaryStorageDir(context, cacheKey), "mdictnative/entries.ndjson")
+        if (!entriesFile.isFile) return@forEachIndexed
+        val nativeHits = MdictNativeBridge.lookup(
+            entriesPath = entriesFile.absolutePath,
+            query = trimmedQuery,
+            maxResults = lookupLimit,
+            scanLength = scanLength
+        )
+        nativeHits.forEachIndexed { rank, hit ->
+            val definition = normalizeDefinitionForDisplaySql(hit.definition)
+            if (definition.isBlank()) return@forEachIndexed
+            val score = (hit.score - order - rank).coerceAtLeast(1)
+            val result = DictionarySearchResult(
+                entry = DictionaryEntry(
+                    term = hit.term,
+                    reading = hit.reading,
+                    definitions = listOf(definition),
+                    pitch = null,
+                    frequency = null,
+                    dictionary = dictionary.name
+                ),
+                score = score,
+                matchedLength = hit.matchedLength
+            )
+            val key = entryStableKey(result.entry)
+            val existing = merged[key]
+            if (existing == null || result.score > existing.score) {
+                merged[key] = result
+            }
+        }
+    }
+
+    return merged.values
+        .sortedWith(
+            compareByDescending<DictionarySearchResult> { it.score }
+                .thenBy { it.entry.term.length }
+                .thenBy { it.entry.term }
+        )
+        .take(maxResults.coerceAtLeast(1))
+}
+
+private fun searchDictionaryWithSqlite(
+    context: Context,
+    dictionaries: List<LoadedDictionary>,
+    query: String,
+    maxResults: Int,
+    profile: DictionaryQueryProfile
+): List<DictionarySearchResult> {
+    val normalizedQuery = normalizeLookupSql(query)
+    if (normalizedQuery.isBlank() || dictionaries.isEmpty()) return emptyList()
+    val config = dictionarySqlLookupConfig(profile, maxResults)
+    val merged = linkedMapOf<String, DictionarySearchResult>()
+
+    dictionaries.forEachIndexed { order, dictionary ->
+        val cacheKey = dictionary.cacheKey.takeIf { it.isNotBlank() } ?: return@forEachIndexed
+        val mdxLikeDictionary = dictionary.format.contains("MDX", ignoreCase = true)
+        if (mdxLikeDictionary) return@forEachIndexed
+        val db = openDictionaryEntriesDbForRead(context, cacheKey) ?: return@forEachIndexed
+        try {
+            val candidateTerms = linkedSetOf<String>()
+            candidateTerms += normalizedQuery
+            val indexTerms = readDictionaryTermBinaryIndex(context, cacheKey)
+            if (indexTerms != null) {
+                candidateTerms += collectPrefixTermsFromBinaryIndex(
+                    sortedTerms = indexTerms,
+                    normalizedPrefix = normalizedQuery,
+                    limit = config.prefixLimit
+                )
+            }
+
+            val localLimit = (config.exactLimit + config.prefixLimit).coerceAtLeast(24)
+            val local = mutableListOf<DictionarySearchResult>()
+            candidateTerms.forEach { norm ->
+                queryEntriesByExactNorm(
+                    db = db,
+                    cacheKey = cacheKey,
+                    normalized = norm,
+                    limit = localLimit,
+                    dictionaryOrder = order,
+                    out = local
+                )
+            }
+            if (local.size < config.containsTriggerSize && config.containsLimit > 0) {
+                queryEntriesByContainsNorm(
+                    db = db,
+                    cacheKey = cacheKey,
+                    normalized = normalizedQuery,
+                    limit = config.containsLimit,
+                    dictionaryOrder = order,
+                    out = local
+                )
+            }
+            if (local.isEmpty()) {
+                queryEntriesByRawContains(
+                    db = db,
+                    cacheKey = cacheKey,
+                    rawQuery = query.trim(),
+                    limit = (maxResults * 8).coerceIn(32, 240),
+                    dictionaryOrder = order,
+                    out = local
+                )
+            }
+            local.forEach { result ->
+                val key = entryStableKey(result.entry)
+                val existing = merged[key]
+                if (existing == null || result.score > existing.score) {
+                    merged[key] = result
+                }
+            }
+        } finally {
+            runCatching { db.close() }
+        }
+    }
+
+    return merged.values
+        .sortedWith(
+            compareByDescending<DictionarySearchResult> { it.score }
+                .thenBy { it.entry.term.length }
+                .thenBy { it.entry.term }
+        )
+        .take(maxResults.coerceAtLeast(1) * 2)
+}
+
+private fun queryEntriesByExactNorm(
+    db: SQLiteDatabase,
+    cacheKey: String,
+    normalized: String,
+    limit: Int,
+    dictionaryOrder: Int,
+    out: MutableList<DictionarySearchResult>
+) {
+    if (normalized.isBlank() || limit <= 0) return
+    db.query(
+        TABLE_ENTRIES,
+        arrayOf(
+            COL_TERM,
+            COL_READING,
+            COL_DEFINITION,
+            COL_PITCH,
+            COL_FREQUENCY,
+            COL_DICTIONARY_NAME,
+            COL_TERM_NORM,
+            COL_READING_NORM,
+            COL_ALIAS_NORM
+        ),
+        "$COL_CACHE_KEY = ? AND ($COL_TERM_NORM = ? OR $COL_READING_NORM = ? OR $COL_ALIAS_NORM = ?)",
+        arrayOf(cacheKey, normalized, normalized, normalized),
+        null,
+        null,
+        null,
+        limit.toString()
+    ).use { cursor ->
+        while (cursor.moveToNext()) {
+            addCursorEntryResult(db, cacheKey, cursor, normalized, dictionaryOrder, out)
+        }
+    }
+}
+
+private fun queryEntriesByContainsNorm(
+    db: SQLiteDatabase,
+    cacheKey: String,
+    normalized: String,
+    limit: Int,
+    dictionaryOrder: Int,
+    out: MutableList<DictionarySearchResult>
+) {
+    if (normalized.isBlank() || limit <= 0) return
+    val likeArg = "%$normalized%"
+    db.query(
+        TABLE_ENTRIES,
+        arrayOf(
+            COL_TERM,
+            COL_READING,
+            COL_DEFINITION,
+            COL_PITCH,
+            COL_FREQUENCY,
+            COL_DICTIONARY_NAME,
+            COL_TERM_NORM,
+            COL_READING_NORM,
+            COL_ALIAS_NORM
+        ),
+        "$COL_CACHE_KEY = ? AND ($COL_TERM_NORM LIKE ? OR $COL_READING_NORM LIKE ? OR $COL_ALIAS_NORM LIKE ?)",
+        arrayOf(cacheKey, likeArg, likeArg, likeArg),
+        null,
+        null,
+        null,
+        limit.toString()
+    ).use { cursor ->
+        while (cursor.moveToNext()) {
+            addCursorEntryResult(db, cacheKey, cursor, normalized, dictionaryOrder, out)
+        }
+    }
+}
+
+private fun queryEntriesByRawContains(
+    db: SQLiteDatabase,
+    cacheKey: String,
+    rawQuery: String,
+    limit: Int,
+    dictionaryOrder: Int,
+    out: MutableList<DictionarySearchResult>
+) {
+    if (rawQuery.isBlank() || limit <= 0) return
+    val likeArg = "%$rawQuery%"
+    db.query(
+        TABLE_ENTRIES,
+        arrayOf(
+            COL_TERM,
+            COL_READING,
+            COL_DEFINITION,
+            COL_PITCH,
+            COL_FREQUENCY,
+            COL_DICTIONARY_NAME,
+            COL_TERM_NORM,
+            COL_READING_NORM,
+            COL_ALIAS_NORM
+        ),
+        "$COL_CACHE_KEY = ? AND ($COL_TERM LIKE ? OR $COL_READING LIKE ?)",
+        arrayOf(cacheKey, likeArg, likeArg),
+        null,
+        null,
+        null,
+        limit.toString()
+    ).use { cursor ->
+        while (cursor.moveToNext()) {
+            addCursorEntryResult(db, cacheKey, cursor, normalizeLookupSql(rawQuery), dictionaryOrder, out)
+        }
+    }
+}
+
+private fun parseMdxLinkTarget(raw: String): String? {
+    val trimmed = raw.trimStart()
+    if (!trimmed.startsWith("@@@LINK=")) return null
+    val target = trimmed
+        .removePrefix("@@@LINK=")
+        .replace("\u0000", "")
+        .lineSequence()
+        .firstOrNull()
+        .orEmpty()
+        .trim()
+    return target.ifBlank { null }
+}
+
+private fun resolveLinkedDefinitionFromSqlite(
+    db: SQLiteDatabase,
+    cacheKey: String,
+    initialDefinition: String,
+    maxDepth: Int = 8
+): String {
+    var current = initialDefinition
+    val visited = HashSet<String>()
+    var depth = 0
+    while (depth < maxDepth) {
+        val target = parseMdxLinkTarget(current) ?: break
+        if (!visited.add(target)) break
+        val targetNorm = normalizeLookupSql(target)
+        var nextDefinition: String? = null
+        db.query(
+            TABLE_ENTRIES,
+            arrayOf(COL_DEFINITION),
+            "$COL_CACHE_KEY = ? AND ($COL_TERM = ? OR $COL_TERM_NORM = ?)",
+            arrayOf(cacheKey, target, targetNorm),
+            null,
+            null,
+            null,
+            "1"
+        ).use { c ->
+            if (c.moveToFirst()) {
+                nextDefinition = c.getString(0).orEmpty()
+            }
+        }
+        val next = nextDefinition?.trim().orEmpty()
+        if (next.isBlank()) break
+        current = next
+        depth += 1
+    }
+    return current
+}
+
+private fun addCursorEntryResult(
+    db: SQLiteDatabase,
+    cacheKey: String,
+    cursor: android.database.Cursor,
+    normalizedQuery: String,
+    dictionaryOrder: Int,
+    out: MutableList<DictionarySearchResult>
+) {
+    val term = cursor.getString(0).orEmpty()
+    if (term.isBlank()) return
+    val reading = cursor.getString(1)?.trim()?.ifBlank { null }
+    val definitionRaw = cursor.getString(2).orEmpty()
+    val definition = resolveLinkedDefinitionFromSqlite(
+        db = db,
+        cacheKey = cacheKey,
+        initialDefinition = definitionRaw
+    )
+    val pitch = cursor.getString(3)?.trim()?.ifBlank { null }
+    val frequency = cursor.getString(4)?.trim()?.ifBlank { null }
+    val dictionaryName = cursor.getString(5).orEmpty()
+    val termNorm = cursor.getString(6).orEmpty()
+    val readingNorm = cursor.getString(7).orEmpty()
+    val aliasNorm = cursor.getString(8).orEmpty()
+
+    val score = scoreEntryByNormalizedSql(
+        term = termNorm,
+        reading = readingNorm,
+        alias = aliasNorm,
+        normalizedQuery = normalizedQuery
+    ).let { base ->
+        if (base > 0) base else 42
+    } - dictionaryOrder
+    if (score <= 0) return
+
+    out += DictionarySearchResult(
+        entry = DictionaryEntry(
+            term = term,
+            reading = reading,
+            definitions = listOf(definition),
+            pitch = pitch,
+            frequency = frequency,
+            dictionary = dictionaryName
+        ),
+        score = score
+    )
 }
 
 private fun importDictionaryZipWithHoshi(
@@ -812,7 +1226,7 @@ private fun importDictionaryZipWithHoshi(
     }
 }
 
-private fun importDictionaryZipToSqlite(
+private fun importDictionaryMdxWithNative(
     context: Context,
     contentResolver: ContentResolver,
     uri: Uri,
@@ -820,104 +1234,136 @@ private fun importDictionaryZipToSqlite(
     cacheKey: String,
     onProgress: ((DictionaryImportProgress) -> Unit)?
 ): LoadedDictionary {
-    onProgress?.invoke(DictionaryImportProgress(stage = "Scanning archive", current = 0, total = 0))
-    val scan = scanDictionaryZipSql(contentResolver, uri, displayName, onProgress)
-
-    if (scan.termBankPaths.isEmpty()) {
-        val fallback = parseDictionaryFile(contentResolver, uri, displayName, onProgress)
-        return saveParsedDictionaryToSqlite(
-            context = context,
-            cacheKey = cacheKey,
-            sourceUri = uri.toString(),
-            displayName = displayName,
-            dictionary = fallback
-        )
+    if (!MdictNativeBridge.isAvailable) {
+        error("mdict native bridge unavailable")
     }
 
-    val stylesCss = scan.stylesCss
-    var entryCount = 0
-    val entriesDb = openDictionaryEntriesDbForWrite(context, cacheKey)
+    onProgress?.invoke(DictionaryImportProgress(stage = "Preparing MDX import", current = 0, total = 0))
+    val tempMdx = File.createTempFile("dict_import_", ".mdx", context.cacheDir)
     try {
-        withFastImportPragmas(entriesDb) {
-            entriesDb.beginTransaction()
-            try {
-                clearDictionaryEntryRows(entriesDb, cacheKey)
+        contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(tempMdx).use { output ->
+                input.copyTo(output)
+            }
+        } ?: error("Unable to read dictionary file")
 
-                val statement = entriesDb.compileStatement(SQL_INSERT_ENTRY)
-                val remaining = scan.termBankPaths.toHashSet()
-                val total = remaining.size
-                var parsedCount = 0
+        val mdxOutputDir = File(dictionaryStorageDir(context, cacheKey), "mdictnative")
+        if (mdxOutputDir.exists()) mdxOutputDir.deleteRecursively()
+        mdxOutputDir.mkdirs()
 
-                contentResolver.openInputStream(uri)?.use { stream ->
-                    ZipInputStream(BufferedInputStream(stream)).use { zip ->
-                        var entry = zip.nextEntry
-                        while (entry != null) {
-                            if (!entry.isDirectory) {
-                                val path = normalizeZipPathSql(entry.name)
-                                if (path in remaining) {
-                                    entryCount += parseTermBankIntoSql(zip, scan.dictionaryName, cacheKey, statement)
-                                    remaining.remove(path)
-                                    parsedCount += 1
-                                    if (parsedCount == 1 || parsedCount % IMPORT_PROGRESS_STEP == 0 || parsedCount == total) {
-                                        onProgress?.invoke(
-                                            DictionaryImportProgress(
-                                                stage = "Parsing term banks",
-                                                current = parsedCount,
-                                                total = total
-                                            )
-                                        )
-                                    }
-                                }
+        onProgress?.invoke(DictionaryImportProgress(stage = "Importing MDX", current = 0, total = 0))
+        val result = MdictNativeBridge.importMdx(
+            mdxPath = tempMdx.absolutePath,
+            outputDir = mdxOutputDir.absolutePath
+        )
+        if (!result.success) {
+            val detail = result.errors.firstOrNull().orEmpty()
+            error(if (detail.isBlank()) "mdict native import failed" else "mdict native import failed: $detail")
+        }
+        val entriesFile = result.entriesFile
+            .takeIf { it.isNotBlank() }
+            ?.let(::File)
+            ?.takeIf { it.isFile }
+            ?: error("mdict native import output missing entries file")
+
+        val dictionaryName = result.title.ifBlank {
+            displayName.substringBeforeLast('.').ifBlank { "MDict" }
+        }
+        val totalEstimate = result.termCount
+            .coerceAtLeast(0L)
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt()
+
+        onProgress?.invoke(DictionaryImportProgress(stage = "Saving MDX entries", current = 0, total = totalEstimate))
+        val entriesDb = openDictionaryEntriesDbForWrite(context, cacheKey)
+        val insertedCount = try {
+            withFastImportPragmas(entriesDb) {
+                entriesDb.beginTransaction()
+                try {
+                    clearDictionaryEntryRows(entriesDb, cacheKey)
+                    val statement = entriesDb.compileStatement(SQL_INSERT_ENTRY)
+                    var inserted = 0
+                    entriesFile.bufferedReader().useLines { lines ->
+                        lines.forEach { line ->
+                            val raw = line.trim()
+                            if (raw.isBlank()) return@forEach
+                            val json = runCatching { JSONObject(raw) }.getOrNull() ?: return@forEach
+                            val term = json.optString("term").trim()
+                            if (term.isBlank()) return@forEach
+                            val reading = json.optString("reading").trim().ifBlank { null }
+                            val definition = normalizeDefinitionForDisplaySql(json.optString("definition").trim())
+                            val entry = DictionaryEntry(
+                                term = term,
+                                reading = reading,
+                                definitions = listOf(definition),
+                                pitch = null,
+                                frequency = null,
+                                dictionary = dictionaryName
+                            )
+                            insertEntrySql(statement, cacheKey, dictionaryName, entry)
+                            inserted += 1
+                            if (inserted % 500 == 0) {
+                                onProgress?.invoke(
+                                    DictionaryImportProgress(
+                                        stage = "Saving MDX entries",
+                                        current = inserted,
+                                        total = totalEstimate
+                                    )
+                                )
                             }
-                            zip.closeEntry()
-                            entry = zip.nextEntry
                         }
                     }
-                } ?: error("Unable to read dictionary archive")
-
-                entriesDb.setTransactionSuccessful()
-            } finally {
-                entriesDb.endTransaction()
+                    entriesDb.setTransactionSuccessful()
+                    inserted
+                } finally {
+                    entriesDb.endTransaction()
+                }
             }
+        } finally {
+            runCatching { writeDictionaryTermBinaryIndex(context, cacheKey, entriesDb) }
+            runCatching { entriesDb.close() }
+        }
+        if (insertedCount <= 0) {
+            val detail = result.errors.firstOrNull().orEmpty()
+            error(if (detail.isBlank()) "mdict native import produced no entries" else "mdict native import produced no entries: $detail")
         }
 
-        onProgress?.invoke(DictionaryImportProgress(stage = "Building binary index", current = 0, total = 0))
-        writeDictionaryTermBinaryIndex(context, cacheKey, entriesDb)
-    } finally {
-        runCatching { entriesDb.close() }
-    }
+        val metaDb = writableDb(context)
+        metaDb.beginTransaction()
+        try {
+            upsertDictionaryMeta(
+                db = metaDb,
+                cacheKey = cacheKey,
+                sourceUri = uri.toString(),
+                displayName = displayName,
+                name = dictionaryName,
+                format = "MDX (native)",
+                stylesCss = null,
+                entryCount = insertedCount
+            )
+            metaDb.setTransactionSuccessful()
+        } finally {
+            metaDb.endTransaction()
+        }
 
-    runCatching {
-        writableDb(context).delete(TABLE_ENTRIES, "$COL_CACHE_KEY = ?", arrayOf(cacheKey))
-    }
-
-    val metaDb = writableDb(context)
-    metaDb.beginTransaction()
-    try {
-        upsertDictionaryMeta(
-            db = metaDb,
-            cacheKey = cacheKey,
-            sourceUri = uri.toString(),
-            displayName = displayName,
-            name = scan.dictionaryName,
-            format = "Yomichan/Migaku ZIP",
-            stylesCss = stylesCss,
-            entryCount = entryCount
+        onProgress?.invoke(
+            DictionaryImportProgress(
+                stage = "Done",
+                current = insertedCount,
+                total = totalEstimate.coerceAtLeast(insertedCount)
+            )
         )
-        metaDb.setTransactionSuccessful()
+        return LoadedDictionary(
+            cacheKey = cacheKey,
+            name = dictionaryName,
+            format = "MDX (native)",
+            entries = emptyList(),
+            stylesCss = null,
+            entryCount = insertedCount
+        )
     } finally {
-        metaDb.endTransaction()
+        runCatching { tempMdx.delete() }
     }
-
-    onProgress?.invoke(DictionaryImportProgress(stage = "Done", current = 1, total = 1))
-    return LoadedDictionary(
-        cacheKey = cacheKey,
-        name = scan.dictionaryName,
-        format = "Yomichan/Migaku ZIP",
-        entries = emptyList(),
-        stylesCss = stylesCss,
-        entryCount = entryCount
-    )
 }
 
 private fun saveParsedDictionaryToSqlite(
@@ -1024,151 +1470,6 @@ internal fun glossaryRawToDefinitionHtmlSql(glossaryRaw: String): String {
     }
 }
 
-private fun parseTermBankIntoSql(
-    zip: ZipInputStream,
-    dictionaryName: String,
-    cacheKey: String,
-    statement: SQLiteStatement
-): Int {
-    val reader = JsonReader(InputStreamReader(zip, Charsets.UTF_8))
-    reader.isLenient = true
-    if (reader.peek() != JsonToken.BEGIN_ARRAY) {
-        reader.skipValue()
-        return 0
-    }
-
-    var count = 0
-    reader.beginArray()
-    while (reader.hasNext()) {
-        val parsed = when (reader.peek()) {
-            JsonToken.BEGIN_ARRAY -> parseTermBankArrayRowSql(reader)
-            JsonToken.BEGIN_OBJECT -> parseTermBankObjectRowSql(reader)
-            else -> {
-                reader.skipValue()
-                null
-            }
-        } ?: continue
-
-        val definitions = extractGlossaryFromRawValueSql(parsed.glossaryValue)
-        if (definitions.isEmpty()) continue
-
-        val entry = DictionaryEntry(
-            term = parsed.term,
-            reading = parsed.reading,
-            definitions = definitions,
-            pitch = null,
-            frequency = null,
-            dictionary = dictionaryName
-        )
-        insertEntrySql(statement, cacheKey, dictionaryName, entry)
-        count += 1
-    }
-    reader.endArray()
-    return count
-}
-
-private data class ParsedTermBankRowSql(
-    val term: String,
-    val reading: String?,
-    val glossaryValue: Any?
-)
-
-private fun parseTermBankArrayRowSql(reader: JsonReader): ParsedTermBankRowSql? {
-    reader.beginArray()
-    var term = ""
-    var reading: String? = null
-    var glossaryValue: Any? = null
-    var fallbackGlossaryValue: Any? = null
-    var column = 0
-
-    while (reader.hasNext()) {
-        when (column) {
-            0 -> term = readJsonScalarAsTextSql(reader).trim()
-            1 -> reading = readJsonScalarAsTextSql(reader).trim().ifBlank { null }
-            5 -> glossaryValue = readJsonValueSql(reader)
-            else -> {
-                if (glossaryValue == null && fallbackGlossaryValue == null && column in 2..10) {
-                    val candidate = readJsonValueSql(reader)
-                    if (looksLikeGlossaryCandidateSql(candidate)) {
-                        fallbackGlossaryValue = candidate
-                    }
-                } else {
-                    reader.skipValue()
-                }
-            }
-        }
-        column += 1
-    }
-    reader.endArray()
-
-    if (term.isBlank()) return null
-    return ParsedTermBankRowSql(
-        term = term,
-        reading = reading,
-        glossaryValue = glossaryValue ?: fallbackGlossaryValue
-    )
-}
-
-private fun parseTermBankObjectRowSql(reader: JsonReader): ParsedTermBankRowSql? {
-    reader.beginObject()
-    var term = ""
-    var reading: String? = null
-    var glossaryValue: Any? = null
-    var fallbackGlossaryValue: Any? = null
-
-    while (reader.hasNext()) {
-        val key = reader.nextName().trim().lowercase(Locale.ROOT)
-        when (key) {
-            "term", "expression", "word" -> {
-                term = readJsonScalarAsTextSql(reader).trim()
-            }
-
-            "reading", "kana", "pronunciation" -> {
-                reading = readJsonScalarAsTextSql(reader).trim().ifBlank { null }
-            }
-
-            "glossary", "definition", "definitions", "meanings", "senses" -> {
-                glossaryValue = readJsonValueSql(reader)
-            }
-
-            else -> {
-                if (glossaryValue == null && fallbackGlossaryValue == null) {
-                    val candidate = readJsonValueSql(reader)
-                    if (
-                        key.contains("glossary") ||
-                        key.contains("definition") ||
-                        key.contains("meaning")
-                    ) {
-                        if (looksLikeGlossaryCandidateSql(candidate)) {
-                            fallbackGlossaryValue = candidate
-                        }
-                    }
-                } else {
-                    reader.skipValue()
-                }
-            }
-        }
-    }
-    reader.endObject()
-
-    if (term.isBlank()) return null
-    return ParsedTermBankRowSql(
-        term = term,
-        reading = reading,
-        glossaryValue = glossaryValue ?: fallbackGlossaryValue
-    )
-}
-
-private fun looksLikeGlossaryCandidateSql(value: Any?): Boolean {
-    return when (value) {
-        null -> false
-        is String -> value.trim().length >= 2
-        is List<*> -> value.isNotEmpty()
-        is Map<*, *> -> value.isNotEmpty()
-        else -> false
-    }
-}
-
 private fun insertEntrySql(
     statement: SQLiteStatement,
     cacheKey: String,
@@ -1196,23 +1497,6 @@ private fun insertEntrySql(
     statement.bindString(9, readingNorm)
     statement.bindString(10, aliasNorm)
     statement.executeInsert()
-}
-
-private fun readJsonScalarAsTextSql(reader: JsonReader): String {
-    return when (reader.peek()) {
-        JsonToken.STRING -> reader.nextString()
-        JsonToken.NUMBER -> reader.nextString()
-        JsonToken.BOOLEAN -> reader.nextBoolean().toString()
-        JsonToken.NULL -> {
-            reader.nextNull()
-            ""
-        }
-
-        else -> {
-            val value = readJsonValueSql(reader)
-            value?.toString().orEmpty()
-        }
-    }
 }
 
 private fun readJsonValueSql(reader: JsonReader): Any? {
@@ -1534,96 +1818,5 @@ private fun escapeHtmlAttributeSql(value: String): String {
         .replace("<", "&lt;")
         .replace(">", "&gt;")
 }
-
-private fun scanDictionaryZipSql(
-    contentResolver: ContentResolver,
-    uri: Uri,
-    fallbackName: String,
-    onProgress: ((DictionaryImportProgress) -> Unit)?
-): SqlZipScanResult {
-    var dictionaryName = fallbackName.substringBeforeLast('.').ifBlank { "Dictionary" }
-    val termBankPaths = mutableListOf<String>()
-    var stylesCss: String? = null
-    var stylesCssPriority = Int.MIN_VALUE
-    var firstDslPath: String? = null
-    var firstJsonPath: String? = null
-    var scannedEntries = 0
-
-    contentResolver.openInputStream(uri)?.use { stream ->
-        ZipInputStream(BufferedInputStream(stream)).use { zip ->
-            var entry = zip.nextEntry
-            while (entry != null) {
-                scannedEntries += 1
-                if (scannedEntries == 1 || scannedEntries % 25 == 0) {
-                    onProgress?.invoke(
-                        DictionaryImportProgress(
-                            stage = "Scanning archive",
-                            current = scannedEntries,
-                            total = 0
-                        )
-                    )
-                }
-                if (!entry.isDirectory) {
-                    val path = normalizeZipPathSql(entry.name)
-                    val fileName = path.substringAfterLast('/').lowercase(Locale.US)
-                    when {
-                        fileName == "index.json" -> {
-                            val raw = zip.readBytes().decodeToString()
-                            val title = runCatching {
-                                val obj = JSONObject(raw)
-                                obj.optString("title").ifBlank { obj.optString("name") }
-                            }.getOrNull()
-                            if (!title.isNullOrBlank()) dictionaryName = title
-                        }
-
-                        fileName.endsWith(".css") -> {
-                            val css = runCatching { zip.readBytes().decodeToString() }.getOrNull()
-                            if (!css.isNullOrBlank()) {
-                                val priority = when (fileName) {
-                                    "styles.css" -> 3
-                                    "style.css" -> 2
-                                    else -> 1
-                                }
-                                if (priority >= stylesCssPriority) {
-                                    stylesCss = css
-                                    stylesCssPriority = priority
-                                }
-                            }
-                        }
-
-                        isTermBankFileSql(path) -> termBankPaths += path
-                        firstDslPath == null && path.lowercase(Locale.US).endsWith(".dsl") -> firstDslPath = path
-
-                        firstJsonPath == null &&
-                            path.lowercase(Locale.US).endsWith(".json") &&
-                            !path.substringAfterLast('/').equals("index.json", true) -> {
-                            firstJsonPath = path
-                        }
-                    }
-                }
-                zip.closeEntry()
-                entry = zip.nextEntry
-            }
-        }
-    } ?: error("Unable to read dictionary archive")
-
-    return SqlZipScanResult(
-        dictionaryName = dictionaryName,
-        termBankPaths = termBankPaths.sorted(),
-        stylesCss = stylesCss,
-        firstDslPath = firstDslPath,
-        firstJsonPath = firstJsonPath
-    )
-}
-
-private fun normalizeZipPathSql(path: String): String {
-    return path.replace('\\', '/').trimStart('/')
-}
-
-private fun isTermBankFileSql(path: String): Boolean {
-    val name = path.substringAfterLast('/').lowercase(Locale.US)
-    return TERM_BANK_FILE_REGEX.matches(name)
-}
-
 
 

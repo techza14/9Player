@@ -37,12 +37,17 @@ object BookReaderFloatingBridge {
         fun onPlaybackPositionChanged(positionMs: Long)
     }
 
+    interface PlaybackSpeedListener {
+        fun onPlaybackSpeedChanged(speed: Float)
+    }
+
     @Volatile
     private var controller: Controller? = null
     private val listeners = linkedSetOf<PlaybackStateListener>()
     private val favoriteListeners = linkedSetOf<FavoriteStateListener>()
     private val subtitleListeners = linkedSetOf<SubtitleStateListener>()
     private val playbackPositionListeners = linkedSetOf<PlaybackPositionListener>()
+    private val playbackSpeedListeners = linkedSetOf<PlaybackSpeedListener>()
     @Volatile
     private var playingSnapshot: Boolean = false
     @Volatile
@@ -55,6 +60,8 @@ object BookReaderFloatingBridge {
     private var cueSnapshot: CueSnapshot? = null
     @Volatile
     private var playbackPositionSnapshot: Long = 0L
+    @Volatile
+    private var playbackSpeedSnapshot: Float = 1f
 
     fun attach(controller: Controller) {
         synchronized(this) {
@@ -66,6 +73,7 @@ object BookReaderFloatingBridge {
         notifyFavoriteState(favoriteSnapshot)
         notifySubtitle(subtitleSnapshot)
         notifyPlaybackPosition(playbackPositionSnapshot)
+        notifyPlaybackSpeed(playbackSpeedSnapshot)
     }
 
     fun detach(controller: Controller) {
@@ -82,6 +90,7 @@ object BookReaderFloatingBridge {
         notifyFavoriteState(favoriteSnapshot)
         notifySubtitle(subtitleSnapshot)
         notifyPlaybackPosition(0L)
+        notifyPlaybackSpeed(1f)
     }
 
     fun addPlaybackStateListener(listener: PlaybackStateListener) {
@@ -136,6 +145,19 @@ object BookReaderFloatingBridge {
         }
     }
 
+    fun addPlaybackSpeedListener(listener: PlaybackSpeedListener) {
+        synchronized(this) {
+            playbackSpeedListeners += listener
+        }
+        listener.onPlaybackSpeedChanged(playbackSpeedSnapshot)
+    }
+
+    fun removePlaybackSpeedListener(listener: PlaybackSpeedListener) {
+        synchronized(this) {
+            playbackSpeedListeners -= listener
+        }
+    }
+
     fun notifyPlaybackState(isPlaying: Boolean) {
         val snapshot: List<PlaybackStateListener>
         synchronized(this) {
@@ -151,6 +173,7 @@ object BookReaderFloatingBridge {
     fun currentSubtitle(): String? = subtitleSnapshot
     fun currentCue(): CueSnapshot? = cueSnapshot
     fun currentPlaybackPositionMs(): Long = playbackPositionSnapshot
+    fun currentPlaybackSpeed(): Float = playbackSpeedSnapshot
 
     fun setCurrentAudioUri(audioUri: String?) {
         synchronized(this) {
@@ -200,6 +223,16 @@ object BookReaderFloatingBridge {
         snapshot.forEach { it.onPlaybackPositionChanged(normalized) }
     }
 
+    fun notifyPlaybackSpeed(speed: Float) {
+        val normalized = if (speed.isFinite() && speed > 0f) speed else 1f
+        val snapshot: List<PlaybackSpeedListener>
+        synchronized(this) {
+            playbackSpeedSnapshot = normalized
+            snapshot = playbackSpeedListeners.toList()
+        }
+        snapshot.forEach { it.onPlaybackSpeedChanged(normalized) }
+    }
+
     fun notifyFavoriteState(isFavorite: Boolean) {
         val snapshot: List<FavoriteStateListener>
         synchronized(this) {
@@ -240,7 +273,7 @@ object BookReaderFloatingBridge {
 
 private const val TIMED_SUBTITLE_SCROLL_START_HOLD = 0.12f
 private const val TIMED_SUBTITLE_SCROLL_END_HOLD = 0.18f
-private const val TIMED_SUBTITLE_SCROLL_TARGET_MAX = 0.94f
+private const val TIMED_SUBTITLE_SCROLL_TARGET_MAX = 1.0f
 
 internal fun mapTimedSubtitleScrollProgress(linearProgress: Float): Float {
     val progress = linearProgress.coerceIn(0f, 1f)

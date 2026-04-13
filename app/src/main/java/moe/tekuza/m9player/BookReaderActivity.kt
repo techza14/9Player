@@ -1589,25 +1589,32 @@ private fun BookReaderScreen(
         scope.launch {
             val result = withContext(Dispatchers.Default) {
                 runCatching {
-                    computeLookupResults(
+                    computeTapLookupResultsWithWinningCandidate(
                         context = context,
                         dictionaries = dictionariesSnapshot,
-                        candidates = candidates
+                        query = selectedToken ?: candidates.first()
                     )
                 }
             }
-            result.onSuccess { hits ->
+            result.onSuccess { computed ->
                 if (lookupPopupRequestNonce != requestNonce) return@onSuccess
+                val hits = computed?.hits.orEmpty()
                 if (hits.isEmpty()) return@onSuccess
+                val matchedLength = hits.firstOrNull { it.matchedLength > 0 }?.matchedLength
+                    ?: computed?.query?.length
+                    ?: selectedToken?.length
+                    ?: 1
                 val selectedRange = trimSelectionRangeByMatchedLength(
                     selectionRange,
-                    hits.first().matchedLength
+                    matchedLength
                 )
                 val selectionText = selectedRange?.let { range ->
                     val start = range.first.coerceIn(0, cue.text.length)
                     val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
                     if (endExclusive > start) cue.text.substring(start, endExclusive) else ""
-                }?.trim()?.takeIf { it.isNotBlank() } ?: selectedToken
+                }?.trim()?.takeIf { it.isNotBlank() }
+                    ?: computed?.query?.trim()?.takeIf { it.isNotBlank() }
+                    ?: selectedToken
                 lookupSession.push(buildLookupLayer(
                     loading = false,
                     error = null,
@@ -1679,139 +1686,70 @@ private fun BookReaderScreen(
         tapData: DefinitionLookupTapData,
         anchor: ReaderLookupAnchor?
     ) {
-        val currentLayer = lookupSession.getOrNull(sourceLayerIndex) ?: run {
-            Log.d(BOOK_LOOKUP_ANCHOR_LOG_TAG, "recursiveAbort reason=no_source_layer index=$sourceLayerIndex")
-            return
-        }
-        val cue = currentLayer.cue ?: run {
-            Log.d(BOOK_LOOKUP_ANCHOR_LOG_TAG, "recursiveAbort reason=no_cue index=$sourceLayerIndex")
-            return
-        }
-        val cueIndex = currentLayer.cueIndex
-        val selection = selectLookupScanText(tapData.scanText.ifBlank { tapData.text }, 0) ?: run {
-            Log.d(
-                BOOK_LOOKUP_ANCHOR_LOG_TAG,
-                "recursiveAbort reason=no_selection scan='${tapData.scanText.take(24)}' text='${tapData.text.take(24)}'"
-            )
-            truncateLookupLayersTo(sourceLayerIndex)
-            return
-        }
-        val term = selection.text.trim().takeIf { it.isNotBlank() } ?: run {
-            Log.d(BOOK_LOOKUP_ANCHOR_LOG_TAG, "recursiveAbort reason=blank_term")
-            truncateLookupLayersTo(sourceLayerIndex)
-            return
-        }
-        val dictionariesSnapshot = loadedDictionaries
-        val tapAnchorBounds = anchor.boundingRectOrNull()
-        val currentAnchorBounds = currentLayer.anchor.boundingRectOrNull()
-        val estimatedAnchorY = tapAnchorBounds?.bottom
-            ?: currentAnchorBounds?.bottom
-            ?: (view.height * 0.56f)
-        val shouldPlaceBelow = estimatedAnchorY <= (view.height / 2f)
-        Log.d(
-            BOOK_LOOKUP_ANCHOR_LOG_TAG,
-            "recursiveStart sourceLayer=$sourceLayerIndex term=$term tapAnchor=${formatRectForLog(tapAnchorBounds)} currentAnchor=${formatRectForLog(currentAnchorBounds)} placeBelow=$shouldPlaceBelow"
-        )
-        val requestNonce = lookupPopupRequestNonce + 1L
-        lookupPopupRequestNonce = requestNonce
-
-        if (dictionariesSnapshot.isEmpty()) {
-            Log.d(BOOK_LOOKUP_ANCHOR_LOG_TAG, "recursiveAbort reason=no_dictionary")
-            Toast.makeText(context, context.getString(R.string.bookreader_lookup_no_dict), Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        scope.launch {
-            val result = withContext(Dispatchers.Default) {
-                runCatching {
-                    computeLookupResults(
-                        context = context,
-                        dictionaries = dictionariesSnapshot,
-                        candidates = listOf(term)
+        launchRecursiveLookupIntoSession(
+            context = context,
+            scope = scope,
+            session = lookupSession,
+            sourceLayerIndex = sourceLayerIndex,
+            definitionKey = definitionKey,
+            tapData = tapData,
+            explicitAnchor = anchor,
+            requireSourceCue = true,
+            viewportHeight = view.height,
+            dictionaries = loadedDictionaries,
+            nextRequestNonce = {
+                val next = lookupPopupRequestNonce + 1L
+                lookupPopupRequestNonce = next
+                next
+            },
+            isRequestNonceCurrent = { nonce -> lookupPopupRequestNonce == nonce },
+            logAnchorTag = BOOK_LOOKUP_ANCHOR_LOG_TAG,
+            logPosTag = BOOK_LOOKUP_POS_LOG_TAG,
+            buildPopupSentence = { term, data ->
+                data.sentence.trim().ifBlank {
+                    extractFullSentenceLikeHoshi(
+                        text = data.nodeText,
+                        anchorText = term,
+                        anchorIndexHint = data.offset
                     )
                 }
-            }
-            result.onSuccess { hits ->
-                if (lookupPopupRequestNonce != requestNonce) return@onSuccess
-                if (hits.isEmpty()) {
-                    Log.d(BOOK_LOOKUP_ANCHOR_LOG_TAG, "recursiveAbort reason=no_hits term=$term")
-                    return@onSuccess
-                }
-                val resolvedRects = resolveDefinitionMatchedRects(tapData, hits.first().matchedLength)
-                val adjustedHighlightRects = if (resolvedRects != null) {
-                    resolvedRects.localCharRects
-                        .let { rebuildRectsFromCharacterRectsShared(it, hits.first().matchedLength) }
-                        .let { sanitizeResolvedHighlightRectsShared(it, tapData.localRects) }
-                } else {
-                    rebuildDefinitionRectsByMatchedLength(
-                        rects = tapData.localRects,
-                        charRects = tapData.localCharRects,
-                        nodeText = tapData.nodeText,
-                        startOffset = tapData.offset,
-                        matchedLength = hits.first().matchedLength
-                    )
-                }
-                val tapScreenAnchorRects = tapData.resolveScreenAnchorRects()
-                val adjustedAnchorRects = resolvedRects?.screenCharRects
-                    ?.let { rebuildRectsFromCharacterRectsShared(it, hits.first().matchedLength) }
-                    ?.takeIf { it.isNotEmpty() }
-                    ?: rebuildDefinitionAnchorRectsByMatchedLength(
-                        charRects = tapScreenAnchorRects,
-                        fallbackRect = anchor.boundingRectOrNull() ?: tapScreenAnchorRects.firstOrNull(),
-                        matchedLength = hits.first().matchedLength
-                    )
-                val adjustedAnchor = if (adjustedAnchorRects.isNotEmpty()) {
-                    ReaderLookupAnchor(rects = adjustedAnchorRects)
-                } else {
-                    anchor ?: currentLayer.anchor
-                }
-                val adjustedAnchorBounds = adjustedAnchor.boundingRectOrNull()
-                truncateLookupLayersTo(sourceLayerIndex)
-                if (lookupSession.getOrNull(sourceLayerIndex) != null) {
-                    lookupSession.replaceAt(sourceLayerIndex) { it.copy(
-                        highlightedDefinitionKey = definitionKey,
-                        highlightedDefinitionRects = adjustedHighlightRects
-                    ) }
-                }
-                consumeCueRangeSelection()
-                lookupPopupTemporarilyHidden = false
-                lookupSession.push(buildLookupLayer(
+            },
+            buildLayer = { resolved ->
+                buildLookupLayer(
                     loading = false,
                     error = null,
-                    rawResults = hits,
-                    cue = cue,
-                    cueIndex = cueIndex,
+                    rawResults = resolved.hits,
+                    cue = resolved.sourceCue,
+                    cueIndex = resolved.sourceCueIndex,
                     anchorOffset = tapData.offset,
-                    anchor = adjustedAnchor,
-                    placeBelow = shouldPlaceBelow,
+                    anchor = resolved.adjustedAnchor,
+                    placeBelow = resolved.shouldPlaceBelow,
                     preferSidePlacement = true,
                     selectedRange = null,
-                    selectionText = term,
-                    popupSentence = tapData.sentence.trim().ifBlank {
-                        extractFullSentenceLikeHoshi(
-                            text = tapData.nodeText,
-                            anchorText = term,
-                            anchorIndexHint = tapData.offset
-                        )
-                    }
-                ))
-                Log.d(
-                    BOOK_LOOKUP_POS_LOG_TAG,
-                    "push layer=${lookupSession.lastIndex} source=recursive term=$term anchor=${formatRectForLog(adjustedAnchorBounds)} placeBelow=$shouldPlaceBelow fromLayer=$sourceLayerIndex"
+                    selectionText = resolved.term,
+                    popupSentence = resolved.popupSentence
                 )
-            }.onFailure {
-                if (lookupPopupRequestNonce != requestNonce) return@onFailure
+            },
+            onNoSourceLayer = { _ -> },
+            onNoCue = { _ -> },
+            onNoSelection = {
+                truncateLookupLayersTo(sourceLayerIndex)
+            },
+            onNoDictionary = {
+                Toast.makeText(context, context.getString(R.string.bookreader_lookup_no_dict), Toast.LENGTH_SHORT).show()
+            },
+            onBeforeApply = {
+                consumeCueRangeSelection()
+                lookupPopupTemporarilyHidden = false
+            },
+            onFailure = { error ->
                 Toast.makeText(
                     context,
-                    (it.message ?: context.getString(R.string.bookreader_lookup_failed)).take(200),
+                    (error.message ?: context.getString(R.string.bookreader_lookup_failed)).take(200),
                     Toast.LENGTH_LONG
                 ).show()
-                Log.d(
-                    BOOK_LOOKUP_POS_LOG_TAG,
-                    "recursiveFail sourceLayer=$sourceLayerIndex term=$term"
-                )
             }
-        }
+        )
     }
 
     fun addLookupGroupToAnki(layerIndex: Int, groupedResult: GroupedLookupResult) {
@@ -2836,7 +2774,7 @@ private fun BookReaderScreen(
                 layer.preferSidePlacement,
                 density.density
             ) {
-                computeLookupPopupSizeSpec(
+                computeSharedLookupPopupSizeSpec(
                     screenWidthDp = configuration.screenWidthDp,
                     screenHeightDp = configuration.screenHeightDp,
                     anchor = effectiveAnchor,
@@ -2855,13 +2793,14 @@ private fun BookReaderScreen(
                 popupSizeSpec.widthDp,
                 popupSizeSpec.contentMaxHeightDp
             ) {
-                ReaderLookupPopupPositionProvider(
+                SharedLookupPopupPositionProvider(
                     anchor = effectiveAnchor,
                     placeBelow = layer.placeBelow,
                     preferSidePlacement = layer.preferSidePlacement,
                     preferredDirection = popupSizeSpec.preferredDirection,
                     gapPx = lookupPopupGapPx,
-                    screenPaddingPx = lookupPopupScreenPaddingPx
+                    screenPaddingPx = lookupPopupScreenPaddingPx,
+                    logTag = BOOK_LOOKUP_POS_LOG_TAG
                 )
             }
             Popup(
@@ -2911,11 +2850,10 @@ private fun BookReaderScreen(
                             showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
                             showAddToAnki = true
                         )
-                        ReaderLookupPopupCard(
+                        LookupPopupCardContent(
                             groupedResults = layer.groupedResults,
                             loading = layer.loading,
                             error = layer.error,
-                            sourceTerm = layer.sourceTerm,
                             highlightedDefinitionKey = layer.highlightedDefinitionKey,
                             highlightedDefinitionRects = layer.highlightedDefinitionRects,
                             collapsedSections = layer.collapsedSections,
@@ -2958,215 +2896,6 @@ private fun BookReaderScreen(
                                 }
                             }
                         )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReaderLookupPopupCard(
-    groupedResults: List<GroupedLookupResult>,
-    loading: Boolean,
-    error: String?,
-    sourceTerm: String?,
-    highlightedDefinitionKey: String?,
-    highlightedDefinitionRects: List<Rect>,
-    collapsedSections: Map<String, Boolean>,
-    actionState: LookupCardActionState,
-    contentMaxHeightDp: Int,
-    onToggleSection: ((String, Boolean) -> Unit)?,
-    onDefinitionLookup: ((String, DefinitionLookupTapData) -> Unit)?,
-    onRangeSelection: (() -> Unit)?,
-    onPlayAudio: ((GroupedLookupResult) -> Unit)?,
-    onAddToAnki: ((GroupedLookupResult) -> Unit)?,
-    onCloseAll: (() -> Unit)?,
-    onClose: (() -> Unit)?
-) {
-    val presentation = remember(groupedResults, highlightedDefinitionKey, highlightedDefinitionRects, collapsedSections) {
-        buildLookupPresentation(
-            ReaderLookupLayer(
-                loading = loading,
-                error = error,
-                groupedResults = groupedResults,
-                sourceTerm = null,
-                cue = null,
-                cueIndex = null,
-                anchorOffset = null,
-                anchor = null,
-                placeBelow = true,
-                preferSidePlacement = false,
-                selectedRange = null,
-                selectionText = null,
-                popupSentence = null,
-                highlightedDefinitionKey = highlightedDefinitionKey,
-                highlightedDefinitionRects = highlightedDefinitionRects,
-                highlightedDefinitionNodePathJson = null,
-                highlightedDefinitionOffset = null,
-                highlightedDefinitionLength = null,
-                collapsedSections = collapsedSections,
-                autoPlayNonce = 0L,
-                autoPlayedKey = null
-            )
-        )
-    }
-    Column(
-        modifier = Modifier.padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        if (!actionState.sourceTerm.isNullOrBlank()) {
-            Text(
-                text = stringResource(R.string.floating_lookup_from, actionState.sourceTerm),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(contentMaxHeightDp.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (loading) {
-                Text(stringResource(R.string.common_querying))
-            }
-            if (error != null) {
-                Text(error, color = MaterialTheme.colorScheme.error)
-            }
-            presentation.forEach { groupedPresentation ->
-                val groupedResult = groupedPresentation.groupedResult
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            LookupHeadwordWithReading(
-                                term = groupedResult.term,
-                                reading = groupedResult.reading,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(end = 8.dp)
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                if (actionState.showRangeSelection && onRangeSelection != null) {
-                                    OutlinedButton(onClick = onRangeSelection) {
-                                        Text("▦")
-                                    }
-                                }
-                                if (actionState.showPlayAudio && onPlayAudio != null) {
-                                    OutlinedButton(onClick = { onPlayAudio(groupedResult) }) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.Audiotrack,
-                                            contentDescription = stringResource(R.string.common_audio),
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                }
-                                if (actionState.showAddToAnki && onAddToAnki != null) {
-                                    OutlinedButton(onClick = { onAddToAnki(groupedResult) }) {
-                                        Text("+")
-                                    }
-                                }
-                            }
-                        }
-                        val frequencyLabel = stringResource(R.string.bookreader_meta_frequency)
-                        val pitchLabel = stringResource(R.string.bookreader_meta_pitch)
-                        val topFrequencyBadges = groupedResult.dictionaries
-                            .asSequence()
-                            .map { dictionaryGroup ->
-                                parseMetaBadges(dictionaryGroup.frequency, frequencyLabel)
-                            }
-                            .firstOrNull { it.isNotEmpty() }
-                            .orEmpty()
-                        if (topFrequencyBadges.isNotEmpty()) {
-                            MetaBadgeRow(
-                                badges = topFrequencyBadges,
-                                labelColor = Color(0xFFDDF0DD),
-                                labelTextColor = Color(0xFF305E33)
-                            )
-                        }
-                        val topPitchBadges = groupedResult.dictionaries
-                            .asSequence()
-                            .map { dictionaryGroup ->
-                                parsePitchBadgeGroups(
-                                    raw = dictionaryGroup.pitch,
-                                    reading = groupedResult.reading,
-                                    defaultLabel = pitchLabel
-                                )
-                            }
-                            .firstOrNull { it.isNotEmpty() }
-                            .orEmpty()
-                        if (topPitchBadges.isNotEmpty()) {
-                            topPitchBadges.forEach { group ->
-                                PitchBadgeRow(
-                                    group = group,
-                                    labelColor = Color(0xFFE7DDF8),
-                                    labelTextColor = Color(0xFF4E3A74)
-                                )
-                            }
-                        }
-
-                        groupedPresentation.dictionaries.forEach { dictionaryPresentation ->
-                            Card(modifier = Modifier.fillMaxWidth()) {
-                                Column(
-                                    modifier = Modifier.padding(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    DictionaryEntryHeader(
-                                        dictionaryName = dictionaryPresentation.dictionaryName,
-                                        expanded = dictionaryPresentation.expanded,
-                                        onToggleExpanded = {
-                                            onToggleSection?.invoke(
-                                                dictionaryPresentation.sectionKey,
-                                                dictionaryPresentation.expanded
-                                            )
-                                        }
-                                    )
-                                    if (dictionaryPresentation.expanded) {
-                                        dictionaryPresentation.definitions.forEach { definitionPresentation ->
-                                            Card(modifier = Modifier.fillMaxWidth()) {
-                                                Column(
-                                                    modifier = Modifier.padding(8.dp),
-                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                                ) {
-                                                    RichDefinitionView(
-                                                        definition = definitionPresentation.definitionHtml,
-                                                        dictionaryName = null,
-                                                        dictionaryCss = definitionPresentation.dictionaryCss,
-                                                        highlightedRects = definitionPresentation.highlightedRects,
-                                                        onLookupTap = if (onDefinitionLookup != null) {
-                                                            { tapData ->
-                                                                onDefinitionLookup(definitionPresentation.definitionKey, tapData)
-                                                            }
-                                                        } else null
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (onClose != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onClose) {
-                    Text(stringResource(R.string.common_close))
-                }
-                if (actionState.canCloseAll && onCloseAll != null) {
-                    TextButton(onClick = onCloseAll) {
-                        Text(stringResource(R.string.common_close_all))
                     }
                 }
             }
@@ -3254,7 +2983,7 @@ private fun ReaderLookupClickableSubtitle(
             }
         }
         callback(
-            if (localRects.isEmpty()) null else ReaderLookupAnchor(rects = mergeRectsByLine(localRects))
+            if (localRects.isEmpty()) null else ReaderLookupAnchor(rects = mergeRectsByLineShared(localRects))
         )
     }
 
@@ -3321,182 +3050,6 @@ private fun ReaderLookupClickableSubtitle(
     )
 }
 
-private data class LookupPopupSizeSpec(
-    val widthDp: Int,
-    val contentMaxHeightDp: Int,
-    val preferredDirection: LookupPopupDirection
-)
-
-private enum class LookupPopupDirection {
-    BELOW,
-    ABOVE,
-    RIGHT,
-    LEFT
-}
-
-private fun computeLookupPopupSizeSpec(
-    screenWidthDp: Int,
-    screenHeightDp: Int,
-    anchor: ReaderLookupAnchor?,
-    placeBelow: Boolean,
-    preferSidePlacement: Boolean,
-    density: Float
-): LookupPopupSizeSpec {
-    val safeDensity = density.takeIf { it > 0f } ?: 1f
-    val screenWidth = screenWidthDp.toFloat().coerceAtLeast(1f)
-    val screenHeight = screenHeightDp.toFloat().coerceAtLeast(1f)
-    val anchorBounds = anchor.boundingRectOrNull()
-    val anchorLeftDp = ((anchorBounds?.left ?: screenWidth * safeDensity * 0.4f) / safeDensity).coerceIn(0f, screenWidth)
-    val anchorRightDp = ((anchorBounds?.right ?: screenWidth * safeDensity * 0.6f) / safeDensity).coerceIn(0f, screenWidth)
-    val anchorTopDp = ((anchorBounds?.top ?: screenHeight * safeDensity * 0.46f) / safeDensity).coerceIn(0f, screenHeight)
-    val anchorBottomDp = ((anchorBounds?.bottom ?: screenHeight * safeDensity * 0.56f) / safeDensity).coerceIn(0f, screenHeight)
-    val screenPaddingDp = 12f
-    val guardDp = 24f
-    val preferredMinWidthDp = 220f
-    val maxWidthDp = 320f
-    val preferredMinContentHeightDp = 96f
-    val maxContentHeightDp = 260f
-    val chromeReserveDp = 112f
-
-    data class DirectionCap(val direction: LookupPopupDirection, val widthCap: Float, val contentHeightCap: Float)
-
-    val fullWidthCap = (screenWidth - screenPaddingDp * 2f).coerceAtLeast(0f)
-    val fullHeightCap = (screenHeight - screenPaddingDp * 2f - chromeReserveDp).coerceAtLeast(0f)
-    val belowCap = DirectionCap(
-        direction = LookupPopupDirection.BELOW,
-        widthCap = fullWidthCap,
-        contentHeightCap = (screenHeight - anchorBottomDp - guardDp - screenPaddingDp - chromeReserveDp).coerceAtLeast(0f)
-    )
-    val aboveCap = DirectionCap(
-        direction = LookupPopupDirection.ABOVE,
-        widthCap = fullWidthCap,
-        contentHeightCap = (anchorTopDp - guardDp - screenPaddingDp - chromeReserveDp).coerceAtLeast(0f)
-    )
-    val rightCap = DirectionCap(
-        direction = LookupPopupDirection.RIGHT,
-        widthCap = (screenWidth - anchorRightDp - guardDp - screenPaddingDp).coerceAtLeast(0f),
-        contentHeightCap = fullHeightCap
-    )
-    val leftCap = DirectionCap(
-        direction = LookupPopupDirection.LEFT,
-        widthCap = (anchorLeftDp - guardDp - screenPaddingDp).coerceAtLeast(0f),
-        contentHeightCap = fullHeightCap
-    )
-
-    val verticalCaps = if (placeBelow) listOf(belowCap, aboveCap) else listOf(aboveCap, belowCap)
-    val sideCaps = if (preferSidePlacement) listOf(rightCap, leftCap) else listOf(leftCap, rightCap)
-
-    val bestCap =
-        verticalCaps.firstOrNull { it.widthCap >= preferredMinWidthDp && it.contentHeightCap >= preferredMinContentHeightDp }
-            ?: sideCaps.firstOrNull { it.widthCap >= preferredMinWidthDp && it.contentHeightCap >= preferredMinContentHeightDp }
-            ?: (verticalCaps + sideCaps).maxByOrNull { it.widthCap * it.contentHeightCap }
-
-    val width = (bestCap?.widthCap ?: maxWidthDp)
-        .coerceIn(1f, maxWidthDp)
-        .toInt()
-    val contentMaxHeight = (bestCap?.contentHeightCap ?: maxContentHeightDp)
-        .coerceIn(1f, maxContentHeightDp)
-        .toInt()
-
-    return LookupPopupSizeSpec(
-        widthDp = width,
-        contentMaxHeightDp = contentMaxHeight,
-        preferredDirection = bestCap?.direction ?: if (placeBelow) LookupPopupDirection.BELOW else LookupPopupDirection.ABOVE
-    )
-}
-
-private fun rebuildDefinitionRectsByMatchedLength(
-    rects: List<Rect>,
-    charRects: List<Rect>,
-    nodeText: String,
-    startOffset: Int,
-    matchedLength: Int
-): List<Rect> {
-    val exactRects = rebuildRectsFromCharacterRects(charRects, matchedLength)
-    if (exactRects.isNotEmpty()) return exactRects
-    if (rects.isEmpty()) return emptyList()
-    val safeNodeTextLength = nodeText.length.takeIf { it > 0 } ?: return rects
-    val safeStartOffset = startOffset.coerceIn(0, safeNodeTextLength - 1)
-    val remainingLength = (safeNodeTextLength - safeStartOffset).coerceAtLeast(1)
-    val safeMatchedLength = matchedLength.coerceAtLeast(1).coerceAtMost(remainingLength)
-    val safeBaseLength = selectLookupScanText(nodeText, safeStartOffset)?.text?.length?.coerceAtLeast(safeMatchedLength)
-        ?: remainingLength
-    if (safeMatchedLength >= safeBaseLength) return rects
-    val totalWidth = rects.sumOf { (it.right - it.left).coerceAtLeast(0f).toDouble() }.toFloat()
-    if (totalWidth <= 0f) return rects
-    var remainingWidth = totalWidth * (safeMatchedLength.toFloat() / safeBaseLength.toFloat())
-    val result = mutableListOf<Rect>()
-    for (rect in rects) {
-        if (remainingWidth <= 0f) break
-        val rectWidth = (rect.right - rect.left).coerceAtLeast(0f)
-        if (rectWidth <= 0f) continue
-        if (remainingWidth >= rectWidth) {
-            result += rect
-            remainingWidth -= rectWidth
-        } else {
-            result += Rect(
-                left = rect.left,
-                top = rect.top,
-                right = rect.left + remainingWidth,
-                bottom = rect.bottom
-            )
-            remainingWidth = 0f
-        }
-    }
-    return result.ifEmpty { rects.take(1) }
-}
-
-private fun rebuildDefinitionAnchorRectsByMatchedLength(
-    charRects: List<Rect>,
-    fallbackRect: Rect?,
-    matchedLength: Int
-): List<Rect> {
-    val exactRects = rebuildRectsFromCharacterRects(charRects, matchedLength)
-    return when {
-        exactRects.isNotEmpty() -> exactRects
-        fallbackRect != null -> listOf(fallbackRect)
-        else -> emptyList()
-    }
-}
-
-private fun rebuildRectsFromCharacterRects(
-    charRects: List<Rect>,
-    matchedLength: Int
-): List<Rect> {
-    if (charRects.isEmpty()) return emptyList()
-    val safeMatchedLength = matchedLength.coerceAtLeast(1).coerceAtMost(charRects.size)
-    val selectedRects = charRects.take(safeMatchedLength).filter {
-        (it.right - it.left) > 0f || (it.bottom - it.top) > 0f
-    }
-    if (selectedRects.isEmpty()) return emptyList()
-    return mergeRectsByLine(selectedRects)
-}
-
-private fun mergeRectsByLine(rects: List<Rect>): List<Rect> {
-    if (rects.isEmpty()) return emptyList()
-    val sorted = rects.sortedWith(compareBy<Rect> { it.top }.thenBy { it.left })
-    val result = mutableListOf<Rect>()
-    val verticalTolerance = 2f
-    var current = sorted.first()
-    for (index in 1 until sorted.size) {
-        val rect = sorted[index]
-        if (kotlin.math.abs(rect.top - current.top) <= verticalTolerance &&
-            kotlin.math.abs(rect.bottom - current.bottom) <= verticalTolerance
-        ) {
-            current = Rect(
-                left = minOf(current.left, rect.left),
-                top = minOf(current.top, rect.top),
-                right = maxOf(current.right, rect.right),
-                bottom = maxOf(current.bottom, rect.bottom)
-            )
-        } else {
-            result += current
-            current = rect
-        }
-    }
-    result += current
-    return result
-}
 
 private fun mergeRects(rects: List<Rect>): Rect {
     return Rect(
@@ -3514,15 +3067,6 @@ private fun formatRectForLog(rect: Rect?): String {
 
 private fun formatRangeForLog(range: IntRange?): String {
     return range?.let { "${it.first}..${it.last}" } ?: "null"
-}
-
-private fun formatIntRectForLog(rect: IntRect): String {
-    return "${rect.left},${rect.top},${rect.right},${rect.bottom}"
-}
-
-private fun formatIntRectsForLog(rects: List<IntRect>): String {
-    if (rects.isEmpty()) return "[]"
-    return rects.joinToString(prefix = "[", postfix = "]") { formatIntRectForLog(it) }
 }
 
 private fun ReaderLookupAnchor?.boundingRectOrNull(): Rect? {
@@ -3548,315 +3092,6 @@ private fun ReaderLookupAnchor?.expandForSelectionText(selectionText: String?): 
         bottom = rect.bottom + 3f
     )
     return ReaderLookupAnchor(rects = listOf(expanded))
-}
-
-private fun DefinitionLookupTapData.resolveScreenAnchorRects(): List<Rect> {
-    val fromChars = screenCharRects.filter { !it.isEmpty }
-    val fromRect = screenRect?.takeIf { !it.isEmpty }?.let { listOf(it) }.orEmpty()
-    val host = hostView ?: return emptyList()
-    val location = IntArray(2)
-    host.getLocationOnScreen(location)
-    val fallbackLocalRects = if (localCharRects.isNotEmpty()) localCharRects else localRects
-    val fromLocal = fallbackLocalRects
-        .filter { !it.isEmpty }
-        .map { rect ->
-            Rect(
-                left = location[0].toFloat() + rect.left,
-                top = location[1].toFloat() + rect.top,
-                right = location[0].toFloat() + rect.right,
-                bottom = location[1].toFloat() + rect.bottom
-            )
-        }
-    // Prefer the JS-provided character-level screen rects when available.
-    // They are usually the most precise anchor for recursive lookup positioning.
-    if (fromChars.isNotEmpty()) return fromChars
-    if (fromLocal.isNotEmpty()) return fromLocal
-    return fromRect
-}
-
-private class ReaderLookupPopupPositionProvider(
-    private val anchor: ReaderLookupAnchor?,
-    private val placeBelow: Boolean,
-    private val preferSidePlacement: Boolean,
-    private val preferredDirection: LookupPopupDirection,
-    private val gapPx: Int,
-    private val screenPaddingPx: Int
-) : PopupPositionProvider {
-    override fun calculatePosition(
-        anchorBounds: IntRect,
-        windowSize: IntSize,
-        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
-        popupContentSize: IntSize
-    ): IntOffset {
-        val effectiveGapPx = gapPx.coerceIn(8, 20)
-        val sourceRects = anchor?.rects
-            ?.filter { !it.isEmpty }
-            ?.map {
-                IntRect(
-                    left = it.left.toInt(),
-                    top = it.top.toInt(),
-                    right = it.right.toInt(),
-                    bottom = it.bottom.toInt()
-                )
-            }
-            ?.takeIf { it.isNotEmpty() }
-            ?: listOf(
-                IntRect(
-                    left = (windowSize.width * 0.4f).toInt(),
-                    top = (windowSize.height * 0.46f).toInt(),
-                    right = (windowSize.width * 0.6f).toInt(),
-                    bottom = (windowSize.height * 0.56f).toInt()
-                )
-            )
-        val sourceBoundsRect = IntRect(
-            left = sourceRects.minOf { it.left },
-            top = sourceRects.minOf { it.top },
-            right = sourceRects.maxOf { it.right },
-            bottom = sourceRects.maxOf { it.bottom }
-        )
-        val blockedRects = listOf(sourceBoundsRect)
-        val maxX = (windowSize.width - popupContentSize.width - screenPaddingPx).coerceAtLeast(screenPaddingPx)
-        val maxY = (windowSize.height - popupContentSize.height - screenPaddingPx).coerceAtLeast(screenPaddingPx)
-        Log.d(
-            BOOK_LOOKUP_POS_LOG_TAG,
-            "calc sourceRects=${formatIntRectsForLog(sourceRects)} blockedRects=${formatIntRectsForLog(blockedRects)} popup=${popupContentSize.width}x${popupContentSize.height} placeBelow=$placeBelow side=$preferSidePlacement preferred=$preferredDirection"
-        )
-
-        fun fitsScreen(candidate: IntOffset): Boolean {
-            return candidate.x in screenPaddingPx..maxX && candidate.y in screenPaddingPx..maxY
-        }
-
-        fun clampToScreen(candidate: IntOffset): IntOffset {
-            return IntOffset(
-                x = candidate.x.coerceIn(screenPaddingPx, maxX),
-                y = candidate.y.coerceIn(screenPaddingPx, maxY)
-            )
-        }
-
-        fun isNonOverlapping(candidate: IntOffset): Boolean {
-            val candidateRect = popupRect(candidate, popupContentSize)
-            return blockedRects.none { rectsOverlap(it, candidateRect) }
-        }
-
-        fun directionPriority(direction: LookupPopupDirection): Int {
-            val baseOrder = if (preferSidePlacement) {
-                if (placeBelow) {
-                    listOf(LookupPopupDirection.RIGHT, LookupPopupDirection.LEFT, LookupPopupDirection.BELOW, LookupPopupDirection.ABOVE)
-                } else {
-                    listOf(LookupPopupDirection.RIGHT, LookupPopupDirection.LEFT, LookupPopupDirection.ABOVE, LookupPopupDirection.BELOW)
-                }
-            } else {
-                if (placeBelow) {
-                    listOf(LookupPopupDirection.BELOW, LookupPopupDirection.ABOVE, LookupPopupDirection.RIGHT, LookupPopupDirection.LEFT)
-                } else {
-                    listOf(LookupPopupDirection.ABOVE, LookupPopupDirection.BELOW, LookupPopupDirection.RIGHT, LookupPopupDirection.LEFT)
-                }
-            }
-            val order = listOf(preferredDirection) + baseOrder.filter { it != preferredDirection }
-            return order.indexOf(direction).takeIf { it >= 0 } ?: Int.MAX_VALUE
-        }
-
-        fun buildAdjacentCandidates(): List<Pair<LookupPopupDirection, IntOffset>> {
-            val forbidden = sourceBoundsRect
-            val popupW = popupContentSize.width
-            val popupH = popupContentSize.height
-            val forbiddenW = (forbidden.right - forbidden.left).coerceAtLeast(1)
-            val forbiddenH = (forbidden.bottom - forbidden.top).coerceAtLeast(1)
-            val xVariants = listOf(
-                forbidden.left,
-                forbidden.right - popupW,
-                forbidden.left + ((forbiddenW - popupW) / 2)
-            )
-            val yVariants = listOf(
-                forbidden.top,
-                forbidden.bottom - popupH,
-                forbidden.top + ((forbiddenH - popupH) / 2)
-            )
-            val belowY = forbidden.bottom + effectiveGapPx
-            val aboveY = forbidden.top - popupH - effectiveGapPx
-            val rightX = forbidden.right + effectiveGapPx
-            val leftX = forbidden.left - popupW - effectiveGapPx
-            return buildList {
-                xVariants.forEach { x ->
-                    add(LookupPopupDirection.BELOW to IntOffset(x, belowY))
-                    add(LookupPopupDirection.ABOVE to IntOffset(x, aboveY))
-                }
-                yVariants.forEach { y ->
-                    add(LookupPopupDirection.RIGHT to IntOffset(rightX, y))
-                    add(LookupPopupDirection.LEFT to IntOffset(leftX, y))
-                }
-            }
-        }
-
-        fun returnWithLog(reason: String, candidate: IntOffset): IntOffset {
-            val popup = popupRect(candidate, popupContentSize)
-            val sourceOverlap = sourceRects.sumOf { overlapArea(it, popup) }
-            val blockedOverlap = blockedRects.sumOf { overlapArea(it, popup) }
-            Log.d(
-                BOOK_LOOKUP_POS_LOG_TAG,
-                "show reason=$reason pos=${candidate.x},${candidate.y} sourceOverlap=$sourceOverlap blockedOverlap=$blockedOverlap sourceBounds=${formatIntRectForLog(sourceBoundsRect)} popupRect=${formatIntRectForLog(popup)}"
-            )
-            return candidate
-        }
-
-        val adjacent = buildAdjacentCandidates()
-        val bestAdjacent = adjacent
-            .minWithOrNull(
-                compareBy<Pair<LookupPopupDirection, IntOffset>> { (direction, _) ->
-                    directionPriority(direction)
-                }.thenBy { (_, candidate) ->
-                    if (fitsScreen(candidate) && isNonOverlapping(candidate)) 0 else 1
-                }.thenBy { (_, candidate) ->
-                    rectDistance(sourceBoundsRect, popupRect(candidate, popupContentSize))
-                }
-            )
-        if (bestAdjacent != null) {
-            val candidate = bestAdjacent.second
-            if (fitsScreen(candidate) && isNonOverlapping(candidate)) {
-                return returnWithLog("adjacent_fit", candidate)
-            }
-        }
-
-        val clampedAdjacent = adjacent
-            .map { (direction, candidate) -> direction to clampToScreen(candidate) }
-            .distinctBy { (_, candidate) -> candidate }
-            .filter { (_, candidate) -> fitsScreen(candidate) && isNonOverlapping(candidate) }
-            .minWithOrNull(
-                compareBy<Pair<LookupPopupDirection, IntOffset>> { (direction, _) ->
-                    directionPriority(direction)
-                }.thenBy { (_, candidate) ->
-                    rectDistance(sourceBoundsRect, popupRect(candidate, popupContentSize))
-                }
-            )?.second
-        if (clampedAdjacent != null) return returnWithLog("adjacent_clamped_fit", clampedAdjacent)
-
-        val nearestNonOverlap = run {
-            val step = maxOf(32, popupContentSize.height / 12)
-            val left = screenPaddingPx
-            val right = maxX
-            val top = screenPaddingPx
-            val bottom = maxY
-            var best: IntOffset? = null
-            var bestDistance = Int.MAX_VALUE
-            var y = top
-            while (y <= bottom) {
-                var x = left
-                while (x <= right) {
-                    val candidate = IntOffset(x, y)
-                    if (fitsScreen(candidate) && isNonOverlapping(candidate)) {
-                        val distance = rectDistance(sourceBoundsRect, popupRect(candidate, popupContentSize))
-                        if (distance < bestDistance) {
-                            best = candidate
-                            bestDistance = distance
-                        }
-                    }
-                    x += step
-                }
-                y += step
-            }
-            best
-        }
-        if (nearestNonOverlap != null) return returnWithLog("nearest_non_overlap_fit", nearestNonOverlap)
-
-        val rawCandidates = adjacent.map { it.second }
-        val clampedCandidates = rawCandidates.map(::clampToScreen).distinct()
-        val fitCount = clampedCandidates.count { fitsScreen(it) }
-        val nonOverlapCount = clampedCandidates.count { isNonOverlapping(it) }
-        val fitAndNonOverlapCount = clampedCandidates.count { fitsScreen(it) && isNonOverlapping(it) }
-        Log.d(
-            BOOK_LOOKUP_POS_LOG_TAG,
-            "reject reason=no_adjacent_candidate raw=${rawCandidates.size} clamped=${clampedCandidates.size} fit=$fitCount nonOverlap=$nonOverlapCount fitAndNonOverlap=$fitAndNonOverlapCount sourceBounds=${formatIntRectForLog(sourceBoundsRect)}"
-        )
-        // No hard-fallback: keep popup outside screen when there is no valid candidate.
-        return IntOffset(
-            x = windowSize.width + screenPaddingPx,
-            y = windowSize.height + screenPaddingPx
-        )
-    }
-}
-
-private fun popupRect(position: IntOffset, popupContentSize: IntSize): IntRect {
-    return IntRect(
-        left = position.x,
-        top = position.y,
-        right = position.x + popupContentSize.width,
-        bottom = position.y + popupContentSize.height
-    )
-}
-
-private fun rectsOverlap(a: IntRect, b: IntRect): Boolean {
-    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
-}
-
-private fun overlapArea(a: IntRect, b: IntRect): Int {
-    val left = maxOf(a.left, b.left)
-    val top = maxOf(a.top, b.top)
-    val right = minOf(a.right, b.right)
-    val bottom = minOf(a.bottom, b.bottom)
-    if (right <= left || bottom <= top) return 0
-    return (right - left) * (bottom - top)
-}
-
-private fun rectDistance(a: IntRect, b: IntRect): Int {
-    val dx = when {
-        b.left >= a.right -> b.left - a.right
-        a.left >= b.right -> a.left - b.right
-        else -> 0
-    }
-    val dy = when {
-        b.top >= a.bottom -> b.top - a.bottom
-        a.top >= b.bottom -> a.top - b.bottom
-        else -> 0
-    }
-    return dx + dy
-}
-
-private fun buildLookupPopupCandidates(
-    anchorLeft: Int,
-    anchorRight: Int,
-    anchorTop: Int,
-    anchorBottom: Int,
-    popupContentSize: IntSize,
-    maxX: Int,
-    maxY: Int,
-    preferSidePlacement: Boolean,
-    placeBelow: Boolean,
-    gapPx: Int,
-    screenPaddingPx: Int,
-    requireFit: Boolean
-): List<IntOffset> {
-    fun candidate(offset: IntOffset): IntOffset? {
-        if (!requireFit) return offset
-        return offset.takeIf {
-            it.x in screenPaddingPx..maxX && it.y in screenPaddingPx..maxY
-        }
-    }
-
-    val alignedX = anchorLeft.coerceIn(screenPaddingPx, maxX)
-    val alignedY = anchorTop.coerceIn(screenPaddingPx, maxY)
-
-    val verticalCandidates = if (placeBelow) {
-        listOf(
-            IntOffset(alignedX, anchorBottom + gapPx),
-            IntOffset(alignedX, anchorTop - popupContentSize.height - gapPx)
-        )
-    } else {
-        listOf(
-            IntOffset(alignedX, anchorTop - popupContentSize.height - gapPx),
-            IntOffset(alignedX, anchorBottom + gapPx)
-        )
-    }
-    val sideCandidates = listOf(
-        IntOffset(anchorRight + gapPx, alignedY),
-        IntOffset(anchorLeft - popupContentSize.width - gapPx, alignedY)
-    )
-
-    val ordered = if (preferSidePlacement) {
-        sideCandidates + verticalCandidates
-    } else {
-        verticalCandidates + sideCandidates
-    }
-    return ordered.mapNotNull(::candidate)
 }
 
 private val HOSHI_SENTENCE_DELIMITERS = setOf('\u3002', '\uFF01', '\uFF1F', '.', '!', '?', '\n', '\r')

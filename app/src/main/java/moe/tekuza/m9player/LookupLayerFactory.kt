@@ -6,6 +6,7 @@ internal fun buildLookupLayerFromRawResults(
     rawResults: List<DictionarySearchResult>,
     dictionaryCssByName: Map<String, String?>,
     dictionaryPriorityByName: Map<String, Int>,
+    dictionaryTypeByName: Map<String, LookupDictionaryType> = emptyMap(),
     loading: Boolean,
     error: String?,
     sourceTerm: String? = null,
@@ -30,7 +31,8 @@ internal fun buildLookupLayerFromRawResults(
     val groupedResults = groupLookupResultsByTerm(
         results = rawResults,
         dictionaryCssByName = dictionaryCssByName,
-        dictionaryPriorityByName = dictionaryPriorityByName
+        dictionaryPriorityByName = dictionaryPriorityByName,
+        dictionaryTypeByName = dictionaryTypeByName
     ).take(10)
     return buildLookupLayerFromGroupedResults(
         groupedResults = groupedResults,

@@ -752,20 +752,24 @@ companion object {
             }
             val result = withContext(Dispatchers.Default) {
                 runCatching {
-                    computeLookupResults(
+                    computeTapLookupResultsWithWinningCandidate(
                         context = this@AudiobookFloatingOverlayService,
                         dictionaries = dictionaries,
-                        candidates = listOf(term)
+                        query = term
                     )
                 }
             }
             if (lookupRequestNonce != requestNonce) return@launch
-            result.onSuccess { hits ->
+            result.onSuccess { computed ->
+                val hits = computed?.hits.orEmpty()
                 if (hits.isEmpty()) {
                     hideFloatingLookup()
                     return@onSuccess
                 }
-                val matchedLength = hits.firstOrNull()?.matchedLength ?: 1
+                val matchedLength = hits.firstOrNull { it.matchedLength > 0 }?.matchedLength
+                    ?: computed?.query?.length
+                    ?: term.length
+                    ?: 1
                 val trimmedRange = trimSelectionRangeByMatchedLength(selection.range, matchedLength) ?: selection.range
                 val finalSelectionText = subtitleText.substring(trimmedRange.first, trimmedRange.last + 1)
                 val anchorRects = subtitleTextView
@@ -2613,16 +2617,20 @@ companion object {
             }
             val result = withContext(Dispatchers.Default) {
                 runCatching {
-                    computeLookupResults(
+                    computeTapLookupResultsWithWinningCandidate(
                         context = this@AudiobookFloatingOverlayService,
                         dictionaries = dictionaries,
-                        candidates = listOf(term)
+                        query = term
                     )
                 }
             }
             if (lookupRequestNonce != requestNonce) return@launch
-            result.onSuccess { hits ->
-                val matchedLength = hits.firstOrNull()?.matchedLength ?: 1
+            result.onSuccess { computed ->
+                val hits = computed?.hits.orEmpty()
+                val matchedLength = hits.firstOrNull { it.matchedLength > 0 }?.matchedLength
+                    ?: computed?.query?.length
+                    ?: term.length
+                    ?: 1
                 if (hits.isEmpty()) {
                     truncateFloatingLookupLayersTo(sourceLayerIndex)
                     Toast.makeText(

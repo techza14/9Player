@@ -155,4 +155,5 @@ internal object HoshiNativeBridge {
 
     @JvmStatic
     private external fun nativeClearLookupCache()
+
 }

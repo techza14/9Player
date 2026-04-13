@@ -4,6 +4,7 @@ import java.util.Locale
 
 internal data class GroupedLookupDictionary(
     val dictionary: String,
+    val dictionaryType: LookupDictionaryType,
     val score: Int,
     val pitch: String?,
     val frequency: String?,
@@ -21,6 +22,7 @@ internal data class GroupedLookupResult(
 
 private data class MutableGroupedLookupDictionary(
     val dictionary: String,
+    val dictionaryType: LookupDictionaryType,
     var score: Int,
     var pitch: String?,
     var frequency: String?,
@@ -38,7 +40,8 @@ private data class MutableGroupedLookupResult(
 internal fun groupLookupResultsByTerm(
     results: List<DictionarySearchResult>,
     dictionaryCssByName: Map<String, String?> = emptyMap(),
-    dictionaryPriorityByName: Map<String, Int> = emptyMap()
+    dictionaryPriorityByName: Map<String, Int> = emptyMap(),
+    dictionaryTypeByName: Map<String, LookupDictionaryType> = emptyMap()
 ): List<GroupedLookupResult> {
     if (results.isEmpty()) return emptyList()
 
@@ -67,6 +70,8 @@ internal fun groupLookupResultsByTerm(
         val dictionaryGroup = termGroup.dictionaries.getOrPut(dictionaryName) {
             MutableGroupedLookupDictionary(
                 dictionary = dictionaryName,
+                dictionaryType = dictionaryTypeByName[dictionaryName]
+                    ?: inferLookupDictionaryType(dictionaryName),
                 score = hit.score,
                 pitch = entry.pitch,
                 frequency = entry.frequency,
@@ -98,6 +103,7 @@ internal fun groupLookupResultsByTerm(
                     val definitions = dictionaryGroup.definitions.toList()
                     GroupedLookupDictionary(
                         dictionary = dictionaryGroup.dictionary,
+                        dictionaryType = dictionaryGroup.dictionaryType,
                         score = dictionaryGroup.score,
                         pitch = dictionaryGroup.pitch,
                         frequency = dictionaryGroup.frequency,

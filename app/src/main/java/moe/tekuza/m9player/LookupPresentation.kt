@@ -12,6 +12,7 @@ internal data class LookupDefinitionPresentation(
 internal data class LookupDictionaryPresentation(
     val sectionKey: String,
     val dictionaryName: String,
+    val dictionaryType: LookupDictionaryType,
     val expanded: Boolean,
     val definitions: List<LookupDefinitionPresentation>
 )
@@ -31,6 +32,12 @@ internal fun lookupDefinitionKey(term: String, dictionaryName: String, definitio
     return "${lookupDictionarySectionKey(term, dictionaryName)}|$definitionIndex"
 }
 
+internal fun lookupDictionaryNameFromDefinitionKey(definitionKey: String): String? {
+    val parts = definitionKey.split("|")
+    if (parts.size < 4) return null
+    return parts[2].trim().takeIf { it.isNotBlank() }
+}
+
 internal fun buildLookupPresentation(layer: ReaderLookupLayer): List<LookupGroupedPresentation> {
     return layer.groupedResults.map { grouped ->
         LookupGroupedPresentation(
@@ -43,6 +50,7 @@ internal fun buildLookupPresentation(layer: ReaderLookupLayer): List<LookupGroup
                 LookupDictionaryPresentation(
                     sectionKey = sectionKey,
                     dictionaryName = dictionaryGroup.dictionary,
+                    dictionaryType = dictionaryGroup.dictionaryType,
                     expanded = expanded,
                     definitions = if (expanded) {
                         dictionaryGroup.definitions.mapIndexed { definitionIndex, definition ->
