@@ -1,4 +1,7 @@
-﻿plugins {
+import org.gradle.internal.os.OperatingSystem
+import java.io.File
+
+plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
@@ -22,6 +25,8 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags += listOf("-std=c++23")
+                val rustLibDir = layout.buildDirectory.dir("rustLibs").get().asFile.absolutePath
+                arguments += listOf("-DRUST_LIB_DIR=${rustLibDir.replace("\\", "/")}")
             }
         }
 
@@ -92,4 +97,67 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
+val rustProjectDir = layout.projectDirectory.dir("src/main/rust/mdict_native")
+val rustOutputDir = layout.buildDirectory.dir("rustLibs")
 
+fun registerRustBuildTask(name: String, targetAbi: String) =
+    tasks.register<Exec>(name) {
+        val isWindows = OperatingSystem.current().isWindows
+        val cargoBinDir = if (isWindows) {
+            File(System.getProperty("user.home"), ".cargo\\bin")
+        } else {
+            File(System.getProperty("user.home"), ".cargo/bin")
+        }
+        val cargoExe = cargoBinDir.resolve(if (isWindows) "cargo.exe" else "cargo")
+        val ndkVersion = android.ndkVersion
+        val ndkHomePath = System.getenv("ANDROID_NDK_HOME")
+            ?: File(
+                File(System.getenv("LOCALAPPDATA") ?: File(System.getProperty("user.home"), "AppData\\Local").absolutePath, "Android\\Sdk"),
+                "ndk\\$ndkVersion"
+            ).absolutePath
+
+        group = "build"
+        description = "Build Rust mdict static library for $targetAbi"
+        workingDir(rustProjectDir.asFile)
+        environment("PATH", "${cargoBinDir.absolutePath}${File.pathSeparator}${System.getenv("PATH")}")
+        environment("ANDROID_NDK_HOME", ndkHomePath)
+        commandLine(
+            cargoExe.absolutePath,
+            "ndk",
+            "-t",
+            targetAbi,
+            "build",
+            "--release"
+        )
+        doLast {
+            val targetTriple = when (targetAbi) {
+                "arm64-v8a" -> "aarch64-linux-android"
+                "x86_64" -> "x86_64-linux-android"
+                else -> error("Unsupported ABI: $targetAbi")
+            }
+            val builtStatic = rustProjectDir.asFile
+                .resolve("target")
+                .resolve(targetTriple)
+                .resolve("release")
+                .resolve("libmdict_native.a")
+            if (!builtStatic.isFile) {
+                throw GradleException("Rust static library not found for $targetAbi at ${builtStatic.absolutePath}")
+            }
+            val abiOutDir = rustOutputDir.get().asFile.resolve(targetAbi)
+            abiOutDir.mkdirs()
+            builtStatic.copyTo(abiOutDir.resolve("libmdict_native.a"), overwrite = true)
+        }
+    }
+
+val buildRustArm64 by registerRustBuildTask("buildMdictRustArm64", "arm64-v8a")
+val buildRustX8664 by registerRustBuildTask("buildMdictRustX8664", "x86_64")
+
+tasks.register("buildMdictRust") {
+    group = "build"
+    description = "Build Rust mdict static libraries for all Android ABIs"
+    dependsOn(buildRustArm64, buildRustX8664)
+}
+
+tasks.named("preBuild") {
+    dependsOn("buildMdictRust")
+}

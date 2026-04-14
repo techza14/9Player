@@ -13,6 +13,8 @@ private const val AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_Y_KEY = "audiobook_floating_
 private const val AUDIOBOOK_FLOATING_OVERLAY_SIZE_DP_KEY = "audiobook_floating_overlay_size_dp"
 private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_SIZE_SP_KEY = "audiobook_floating_overlay_subtitle_size_sp"
 private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_COLOR_KEY = "audiobook_floating_overlay_subtitle_color"
+private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_CUSTOM_COLOR_KEY = "audiobook_floating_overlay_subtitle_custom_color"
+private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_SCROLL_ENABLED_KEY = "audiobook_floating_overlay_subtitle_scroll_enabled"
 private const val AUDIOBOOK_PAUSE_ON_LOOKUP_KEY = "audiobook_pause_on_lookup"
 private const val AUDIOBOOK_ACTIVE_CUE_AT_TOP_KEY = "audiobook_active_cue_at_top"
 private const val AUDIOBOOK_LOOKUP_AUDIO_ENABLED_KEY = "audiobook_lookup_audio_enabled"
@@ -31,6 +33,7 @@ internal const val MAX_FLOATING_OVERLAY_SUBTITLE_SIZE_SP = 40
 internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE = 0xFFFFFFFF.toInt()
 internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_YELLOW = 0xFFFFF59D.toInt()
 internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_GREEN = 0xFFA5D6A7.toInt()
+internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_CYAN = 0xFF80DEEA.toInt()
 
 internal enum class LookupAudioMode(val storageValue: String) {
     LOCAL_TTS("local_tts"),
@@ -60,7 +63,7 @@ internal data class AudiobookSettingsConfig(
     val seekStepMillis: Long = DEFAULT_AUDIOBOOK_SKIP_MILLIS,
     val floatingOverlayEnabled: Boolean = false,
     val floatingOverlaySubtitleEnabled: Boolean = false,
-    val pausePlaybackOnLookup: Boolean = false,
+    val pausePlaybackOnLookup: Boolean = true,
     val activeCueDisplayAtTop: Boolean = false,
     val lookupPlaybackAudioEnabled: Boolean = false,
     val lookupPlaybackAudioAutoPlay: Boolean = false,
@@ -71,6 +74,8 @@ internal data class AudiobookSettingsConfig(
     val floatingOverlaySizeDp: Int = DEFAULT_FLOATING_OVERLAY_SIZE_DP,
     val floatingOverlaySubtitleSizeSp: Int = DEFAULT_FLOATING_OVERLAY_SUBTITLE_SIZE_SP,
     val floatingOverlaySubtitleColor: Int = FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE,
+    val floatingOverlaySubtitleCustomColor: Int = FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE,
+    val floatingOverlaySubtitleScrollEnabled: Boolean = true,
     val floatingOverlaySubtitleY: Int = 0,
     val floatingOverlayBubbleX: Int = 24,
     val floatingOverlayBubbleY: Int = 0
@@ -99,7 +104,7 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
             AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_ENABLED_KEY,
             false
         ),
-        pausePlaybackOnLookup = prefs.getBoolean(AUDIOBOOK_PAUSE_ON_LOOKUP_KEY, false),
+        pausePlaybackOnLookup = prefs.getBoolean(AUDIOBOOK_PAUSE_ON_LOOKUP_KEY, true),
         activeCueDisplayAtTop = prefs.getBoolean(AUDIOBOOK_ACTIVE_CUE_AT_TOP_KEY, false),
         lookupPlaybackAudioEnabled = prefs.getBoolean(AUDIOBOOK_LOOKUP_AUDIO_ENABLED_KEY, false),
         lookupPlaybackAudioAutoPlay = prefs.getBoolean(AUDIOBOOK_LOOKUP_AUDIO_AUTO_PLAY_KEY, false),
@@ -121,6 +126,14 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
         floatingOverlaySubtitleColor = prefs.getInt(
             AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_COLOR_KEY,
             FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE
+        ),
+        floatingOverlaySubtitleCustomColor = prefs.getInt(
+            AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_CUSTOM_COLOR_KEY,
+            FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE
+        ),
+        floatingOverlaySubtitleScrollEnabled = prefs.getBoolean(
+            AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_SCROLL_ENABLED_KEY,
+            true
         ),
         floatingOverlaySubtitleY = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_Y_KEY, 0),
         floatingOverlayBubbleX = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_X_KEY, 24),
@@ -213,6 +226,20 @@ internal fun saveAudiobookFloatingOverlaySubtitleColor(context: Context, color: 
     context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
         .edit()
         .putInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_COLOR_KEY, color)
+        .apply()
+}
+
+internal fun saveAudiobookFloatingOverlaySubtitleCustomColor(context: Context, color: Int) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_CUSTOM_COLOR_KEY, color)
+        .apply()
+}
+
+internal fun saveAudiobookFloatingOverlaySubtitleScrollEnabled(context: Context, enabled: Boolean) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_SCROLL_ENABLED_KEY, enabled)
         .apply()
 }
 

@@ -4,7 +4,7 @@ internal fun ReaderLookupSession.closeLayerOrClear(layerIndex: Int): CloseLookup
     return if (layerIndex <= 0) {
         CloseLookupAction.ClearAll
     } else {
-        CloseLookupAction.ShowLayer(layerIndex)
+        CloseLookupAction.ShowLayer(layerIndex - 1)
     }
 }
 

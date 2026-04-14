@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(HOSHIDICTS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/hoshidicts)
+set(RUST_LIB_DIR "" CACHE PATH "Directory containing per-ABI Rust static libs")
 
 set(CMAKE_DISABLE_TESTING ON CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
@@ -50,6 +51,19 @@ add_library(tset_native SHARED
     hoshidicts_jni.cpp
 )
 
+if(RUST_LIB_DIR STREQUAL "")
+    message(FATAL_ERROR "RUST_LIB_DIR is not set. Rust mdict static library is required.")
+endif()
+
+set(MDICT_NATIVE_LIB "${RUST_LIB_DIR}/${ANDROID_ABI}/libmdict_native.a")
+if(NOT EXISTS "${MDICT_NATIVE_LIB}")
+    message(FATAL_ERROR "Missing Rust mdict static library for ABI ${ANDROID_ABI}: ${MDICT_NATIVE_LIB}")
+endif()
+
+add_library(mdict_native_static STATIC IMPORTED)
+set_target_properties(mdict_native_static PROPERTIES IMPORTED_LOCATION "${MDICT_NATIVE_LIB}")
+
 target_link_libraries(tset_native PRIVATE
     hoshidicts_core
+    mdict_native_static
 )

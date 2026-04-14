@@ -30,7 +30,6 @@
 ### [Mining Workflow](#mining-workflow)
 - [音频](#音频)
 - 导入Yomitan辞典
-- [MDX 转换](#mdx-转换)
 - 点击字幕查词或者在收藏查词
 - Anki导出
 
@@ -73,31 +72,6 @@ Collection
 - [marv](https://github.com/MarvNC/yomitan-dictionaries?tab=readme-ov-file#dictionary-collection)
 - [uchagikun](https://github.com/SalwynnJP/yomitan-dictionaries)
 - [Shoui](https://learnjapanese.moe/yomichan/#acquiring-dictionaries)
-
-## MDX 转换
-
-目前 app 内导入链还是以 Yomitan ZIP 为主。  
-如果你的辞典是 `.mdx` / `.mdd`，现在仓库里带了一个基于 `Manabitan` 参考实现的转换脚本，可以先把 MDX 转成 Yomitan ZIP，再在 app 里导入。
-
-Windows:
-
-```powershell
-./scripts/convert_mdx.ps1 C:\path\to\dict.mdx
-```
-
-Python:
-
-```bash
-python scripts/convert_mdx.py /path/to/dict.mdx
-```
-
-如果缺少依赖，先安装：
-
-```bash
-pip install pyglossary
-```
-
-转换完成后会生成一个 `.yomitan.zip`，再用 app 的辞典导入功能导入即可。
 
 可参考以下设置：
 
