@@ -1396,6 +1396,33 @@ private fun ReaderSyncScreen() {
         }
     }
 
+    fun buildMainLookupLayer(
+        rawResults: List<DictionarySearchResult>,
+        loading: Boolean,
+        error: String?,
+        selectedRange: IntRange?,
+        selectionText: String?
+    ): ReaderLookupLayer {
+        return buildLookupLayerFromRawResults(
+            rawResults = rawResults,
+            dictionaryCssByName = dictionaryCssByName,
+            dictionaryPriorityByName = dictionaryPriorityByName,
+            dictionaryTypeByName = dictionaryTypeByName,
+            loading = loading,
+            error = error,
+            sourceTerm = null,
+            cue = null,
+            cueIndex = null,
+            anchorOffset = null,
+            anchor = null,
+            placeBelow = true,
+            preferSidePlacement = true,
+            selectedRange = selectedRange,
+            selectionText = selectionText,
+            popupSentence = null
+        )
+    }
+
     fun openMainLookupCuePreview(cue: SubtitleCue, sourceBookTitle: String? = null) {
         if (loadedDictionaries.isEmpty()) {
             exportStatus = context.getString(R.string.bookreader_lookup_no_dict)
@@ -1416,23 +1443,12 @@ private fun ReaderSyncScreen() {
             readerBooks.firstOrNull { it.title == sourceBookTitle }?.audioUri ?: audioUri
         }
         mainLookupSession.push(
-            buildLookupLayerFromRawResults(
+            buildMainLookupLayer(
                 rawResults = emptyList(),
-                dictionaryCssByName = dictionaryCssByName,
-                dictionaryPriorityByName = dictionaryPriorityByName,
-                dictionaryTypeByName = dictionaryTypeByName,
                 loading = false,
                 error = null,
-                sourceTerm = null,
-                cue = null,
-                cueIndex = null,
-                anchorOffset = null,
-                anchor = null,
-                placeBelow = true,
-                preferSidePlacement = true,
                 selectedRange = null,
-                selectionText = cue.text,
-                popupSentence = null
+                selectionText = cue.text
             )
         )
     }
@@ -1505,46 +1521,24 @@ private fun ReaderSyncScreen() {
                 mainLookupPopupError = null
                 mainLookupPopupLoading = true
                 setOrPushMainLookupLayer(
-                    buildLookupLayerFromRawResults(
+                    buildMainLookupLayer(
                         rawResults = emptyList(),
-                        dictionaryCssByName = dictionaryCssByName,
-                        dictionaryPriorityByName = dictionaryPriorityByName,
-                        dictionaryTypeByName = dictionaryTypeByName,
                         loading = true,
                         error = null,
-                        sourceTerm = null,
-                        cue = null,
-                        cueIndex = null,
-                        anchorOffset = null,
-                        anchor = null,
-                        placeBelow = true,
-                        preferSidePlacement = true,
                         selectedRange = null,
-                        selectionText = candidates.firstOrNull(),
-                        popupSentence = null
+                        selectionText = candidates.firstOrNull()
                     )
                 )
                 queryMainLookupCandidates(candidates) { result ->
                     result.onSuccess { hits ->
                         if (hits.isEmpty()) {
                             setOrPushMainLookupLayer(
-                                buildLookupLayerFromRawResults(
+                                buildMainLookupLayer(
                                     rawResults = emptyList(),
-                                    dictionaryCssByName = dictionaryCssByName,
-                                    dictionaryPriorityByName = dictionaryPriorityByName,
-                                    dictionaryTypeByName = dictionaryTypeByName,
                                     loading = false,
                                     error = null,
-                                    sourceTerm = null,
-                                    cue = null,
-                                    cueIndex = null,
-                                    anchorOffset = null,
-                                    anchor = null,
-                                    placeBelow = true,
-                                    preferSidePlacement = true,
                                     selectedRange = null,
-                                    selectionText = candidates.firstOrNull(),
-                                    popupSentence = null
+                                    selectionText = candidates.firstOrNull()
                                 )
                             )
                             mainLookupPopupLoading = false
@@ -1552,23 +1546,12 @@ private fun ReaderSyncScreen() {
                             return@onSuccess
                         }
                         setOrPushMainLookupLayer(
-                            buildLookupLayerFromRawResults(
+                            buildMainLookupLayer(
                                 rawResults = hits,
-                                dictionaryCssByName = dictionaryCssByName,
-                                dictionaryPriorityByName = dictionaryPriorityByName,
-                                dictionaryTypeByName = dictionaryTypeByName,
                                 loading = false,
                                 error = null,
-                                sourceTerm = null,
-                                cue = null,
-                                cueIndex = null,
-                                anchorOffset = null,
-                                anchor = null,
-                                placeBelow = true,
-                                preferSidePlacement = true,
                                 selectedRange = null,
-                                selectionText = candidates.firstOrNull(),
-                                popupSentence = null
+                                selectionText = candidates.firstOrNull()
                             )
                         )
                         mainLookupPopupSelectedRange = if (hits.isNotEmpty()) {
@@ -1579,23 +1562,12 @@ private fun ReaderSyncScreen() {
                         mainLookupPopupLoading = false
                     }.onFailure { error ->
                         setOrPushMainLookupLayer(
-                            buildLookupLayerFromRawResults(
+                            buildMainLookupLayer(
                                 rawResults = emptyList(),
-                                dictionaryCssByName = dictionaryCssByName,
-                                dictionaryPriorityByName = dictionaryPriorityByName,
-                                dictionaryTypeByName = dictionaryTypeByName,
                                 loading = false,
                                 error = error.message ?: context.getString(R.string.bookreader_lookup_failed),
-                                sourceTerm = null,
-                                cue = null,
-                                cueIndex = null,
-                                anchorOffset = null,
-                                anchor = null,
-                                placeBelow = true,
-                                preferSidePlacement = true,
                                 selectedRange = null,
-                                selectionText = candidates.firstOrNull(),
-                                popupSentence = null
+                                selectionText = candidates.firstOrNull()
                             )
                         )
                         mainLookupPopupError = error.message ?: context.getString(R.string.bookreader_lookup_failed)
@@ -1618,91 +1590,47 @@ private fun ReaderSyncScreen() {
                 mainLookupPopupSelectedRange = inferredRange
                 mainLookupPopupAudioUri = null
                 setOrPushMainLookupLayer(
-                    buildLookupLayerFromRawResults(
+                    buildMainLookupLayer(
                         rawResults = emptyList(),
-                        dictionaryCssByName = dictionaryCssByName,
-                        dictionaryPriorityByName = dictionaryPriorityByName,
-                        dictionaryTypeByName = dictionaryTypeByName,
                         loading = true,
                         error = null,
-                        sourceTerm = null,
-                        cue = null,
-                        cueIndex = null,
-                        anchorOffset = null,
-                        anchor = null,
-                        placeBelow = true,
-                        preferSidePlacement = true,
                         selectedRange = inferredRange,
-                        selectionText = rootToken,
-                        popupSentence = null
+                        selectionText = rootToken
                     )
                 )
                 queryMainLookupCandidates(candidates) { result ->
                     result.onSuccess { hits ->
                         if (hits.isEmpty()) {
                             setOrPushMainLookupLayer(
-                                buildLookupLayerFromRawResults(
+                                buildMainLookupLayer(
                                     rawResults = emptyList(),
-                                    dictionaryCssByName = dictionaryCssByName,
-                                    dictionaryPriorityByName = dictionaryPriorityByName,
-                                    dictionaryTypeByName = dictionaryTypeByName,
                                     loading = false,
                                     error = null,
-                                    sourceTerm = null,
-                                    cue = null,
-                                    cueIndex = null,
-                                    anchorOffset = null,
-                                    anchor = null,
-                                    placeBelow = true,
-                                    preferSidePlacement = true,
                                     selectedRange = inferredRange,
-                                    selectionText = rootToken,
-                                    popupSentence = null
+                                    selectionText = rootToken
                                 )
                             )
                             mainLookupPopupLoading = false
                             return@onSuccess
                         }
                         setOrPushMainLookupLayer(
-                            buildLookupLayerFromRawResults(
+                            buildMainLookupLayer(
                                 rawResults = hits,
-                                dictionaryCssByName = dictionaryCssByName,
-                                dictionaryPriorityByName = dictionaryPriorityByName,
-                                dictionaryTypeByName = dictionaryTypeByName,
                                 loading = false,
                                 error = null,
-                                sourceTerm = null,
-                                cue = null,
-                                cueIndex = null,
-                                anchorOffset = null,
-                                anchor = null,
-                                placeBelow = true,
-                                preferSidePlacement = true,
                                 selectedRange = inferredRange,
-                                selectionText = rootToken,
-                                popupSentence = null
+                                selectionText = rootToken
                             )
                         )
                         mainLookupPopupLoading = false
                     }.onFailure { error ->
                         setOrPushMainLookupLayer(
-                            buildLookupLayerFromRawResults(
+                            buildMainLookupLayer(
                                 rawResults = emptyList(),
-                                dictionaryCssByName = dictionaryCssByName,
-                                dictionaryPriorityByName = dictionaryPriorityByName,
-                                dictionaryTypeByName = dictionaryTypeByName,
                                 loading = false,
                                 error = error.message ?: context.getString(R.string.bookreader_lookup_failed),
-                                sourceTerm = null,
-                                cue = null,
-                                cueIndex = null,
-                                anchorOffset = null,
-                                anchor = null,
-                                placeBelow = true,
-                                preferSidePlacement = true,
                                 selectedRange = inferredRange,
-                                selectionText = rootToken,
-                                popupSentence = null
+                                selectionText = rootToken
                             )
                         )
                         mainLookupPopupError = error.message ?: context.getString(R.string.bookreader_lookup_failed)
@@ -2044,12 +1972,7 @@ private fun ReaderSyncScreen() {
         playLookupGroupAudio(target)
     }
     val mainLookupActiveLayer = mainLookupSession.activeLayer
-    val groupedMainLookupPopupResults = remember(
-        mainLookupActiveLayer,
-        dictionaryCssByName,
-        dictionaryPriorityByName,
-        dictionaryTypeByName
-    ) {
+    val groupedMainLookupPopupResults = remember(mainLookupActiveLayer) {
         mainLookupActiveLayer?.groupedResults ?: emptyList()
     }
     LaunchedEffect(
