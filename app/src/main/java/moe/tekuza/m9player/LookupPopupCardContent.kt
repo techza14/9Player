@@ -4,7 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -86,13 +86,10 @@ internal fun LookupPopupCardContent(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(contentMaxHeightDp.dp)
+                .heightIn(max = contentMaxHeightDp.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (loading) {
-                Text(stringResource(R.string.common_querying))
-            }
             if (error != null) {
                 Text(error, color = MaterialTheme.colorScheme.error)
             }

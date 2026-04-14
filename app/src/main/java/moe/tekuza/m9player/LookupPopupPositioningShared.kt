@@ -107,6 +107,26 @@ internal class SharedLookupPopupPositionProvider(
         popupContentSize: IntSize
     ): IntOffset {
         val effectiveGapPx = gapPx.coerceIn(8, 20)
+        val maxX = (windowSize.width - popupContentSize.width - screenPaddingPx).coerceAtLeast(screenPaddingPx)
+        val maxY = (windowSize.height - popupContentSize.height - screenPaddingPx).coerceAtLeast(screenPaddingPx)
+
+        if (anchor == null) {
+            val fixedCandidate = IntOffset(
+                x = ((windowSize.width - popupContentSize.width) / 2).coerceIn(screenPaddingPx, maxX),
+                y = (windowSize.height * 0.14f).toInt().coerceIn(screenPaddingPx, maxY)
+            )
+            val popup = popupRectShared(fixedCandidate, popupContentSize)
+            Log.d(
+                logTag,
+                "calc sourceRects=[] blockedRects=[] popup=${popupContentSize.width}x${popupContentSize.height} placeBelow=$placeBelow side=$preferSidePlacement preferred=$preferredDirection noAnchor=true"
+            )
+            Log.d(
+                logTag,
+                "show reason=no_anchor_fixed pos=${fixedCandidate.x},${fixedCandidate.y} sourceOverlap=0 blockedOverlap=0 sourceBounds=none popupRect=${formatIntRectForLogShared(popup)}"
+            )
+            return fixedCandidate
+        }
+
         val sourceRects = anchor?.rects
             ?.filter { !it.isEmpty }
             ?.map {
@@ -133,8 +153,6 @@ internal class SharedLookupPopupPositionProvider(
             bottom = sourceRects.maxOf { it.bottom }
         )
         val blockedRects = listOf(sourceBoundsRect)
-        val maxX = (windowSize.width - popupContentSize.width - screenPaddingPx).coerceAtLeast(screenPaddingPx)
-        val maxY = (windowSize.height - popupContentSize.height - screenPaddingPx).coerceAtLeast(screenPaddingPx)
         Log.d(
             logTag,
             "calc sourceRects=${formatIntRectsForLogShared(sourceRects)} blockedRects=${formatIntRectsForLogShared(blockedRects)} popup=${popupContentSize.width}x${popupContentSize.height} placeBelow=$placeBelow side=$preferSidePlacement preferred=$preferredDirection"

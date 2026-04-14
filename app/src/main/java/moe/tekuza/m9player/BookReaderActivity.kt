@@ -754,8 +754,6 @@ private fun BookReaderScreen(
     val lookupPopupVisible = activeLookupLayer != null
     val lifecycleOwner = LocalLifecycleOwner.current
     val lyricsFollowTopPaddingPx = with(LocalDensity.current) { 72.dp.toPx() }
-    val lookupPopupGapPx = with(LocalDensity.current) { 14.dp.roundToPx() }
-    val lookupPopupScreenPaddingPx = with(LocalDensity.current) { 12.dp.roundToPx() }
 
     DisposableEffect(lifecycleOwner) {
         val observer = object : DefaultLifecycleObserver {
@@ -2743,164 +2741,78 @@ private fun BookReaderScreen(
         }
     }
 
-    if (lookupPopupVisible) {
-        val configuration = LocalConfiguration.current
-        val density = LocalDensity.current
-        lookupSession.layers.forEachIndexed { index, layer ->
-            val isTopLayer = index == lookupSession.lastIndex
-            val isPreviousLayer = index == lookupSession.lastIndex - 1
-            val effectiveAnchor = remember(
-                index,
-                layer.anchor,
-                layer.selectionText,
-                layer.cueIndex,
-                layer.selectedRange,
-                activeCueIndex,
+    LookupPopupHost(
+        visible = lookupPopupVisible,
+        session = lookupSession,
+        logTag = BOOK_LOOKUP_POS_LOG_TAG,
+        temporarilyHidden = lookupPopupTemporarilyHidden,
+        resolveAnchor = { index, layer ->
+            if (index == 0 && liveSelectedRangeAnchor != null) {
                 liveSelectedRangeAnchor
-            ) {
-                val runtimeAnchor =
-                    if (index == 0 && liveSelectedRangeAnchor != null) {
-                        liveSelectedRangeAnchor
-                    } else {
-                        layer.anchor
-                    }
-                runtimeAnchor
+            } else {
+                layer.anchor
             }
-            val popupSizeSpec = remember(
-                configuration.screenWidthDp,
-                configuration.screenHeightDp,
-                effectiveAnchor,
-                layer.placeBelow,
-                layer.preferSidePlacement,
-                density.density
-            ) {
-                computeSharedLookupPopupSizeSpec(
-                    screenWidthDp = configuration.screenWidthDp,
-                    screenHeightDp = configuration.screenHeightDp,
-                    anchor = effectiveAnchor,
-                    placeBelow = layer.placeBelow,
-                    preferSidePlacement = layer.preferSidePlacement,
-                    density = density.density
+        },
+        onDismissTopLayer = {
+            if (!lookupPopupTemporarilyHidden) {
+                popLookupSnapshotOrClose()
+            }
+        },
+        onTruncateToLayer = { layerIndex ->
+            truncateLookupLayersTo(layerIndex)
+        },
+        buildActionState = { layerIndex, layer, isTopLayer, _ ->
+            buildLookupCardActionState(
+                sourceTerm = layer.sourceTerm,
+                layerIndex = layerIndex,
+                sessionSize = lookupSession.size,
+                showRangeSelection = isTopLayer && layerIndex == 0 && hasSubtitleFile && audiobookSettings.lookupRangeSelectionEnabled,
+                showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
+                showAddToAnki = true
+            )
+        },
+        onToggleSection = { layerIndex, key, expanded ->
+            if (layerIndex == lookupSession.lastIndex) {
+                lookupSession.toggleCollapsedSection(layerIndex, key, expanded)
+            }
+        },
+        onDefinitionLookup = { layerIndex, definitionKey, tapData ->
+            val isTopLayer = layerIndex == lookupSession.lastIndex
+            val isPreviousLayer = layerIndex == lookupSession.lastIndex - 1
+            if (isTopLayer || isPreviousLayer) {
+                Log.d(
+                    BOOK_LOOKUP_ANCHOR_LOG_TAG,
+                    "cardTap layer=$layerIndex key=$definitionKey scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
                 )
+                val anchorRects = tapData.resolveScreenAnchorRects()
+                    .takeIf { it.isNotEmpty() }
+                val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
+                performRecursiveLookupFromDefinition(layerIndex, definitionKey, tapData, anchor)
             }
-            val positionProvider = remember(
-                effectiveAnchor,
-                layer.placeBelow,
-                layer.preferSidePlacement,
-                popupSizeSpec.preferredDirection,
-                lookupPopupGapPx,
-                lookupPopupScreenPaddingPx,
-                popupSizeSpec.widthDp,
-                popupSizeSpec.contentMaxHeightDp
-            ) {
-                SharedLookupPopupPositionProvider(
-                    anchor = effectiveAnchor,
-                    placeBelow = layer.placeBelow,
-                    preferSidePlacement = layer.preferSidePlacement,
-                    preferredDirection = popupSizeSpec.preferredDirection,
-                    gapPx = lookupPopupGapPx,
-                    screenPaddingPx = lookupPopupScreenPaddingPx,
-                    logTag = BOOK_LOOKUP_POS_LOG_TAG
-                )
+        },
+        onRangeSelection = { layerIndex ->
+            val isTopRootLayer =
+                layerIndex == lookupSession.lastIndex &&
+                    layerIndex == 0 &&
+                    hasSubtitleFile &&
+                    audiobookSettings.lookupRangeSelectionEnabled
+            if (isTopRootLayer) {
+                beginCueRangeSelection(reopenLookupPopupAfterSelection = true)
             }
-            Popup(
-                popupPositionProvider = positionProvider,
-                onDismissRequest = {
-                    if (!isTopLayer || lookupPopupTemporarilyHidden) return@Popup
-                    popLookupSnapshotOrClose()
-                },
-                properties = PopupProperties(
-                    focusable = isTopLayer && !lookupPopupTemporarilyHidden && lookupSession.size == 1,
-                    dismissOnBackPress = false,
-                    dismissOnClickOutside = isTopLayer && lookupSession.size == 1,
-                    clippingEnabled = false
-                )
-            ) {
-                if (lookupPopupTemporarilyHidden) {
-                    Box(
-                        modifier = Modifier
-                            .size(1.dp)
-                            .alpha(0f)
-                    )
-                } else {
-                    Surface(
-                        modifier = Modifier
-                            .width(popupSizeSpec.widthDp.dp)
-                            .padding(horizontal = 6.dp, vertical = 10.dp)
-                            .then(
-                                if (!isTopLayer && !isPreviousLayer) {
-                                    Modifier.clickable { truncateLookupLayersTo(index) }
-                                } else {
-                                    Modifier
-                                }
-                            ),
-                        shape = MaterialTheme.shapes.large,
-                        tonalElevation = if (isTopLayer) 8.dp else 6.dp,
-                        shadowElevation = if (isTopLayer) 10.dp else 6.dp,
-                        border = BorderStroke(
-                            width = 1.dp,
-                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
-                        )
-                    ) {
-                        val actionState = buildLookupCardActionState(
-                            sourceTerm = layer.sourceTerm,
-                            layerIndex = index,
-                            sessionSize = lookupSession.size,
-                            showRangeSelection = isTopLayer && index == 0 && hasSubtitleFile && audiobookSettings.lookupRangeSelectionEnabled,
-                            showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
-                            showAddToAnki = true
-                        )
-                        LookupPopupCardContent(
-                            groupedResults = layer.groupedResults,
-                            loading = layer.loading,
-                            error = layer.error,
-                            highlightedDefinitionKey = layer.highlightedDefinitionKey,
-                            highlightedDefinitionRects = layer.highlightedDefinitionRects,
-                            collapsedSections = layer.collapsedSections,
-                            actionState = actionState,
-                            contentMaxHeightDp = popupSizeSpec.contentMaxHeightDp,
-                            onToggleSection = if (isTopLayer) {
-                                { key, expanded ->
-                                    lookupSession.toggleCollapsedSection(index, key, expanded)
-                                }
-                            } else null,
-                            onDefinitionLookup = if (isTopLayer || isPreviousLayer) {
-                                { definitionKey, tapData ->
-                                    Log.d(
-                                        BOOK_LOOKUP_ANCHOR_LOG_TAG,
-                                        "cardTap layer=$index key=$definitionKey scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
-                                    )
-                                    val anchorRects = tapData.resolveScreenAnchorRects()
-                                        .takeIf { it.isNotEmpty() }
-                                    val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
-                                    performRecursiveLookupFromDefinition(index, definitionKey, tapData, anchor)
-                                }
-                            } else null,
-                            onRangeSelection = if (actionState.showRangeSelection) {
-                                { beginCueRangeSelection(reopenLookupPopupAfterSelection = true) }
-                            } else null,
-                            onPlayAudio = if (actionState.showPlayAudio) {
-                                { groupedResult -> playLookupGroupAudio(index, groupedResult) }
-                            } else null,
-                            onAddToAnki = { groupedResult ->
-                                addLookupGroupToAnki(index, groupedResult)
-                            },
-                            onCloseAll = if (isTopLayer && actionState.canCloseAll) {
-                                { closeLookupPopup() }
-                            } else null,
-                            onClose = {
-                                if (isTopLayer) {
-                                    popLookupSnapshotOrClose()
-                                } else {
-                                    truncateLookupLayersTo(index)
-                                }
-                            }
-                        )
-                    }
-                }
+        },
+        onPlayAudio = { layerIndex, groupedResult ->
+            val isTopLayer = layerIndex == lookupSession.lastIndex
+            if (isTopLayer && audiobookSettings.lookupPlaybackAudioEnabled) {
+                playLookupGroupAudio(layerIndex, groupedResult)
             }
+        },
+        onAddToAnki = { layerIndex, groupedResult ->
+            addLookupGroupToAnki(layerIndex, groupedResult)
+        },
+        onCloseAll = {
+            closeLookupPopup()
         }
-    }
+    )
 }
 
 private fun buildHighlightedText(text: String, selectedRange: IntRange?): AnnotatedString {

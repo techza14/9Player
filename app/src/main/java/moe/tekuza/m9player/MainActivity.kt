@@ -84,11 +84,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -257,6 +260,8 @@ private fun ReaderSyncScreen() {
     val activity = context as? Activity
     val lifecycleOwner = LocalLifecycleOwner.current
     val view = LocalView.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val contentResolver = context.contentResolver
     val scope = rememberCoroutineScope()
 
@@ -299,6 +304,8 @@ private fun ReaderSyncScreen() {
     var selectedEntryKey by remember { mutableStateOf<String?>(null) }
     var dictionaryLookupAutoPlayedKey by remember { mutableStateOf<String?>(null) }
     val dictionaryLookupCollapsedSections = remember { mutableStateMapOf<String, Boolean>() }
+    var dictionaryPageHighlightedDefinitionKey by remember { mutableStateOf<String?>(null) }
+    var dictionaryPageHighlightedRects by remember { mutableStateOf<List<Rect>>(emptyList()) }
 
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var pendingAnkiCard by remember { mutableStateOf<MinedCard?>(null) }
@@ -1294,7 +1301,7 @@ private fun ReaderSyncScreen() {
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .distinct()
-            .take(1)
+            .take(24)
     }
 
     fun buildRawLookupCandidatesFromTap(tapData: DefinitionLookupTapData): List<String> {
@@ -1314,17 +1321,21 @@ private fun ReaderSyncScreen() {
         candidates: List<String>
     ): List<DictionarySearchResult> {
         if (dictionaries.isEmpty() || candidates.isEmpty()) return emptyList()
-        val query = candidates
-            .map { it.trim() }
-            .firstOrNull { it.isNotBlank() }
-            ?: return emptyList()
-        return searchDictionarySql(
+        val strictHits = computeLookupResultsWithWinningCandidate(
             context = context,
             dictionaries = dictionaries,
-            query = query,
-            maxResults = MAX_LOOKUP_RESULTS,
-            profile = DictionaryQueryProfile.FULL
-        )
+            candidates = candidates,
+            profile = DictionaryQueryProfile.FULL,
+            expandCandidates = false
+        )?.hits.orEmpty()
+        if (strictHits.isNotEmpty()) return strictHits
+        return computeLookupResultsWithWinningCandidate(
+            context = context,
+            dictionaries = dictionaries,
+            candidates = candidates,
+            profile = DictionaryQueryProfile.FULL,
+            expandCandidates = true
+        )?.hits.orEmpty()
     }
 
     fun triggerLookupCandidates(
@@ -1377,6 +1388,55 @@ private fun ReaderSyncScreen() {
         }
     }
 
+    fun setOrPushMainLookupLayer(layer: ReaderLookupLayer) {
+        if (mainLookupSession.size > 0) {
+            mainLookupSession.replaceTop { layer }
+        } else {
+            mainLookupSession.push(layer)
+        }
+    }
+
+    fun openMainLookupCuePreview(cue: SubtitleCue, sourceBookTitle: String? = null) {
+        if (loadedDictionaries.isEmpty()) {
+            exportStatus = context.getString(R.string.bookreader_lookup_no_dict)
+            return
+        }
+        mainLookupPopupVisible = true
+        mainLookupSession.clear()
+        mainLookupAutoPlayNonce += 1L
+        mainLookupAutoPlayedKey = null
+        mainLookupPopupTitle = cue.text
+        mainLookupPopupError = null
+        mainLookupPopupLoading = false
+        mainLookupPopupCue = cue
+        mainLookupPopupSelectedRange = null
+        mainLookupPopupAudioUri = if (sourceBookTitle.isNullOrBlank()) {
+            audioUri
+        } else {
+            readerBooks.firstOrNull { it.title == sourceBookTitle }?.audioUri ?: audioUri
+        }
+        mainLookupSession.push(
+            buildLookupLayerFromRawResults(
+                rawResults = emptyList(),
+                dictionaryCssByName = dictionaryCssByName,
+                dictionaryPriorityByName = dictionaryPriorityByName,
+                dictionaryTypeByName = dictionaryTypeByName,
+                loading = false,
+                error = null,
+                sourceTerm = null,
+                cue = null,
+                cueIndex = null,
+                anchorOffset = null,
+                anchor = null,
+                placeBelow = true,
+                preferSidePlacement = true,
+                selectedRange = null,
+                selectionText = cue.text,
+                popupSentence = null
+            )
+        )
+    }
+
     fun pushMainLookupRootLayer(
         hits: List<DictionarySearchResult>,
         cue: ReaderSubtitleCue?,
@@ -1386,7 +1446,6 @@ private fun ReaderSyncScreen() {
         anchor: ReaderLookupAnchor? = null,
         placeBelow: Boolean = true
     ) {
-        mainLookupSession.clear()
         mainLookupSession.push(
             buildLookupLayerFromRawResults(
                 rawResults = hits,
@@ -1427,23 +1486,90 @@ private fun ReaderSyncScreen() {
                     readerBooks.firstOrNull { it.title == request.sourceBookTitle }?.audioUri ?: audioUri
                 }
                 val selectedToken = selection?.text?.trim()?.takeIf { it.isNotBlank() }
-                val candidates = listOfNotNull(selectedToken)
-                if (candidates.isEmpty()) return
+                val candidates = listOfNotNull(selectedToken).ifEmpty {
+                    normalizeLookupCandidates(
+                        listOf(
+                            cue.text,
+                            extractLookupToken(cue.text)
+                        )
+                    )
+                }
+                if (candidates.isEmpty()) {
+                    mainLookupPopupError = context.getString(R.string.bookreader_lookup_failed)
+                    return
+                }
                 mainLookupPopupVisible = true
-                mainLookupSession.clear()
                 mainLookupAutoPlayNonce += 1L
                 mainLookupAutoPlayedKey = null
                 mainLookupPopupTitle = candidates.firstOrNull() ?: selectedToken.orEmpty()
                 mainLookupPopupError = null
                 mainLookupPopupLoading = true
+                setOrPushMainLookupLayer(
+                    buildLookupLayerFromRawResults(
+                        rawResults = emptyList(),
+                        dictionaryCssByName = dictionaryCssByName,
+                        dictionaryPriorityByName = dictionaryPriorityByName,
+                        dictionaryTypeByName = dictionaryTypeByName,
+                        loading = true,
+                        error = null,
+                        sourceTerm = null,
+                        cue = null,
+                        cueIndex = null,
+                        anchorOffset = null,
+                        anchor = null,
+                        placeBelow = true,
+                        preferSidePlacement = true,
+                        selectedRange = null,
+                        selectionText = candidates.firstOrNull(),
+                        popupSentence = null
+                    )
+                )
                 queryMainLookupCandidates(candidates) { result ->
                     result.onSuccess { hits ->
-                        pushMainLookupRootLayer(
-                            hits = hits,
-                            cue = cue.toReaderSubtitleCue(),
-                            selectedRange = mainLookupPopupSelectedRange,
-                            selectionText = candidates.firstOrNull(),
-                            popupSentence = cue.text
+                        if (hits.isEmpty()) {
+                            setOrPushMainLookupLayer(
+                                buildLookupLayerFromRawResults(
+                                    rawResults = emptyList(),
+                                    dictionaryCssByName = dictionaryCssByName,
+                                    dictionaryPriorityByName = dictionaryPriorityByName,
+                                    dictionaryTypeByName = dictionaryTypeByName,
+                                    loading = false,
+                                    error = null,
+                                    sourceTerm = null,
+                                    cue = null,
+                                    cueIndex = null,
+                                    anchorOffset = null,
+                                    anchor = null,
+                                    placeBelow = true,
+                                    preferSidePlacement = true,
+                                    selectedRange = null,
+                                    selectionText = candidates.firstOrNull(),
+                                    popupSentence = null
+                                )
+                            )
+                            mainLookupPopupLoading = false
+                            mainLookupPopupSelectedRange = null
+                            return@onSuccess
+                        }
+                        setOrPushMainLookupLayer(
+                            buildLookupLayerFromRawResults(
+                                rawResults = hits,
+                                dictionaryCssByName = dictionaryCssByName,
+                                dictionaryPriorityByName = dictionaryPriorityByName,
+                                dictionaryTypeByName = dictionaryTypeByName,
+                                loading = false,
+                                error = null,
+                                sourceTerm = null,
+                                cue = null,
+                                cueIndex = null,
+                                anchorOffset = null,
+                                anchor = null,
+                                placeBelow = true,
+                                preferSidePlacement = true,
+                                selectedRange = null,
+                                selectionText = candidates.firstOrNull(),
+                                popupSentence = null
+                            )
                         )
                         mainLookupPopupSelectedRange = if (hits.isNotEmpty()) {
                             trimSelectionRangeByMatchedLength(selectionRange, hits.first().matchedLength)
@@ -1452,6 +1578,26 @@ private fun ReaderSyncScreen() {
                         }
                         mainLookupPopupLoading = false
                     }.onFailure { error ->
+                        setOrPushMainLookupLayer(
+                            buildLookupLayerFromRawResults(
+                                rawResults = emptyList(),
+                                dictionaryCssByName = dictionaryCssByName,
+                                dictionaryPriorityByName = dictionaryPriorityByName,
+                                dictionaryTypeByName = dictionaryTypeByName,
+                                loading = false,
+                                error = error.message ?: context.getString(R.string.bookreader_lookup_failed),
+                                sourceTerm = null,
+                                cue = null,
+                                cueIndex = null,
+                                anchorOffset = null,
+                                anchor = null,
+                                placeBelow = true,
+                                preferSidePlacement = true,
+                                selectedRange = null,
+                                selectionText = candidates.firstOrNull(),
+                                popupSentence = null
+                            )
+                        )
                         mainLookupPopupError = error.message ?: context.getString(R.string.bookreader_lookup_failed)
                         mainLookupPopupLoading = false
                     }
@@ -1460,29 +1606,105 @@ private fun ReaderSyncScreen() {
             is MainLookupRequest.Candidates -> {
                 val candidates = normalizeLookupCandidates(request.rawCandidates)
                 if (candidates.isEmpty()) return
+                val rootToken = candidates.first()
+                val inferredRange = rootToken.indices.firstOrNull()?.let { 0..rootToken.lastIndex }
                 mainLookupPopupVisible = true
-                mainLookupSession.clear()
                 mainLookupAutoPlayNonce += 1L
                 mainLookupAutoPlayedKey = null
-                mainLookupPopupTitle = candidates.first()
+                mainLookupPopupTitle = rootToken
                 mainLookupPopupError = null
                 mainLookupPopupLoading = true
                 mainLookupPopupCue = null
-                mainLookupPopupSelectedRange = null
+                mainLookupPopupSelectedRange = inferredRange
                 mainLookupPopupAudioUri = null
+                setOrPushMainLookupLayer(
+                    buildLookupLayerFromRawResults(
+                        rawResults = emptyList(),
+                        dictionaryCssByName = dictionaryCssByName,
+                        dictionaryPriorityByName = dictionaryPriorityByName,
+                        dictionaryTypeByName = dictionaryTypeByName,
+                        loading = true,
+                        error = null,
+                        sourceTerm = null,
+                        cue = null,
+                        cueIndex = null,
+                        anchorOffset = null,
+                        anchor = null,
+                        placeBelow = true,
+                        preferSidePlacement = true,
+                        selectedRange = inferredRange,
+                        selectionText = rootToken,
+                        popupSentence = null
+                    )
+                )
                 queryMainLookupCandidates(candidates) { result ->
                     result.onSuccess { hits ->
-                        pushMainLookupRootLayer(
-                            hits = hits,
-                            cue = null,
-                            selectedRange = null,
-                            selectionText = candidates.first(),
-                            popupSentence = null,
-                            anchor = request.anchor,
-                            placeBelow = request.placeBelow
+                        if (hits.isEmpty()) {
+                            setOrPushMainLookupLayer(
+                                buildLookupLayerFromRawResults(
+                                    rawResults = emptyList(),
+                                    dictionaryCssByName = dictionaryCssByName,
+                                    dictionaryPriorityByName = dictionaryPriorityByName,
+                                    dictionaryTypeByName = dictionaryTypeByName,
+                                    loading = false,
+                                    error = null,
+                                    sourceTerm = null,
+                                    cue = null,
+                                    cueIndex = null,
+                                    anchorOffset = null,
+                                    anchor = null,
+                                    placeBelow = true,
+                                    preferSidePlacement = true,
+                                    selectedRange = inferredRange,
+                                    selectionText = rootToken,
+                                    popupSentence = null
+                                )
+                            )
+                            mainLookupPopupLoading = false
+                            return@onSuccess
+                        }
+                        setOrPushMainLookupLayer(
+                            buildLookupLayerFromRawResults(
+                                rawResults = hits,
+                                dictionaryCssByName = dictionaryCssByName,
+                                dictionaryPriorityByName = dictionaryPriorityByName,
+                                dictionaryTypeByName = dictionaryTypeByName,
+                                loading = false,
+                                error = null,
+                                sourceTerm = null,
+                                cue = null,
+                                cueIndex = null,
+                                anchorOffset = null,
+                                anchor = null,
+                                placeBelow = true,
+                                preferSidePlacement = true,
+                                selectedRange = inferredRange,
+                                selectionText = rootToken,
+                                popupSentence = null
+                            )
                         )
                         mainLookupPopupLoading = false
                     }.onFailure { error ->
+                        setOrPushMainLookupLayer(
+                            buildLookupLayerFromRawResults(
+                                rawResults = emptyList(),
+                                dictionaryCssByName = dictionaryCssByName,
+                                dictionaryPriorityByName = dictionaryPriorityByName,
+                                dictionaryTypeByName = dictionaryTypeByName,
+                                loading = false,
+                                error = error.message ?: context.getString(R.string.bookreader_lookup_failed),
+                                sourceTerm = null,
+                                cue = null,
+                                cueIndex = null,
+                                anchorOffset = null,
+                                anchor = null,
+                                placeBelow = true,
+                                preferSidePlacement = true,
+                                selectedRange = inferredRange,
+                                selectionText = rootToken,
+                                popupSentence = null
+                            )
+                        )
                         mainLookupPopupError = error.message ?: context.getString(R.string.bookreader_lookup_failed)
                         mainLookupPopupLoading = false
                     }
@@ -2214,7 +2436,11 @@ private fun ReaderSyncScreen() {
 
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
-                                onClick = { triggerLookupCandidates(listOf(lookupQuery)) },
+                                onClick = {
+                                    focusManager.clearFocus(force = true)
+                                    keyboardController?.hide()
+                                    triggerLookupCandidates(listOf(lookupQuery))
+                                },
                                 enabled = loadedDictionaries.isNotEmpty() && lookupQuery.isNotBlank()
                             ) {
                                 Text(stringResource(R.string.dictionary_query_button))
@@ -2334,7 +2560,12 @@ private fun ReaderSyncScreen() {
                                                     }
                                                 )
                                                 if (expanded) {
-                                                    dictionaryGroup.definitions.forEach { definition ->
+                                                    dictionaryGroup.definitions.forEachIndexed { definitionIndex, definition ->
+                                                        val definitionKey = lookupDefinitionKey(
+                                                            term = groupedResult.term,
+                                                            dictionaryName = dictionaryGroup.dictionary,
+                                                            definitionIndex = definitionIndex
+                                                        )
                                                         Card(modifier = Modifier.fillMaxWidth()) {
                                                             Column(
                                                                 modifier = Modifier.padding(8.dp),
@@ -2344,20 +2575,89 @@ private fun ReaderSyncScreen() {
                                                                     definition = definition,
                                                                     dictionaryName = null,
                                                                     dictionaryCss = dictionaryGroup.css,
+                                                                    highlightedRects = if (dictionaryPageHighlightedDefinitionKey == definitionKey) {
+                                                                        dictionaryPageHighlightedRects
+                                                                    } else {
+                                                                        emptyList()
+                                                                    },
                                                                     onLookupTap = { tapData ->
-                                                                        val candidates = buildRawLookupCandidatesFromTap(tapData)
-                                                                        if (candidates.isNotEmpty()) {
-                                                                            val anchorRects = tapData.resolveScreenAnchorRects().takeIf { it.isNotEmpty() }
-                                                                            val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
-                                                                            val anchorBottom = anchor?.boundingRectCoreOrNull()?.bottom
-                                                                            val shouldPlaceBelow = anchorBottom?.let { it <= view.height * 0.56f } ?: true
-                                                                            startMainLookup(
-                                                                                MainLookupRequest.Candidates(
-                                                                                    rawCandidates = candidates,
-                                                                                    anchor = anchor,
-                                                                                    placeBelow = shouldPlaceBelow
-                                                                                )
+                                                                        scope.launch {
+                                                                            val tapCandidates = listOf(
+                                                                                tapData.scanText.trim(),
+                                                                                tapData.text.trim(),
+                                                                                tapData.nodeText.trim()
                                                                             )
+                                                                                .filter { it.isNotBlank() }
+                                                                                .distinct()
+                                                                            val resolvedLookup = withContext(Dispatchers.Default) {
+                                                                                runCatching {
+                                                                                    computeLookupResultsWithWinningCandidate(
+                                                                                        context = context,
+                                                                                        dictionaries = loadedDictionaries,
+                                                                                        candidates = tapCandidates,
+                                                                                        profile = DictionaryQueryProfile.FULL,
+                                                                                        expandCandidates = false
+                                                                                    )
+                                                                                }.getOrNull()
+                                                                            }
+                                                                            val matchedLength =
+                                                                                resolvedLookup?.hits
+                                                                                    ?.firstOrNull()
+                                                                                    ?.matchedLength
+                                                                                    ?.coerceAtLeast(1)
+                                                                                    ?: selectLookupScanText(
+                                                                                        tapData.scanText.ifBlank { tapData.text },
+                                                                                        0
+                                                                                    )?.text?.length?.coerceAtLeast(1)
+                                                                                    ?: tapData.scanText.length.coerceAtLeast(1)
+                                                                            val resolvedRects = resolveDefinitionMatchedRects(
+                                                                                tapData = tapData,
+                                                                                matchedLength = matchedLength
+                                                                            )
+                                                                            val highlightRects = if (resolvedRects != null) {
+                                                                                val rebuilt = rebuildRectsFromCharacterRectsShared(
+                                                                                    charRects = resolvedRects.localCharRects,
+                                                                                    matchedLength = matchedLength
+                                                                                )
+                                                                                sanitizeResolvedHighlightRectsShared(
+                                                                                    rebuilt,
+                                                                                    tapData.localRects
+                                                                                )
+                                                                            } else {
+                                                                                rebuildDefinitionRectsByMatchedLengthCore(
+                                                                                    rects = tapData.localRects,
+                                                                                    charRects = tapData.localCharRects,
+                                                                                    nodeText = tapData.nodeText,
+                                                                                    startOffset = tapData.offset,
+                                                                                    matchedLength = matchedLength
+                                                                                )
+                                                                            }
+                                                                            dictionaryPageHighlightedDefinitionKey = definitionKey
+                                                                            dictionaryPageHighlightedRects = highlightRects
+                                                                            val mergedCandidates = buildList {
+                                                                                resolvedLookup?.query
+                                                                                    ?.trim()
+                                                                                    ?.takeIf { it.isNotBlank() }
+                                                                                    ?.let { add(it) }
+                                                                                buildRawLookupCandidatesFromTap(tapData).forEach { candidate ->
+                                                                                    if (candidate.isNotBlank() && !contains(candidate)) {
+                                                                                        add(candidate)
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                            if (mergedCandidates.isNotEmpty()) {
+                                                                                val anchorRects = tapData.resolveScreenAnchorRects().takeIf { it.isNotEmpty() }
+                                                                                val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
+                                                                                val anchorBottom = anchor?.boundingRectCoreOrNull()?.bottom
+                                                                                val shouldPlaceBelow = anchorBottom?.let { it <= view.height * 0.56f } ?: true
+                                                                                startMainLookup(
+                                                                                    MainLookupRequest.Candidates(
+                                                                                        rawCandidates = mergedCandidates,
+                                                                                        anchor = anchor,
+                                                                                        placeBelow = shouldPlaceBelow
+                                                                                    )
+                                                                                )
+                                                                            }
                                                                         }
                                                                     }
                                                                 )
@@ -2405,16 +2705,13 @@ private fun ReaderSyncScreen() {
                                             }
                                             OutlinedButton(
                                                 onClick = {
-                                                    startMainLookup(
-                                                        MainLookupRequest.Cue(
-                                                            cue = SubtitleCue(
-                                                                startMs = item.startMs,
-                                                                endMs = item.endMs,
-                                                                text = item.text
-                                                            ),
-                                                            offset = 0,
-                                                            sourceBookTitle = item.bookTitle
-                                                        )
+                                                    openMainLookupCuePreview(
+                                                        cue = SubtitleCue(
+                                                            startMs = item.startMs,
+                                                            endMs = item.endMs,
+                                                            text = item.text
+                                                        ),
+                                                        sourceBookTitle = item.bookTitle
                                                     )
                                                 },
                                                 enabled = loadedDictionaries.isNotEmpty()
@@ -2588,206 +2885,92 @@ private fun ReaderSyncScreen() {
         }
 
         if (mainLookupPopupVisible) {
-            val popupLayer = mainLookupActiveLayer
-            if (popupLayer == null) {
-                Popup(
-                    alignment = Alignment.TopCenter,
-                    onDismissRequest = { closeMainLookupPopup() },
-                    properties = PopupProperties(
-                        focusable = true,
-                        dismissOnBackPress = true,
-                        dismissOnClickOutside = true,
-                        clippingEnabled = false
-                    )
-                ) {
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth(0.96f)
-                            .padding(top = 72.dp),
-                        shape = MaterialTheme.shapes.large,
-                        tonalElevation = 8.dp
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            if (mainLookupPopupLoading) {
-                                Text(stringResource(R.string.common_querying))
-                            } else if (mainLookupPopupError != null) {
-                                Text(
-                                    context.getString(R.string.lookup_error_prefix, mainLookupPopupError.orEmpty()),
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                TextButton(onClick = { closeMainLookupPopup() }) {
-                                    Text(stringResource(R.string.common_close))
-                                }
-                            }
-                        }
+            LookupPopupHost(
+                visible = true,
+                session = mainLookupSession,
+                logTag = MAIN_LOOKUP_DEBUG_LOG_TAG,
+                onDismissTopLayer = {
+                    if (mainLookupSession.size > 1) {
+                        mainLookupSession.pop()
+                    } else {
+                        closeMainLookupPopup()
                     }
-                }
-            } else {
-                val configuration = LocalConfiguration.current
-                val density = LocalDensity.current
-                val popupSizeSpec = remember(
-                    configuration.screenWidthDp,
-                    configuration.screenHeightDp,
-                    popupLayer.anchor,
-                    popupLayer.placeBelow,
-                    popupLayer.preferSidePlacement,
-                    density.density
-                ) {
-                    computeSharedLookupPopupSizeSpec(
-                        screenWidthDp = configuration.screenWidthDp,
-                        screenHeightDp = configuration.screenHeightDp,
-                        anchor = popupLayer.anchor,
-                        placeBelow = popupLayer.placeBelow,
-                        preferSidePlacement = popupLayer.preferSidePlacement,
-                        density = density.density
+                },
+                onTruncateToLayer = { layerIndex ->
+                    mainLookupSession.truncateTo(layerIndex)
+                },
+                buildActionState = { layerIndex, layer, _, _ ->
+                    buildLookupCardActionState(
+                        sourceTerm = layer.sourceTerm,
+                        layerIndex = layerIndex,
+                        sessionSize = mainLookupSession.size,
+                        showRangeSelection = false,
+                        showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
+                        showAddToAnki = true
                     )
-                }
-                val gapPx = with(density) { 14.dp.roundToPx() }
-                val screenPaddingPx = with(density) { 12.dp.roundToPx() }
-                val positionProvider = remember(
-                    popupLayer.anchor,
-                    popupLayer.placeBelow,
-                    popupLayer.preferSidePlacement,
-                    popupSizeSpec.preferredDirection,
-                    gapPx,
-                    screenPaddingPx
-                ) {
-                    SharedLookupPopupPositionProvider(
-                        anchor = popupLayer.anchor,
-                        placeBelow = popupLayer.placeBelow,
-                        preferSidePlacement = popupLayer.preferSidePlacement,
-                        preferredDirection = popupSizeSpec.preferredDirection,
-                        gapPx = gapPx,
-                        screenPaddingPx = screenPaddingPx,
-                        logTag = MAIN_LOOKUP_DEBUG_LOG_TAG
-                    )
-                }
-                Popup(
-                    popupPositionProvider = positionProvider,
-                    onDismissRequest = { closeMainLookupPopup() },
-                    properties = PopupProperties(
-                        focusable = true,
-                        dismissOnBackPress = true,
-                        dismissOnClickOutside = true,
-                        clippingEnabled = false
-                    )
-                ) {
-                    Surface(
-                        modifier = Modifier
-                            .width(popupSizeSpec.widthDp.dp)
-                            .padding(horizontal = 6.dp, vertical = 10.dp),
-                        shape = MaterialTheme.shapes.large,
-                        tonalElevation = 8.dp
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            val popupCue = mainLookupPopupCue
-                            if (popupCue != null) {
-                                var popupCueLayout by remember(popupCue.text, mainLookupPopupSelectedRange) { mutableStateOf<TextLayoutResult?>(null) }
-                                Text(
-                                    text = buildMainHighlightedText(popupCue.text, mainLookupPopupSelectedRange),
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    modifier = Modifier.pointerInput(popupCue) {
-                                        detectTapGestures { tapOffset ->
-                                            val layout = popupCueLayout ?: return@detectTapGestures
-                                            startMainLookup(
-                                                MainLookupRequest.Cue(
-                                                    cue = popupCue,
-                                                    offset = layout.getOffsetForPosition(tapOffset)
-                                                )
-                                            )
-                                        }
-                                    },
-                                    onTextLayout = { popupCueLayout = it }
-                                )
-                                Text(
-                                    "${formatTime(popupCue.startMs)} - ${formatTime(popupCue.endMs)}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
+                },
+                beforeCardContent = { layerIndex, _, isTopLayer, _ ->
+                    if (isTopLayer) {
+                        val popupCue = mainLookupPopupCue
+                        if (popupCue != null) {
+                            var popupCueLayout by remember(popupCue.text, mainLookupPopupSelectedRange, layerIndex) {
+                                mutableStateOf<TextLayoutResult?>(null)
                             }
-                            val popupLayerIndex = mainLookupSession.lastIndex
-                            val popupActionState = buildLookupCardActionState(
-                                sourceTerm = popupLayer.sourceTerm,
-                                layerIndex = popupLayerIndex,
-                                sessionSize = mainLookupSession.size,
-                                showRangeSelection = false,
-                                showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
-                                showAddToAnki = true
-                            )
-                            LookupPopupCardContent(
-                                groupedResults = groupedMainLookupPopupResults,
-                                loading = mainLookupPopupLoading || popupLayer.loading,
-                                error = popupLayer.error ?: mainLookupPopupError?.let {
-                                    context.getString(R.string.lookup_error_prefix, it)
-                                },
-                                highlightedDefinitionKey = popupLayer.highlightedDefinitionKey,
-                                highlightedDefinitionRects = popupLayer.highlightedDefinitionRects,
-                                collapsedSections = popupLayer.collapsedSections,
-                                actionState = popupActionState,
-                                contentMaxHeightDp = popupSizeSpec.contentMaxHeightDp,
-                                onToggleSection = { key, expanded ->
-                                    if (popupLayerIndex >= 0) {
-                                        mainLookupSession.toggleCollapsedSection(popupLayerIndex, key, expanded)
-                                    }
-                                },
-                                onDefinitionLookup = { definitionKey, tapData ->
-                                    val sourceLayerIndex = mainLookupSession.lastIndex
-                                    if (sourceLayerIndex < 0) {
-                                        val candidates = buildRawLookupCandidatesFromTap(tapData)
-                                        if (candidates.isNotEmpty()) {
-                                            val anchorRects = tapData.resolveScreenAnchorRects().takeIf { it.isNotEmpty() }
-                                            val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
-                                            val anchorBottom = anchor?.boundingRectCoreOrNull()?.bottom
-                                            val shouldPlaceBelow = anchorBottom?.let { it <= view.height * 0.56f } ?: true
-                                            startMainLookup(
-                                                MainLookupRequest.Candidates(
-                                                    rawCandidates = candidates,
-                                                    anchor = anchor,
-                                                    placeBelow = shouldPlaceBelow
-                                                )
-                                            )
-                                        }
-                                    } else {
+                            Text(
+                                text = buildMainHighlightedText(popupCue.text, mainLookupPopupSelectedRange),
+                                style = MaterialTheme.typography.headlineSmall,
+                                modifier = Modifier.pointerInput(popupCue) {
+                                    detectTapGestures { tapOffset ->
+                                        val layout = popupCueLayout ?: return@detectTapGestures
                                         startMainLookup(
-                                            MainLookupRequest.RecursiveTap(
-                                                sourceLayerIndex = sourceLayerIndex,
-                                                definitionKey = definitionKey,
-                                                tapData = tapData
+                                            MainLookupRequest.Cue(
+                                                cue = popupCue,
+                                                offset = layout.getOffsetForPosition(tapOffset)
                                             )
                                         )
                                     }
                                 },
-                                onRangeSelection = null,
-                                onPlayAudio = { groupedResult -> playLookupGroupAudio(groupedResult) },
-                                onAddToAnki = { groupedResult ->
-                                    val primary = groupedResult.dictionaries.firstOrNull() ?: return@LookupPopupCardContent
-                                    selectedEntryKey = entryStableKey(primary.entry)
-                                    exportLookupGroupToAnki(
-                                        groupedResult = groupedResult,
-                                        sourceCue = popupCue,
-                                        lookupTitle = mainLookupPopupTitle
-                                    )
-                                },
-                                onCloseAll = { closeMainLookupPopup() },
-                                onClose = {
-                                    if (mainLookupSession.size > 1) {
-                                        mainLookupSession.pop()
-                                    } else {
-                                        closeMainLookupPopup()
-                                    }
-                                }
+                                onTextLayout = { popupCueLayout = it }
+                            )
+                            Text(
+                                "${formatTime(popupCue.startMs)} - ${formatTime(popupCue.endMs)}",
+                                style = MaterialTheme.typography.bodySmall
                             )
                         }
                     }
-                }
-            }
+                },
+                onToggleSection = { layerIndex, key, expanded ->
+                    mainLookupSession.toggleCollapsedSection(layerIndex, key, expanded)
+                },
+                onDefinitionLookup = { sourceLayerIndex, definitionKey, tapData ->
+                    val isTopLayer = sourceLayerIndex == mainLookupSession.lastIndex
+                    val isPreviousLayer = sourceLayerIndex == mainLookupSession.lastIndex - 1
+                    if (isTopLayer || isPreviousLayer) {
+                        startMainLookup(
+                            MainLookupRequest.RecursiveTap(
+                                sourceLayerIndex = sourceLayerIndex,
+                                definitionKey = definitionKey,
+                                tapData = tapData
+                            )
+                        )
+                    }
+                },
+                onPlayAudio = { _, groupedResult ->
+                    playLookupGroupAudio(groupedResult)
+                },
+                onAddToAnki = { _, groupedResult ->
+                    val primary = groupedResult.dictionaries.firstOrNull()
+                    if (primary != null) {
+                        selectedEntryKey = entryStableKey(primary.entry)
+                        exportLookupGroupToAnki(
+                            groupedResult = groupedResult,
+                            sourceCue = mainLookupPopupCue,
+                            lookupTitle = mainLookupPopupTitle
+                        )
+                    }
+                },
+                onCloseAll = { closeMainLookupPopup() }
+            )
         }
 
             VersionEasterGifPopup(
