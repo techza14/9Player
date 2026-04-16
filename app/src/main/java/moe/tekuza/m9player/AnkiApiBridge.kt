@@ -363,22 +363,31 @@ private fun buildAnkiVariables(
     includeCutAudio: Boolean,
     includeLookupAudio: Boolean
 ): Map<String, String> {
-    val dictionaryName = card.dictionaryName.orEmpty()
-    val glossaryHtml = buildStyledGlossary(
-        definitions = card.definitions,
-        dictionaryName = dictionaryName,
-        dictionaryCss = card.dictionaryCss
-    )
-    val glossaryFirst = card.definitions.firstOrNull().orEmpty()
-    val glossaryNoDictionary = card.definitions.joinToString("<br>")
-    val glossaryPlain = card.definitions.joinToString("\n")
+    val glossarySources = buildMinedCardGlossarySources(card)
+    val primaryGlossarySource = selectPrimaryGlossarySource(card, glossarySources)
+    val dictionaryName = primaryGlossarySource?.dictionaryName.orEmpty()
+    val glossaryHtml = buildStyledGlossaryFromSources(glossarySources)
+    val allDefinitions = glossarySources.flatMap { it.definitions }
+    val glossaryFirst = allDefinitions.firstOrNull().orEmpty()
+    val glossaryNoDictionary = allDefinitions.joinToString("<br>")
+    val glossaryPlain = allDefinitions.joinToString("\n")
+    val singleGlossaryHtml = primaryGlossarySource?.let { source ->
+        buildStyledGlossary(
+            definitions = source.definitions,
+            dictionaryName = source.dictionaryName,
+            dictionaryCss = source.dictionaryCss
+        )
+    }.orEmpty()
+    val singleGlossaryFirst = primaryGlossarySource?.definitions?.firstOrNull().orEmpty()
+    val singleGlossaryNoDictionary = primaryGlossarySource?.definitions?.joinToString("<br>").orEmpty()
     val styledGlossaryFirst = if (glossaryFirst.isBlank()) {
         ""
     } else {
+        val firstSource = glossarySources.firstOrNull()
         buildStyledGlossary(
             definitions = listOf(glossaryFirst),
-            dictionaryName = dictionaryName,
-            dictionaryCss = card.dictionaryCss
+            dictionaryName = firstSource?.dictionaryName ?: dictionaryName,
+            dictionaryCss = firstSource?.dictionaryCss ?: card.dictionaryCss
         )
     }
     val cutAudio = if (includeCutAudio) {
@@ -399,7 +408,7 @@ private fun buildAnkiVariables(
     val singleFrequency = card.frequency.orEmpty()
     val resolvedBookTitle = resolveBookTitle(context, card)
 
-    return mapOf(
+    val variables = mutableMapOf(
         "expression" to card.word,
         "dictionary-name" to dictionaryName,
         "dictionary" to dictionaryName,
@@ -422,9 +431,9 @@ private fun buildAnkiVariables(
         "glossary-first" to styledGlossaryFirst,
         "glossary-first-brief" to glossaryFirst,
         "glossary-first-no-dictionary" to glossaryFirst,
-        "single-glossary" to glossaryHtml,
-        "single-glossary-brief" to glossaryFirst,
-        "single-glossary-no-dictionary" to glossaryNoDictionary,
+        "single-glossary" to singleGlossaryHtml,
+        "single-glossary-brief" to singleGlossaryFirst,
+        "single-glossary-no-dictionary" to singleGlossaryNoDictionary,
         "glossary-brief" to glossaryFirst,
         "glossary-plain" to glossaryPlain,
         "glossary-plain-no-dictionary" to glossaryPlain,
@@ -445,6 +454,104 @@ private fun buildAnkiVariables(
         "cut-audio" to cutAudio,
         "book-title" to resolvedBookTitle
     )
+    glossarySources.forEach { source ->
+        val normalizedName = normalizeDictionaryToken(source.dictionaryName)
+        if (normalizedName.isBlank()) return@forEach
+        variables[templateSingleGlossaryKey("single-glossary", normalizedName)] = buildStyledGlossary(
+            definitions = source.definitions,
+            dictionaryName = source.dictionaryName,
+            dictionaryCss = source.dictionaryCss
+        )
+        variables[templateSingleGlossaryKey("single-glossary-brief", normalizedName)] =
+            source.definitions.firstOrNull().orEmpty()
+        variables[templateSingleGlossaryKey("single-glossary-no-dictionary", normalizedName)] =
+            source.definitions.joinToString("<br>")
+    }
+    return variables
+}
+
+private data class MinedCardGlossarySource(
+    val dictionaryName: String,
+    val definitions: List<String>,
+    val dictionaryCss: String?
+)
+
+private fun buildMinedCardGlossarySources(card: MinedCard): List<MinedCardGlossarySource> {
+    val mapped = card.glossaryByDictionary
+        .mapNotNull { dictionaryGlossary ->
+            val dictionaryName = dictionaryGlossary.dictionaryName.trim()
+            val definitions = dictionaryGlossary.definitions
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+            if (dictionaryName.isBlank() || definitions.isEmpty()) {
+                null
+            } else {
+                MinedCardGlossarySource(
+                    dictionaryName = dictionaryName,
+                    definitions = definitions,
+                    dictionaryCss = dictionaryGlossary.dictionaryCss
+                )
+            }
+        }
+    if (mapped.isNotEmpty()) return mapped
+    val fallbackDefinitions = card.definitions
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+    if (fallbackDefinitions.isEmpty()) return emptyList()
+    return listOf(
+        MinedCardGlossarySource(
+            dictionaryName = card.dictionaryName.orEmpty().ifBlank { "Dictionary" },
+            definitions = fallbackDefinitions,
+            dictionaryCss = card.dictionaryCss
+        )
+    )
+}
+
+private fun selectPrimaryGlossarySource(
+    card: MinedCard,
+    sources: List<MinedCardGlossarySource>
+): MinedCardGlossarySource? {
+    if (sources.isEmpty()) return null
+    val preferred = normalizeDictionaryToken(card.dictionaryName.orEmpty())
+    if (preferred.isBlank()) return sources.firstOrNull()
+    return sources.firstOrNull { normalizeDictionaryToken(it.dictionaryName) == preferred }
+        ?: sources.firstOrNull()
+}
+
+private fun buildStyledGlossaryFromSources(sources: List<MinedCardGlossarySource>): String {
+    if (sources.isEmpty()) return ""
+    if (sources.size == 1) {
+        val source = sources.first()
+        return buildStyledGlossary(
+            definitions = source.definitions,
+            dictionaryName = source.dictionaryName,
+            dictionaryCss = source.dictionaryCss
+        )
+    }
+    val items = sources.joinToString("") { source ->
+        val safeName = escapeHtmlText(source.dictionaryName)
+        val safeAttr = escapeHtmlAttribute(source.dictionaryName)
+        val body = source.definitions.joinToString("<br>")
+        """
+            <li data-dictionary="$safeAttr">
+                <i>($safeName)</i> <span>$body</span>
+            </li>
+        """.trimIndent()
+    }
+    val scopedCss = sources
+        .asSequence()
+        .map { source -> buildScopedDictionaryCss(source.dictionaryCss.orEmpty(), source.dictionaryName) }
+        .filter { it.isNotBlank() }
+        .joinToString("\n")
+    val styleBlock = if (scopedCss.isBlank()) "" else "<style>$scopedCss</style>"
+    return """
+        <div style="text-align: left;" class="yomitan-glossary">
+            <ol>
+                $items
+                $styleBlock
+            </ol>
+        </div>
+    """.trimIndent()
 }
 
 private fun resolveBookTitle(context: Context, card: MinedCard): String {
@@ -1820,9 +1927,6 @@ private fun createAnkiMediaTempFile(
 
 private fun resolveTemplate(template: String, variables: Map<String, String>): String {
     var output = template
-    val selectedDictionaryName = normalizeDictionaryToken(
-        variables["dictionary"].orEmpty().ifBlank { variables["dictionary-name"].orEmpty() }
-    )
     output = output.replace(SINGLE_GLOSSARY_DICT_MARKER_REGEX) { match ->
         val rawMarker = match.groupValues.getOrNull(1).orEmpty().trim()
         val (requestedNameRaw, markerKey) = when {
@@ -1837,14 +1941,12 @@ private fun resolveTemplate(template: String, variables: Map<String, String>): S
             else -> rawMarker to "single-glossary"
         }
         val requestedDictionaryName = normalizeDictionaryToken(requestedNameRaw)
-        if (requestedDictionaryName.isBlank() || selectedDictionaryName.isBlank()) {
-            ""
-        } else if (requestedDictionaryName == selectedDictionaryName) {
-            variables[markerKey].orEmpty()
-        } else {
-            ""
-        }
+        if (requestedDictionaryName.isBlank()) return@replace ""
+        variables[templateSingleGlossaryKey(markerKey, requestedDictionaryName)].orEmpty()
     }
+    val selectedDictionaryName = normalizeDictionaryToken(
+        variables["dictionary"].orEmpty().ifBlank { variables["dictionary-name"].orEmpty() }
+    )
     output = output.replace(SINGLE_FREQUENCY_NUMBER_DICT_MARKER_REGEX) { match ->
         val requestedDictionaryName = normalizeDictionaryToken(match.groupValues.getOrNull(1).orEmpty())
         if (requestedDictionaryName.isBlank() || selectedDictionaryName.isBlank()) {
@@ -1876,6 +1978,10 @@ private fun resolveTemplate(template: String, variables: Map<String, String>): S
             ?: normalizedVariables[canonicalizeTemplateKey(key)]
             ?: ""
     }
+}
+
+private fun templateSingleGlossaryKey(markerKey: String, normalizedDictionaryName: String): String {
+    return "__${markerKey}::$normalizedDictionaryName"
 }
 
 private fun templateUsesVariable(template: String, variableName: String): Boolean {

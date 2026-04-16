@@ -35,6 +35,7 @@ internal data class MinedCard(
     val definitions: List<String>,
     val dictionaryName: String?,
     val dictionaryCss: String?,
+    val glossaryByDictionary: List<MinedDictionaryGlossary> = emptyList(),
     val pitch: String?,
     val frequency: String?,
     val cueStartMs: Long,
@@ -45,4 +46,9 @@ internal data class MinedCard(
     val requireCueAudioClip: Boolean = false
 )
 
+internal data class MinedDictionaryGlossary(
+    val dictionaryName: String,
+    val definitions: List<String>,
+    val dictionaryCss: String? = null
+)
 

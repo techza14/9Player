@@ -2779,6 +2779,7 @@ companion object {
                             entry = dictionaryGroup.entry,
                             definition = exportDefinitionHtml,
                             dictionaryCss = dictionaryGroup.css,
+                            groupedDictionaries = grouped.dictionaries,
                             popupSelectionText = popupSelectionText,
                             sentenceOverride = sentence
                         )
