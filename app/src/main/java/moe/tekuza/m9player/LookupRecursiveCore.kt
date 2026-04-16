@@ -21,8 +21,12 @@ internal fun prepareRecursiveLookupStart(
     explicitAnchor: ReaderLookupAnchor?,
     viewportHeight: Int
 ): RecursiveLookupStart? {
-    val selection = selectLookupScanText(tapData.scanText.ifBlank { tapData.text }, 0) ?: return null
-    val term = selection.text.trim().takeIf { it.isNotBlank() } ?: return null
+    val term = if (tapData.tapSource.equals("entry", ignoreCase = true)) {
+        tapData.scanText.trim().ifBlank { tapData.text.trim() }
+    } else {
+        val selection = selectLookupScanText(tapData.scanText.ifBlank { tapData.text }, 0) ?: return null
+        selection.text.trim()
+    }.takeIf { it.isNotBlank() } ?: return null
     val tapAnchorBounds = explicitAnchor.boundingRectCoreOrNull()
     val currentAnchorBounds = sourceLayer.anchor.boundingRectCoreOrNull()
     val estimatedAnchorY = tapAnchorBounds?.bottom

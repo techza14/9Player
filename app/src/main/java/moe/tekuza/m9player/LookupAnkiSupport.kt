@@ -18,6 +18,10 @@ internal fun addLookupDefinitionToAnkiShared(
     popupSelectionText: String? = null,
     sentenceOverride: String? = null
 ): AnkiExportResult {
+    android.util.Log.d(
+        "AnkiExportDebug",
+        "sharedExport start term=${entry.term} dict=${entry.dictionary} groupedCount=${groupedDictionaries.size} grouped=${groupedDictionaries.joinToString("|") { it.dictionary }}"
+    )
     val persistedConfig = withAnkiStep("load-config") {
         loadPersistedAnkiConfig(context)
     }
@@ -58,6 +62,10 @@ internal fun addLookupDefinitionToAnkiShared(
         lookupAudioUri = lookupAudioUri,
         audioTagOnly = true,
         requireCueAudioClip = audioUri != null
+    )
+    android.util.Log.d(
+        "AnkiExportDebug",
+        "sharedExport card word=${card.word} primaryDict=${card.dictionaryName.orEmpty()} glossaryByDict=${card.glossaryByDictionary.joinToString("|") { "${it.dictionaryName}:${it.definitions.size}" }}"
     )
 
     return withAnkiStep("export-note") {
