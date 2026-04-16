@@ -2261,6 +2261,27 @@ companion object {
                 }
             })
             webViewClient = object : android.webkit.WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView?,
+                    request: android.webkit.WebResourceRequest?
+                ): Boolean {
+                    val uri = request?.url ?: return false
+                    if (uri.scheme.equals("entry", ignoreCase = true)) {
+                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block entry navigation uri=$uri")
+                        return true
+                    }
+                    return false
+                }
+
+                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                    val raw = url?.trim().orEmpty()
+                    if (raw.startsWith("entry://", ignoreCase = true)) {
+                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block entry navigation uri=$raw")
+                        return true
+                    }
+                    return false
+                }
+
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     if (
@@ -2275,6 +2296,7 @@ companion object {
                                     DefinitionLookupTapData(
                                         text = "",
                                         scanText = "",
+                                        tapSource = "text",
                                         sentence = "",
                                         offset = layer.highlightedDefinitionOffset,
                                         nodeText = "",
@@ -2334,6 +2356,7 @@ companion object {
                 DefinitionLookupTapData(
                     text = "",
                     scanText = "",
+                    tapSource = "text",
                     sentence = "",
                     offset = offset,
                     nodeText = "",
@@ -2351,6 +2374,7 @@ companion object {
                     DefinitionLookupTapData(
                         text = "",
                         scanText = "",
+                        tapSource = "text",
                         sentence = "",
                         offset = offset,
                         nodeText = "",
@@ -2594,11 +2618,11 @@ companion object {
             if (settings.pausePlaybackOnLookup && BookReaderFloatingBridge.isPlaying()) {
                 BookReaderFloatingBridge.setPlaying(play = false)
             }
-            val selection = selectLookupScanText(tapData.scanText.ifBlank { tapData.text }, 0) ?: run {
-                truncateFloatingLookupLayersTo(sourceLayerIndex)
-                return@launch
-            }
-            val term = selection.text.trim().takeIf { it.isNotBlank() } ?: run {
+            val term = if (tapData.tapSource.equals("entry", ignoreCase = true)) {
+                tapData.scanText.trim().ifBlank { tapData.text.trim() }
+            } else {
+                selectLookupScanText(tapData.scanText.ifBlank { tapData.text }, 0)?.text?.trim().orEmpty()
+            }.takeIf { it.isNotBlank() } ?: run {
                 truncateFloatingLookupLayersTo(sourceLayerIndex)
                 return@launch
             }
@@ -2666,7 +2690,7 @@ companion object {
                     FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG,
                     "preflight key=$definitionKey len=$matchedLength applied=$preflightApplied"
                 )
-                if (!preflightApplied) {
+                if (!preflightApplied && !tapData.tapSource.equals("entry", ignoreCase = true)) {
                     return@onSuccess
                 }
                 // Keep recursive popup anchor tied to the exact tap location.
@@ -2715,7 +2739,7 @@ companion object {
                     ?.minOfOrNull { it.bottom }
                     ?: (resources.displayMetrics.heightPixels * 0.56f)
                 val shouldPlaceBelow = estimatedAnchorY <= (resources.displayMetrics.heightPixels / 2f)
-                val finalSelectionText = selection.text.take(matchedLength.coerceAtLeast(1)).trim().ifBlank { term }
+                val finalSelectionText = term.take(matchedLength.coerceAtLeast(1)).trim().ifBlank { term }
                 val layer = buildFloatingLookupLayer(
                     term = finalSelectionText,
                     popupSentence = tapData.sentence.trim().ifBlank { null },

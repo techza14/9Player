@@ -94,6 +94,7 @@ private val SINGLE_FREQUENCY_DICT_MARKER_REGEX = Regex("\\{single-frequency-([^{
 private val NON_ALNUM_TEMPLATE_KEY_REGEX = Regex("[^a-z0-9]")
 private val DICTIONARY_TOKEN_STRIP_REGEX = Regex("[\\s\\p{Punct}\\p{S}]")
 private const val ANKI_AUDIO_LOG_TAG = "AnkiAudio"
+private const val ANKI_EXPORT_DEBUG_TAG = "AnkiExportDebug"
 
 internal fun loadAnkiCatalog(context: Context): AnkiCatalog {
     ankiAvailabilityErrorMessage(context, requirePermission = true)?.let(::error)
@@ -201,6 +202,10 @@ internal fun exportToAnkiDroidApi(
     card: MinedCard,
     config: AnkiExportConfig
 ) {
+    Log.d(
+        ANKI_EXPORT_DEBUG_TAG,
+        "export start word=${card.word} primaryDict=${card.dictionaryName.orEmpty()} glossaryByDictCount=${card.glossaryByDictionary.size} model=${config.modelName} deck=${config.deckName}"
+    )
     ankiAvailabilityErrorMessage(context, requirePermission = true)?.let(::error)
 
     val api = runCatching { AddContentApi(context) }.getOrElse { throwable ->
@@ -236,6 +241,10 @@ internal fun exportToAnkiDroidApi(
     }.getOrElse { throwable ->
         error("Anki variable build failed. ${throwableDetail(throwable)}")
     }
+    Log.d(
+        ANKI_EXPORT_DEBUG_TAG,
+        "export variables dict=${variables["dictionary"].orEmpty()} glossaryLen=${variables["glossary"]?.length ?: 0} singleGlossaryLen=${variables["single-glossary"]?.length ?: 0}"
+    )
 
     val fieldValues = runCatching {
         model.fields.map { fieldName ->
@@ -249,6 +258,10 @@ internal fun exportToAnkiDroidApi(
     if (fieldValues.all { it.isBlank() }) {
         error("All rendered field values are empty. Check your field variables in Settings > Anki.")
     }
+    Log.d(
+        ANKI_EXPORT_DEBUG_TAG,
+        "export rendered fields=${model.fields.zip(fieldValues.asList()).joinToString(separator = "|") { (name, value) -> "$name:${value.length}" }}"
+    )
 
     val tags = config.tags
     val noteId = runCatching {
@@ -364,6 +377,10 @@ private fun buildAnkiVariables(
     includeLookupAudio: Boolean
 ): Map<String, String> {
     val glossarySources = buildMinedCardGlossarySources(card)
+    Log.d(
+        ANKI_EXPORT_DEBUG_TAG,
+        "variables sources count=${glossarySources.size} names=${glossarySources.joinToString(separator = "|") { "${it.dictionaryName}:${it.definitions.size}" }}"
+    )
     val primaryGlossarySource = selectPrimaryGlossarySource(card, glossarySources)
     val dictionaryName = primaryGlossarySource?.dictionaryName.orEmpty()
     val glossaryHtml = buildStyledGlossaryFromSources(glossarySources)
@@ -467,6 +484,10 @@ private fun buildAnkiVariables(
         variables[templateSingleGlossaryKey("single-glossary-no-dictionary", normalizedName)] =
             source.definitions.joinToString("<br>")
     }
+    Log.d(
+        ANKI_EXPORT_DEBUG_TAG,
+        "variables done primary=${primaryGlossarySource?.dictionaryName.orEmpty()} dynamicSingleKeys=${variables.keys.count { it.startsWith("__single-glossary::") }}"
+    )
     return variables
 }
 
@@ -493,18 +514,29 @@ private fun buildMinedCardGlossarySources(card: MinedCard): List<MinedCardGlossa
                 )
             }
         }
-    if (mapped.isNotEmpty()) return mapped
+    if (mapped.isNotEmpty()) {
+        Log.d(
+            ANKI_EXPORT_DEBUG_TAG,
+            "sources using glossaryByDictionary count=${mapped.size} names=${mapped.joinToString("|") { it.dictionaryName }}"
+        )
+        return mapped
+    }
     val fallbackDefinitions = card.definitions
         .map { it.trim() }
         .filter { it.isNotBlank() }
     if (fallbackDefinitions.isEmpty()) return emptyList()
-    return listOf(
+    val fallback = listOf(
         MinedCardGlossarySource(
             dictionaryName = card.dictionaryName.orEmpty().ifBlank { "Dictionary" },
             definitions = fallbackDefinitions,
             dictionaryCss = card.dictionaryCss
         )
     )
+    Log.d(
+        ANKI_EXPORT_DEBUG_TAG,
+        "sources fallback dict=${fallback.first().dictionaryName} defs=${fallbackDefinitions.size}"
+    )
+    return fallback
 }
 
 private fun selectPrimaryGlossarySource(

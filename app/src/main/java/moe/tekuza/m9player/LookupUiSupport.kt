@@ -2,6 +2,8 @@ package moe.tekuza.m9player
 
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.WebResourceRequest
 import android.view.MotionEvent
 import android.view.View
 import android.util.Log
@@ -49,6 +51,7 @@ private data class RubyPart(val base: String, val ruby: String?)
 internal data class DefinitionLookupTapData(
     val text: String,
     val scanText: String,
+    val tapSource: String,
     val sentence: String,
     val offset: Int,
     val nodeText: String,
@@ -548,6 +551,25 @@ internal fun RichDefinitionView(
                         settings.builtInZoomControls = false
                         settings.displayZoomControls = false
                         settings.setSupportZoom(false)
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                val uri = request?.url ?: return false
+                                if (uri.scheme.equals("entry", ignoreCase = true)) {
+                                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "block entry navigation uri=$uri")
+                                    return true
+                                }
+                                return false
+                            }
+
+                            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                                val raw = url?.trim().orEmpty()
+                                if (raw.startsWith("entry://", ignoreCase = true)) {
+                                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "block entry navigation uri=$raw")
+                                    return true
+                                }
+                                return false
+                            }
+                        }
                         setOnLongClickListener { true }
                         setLayerType(View.LAYER_TYPE_HARDWARE, null)
                         setOnTouchListener(object : View.OnTouchListener {
@@ -990,9 +1012,86 @@ internal fun buildDefinitionHtml(
                 const sentence = text.slice(start, end).trim();
                 return sentence || text.trim();
             }
+            function findEntryAnchor(target) {
+                if (!target || !target.closest) return null;
+                const anchor = target.closest('a[href]');
+                if (!anchor) return null;
+                const href = (anchor.getAttribute('href') || '').trim();
+                if (!href) return null;
+                if (/^entry:/i.test(href)) return anchor;
+                return null;
+            }
+            function normalizeEntryScanText(raw) {
+                if (!raw) return '';
+                let text = String(raw).replace(/\s+/g, '').trim();
+                if (!text) return '';
+                const bracketMatch = text.match(/[（(【〖\[]([^）)】〗\]]+)[）)】〗\]]/);
+                if (bracketMatch && bracketMatch[1]) {
+                    const inside = String(bracketMatch[1]).trim();
+                    const insideCjkRuns = inside.match(/[\u3040-\u30FF\u3400-\u9FFF々ー]+/g) || [];
+                    if (insideCjkRuns.length > 0) {
+                        insideCjkRuns.sort((a, b) => b.length - a.length);
+                        const preferred = insideCjkRuns.find(v => /[\u3400-\u9FFF々]/.test(v)) || insideCjkRuns[0];
+                        if (preferred) return preferred;
+                    }
+                }
+                const hardStop = text.search(/[@#]/);
+                if (hardStop > 0) {
+                    text = text.slice(0, hardStop).trim();
+                }
+                const bracketStop = text.search(/[〖【\[\(（]/);
+                if (bracketStop > 0) {
+                    text = text.slice(0, bracketStop).trim();
+                }
+                const cjkRuns = text.match(/[\u3040-\u30FF\u3400-\u9FFF々ー]+/g) || [];
+                if (cjkRuns.length > 0) {
+                    cjkRuns.sort((a, b) => b.length - a.length);
+                    return cjkRuns[0] || text;
+                }
+                return text;
+            }
+            function dispatchEntryTap(anchor, clientX, clientY) {
+                if (!window.NineLookup || !window.NineLookup.onTap || !anchor) return false;
+                const rect = anchor.getBoundingClientRect();
+                if (!rect) return false;
+                const left = rect.left || clientX || 0;
+                const top = rect.top || clientY || 0;
+                const right = rect.right || left;
+                const bottom = rect.bottom || top;
+                const nodeText = (anchor.textContent || anchor.innerText || '').trim();
+                const scanText = normalizeEntryScanText(nodeText);
+                const payloadRect = [{ left, top, right, bottom }];
+                window.NineLookup.onTap(
+                    nodeText,
+                    scanText || nodeText,
+                    'entry',
+                    scanText || nodeText,
+                    0,
+                    nodeText,
+                    '[]',
+                    JSON.stringify(payloadRect),
+                    JSON.stringify(payloadRect),
+                    left,
+                    top,
+                    right,
+                    bottom
+                );
+                if (window.NineLookup && window.NineLookup.onDebug) {
+                    window.NineLookup.onDebug('entry tap scan=' + (scanText || nodeText));
+                }
+                return true;
+            }
             function handleLookupTap(clientX, clientY, fromTouch) {
                 if (!window.NineLookup || !window.NineLookup.onTap) return;
                 if (Date.now() < suppressClickUntil) return;
+                const directTarget = document.elementFromPoint(clientX || 0, clientY || 0);
+                const directEntryAnchor = findEntryAnchor(directTarget);
+                if (directEntryAnchor) {
+                    if (dispatchEntryTap(directEntryAnchor, clientX || 0, clientY || 0)) {
+                        suppressClickUntil = Date.now() + 260;
+                        return;
+                    }
+                }
                 const now = Date.now();
                 if (
                     Math.abs(clientX - lastTapX) <= 2 &&
@@ -1078,6 +1177,7 @@ internal fun buildDefinitionHtml(
                 window.NineLookup.onTap(
                     text,
                     scanText,
+                    'text',
                     extractSentence(text, safeOffset),
                     safeOffset,
                     node.textContent || '',
@@ -1095,15 +1195,34 @@ internal fun buildDefinitionHtml(
             }
             window.__nineLookupHandleTap = handleLookupTap;
             document.addEventListener('touchend', function(e) {
+                if (Date.now() < suppressClickUntil) return;
                 if (touchMoved) {
                     suppressClickUntil = Date.now() + suppressClickDurationMs;
                     return;
                 }
                 const t = e.changedTouches && e.changedTouches[0];
                 if (!t) return;
+                const touched = document.elementFromPoint(t.clientX || 0, t.clientY || 0);
+                const entryAnchor = findEntryAnchor(touched);
+                if (entryAnchor) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dispatchEntryTap(entryAnchor, t.clientX || 0, t.clientY || 0);
+                    suppressClickUntil = Date.now() + 260;
+                    return;
+                }
                 handleLookupTap(t.clientX || 0, t.clientY || 0, true);
             }, true);
             document.addEventListener('click', function(e) {
+                if (Date.now() < suppressClickUntil) return;
+                const entryAnchor = findEntryAnchor(e.target);
+                if (entryAnchor) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dispatchEntryTap(entryAnchor, e.clientX || 0, e.clientY || 0);
+                    suppressClickUntil = Date.now() + 260;
+                    return;
+                }
                 handleLookupTap(e.clientX || 0, e.clientY || 0, false);
             }, true);
             window.__nineLookupResolveMatchedRects = function(nodePath, startOffset, matchedLength) {
@@ -1240,6 +1359,8 @@ internal class DefinitionLookupBridge(
 ) {
     var hostView: WebView? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile
+    private var lastEntryTapAtMs: Long = 0L
 
     @JavascriptInterface
     fun onDebug(message: String?) {
@@ -1247,17 +1368,28 @@ internal class DefinitionLookupBridge(
     }
 
     @JavascriptInterface
-    fun onTap(text: String?, scanText: String?, sentence: String?, offset: Int, nodeText: String?, nodePathJson: String?, localRectsJson: String?, localCharRectsJson: String?, left: Float, top: Float, right: Float, bottom: Float) {
+    fun onTap(text: String?, scanText: String?, tapSource: String?, sentence: String?, offset: Int, nodeText: String?, nodePathJson: String?, localRectsJson: String?, localCharRectsJson: String?, left: Float, top: Float, right: Float, bottom: Float) {
         try {
             val value = text.orEmpty()
             val scanValue = scanText?.trim().orEmpty()
+            val sourceValue = tapSource?.trim().orEmpty().ifBlank { "text" }
+            val now = System.currentTimeMillis()
+            if (sourceValue.equals("entry", ignoreCase = true)) {
+                lastEntryTapAtMs = now
+            } else if (sourceValue.equals("text", ignoreCase = true)) {
+                val elapsed = now - lastEntryTapAtMs
+                if (elapsed in 0..500) {
+                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge onTap drop text-after-entry elapsedMs=$elapsed")
+                    return
+                }
+            }
             if (value.isBlank()) return
             val localRect = Rect(left, top, right, bottom)
             val localRects = parseRectListJson(localRectsJson).ifEmpty { listOf(localRect) }
             val localCharRects = parseRectListJson(localCharRectsJson)
             Log.d(
                 BOOK_LOOKUP_TAP_LOG_TAG,
-                "bridge onTap textLen=${value.length} scanLen=${scanValue.length} offset=$offset localRects=${localRects.size} localChars=${localCharRects.size} onMain=${Looper.myLooper() == Looper.getMainLooper()}"
+                "bridge onTap source=$sourceValue textLen=${value.length} scanLen=${scanValue.length} offset=$offset localRects=${localRects.size} localChars=${localCharRects.size} onMain=${Looper.myLooper() == Looper.getMainLooper()}"
             )
             val dispatch = Runnable {
                 try {
@@ -1267,6 +1399,7 @@ internal class DefinitionLookupBridge(
                     val data = DefinitionLookupTapData(
                         text = value,
                         scanText = scanValue,
+                        tapSource = sourceValue,
                         sentence = sentence?.trim().orEmpty(),
                         offset = offset,
                         nodeText = nodeText.orEmpty(),
