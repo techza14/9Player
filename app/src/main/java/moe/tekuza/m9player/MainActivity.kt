@@ -87,6 +87,8 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -189,7 +191,13 @@ private enum class HomeLibraryView {
 }
 
 private sealed interface MainLookupRequest {
-    data class Cue(val cue: SubtitleCue, val offset: Int, val sourceBookTitle: String? = null) : MainLookupRequest
+    data class Cue(
+        val cue: SubtitleCue,
+        val offset: Int,
+        val sourceBookTitle: String? = null,
+        val anchor: ReaderLookupAnchor? = null,
+        val placeBelow: Boolean = true
+    ) : MainLookupRequest
     data class Candidates(
         val rawCandidates: List<String>,
         val anchor: ReaderLookupAnchor? = null,
@@ -1520,25 +1528,58 @@ private fun ReaderSyncScreen() {
                 mainLookupPopupTitle = candidates.firstOrNull() ?: selectedToken.orEmpty()
                 mainLookupPopupError = null
                 mainLookupPopupLoading = true
+                fun buildCueLayer(
+                    rawResults: List<DictionarySearchResult>,
+                    loading: Boolean,
+                    error: String?
+                ): ReaderLookupLayer {
+                    val keepCollectionsRootTopCenter =
+                        activeSection == MiningSection.COLLECTIONS && mainLookupSession.size <= 1
+                    val useAnchoredCueLayer = request.anchor != null && !keepCollectionsRootTopCenter
+                    return if (useAnchoredCueLayer) {
+                        buildLookupLayerFromRawResults(
+                            rawResults = rawResults,
+                            dictionaryCssByName = dictionaryCssByName,
+                            dictionaryPriorityByName = dictionaryPriorityByName,
+                            dictionaryTypeByName = dictionaryTypeByName,
+                            loading = loading,
+                            error = error,
+                            sourceTerm = null,
+                            cue = null,
+                            cueIndex = null,
+                            anchorOffset = null,
+                            anchor = request.anchor,
+                            placeBelow = request.placeBelow,
+                            preferSidePlacement = true,
+                            selectedRange = null,
+                            selectionText = candidates.firstOrNull(),
+                            popupSentence = null
+                        )
+                    } else {
+                        buildMainLookupLayer(
+                            rawResults = rawResults,
+                            loading = loading,
+                            error = error,
+                            selectedRange = null,
+                            selectionText = candidates.firstOrNull()
+                        )
+                    }
+                }
                 setOrPushMainLookupLayer(
-                    buildMainLookupLayer(
+                    buildCueLayer(
                         rawResults = emptyList(),
                         loading = true,
-                        error = null,
-                        selectedRange = null,
-                        selectionText = candidates.firstOrNull()
+                        error = null
                     )
                 )
                 queryMainLookupCandidates(candidates) { result ->
                     result.onSuccess { hits ->
                         if (hits.isEmpty()) {
                             setOrPushMainLookupLayer(
-                                buildMainLookupLayer(
+                                buildCueLayer(
                                     rawResults = emptyList(),
                                     loading = false,
-                                    error = null,
-                                    selectedRange = null,
-                                    selectionText = candidates.firstOrNull()
+                                    error = null
                                 )
                             )
                             mainLookupPopupLoading = false
@@ -1546,12 +1587,10 @@ private fun ReaderSyncScreen() {
                             return@onSuccess
                         }
                         setOrPushMainLookupLayer(
-                            buildMainLookupLayer(
+                            buildCueLayer(
                                 rawResults = hits,
                                 loading = false,
-                                error = null,
-                                selectedRange = null,
-                                selectionText = candidates.firstOrNull()
+                                error = null
                             )
                         )
                         mainLookupPopupSelectedRange = if (hits.isNotEmpty()) {
@@ -1562,12 +1601,10 @@ private fun ReaderSyncScreen() {
                         mainLookupPopupLoading = false
                     }.onFailure { error ->
                         setOrPushMainLookupLayer(
-                            buildMainLookupLayer(
+                            buildCueLayer(
                                 rawResults = emptyList(),
                                 loading = false,
-                                error = error.message ?: context.getString(R.string.bookreader_lookup_failed),
-                                selectedRange = null,
-                                selectionText = candidates.firstOrNull()
+                                error = error.message ?: context.getString(R.string.bookreader_lookup_failed)
                             )
                         )
                         mainLookupPopupError = error.message ?: context.getString(R.string.bookreader_lookup_failed)
@@ -1578,59 +1615,95 @@ private fun ReaderSyncScreen() {
             is MainLookupRequest.Candidates -> {
                 val candidates = normalizeLookupCandidates(request.rawCandidates)
                 if (candidates.isEmpty()) return
+                if (activeSection == MiningSection.DICTIONARY && request.anchor == null) {
+                    return
+                }
                 val rootToken = candidates.first()
                 val inferredRange = rootToken.indices.firstOrNull()?.let { 0..rootToken.lastIndex }
+                val useAnchoredRootLayer = activeSection == MiningSection.DICTIONARY && request.anchor != null
+                fun buildCandidatesLayer(
+                    rawResults: List<DictionarySearchResult>,
+                    loading: Boolean,
+                    error: String?
+                ): ReaderLookupLayer {
+                    return if (useAnchoredRootLayer) {
+                        buildLookupLayerFromRawResults(
+                            rawResults = rawResults,
+                            dictionaryCssByName = dictionaryCssByName,
+                            dictionaryPriorityByName = dictionaryPriorityByName,
+                            dictionaryTypeByName = dictionaryTypeByName,
+                            loading = loading,
+                            error = error,
+                            sourceTerm = null,
+                            cue = null,
+                            cueIndex = null,
+                            anchorOffset = null,
+                            anchor = request.anchor,
+                            placeBelow = request.placeBelow,
+                            preferSidePlacement = true,
+                            selectedRange = inferredRange,
+                            selectionText = rootToken,
+                            popupSentence = null
+                        )
+                    } else {
+                        buildMainLookupLayer(
+                            rawResults = rawResults,
+                            loading = loading,
+                            error = error,
+                            selectedRange = inferredRange,
+                            selectionText = rootToken
+                        )
+                    }
+                }
                 mainLookupPopupVisible = true
                 mainLookupAutoPlayNonce += 1L
                 mainLookupAutoPlayedKey = null
                 mainLookupPopupTitle = rootToken
                 mainLookupPopupError = null
                 mainLookupPopupLoading = true
-                mainLookupPopupCue = null
+                if (activeSection != MiningSection.COLLECTIONS) {
+                    mainLookupPopupCue = null
+                }
                 mainLookupPopupSelectedRange = inferredRange
                 mainLookupPopupAudioUri = null
                 setOrPushMainLookupLayer(
-                    buildMainLookupLayer(
+                    buildCandidatesLayer(
                         rawResults = emptyList(),
                         loading = true,
-                        error = null,
-                        selectedRange = inferredRange,
-                        selectionText = rootToken
+                        error = null
                     )
                 )
                 queryMainLookupCandidates(candidates) { result ->
                     result.onSuccess { hits ->
                         if (hits.isEmpty()) {
+                            if (activeSection == MiningSection.DICTIONARY) {
+                                closeMainLookupPopup()
+                                return@onSuccess
+                            }
                             setOrPushMainLookupLayer(
-                                buildMainLookupLayer(
+                                buildCandidatesLayer(
                                     rawResults = emptyList(),
                                     loading = false,
-                                    error = null,
-                                    selectedRange = inferredRange,
-                                    selectionText = rootToken
+                                    error = null
                                 )
                             )
                             mainLookupPopupLoading = false
                             return@onSuccess
                         }
                         setOrPushMainLookupLayer(
-                            buildMainLookupLayer(
+                            buildCandidatesLayer(
                                 rawResults = hits,
                                 loading = false,
-                                error = null,
-                                selectedRange = inferredRange,
-                                selectionText = rootToken
+                                error = null
                             )
                         )
                         mainLookupPopupLoading = false
                     }.onFailure { error ->
                         setOrPushMainLookupLayer(
-                            buildMainLookupLayer(
+                            buildCandidatesLayer(
                                 rawResults = emptyList(),
                                 loading = false,
-                                error = error.message ?: context.getString(R.string.bookreader_lookup_failed),
-                                selectedRange = inferredRange,
-                                selectionText = rootToken
+                                error = error.message ?: context.getString(R.string.bookreader_lookup_failed)
                             )
                         )
                         mainLookupPopupError = error.message ?: context.getString(R.string.bookreader_lookup_failed)
@@ -1742,6 +1815,7 @@ private fun ReaderSyncScreen() {
                             entry = dictionaryGroup.entry,
                             definition = exportDefinitionHtml,
                             dictionaryCss = dictionaryGroup.css,
+                            groupedDictionaries = groupedResult.dictionaries,
                             popupSelectionText = popupSelectionText
                         )
                     } finally {
@@ -1784,6 +1858,7 @@ private fun ReaderSyncScreen() {
 
         dictionaryRefs = dictionaryRefs.filterIndexed { i, _ -> i != index }
         loadedDictionaries = loadedDictionaries.filterIndexed { i, _ -> i != index }
+        bumpDictionaryDataVersion(context)
         ref.cacheKey?.let { cacheKey ->
             scope.launch(Dispatchers.IO) {
                 deleteDictionaryFromSqlite(context, cacheKey)
@@ -1803,6 +1878,7 @@ private fun ReaderSyncScreen() {
         val movedRef = refs.removeAt(fromIndex)
         refs.add(toIndex, movedRef)
         dictionaryRefs = refs
+        bumpDictionaryDataVersion(context)
 
         val dictionaries = loadedDictionaries.toMutableList()
         if (fromIndex in dictionaries.indices) {
@@ -1921,8 +1997,12 @@ private fun ReaderSyncScreen() {
                 )).distinctBy { it.uri }
             }
 
+            val hadDictionaryListChange = nextDictionaryRefs != dictionaryRefs
             loadedDictionaries = nextLoadedDictionaries
             dictionaryRefs = nextDictionaryRefs
+            if (hadDictionaryListChange) {
+                bumpDictionaryDataVersion(context)
+            }
             persistImportState()
             clearDictionaryProgress()
             dictionaryLoading = false
@@ -2832,33 +2912,66 @@ private fun ReaderSyncScreen() {
                         showAddToAnki = true
                     )
                 },
-                beforeCardContent = { layerIndex, _, isTopLayer, _ ->
-                    if (isTopLayer) {
+                contentMaxHeightReserveDp = { layerIndex, _, _, _ ->
+                    if (activeSection == MiningSection.COLLECTIONS && layerIndex == 0 && mainLookupPopupCue != null) 96 else 0
+                },
+                beforeCardContent = { layerIndex, _, _, _ ->
+                    if (layerIndex == 0 && activeSection == MiningSection.COLLECTIONS) {
                         val popupCue = mainLookupPopupCue
                         if (popupCue != null) {
+                            var popupCueCoordinates by remember(popupCue.text, mainLookupPopupSelectedRange, layerIndex) {
+                                mutableStateOf<LayoutCoordinates?>(null)
+                            }
                             var popupCueLayout by remember(popupCue.text, mainLookupPopupSelectedRange, layerIndex) {
                                 mutableStateOf<TextLayoutResult?>(null)
                             }
-                            Text(
-                                text = buildMainHighlightedText(popupCue.text, mainLookupPopupSelectedRange),
-                                style = MaterialTheme.typography.headlineSmall,
-                                modifier = Modifier.pointerInput(popupCue) {
-                                    detectTapGestures { tapOffset ->
-                                        val layout = popupCueLayout ?: return@detectTapGestures
-                                        startMainLookup(
-                                            MainLookupRequest.Cue(
-                                                cue = popupCue,
-                                                offset = layout.getOffsetForPosition(tapOffset)
-                                            )
-                                        )
-                                    }
-                                },
-                                onTextLayout = { popupCueLayout = it }
-                            )
-                            Text(
-                                "${formatTime(popupCue.startMs)} - ${formatTime(popupCue.endMs)}",
-                                style = MaterialTheme.typography.bodySmall
-                            )
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = buildMainHighlightedText(popupCue.text, mainLookupPopupSelectedRange),
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    modifier = Modifier
+                                        .onGloballyPositioned { popupCueCoordinates = it }
+                                        .pointerInput(popupCue) {
+                                            detectTapGestures { tapOffset ->
+                                                val layout = popupCueLayout ?: return@detectTapGestures
+                                                val charOffset = layout.getOffsetForPosition(tapOffset)
+                                                    .coerceIn(0, (popupCue.text.length - 1).coerceAtLeast(0))
+                                                val localRect = layout.getBoundingBox(charOffset)
+                                                val coords = popupCueCoordinates
+                                                val anchor = coords?.let {
+                                                    val topLeft = it.localToWindow(localRect.topLeft)
+                                                    val bottomRight = it.localToWindow(localRect.bottomRight)
+                                                    ReaderLookupAnchor(
+                                                        rects = listOf(
+                                                            Rect(
+                                                                topLeft.x,
+                                                                topLeft.y,
+                                                                bottomRight.x,
+                                                                bottomRight.y
+                                                            )
+                                                        )
+                                                    )
+                                                }
+                                                val placeBelow = anchor?.boundingRectCoreOrNull()
+                                                    ?.let { rect -> rect.bottom <= view.height * 0.56f }
+                                                    ?: true
+                                                startMainLookup(
+                                                    MainLookupRequest.Cue(
+                                                        cue = popupCue,
+                                                        offset = layout.getOffsetForPosition(tapOffset),
+                                                        anchor = anchor,
+                                                        placeBelow = placeBelow
+                                                    )
+                                                )
+                                            }
+                                        },
+                                    onTextLayout = { popupCueLayout = it }
+                                )
+                                Text(
+                                    "${formatTime(popupCue.startMs)} - ${formatTime(popupCue.endMs)}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
                         }
                     }
                 },
@@ -3802,6 +3915,7 @@ private fun addLookupDefinitionToAnkiMain(
     entry: DictionaryEntry,
     definition: String,
     dictionaryCss: String?,
+    groupedDictionaries: List<GroupedLookupDictionary> = emptyList(),
     popupSelectionText: String? = null
 ) {
     val persistedConfig = loadPersistedAnkiConfig(context)
@@ -3821,6 +3935,15 @@ private fun addLookupDefinitionToAnkiMain(
         definitions = listOf(definition),
         dictionaryName = entry.dictionary,
         dictionaryCss = dictionaryCss,
+        glossaryByDictionary = groupedDictionaries
+            .map { dictionaryGroup ->
+                MinedDictionaryGlossary(
+                    dictionaryName = dictionaryGroup.dictionary,
+                    definitions = dictionaryGroup.definitions,
+                    dictionaryCss = dictionaryGroup.css
+                )
+            }
+            .filter { it.dictionaryName.isNotBlank() && it.definitions.isNotEmpty() },
         pitch = entry.pitch,
         frequency = entry.frequency,
         cueStartMs = cue.startMs,

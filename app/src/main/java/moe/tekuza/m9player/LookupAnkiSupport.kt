@@ -14,6 +14,7 @@ internal fun addLookupDefinitionToAnkiShared(
     entry: DictionaryEntry,
     definition: String,
     dictionaryCss: String?,
+    groupedDictionaries: List<GroupedLookupDictionary> = emptyList(),
     popupSelectionText: String? = null,
     sentenceOverride: String? = null
 ): AnkiExportResult {
@@ -40,6 +41,15 @@ internal fun addLookupDefinitionToAnkiShared(
         definitions = listOf(definition),
         dictionaryName = entry.dictionary,
         dictionaryCss = dictionaryCss,
+        glossaryByDictionary = groupedDictionaries
+            .map { dictionaryGroup ->
+                MinedDictionaryGlossary(
+                    dictionaryName = dictionaryGroup.dictionary,
+                    definitions = dictionaryGroup.definitions,
+                    dictionaryCss = dictionaryGroup.css
+                )
+            }
+            .filter { it.dictionaryName.isNotBlank() && it.definitions.isNotEmpty() },
         pitch = entry.pitch,
         frequency = entry.frequency,
         cueStartMs = cueStartMs,

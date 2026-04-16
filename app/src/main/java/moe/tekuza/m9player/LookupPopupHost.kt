@@ -32,6 +32,7 @@ internal fun LookupPopupHost(
     onDismissTopLayer: () -> Unit,
     onTruncateToLayer: ((Int) -> Unit)? = null,
     buildActionState: (index: Int, layer: ReaderLookupLayer, isTop: Boolean, isPrevious: Boolean) -> LookupCardActionState,
+    contentMaxHeightReserveDp: (index: Int, layer: ReaderLookupLayer, isTop: Boolean, isPrevious: Boolean) -> Int = { _, _, _, _ -> 0 },
     beforeCardContent: @Composable (index: Int, layer: ReaderLookupLayer, isTop: Boolean, isPrevious: Boolean) -> Unit = { _, _, _, _ -> },
     onToggleSection: ((Int, String, Boolean) -> Unit)? = null,
     onDefinitionLookup: ((Int, String, DefinitionLookupTapData) -> Unit)? = null,
@@ -86,11 +87,17 @@ internal fun LookupPopupHost(
                 logTag = logTag
             )
         }
-        val effectiveContentMaxHeightDp = if (useTopCenterHost) {
-            (configuration.screenHeightDp * 0.34f).toInt().coerceIn(180, 320)
+        val baseContentMaxHeightDp = if (useTopCenterHost) {
+            if (layer.groupedResults.isEmpty()) {
+                (configuration.screenHeightDp * 0.26f).toInt().coerceIn(150, 220)
+            } else {
+                (configuration.screenHeightDp - 260).coerceIn(240, 560)
+            }
         } else {
             popupSizeSpec.contentMaxHeightDp
         }
+        val reserveDp = contentMaxHeightReserveDp(index, layer, isTopLayer, isPreviousLayer).coerceAtLeast(0)
+        val effectiveContentMaxHeightDp = (baseContentMaxHeightDp - reserveDp).coerceAtLeast(140)
         val popupContent: @Composable () -> Unit = {
             if (temporarilyHidden) {
                 Box(
@@ -128,7 +135,7 @@ internal fun LookupPopupHost(
                     )
                 ) {
                     Column(
-                        modifier = Modifier.padding(12.dp),
+                        modifier = Modifier,
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         beforeCardContent(index, layer, isTopLayer, isPreviousLayer)

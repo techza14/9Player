@@ -462,6 +462,7 @@ private fun BookReaderScreen(
     var srtError by remember { mutableStateOf<String?>(null) }
 
     var loadedDictionaries by remember { mutableStateOf<List<LoadedDictionary>>(emptyList()) }
+    var dictionaryDataVersion by remember { mutableStateOf(loadDictionaryDataVersion(context)) }
 
     val lookupSession = remember { ReaderLookupSession() }
     val lookupPopupLayers = lookupSession.layers
@@ -728,8 +729,8 @@ private fun BookReaderScreen(
             }
     }
 
-    LaunchedEffect(Unit) {
-        val restored = withContext(Dispatchers.IO) {
+    suspend fun loadReaderDictionariesSnapshot(): List<LoadedDictionary> {
+        return withContext(Dispatchers.IO) {
             val persisted = loadPersistedImports(context)
             val refs = persisted.dictionaries.distinctBy { it.uri }
             refs.mapNotNull { ref ->
@@ -741,7 +742,10 @@ private fun BookReaderScreen(
                 loadDictionaryFromSqlite(context, cacheKey)
             }
         }
-        loadedDictionaries = restored
+    }
+
+    LaunchedEffect(dictionaryDataVersion) {
+        loadedDictionaries = loadReaderDictionariesSnapshot()
     }
 
     val dictionaryCssByName = remember(loadedDictionaries) {
@@ -764,6 +768,14 @@ private fun BookReaderScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+    DisposableEffect(context) {
+        val listener = registerDictionaryDataVersionListener(context) { version ->
+            dictionaryDataVersion = version
+        }
+        onDispose {
+            unregisterDictionaryDataVersionListener(context, listener)
         }
     }
 
@@ -1839,6 +1851,7 @@ private fun BookReaderScreen(
                             entry = dictionaryGroup.entry,
                             definition = exportDefinitionHtml,
                             dictionaryCss = dictionaryGroup.css,
+                            groupedDictionaries = groupedResult.dictionaries,
                             popupSelectionText = popupSelectionText,
                             sentenceOverride = sentenceSelection.text
                         )
@@ -3128,6 +3141,7 @@ private fun addLookupDefinitionToAnki(
     entry: DictionaryEntry,
     definition: String,
     dictionaryCss: String?,
+    groupedDictionaries: List<GroupedLookupDictionary> = emptyList(),
     popupSelectionText: String? = null,
     sentenceOverride: String? = null
 ): AnkiExportResult {
@@ -3142,6 +3156,7 @@ private fun addLookupDefinitionToAnki(
         entry = entry,
         definition = definition,
         dictionaryCss = dictionaryCss,
+        groupedDictionaries = groupedDictionaries,
         popupSelectionText = popupSelectionText,
         sentenceOverride = sentenceOverride
     )

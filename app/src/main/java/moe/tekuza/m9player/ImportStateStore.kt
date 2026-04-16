@@ -1,6 +1,7 @@
 package moe.tekuza.m9player
 
 import android.content.Context
+import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -36,6 +37,7 @@ internal data class PersistedImports(
 
 private const val PREFS_NAME = "reader_sync_imports"
 private const val KEY_STATE_JSON = "state_json"
+private const val KEY_DICTIONARY_VERSION = "dictionary_version"
 
 internal fun loadPersistedImports(context: Context): PersistedImports {
     val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -161,5 +163,39 @@ internal fun savePersistedImports(context: Context, state: PersistedImports) {
         .edit()
         .putString(KEY_STATE_JSON, obj.toString())
         .apply()
+}
+
+internal fun loadDictionaryDataVersion(context: Context): Long {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .getLong(KEY_DICTIONARY_VERSION, 0L)
+}
+
+internal fun bumpDictionaryDataVersion(context: Context): Long {
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val next = prefs.getLong(KEY_DICTIONARY_VERSION, 0L) + 1L
+    prefs.edit().putLong(KEY_DICTIONARY_VERSION, next).apply()
+    return next
+}
+
+internal fun registerDictionaryDataVersionListener(
+    context: Context,
+    onChanged: (Long) -> Unit
+): SharedPreferences.OnSharedPreferenceChangeListener {
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val listener = SharedPreferences.OnSharedPreferenceChangeListener { changedPrefs, key ->
+        if (key == KEY_DICTIONARY_VERSION) {
+            onChanged(changedPrefs.getLong(KEY_DICTIONARY_VERSION, 0L))
+        }
+    }
+    prefs.registerOnSharedPreferenceChangeListener(listener)
+    return listener
+}
+
+internal fun unregisterDictionaryDataVersionListener(
+    context: Context,
+    listener: SharedPreferences.OnSharedPreferenceChangeListener
+) {
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .unregisterOnSharedPreferenceChangeListener(listener)
 }
 
