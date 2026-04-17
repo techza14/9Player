@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.core.text.HtmlCompat
+import java.util.Locale
 import android.webkit.WebView
 import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
@@ -482,6 +483,12 @@ companion object {
         var currentR = Color.red(customColorHolder[0])
         var currentG = Color.green(customColorHolder[0])
         var currentB = Color.blue(customColorHolder[0])
+        val presetColors = listOf(
+            FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE,
+            FLOATING_OVERLAY_SUBTITLE_COLOR_YELLOW,
+            FLOATING_OVERLAY_SUBTITLE_COLOR_GREEN,
+            FLOATING_OVERLAY_SUBTITLE_COLOR_CYAN
+        )
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -496,7 +503,7 @@ companion object {
             addView(TextView(this@AudiobookFloatingOverlayService).apply {
                 setTextColor(0xCCFFFFFF.toInt())
                 textSize = 12f
-                text = context.getString(R.string.audiobook_overlay_subtitle_style)
+                text = getOverlayLocalizedString(R.string.audiobook_overlay_subtitle_style)
             })
             val customInfo = TextView(this@AudiobookFloatingOverlayService).apply {
                 setTextColor(0xCCFFFFFF.toInt())
@@ -510,6 +517,7 @@ companion object {
             }
 
             lateinit var customColorButton: View
+            val presetColorButtons = linkedMapOf<Int, View>()
             val customPanel = LinearLayout(this@AudiobookFloatingOverlayService).apply {
                 orientation = LinearLayout.VERTICAL
                 visibility = View.GONE
@@ -521,7 +529,15 @@ companion object {
 
             val refreshCustomUi = {
                 customInfo.text = "RGB($currentR,$currentG,$currentB)"
-                val selected = loadAudiobookSettingsConfig(context).floatingOverlaySubtitleColor == customColorHolder[0]
+                val selectedColor = loadAudiobookSettingsConfig(context).floatingOverlaySubtitleColor
+                presetColorButtons.forEach { (color, button) ->
+                    button.background = createSubtitleColorSwatchDrawable(
+                        color = color,
+                        selected = selectedColor == color,
+                        density = density
+                    )
+                }
+                val selected = selectedColor == customColorHolder[0]
                 customColorButton.background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
                     setColor(customColorHolder[0])
@@ -539,10 +555,15 @@ companion object {
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply { topMargin = (6 * density).toInt() }
-                addView(createColorButton(FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE, settings.floatingOverlaySubtitleColor))
-                addView(createColorButton(FLOATING_OVERLAY_SUBTITLE_COLOR_YELLOW, settings.floatingOverlaySubtitleColor))
-                addView(createColorButton(FLOATING_OVERLAY_SUBTITLE_COLOR_GREEN, settings.floatingOverlaySubtitleColor))
-                addView(createColorButton(FLOATING_OVERLAY_SUBTITLE_COLOR_CYAN, settings.floatingOverlaySubtitleColor))
+                presetColors.forEach { color ->
+                    val button = createColorButton(
+                        color = color,
+                        currentColor = settings.floatingOverlaySubtitleColor,
+                        onColorSelected = { refreshCustomUi() }
+                    )
+                    presetColorButtons[color] = button
+                    addView(button)
+                }
                 customColorButton = createCustomColorButton(
                     color = customColorHolder[0],
                     selected = settings.floatingOverlaySubtitleColor == customColorHolder[0]
@@ -614,7 +635,7 @@ companion object {
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply { topMargin = (8 * density).toInt() }
                 addView(TextView(this@AudiobookFloatingOverlayService).apply {
-                    text = context.getString(R.string.audiobook_overlay_subtitle_scroll)
+                    text = getOverlayLocalizedString(R.string.audiobook_overlay_subtitle_scroll)
                     setTextColor(0xCCFFFFFF.toInt())
                     textSize = 12f
                     layoutParams = LinearLayout.LayoutParams(
@@ -2660,7 +2681,7 @@ companion object {
             isFocusableInTouchMode = false
             settings.javaScriptEnabled = enableLookupTap
             settings.domStorageEnabled = false
-            settings.allowFileAccess = false
+            settings.allowFileAccess = true
             settings.allowContentAccess = false
             settings.blockNetworkLoads = true
             settings.builtInZoomControls = false
@@ -2994,26 +3015,26 @@ companion object {
         }
     }
 
-    private fun createColorButton(color: Int, currentColor: Int): View {
+    private fun createColorButton(
+        color: Int,
+        currentColor: Int,
+        onColorSelected: () -> Unit = {}
+    ): View {
         val density = resources.displayMetrics.density
         return View(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 (28 * density).toInt(),
                 (28 * density).toInt()
             ).apply { marginEnd = (8 * density).toInt() }
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(color)
-                setStroke(
-                    (if (currentColor == color) 3 else 1) * density.toInt().coerceAtLeast(1),
-                    if (currentColor == color) 0xFFFFFFFF.toInt() else 0x44FFFFFF
-                )
-            }
+            background = createSubtitleColorSwatchDrawable(
+                color = color,
+                selected = currentColor == color,
+                density = density
+            )
             setOnClickListener {
                 saveAudiobookFloatingOverlaySubtitleColor(context, color)
                 applySubtitleTypography(loadAudiobookSettingsConfig(context))
-                subtitleSettingsExpanded = false
-                rebuildOverlay()
+                onColorSelected()
             }
         }
     }
@@ -3038,6 +3059,36 @@ companion object {
                 )
             }
             setOnClickListener { onClick() }
+        }
+    }
+
+    private fun createSubtitleColorSwatchDrawable(
+        color: Int,
+        selected: Boolean,
+        density: Float
+    ): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(color)
+            setStroke(
+                (if (selected) 3 else 1) * density.toInt().coerceAtLeast(1),
+                if (selected) 0xFFFFFFFF.toInt() else 0x44FFFFFF
+            )
+        }
+    }
+
+    private fun getOverlayLocalizedString(resId: Int): String {
+        val option = loadAppLanguageOption(this)
+        if (option == AppLanguageOption.SYSTEM) return getString(resId)
+        return try {
+            val locale = Locale.forLanguageTag(option.value)
+            val localizedConfig = Configuration(resources.configuration).apply {
+                setLocale(locale)
+                setLayoutDirection(locale)
+            }
+            createConfigurationContext(localizedConfig).resources.getString(resId)
+        } catch (_: Throwable) {
+            getString(resId)
         }
     }
 

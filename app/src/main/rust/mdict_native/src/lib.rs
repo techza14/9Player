@@ -1,4 +1,4 @@
-use mdict_rs::MdxFile;
+use mdict_rs::{MddFile, MdxFile};
 use once_cell::sync::Lazy;
 use serde_json::json;
 use std::collections::HashMap;
@@ -345,6 +345,58 @@ pub extern "C" fn mdict_native_import_json(
         writer
             .flush()
             .map_err(|e| format!("flush entries file failed: {e}"))?;
+
+        // Best-effort media export from sibling .mdd (same basename as mdx).
+        let mut media_count: u64 = 0;
+        let media_dir = Path::new(&output_dir).join("media");
+        let mdd_path = Path::new(&mdx_path).with_extension("mdd");
+        if mdd_path.is_file() {
+            fs::create_dir_all(&media_dir)
+                .map_err(|e| format!("create media dir failed: {e}"))?;
+            let mdd = MddFile::open(&mdd_path).map_err(|e| format!("open mdd failed: {e}"))?;
+            for item in mdd.entries() {
+                match item {
+                    Ok(resource) => {
+                        let mut rel = resource.key.trim().trim_start_matches('/').trim_start_matches('\\').to_string();
+                        if rel.is_empty() {
+                            continue;
+                        }
+                        rel = rel.replace('\\', "/");
+                        let target = media_dir.join(&rel);
+                        if let Some(parent) = target.parent() {
+                            if let Err(e) = fs::create_dir_all(parent) {
+                                if errors.len() < 16 {
+                                    errors.push(format!("create media parent failed: {e}"));
+                                }
+                                continue;
+                            }
+                        }
+                        match File::create(&target) {
+                            Ok(mut file) => {
+                                if let Err(e) = file.write_all(&resource.data) {
+                                    if errors.len() < 16 {
+                                        errors.push(format!("write media failed: {e}"));
+                                    }
+                                    continue;
+                                }
+                                media_count = media_count.saturating_add(1);
+                            }
+                            Err(e) => {
+                                if errors.len() < 16 {
+                                    errors.push(format!("create media file failed: {e}"));
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if errors.len() < 16 {
+                            errors.push(format!("decode media failed: {e}"));
+                        }
+                    }
+                }
+            }
+        }
+
         if term_count == 0 && errors.is_empty() {
             errors.push("no valid entries decoded".to_string());
         }
@@ -353,6 +405,7 @@ pub extern "C" fn mdict_native_import_json(
             "success": term_count > 0,
             "title": title,
             "termCount": term_count,
+            "mediaCount": media_count,
             "entriesFile": entries_path.to_string_lossy(),
             "errors": errors
         }))

@@ -267,6 +267,7 @@
     <string name="audiobook_overlay_subtitle_disabled">Floating subtitles disabled.</string>
     <string name="audiobook_overlay_subtitle_help">Floating subtitles show the currently playing subtitle text.</string>
     <string name="audiobook_overlay_subtitle_style">Subtitle style</string>
+    <string name="audiobook_overlay_subtitle_scroll">Subtitle scrolling</string>
     <string name="audiobook_unknown_file">Unknown file</string>
     <string name="audiobook_import_stage_copy">Copying file...</string>
     <string name="audiobook_import_stage_validate">Validating database...</string>

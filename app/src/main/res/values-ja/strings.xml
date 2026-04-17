@@ -267,6 +267,7 @@
     <string name="audiobook_overlay_subtitle_disabled">フローティング字幕を無効にしました。</string>
     <string name="audiobook_overlay_subtitle_help">フローティング字幕には現在再生中の字幕テキストが表示されます。</string>
     <string name="audiobook_overlay_subtitle_style">字幕スタイル</string>
+    <string name="audiobook_overlay_subtitle_scroll">字幕スクロール</string>
     <string name="audiobook_unknown_file">不明なファイル</string>
     <string name="audiobook_import_stage_copy">ファイルをコピー中...</string>
     <string name="audiobook_import_stage_validate">データベースを検証中...</string>

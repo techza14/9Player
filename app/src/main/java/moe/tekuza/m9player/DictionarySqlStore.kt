@@ -19,6 +19,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.StringReader
+import java.net.URLDecoder
 import java.util.Locale
 import kotlin.math.max
 
@@ -60,6 +61,11 @@ private val LOOKS_LIKE_HTML_REGEX = Regex("<\\s*/?\\s*[a-zA-Z][^>]*>")
 private val CAMEL_CASE_BOUNDARY_REGEX = Regex("([a-z])([A-Z])")
 private val STRUCTURED_DATA_KEY_SANITIZE_REGEX = Regex("[^a-z0-9_-]")
 private val KANJI_TOKEN_REGEX = Regex("[\\u4E00-\\u9FFF\\u3400-\\u4DBF\\uF900-\\uFAFF\\u3005\\u3006\\u30F6]{1,12}")
+private val HTML_IMG_SRC_QUOTED_REGEX =
+    Regex("(?i)<img\\b([^>]*?)\\bsrc\\s*=\\s*(['\"])(.*?)\\2([^>]*)>")
+private val HTML_IMG_SRC_UNQUOTED_REGEX =
+    Regex("(?i)<img\\b([^>]*?)\\bsrc\\s*=\\s*([^\\s>]+)([^>]*)>")
+private val URI_SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
 
 private const val TABLE_DICTIONARIES = "dictionaries"
 private const val TABLE_ENTRIES = "entries"
@@ -796,6 +802,7 @@ private fun searchDictionaryWithMdictNative(
         val cacheKey = dictionary.cacheKey.takeIf { it.isNotBlank() } ?: return@forEachIndexed
         val entriesFile = File(dictionaryStorageDir(context, cacheKey), "mdictnative/entries.ndjson")
         if (!entriesFile.isFile) return@forEachIndexed
+        val mediaDir = File(dictionaryStorageDir(context, cacheKey), "mdictnative/media")
         val nativeHits = MdictNativeBridge.lookup(
             entriesPath = entriesFile.absolutePath,
             query = trimmedQuery,
@@ -803,7 +810,9 @@ private fun searchDictionaryWithMdictNative(
             scanLength = scanLength
         )
         nativeHits.forEachIndexed { rank, hit ->
-            val definition = normalizeDefinitionForDisplaySql(hit.definition)
+            val definition = normalizeDefinitionForDisplaySql(
+                rewriteMdictImageSrcToFileUri(hit.definition, mediaDir)
+            )
             if (definition.isBlank()) return@forEachIndexed
             val score = (hit.score - order - rank).coerceAtLeast(1)
             val result = DictionarySearchResult(
@@ -1265,6 +1274,7 @@ private fun importDictionaryMdxWithNative(
             ?.let(::File)
             ?.takeIf { it.isFile }
             ?: error("mdict native import output missing entries file")
+        val mediaDir = File(mdxOutputDir, "media")
 
         val dictionaryName = result.title.ifBlank {
             displayName.substringBeforeLast('.').ifBlank { "MDict" }
@@ -1291,7 +1301,12 @@ private fun importDictionaryMdxWithNative(
                             val term = json.optString("term").trim()
                             if (term.isBlank()) return@forEach
                             val reading = json.optString("reading").trim().ifBlank { null }
-                            val definition = normalizeDefinitionForDisplaySql(json.optString("definition").trim())
+                            val definition = normalizeDefinitionForDisplaySql(
+                                rewriteMdictImageSrcToFileUri(
+                                    json.optString("definition").trim(),
+                                    mediaDir
+                                )
+                            )
                             val entry = DictionaryEntry(
                                 term = term,
                                 reading = reading,
@@ -1817,6 +1832,56 @@ private fun escapeHtmlAttributeSql(value: String): String {
         .replace("\"", "&quot;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
+}
+
+private fun rewriteMdictImageSrcToFileUri(definition: String, mediaDir: File): String {
+    if (definition.isBlank()) return definition
+    if (!definition.contains("<img", ignoreCase = true)) return definition
+    if (!mediaDir.isDirectory) return definition
+
+    fun resolveSrc(rawSrc: String): String {
+        val src = rawSrc.trim().trim('"', '\'')
+        if (src.isBlank()) return rawSrc
+        if (src.startsWith("//")) return rawSrc
+        if (src.startsWith("#")) return rawSrc
+        if (src.startsWith("data:", ignoreCase = true)) return rawSrc
+        if (URI_SCHEME_REGEX.containsMatchIn(src)) return rawSrc
+
+        val normalized = src
+            .replace('\\', '/')
+            .trimStart('/')
+            .removePrefix("./")
+            .trim()
+        if (normalized.isBlank()) return rawSrc
+
+        val decoded = runCatching {
+            URLDecoder.decode(normalized, Charsets.UTF_8.name())
+        }.getOrNull()
+        val candidates = linkedSetOf(normalized)
+        if (!decoded.isNullOrBlank()) candidates += decoded
+
+        val resolved = candidates.firstNotNullOfOrNull { candidate ->
+            val file = File(mediaDir, candidate)
+            if (file.isFile) file else null
+        } ?: return rawSrc
+        return resolved.toURI().toString()
+    }
+
+    var out = HTML_IMG_SRC_QUOTED_REGEX.replace(definition) { match ->
+        val before = match.groupValues[1]
+        val quote = match.groupValues[2]
+        val src = match.groupValues[3]
+        val after = match.groupValues[4]
+        "<img$before src=$quote${escapeHtmlAttributeSql(resolveSrc(src))}$quote$after>"
+    }
+
+    out = HTML_IMG_SRC_UNQUOTED_REGEX.replace(out) { match ->
+        val before = match.groupValues[1]
+        val src = match.groupValues[2]
+        val after = match.groupValues[3]
+        "<img$before src=\"${escapeHtmlAttributeSql(resolveSrc(src))}\"$after>"
+    }
+    return out
 }
 
 

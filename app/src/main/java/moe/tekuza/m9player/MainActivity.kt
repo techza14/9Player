@@ -2879,7 +2879,7 @@ private fun ReaderSyncScreen() {
                 },
                 onPickSrt = {
                     pickBookSrtLauncher.launch(
-                        arrayOf("application/x-subrip", "text/plain", "*/*")
+                        arrayOf("application/x-subrip")
                     )
                 },
                 onDismiss = { addBookDialogVisible = false },
