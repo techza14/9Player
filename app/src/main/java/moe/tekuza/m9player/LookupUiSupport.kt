@@ -545,7 +545,7 @@ internal fun RichDefinitionView(
                         isFocusableInTouchMode = false
                         settings.javaScriptEnabled = lookupEnabled
                         settings.domStorageEnabled = false
-                        settings.allowFileAccess = false
+                        settings.allowFileAccess = true
                         settings.allowContentAccess = false
                         settings.blockNetworkLoads = true
                         settings.builtInZoomControls = false

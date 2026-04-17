@@ -513,22 +513,41 @@ private fun BookReaderScreen(
     var dragPreviewPositionMs by remember { mutableStateOf<Long?>(null) }
     val replaceSrtLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val pickedUri = uri ?: return@rememberLauncherForActivityResult
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(
-                pickedUri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
+        val resolver = context.contentResolver
+        val persistedFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        runCatching { resolver.takePersistableUriPermission(pickedUri, persistedFlags) }
+
+        val currentSrtUri = srtUri
+        val targetSrtUri = runCatching {
+            if (currentSrtUri != null && currentSrtUri != pickedUri) {
+                runCatching { resolver.takePersistableUriPermission(currentSrtUri, persistedFlags) }
+                if (swapSrtDocumentContents(resolver, currentSrtUri, pickedUri)) {
+                    currentSrtUri
+                } else {
+                    pickedUri
+                }
+            } else {
+                pickedUri
+            }
+        }.getOrElse {
+            Toast.makeText(
+                context,
+                "更换 SRT 失败：${it.message ?: "unknown"}",
+                Toast.LENGTH_SHORT
+            ).show()
+            pickedUri
         }
+
         saveBookReaderPlaybackPosition(
             context = context,
-            bookKey = buildBookReaderPlaybackKey(title, audioUri, pickedUri),
+            bookKey = buildBookReaderPlaybackKey(title, audioUri, targetSrtUri),
             positionMs = normalizeBookReaderPlaybackPosition(positionMs, durationMs),
             durationMs = durationMs.coerceAtLeast(0L)
         )
         val intent = Intent(context, BookReaderActivity::class.java).apply {
             putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, title)
             putExtra(BookReaderActivity.EXTRA_AUDIO_URI, audioUri?.toString())
-            putExtra(BookReaderActivity.EXTRA_SRT_URI, pickedUri.toString())
+            putExtra(BookReaderActivity.EXTRA_SRT_URI, targetSrtUri.toString())
             putExtra(BookReaderActivity.EXTRA_COVER_URI, coverUri?.toString())
         }
         context.startActivity(intent)
@@ -2393,7 +2412,8 @@ private fun BookReaderScreen(
                                 text = { Text(stringResource(R.string.bookreader_replace_srt)) },
                                 onClick = {
                                     topActionsExpanded = false
-                                    replaceSrtLauncher.launch(arrayOf("application/x-subrip", "text/*", "*/*"))
+                                    if (player.isPlaying) player.pause()
+                                    replaceSrtLauncher.launch(arrayOf("application/x-subrip"))
                                 }
                             )
                         }
@@ -3627,6 +3647,28 @@ private fun buildLegacyBookReaderPlaybackKey(
 
 private fun normalizeBookReaderPlaybackPosition(positionMs: Long, durationMs: Long): Long {
     return positionMs.coerceAtLeast(0L)
+}
+
+private fun swapSrtDocumentContents(
+    resolver: ContentResolver,
+    currentSrtUri: Uri,
+    pickedSrtUri: Uri
+): Boolean {
+    return runCatching {
+        val currentBytes = resolver.openInputStream(currentSrtUri)?.use { it.readBytes() }
+            ?: error("read current srt failed")
+        val pickedBytes = resolver.openInputStream(pickedSrtUri)?.use { it.readBytes() }
+            ?: error("read picked srt failed")
+
+        resolver.openOutputStream(currentSrtUri, "wt")?.use { it.write(pickedBytes) }
+            ?: error("write current srt failed")
+        resolver.openOutputStream(pickedSrtUri, "wt")?.use { it.write(currentBytes) }
+            ?: error("write picked srt failed")
+        true
+    }.getOrElse {
+        Log.e("BookReaderSrtReplace", "swap srt failed", it)
+        false
+    }
 }
 
 private fun findBookChapterIndexAtTime(chapters: List<ReaderAudioChapter>, timeMs: Long): Int {

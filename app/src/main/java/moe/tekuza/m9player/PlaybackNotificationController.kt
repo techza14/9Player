@@ -59,7 +59,9 @@ internal class PlaybackNotificationController(
             seekBy(-DEFAULT_NOTIFICATION_SEEK_MS)
         }
     }
-    private val mediaSession = MediaSession.Builder(appContext, routedPlayer).build()
+    private val mediaSession = MediaSession.Builder(appContext, routedPlayer)
+        .setId("bookreader-${System.currentTimeMillis()}-${System.identityHashCode(this)}")
+        .build()
     private val notificationManager = PlayerNotificationManager.Builder(
         appContext,
         NOTIFICATION_ID,
