@@ -128,7 +128,10 @@ private fun launchRecursiveLookup(
     callbacks: RecursiveLookupCallbacks
 ) {
     val sourceLayer = resolveSourceLayer(sourceLayerIndex) ?: run {
-        Log.d(logAnchorTag, "recursiveAbort reason=no_source_layer index=$sourceLayerIndex")
+        Log.d(
+            logAnchorTag,
+            "recursiveAbort reason=no_source_layer index=$sourceLayerIndex tapSource=${tapData.tapSource} scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
+        )
         callbacks.onNoSourceLayer(sourceLayerIndex)
         return
     }
@@ -146,7 +149,7 @@ private fun launchRecursiveLookup(
     ) ?: run {
         Log.d(
             logAnchorTag,
-            "recursiveAbort reason=no_selection scan='${tapData.scanText.take(24)}' text='${tapData.text.take(24)}'"
+            "recursiveAbort reason=no_selection tapSource=${tapData.tapSource} scan='${tapData.scanText.take(32)}' text='${tapData.text.take(32)}'"
         )
         callbacks.onNoSelection()
         return
@@ -154,7 +157,7 @@ private fun launchRecursiveLookup(
     val term = start.term
     Log.d(
         logAnchorTag,
-        "recursiveStart sourceLayer=$sourceLayerIndex term=$term tapAnchor=${formatRectForLogLocal(start.tapAnchorBounds)} currentAnchor=${formatRectForLogLocal(start.currentAnchorBounds)} placeBelow=${start.shouldPlaceBelow}"
+        "recursiveStart sourceLayer=$sourceLayerIndex tapSource=${tapData.tapSource} term=$term tapAnchor=${formatRectForLogLocal(start.tapAnchorBounds)} currentAnchor=${formatRectForLogLocal(start.currentAnchorBounds)} placeBelow=${start.shouldPlaceBelow}"
     )
 
     if (dictionaries.isEmpty()) {
@@ -170,7 +173,9 @@ private fun launchRecursiveLookup(
                 executeRecursiveLookupQuery(
                     context = context,
                     dictionaries = dictionaries,
-                    term = term
+                    term = term,
+                    tapSource = tapData.tapSource,
+                    sourceDictionaryName = lookupDictionaryNameFromDefinitionKey(definitionKey)
                 )
             }
         }

@@ -44,8 +44,39 @@ internal fun prepareRecursiveLookupStart(
 internal suspend fun executeRecursiveLookupQuery(
     context: Context,
     dictionaries: List<LoadedDictionary>,
-    term: String
+    term: String,
+    tapSource: String,
+    sourceDictionaryName: String?
 ): RecursiveLookupQueryResult {
+    val isEntryTap = tapSource.equals("entry", ignoreCase = true)
+    if (isEntryTap) {
+        val sourceDictName = sourceDictionaryName?.trim().orEmpty()
+        val sourceDictionaries = if (sourceDictName.isBlank()) {
+            emptyList()
+        } else {
+            dictionaries.filter { it.name.equals(sourceDictName, ignoreCase = true) }
+        }
+        if (sourceDictionaries.isNotEmpty()) {
+            val sourceComputed = computeTapLookupResultsWithWinningCandidate(
+                context = context,
+                dictionaries = sourceDictionaries,
+                query = term
+            )
+            val sourceHits = sourceComputed?.hits.orEmpty()
+            if (sourceHits.isNotEmpty()) {
+                val boosted = sourceHits
+                    .sortedWith(
+                        compareByDescending<DictionarySearchResult> {
+                            entryExactPrefixBoost(it.entry, term)
+                        }.thenByDescending { it.score }
+                    )
+                return RecursiveLookupQueryResult(
+                    term = sourceComputed?.query ?: term,
+                    hits = boosted
+                )
+            }
+        }
+    }
     val computed = computeTapLookupResultsWithWinningCandidate(
         context = context,
         dictionaries = dictionaries,
@@ -55,6 +86,20 @@ internal suspend fun executeRecursiveLookupQuery(
         term = computed?.query ?: term,
         hits = computed?.hits.orEmpty()
     )
+}
+
+private fun entryExactPrefixBoost(entry: DictionaryEntry, query: String): Int {
+    val q = query.trim()
+    if (q.isBlank()) return 0
+    val term = entry.term.trim()
+    val reading = entry.reading?.trim().orEmpty()
+    return when {
+        term.equals(q, ignoreCase = true) -> 4
+        reading.equals(q, ignoreCase = true) -> 3
+        term.startsWith(q, ignoreCase = true) -> 2
+        reading.startsWith(q, ignoreCase = true) -> 1
+        else -> 0
+    }
 }
 
 internal fun rebuildDefinitionRectsByMatchedLengthCore(

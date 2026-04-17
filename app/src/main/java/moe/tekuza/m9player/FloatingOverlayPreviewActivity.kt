@@ -116,8 +116,8 @@ private fun FloatingOverlayPreviewRoute(
                     },
                     onDragEnd = {
                         when {
-                            dragAccumulated <= -80f && modeIndex < modes.lastIndex -> modeIndex += 1
-                            dragAccumulated >= 80f && modeIndex > 0 -> modeIndex -= 1
+                            dragAccumulated >= 80f && modeIndex < modes.lastIndex -> modeIndex += 1
+                            dragAccumulated <= -80f && modeIndex > 0 -> modeIndex -= 1
                         }
                         dragAccumulated = 0f
                     },

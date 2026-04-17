@@ -36,7 +36,7 @@ internal fun loadAvailableDictionaries(
 ): List<LoadedDictionary> {
     val persisted = loadPersistedImports(context)
     val refs = persisted.dictionaries.distinctBy { it.uri }
-    return refs.mapNotNull { ref ->
+    val imported = refs.mapNotNull { ref ->
         val restoredUri = runCatching { Uri.parse(ref.uri) }.getOrNull()
         val displayName = ref.name.ifBlank {
             restoredUri?.let { queryLookupSourceDisplayName(contentResolver, it) }.orEmpty()
@@ -44,6 +44,7 @@ internal fun loadAvailableDictionaries(
         val cacheKey = ref.cacheKey ?: buildDictionaryCacheKey(ref.uri, displayName)
         loadDictionaryFromSqlite(context, cacheKey)
     }
+    return includeMountedMdxDictionary(context, imported)
 }
 
 private fun queryLookupSourceDisplayName(contentResolver: ContentResolver, uri: Uri): String {
@@ -96,7 +97,8 @@ internal fun computeLookupResultsWithWinningCandidate(
     profile: DictionaryQueryProfile = DictionaryQueryProfile.FULL,
     expandCandidates: Boolean = true
 ): LookupComputationResult? {
-    if (dictionaries.isEmpty() || candidates.isEmpty()) return null
+    val effectiveDictionaries = includeMountedMdxDictionary(context, dictionaries)
+    if (effectiveDictionaries.isEmpty() || candidates.isEmpty()) return null
     val normalizedCandidates = if (expandCandidates) {
         buildLookupCandidates(candidates)
     } else {
@@ -110,7 +112,7 @@ internal fun computeLookupResultsWithWinningCandidate(
     }
     if (normalizedCandidates.isEmpty()) return null
 
-    val expectedDictionaryNames = dictionaries
+    val expectedDictionaryNames = effectiveDictionaries
         .map { it.name.trim() }
         .filter { it.isNotBlank() }
         .toSet()
@@ -122,7 +124,7 @@ internal fun computeLookupResultsWithWinningCandidate(
     for (query in normalizedCandidates) {
         val hits = searchDictionarySql(
             context = context,
-            dictionaries = dictionaries,
+            dictionaries = effectiveDictionaries,
             query = query,
             maxResults = MAX_LOOKUP_RESULTS,
             profile = profile

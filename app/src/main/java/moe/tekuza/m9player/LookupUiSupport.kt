@@ -1,9 +1,11 @@
 package moe.tekuza.m9player
 
+import android.net.Uri
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.view.MotionEvent
 import android.view.View
 import android.util.Log
@@ -546,16 +548,68 @@ internal fun RichDefinitionView(
                         settings.javaScriptEnabled = lookupEnabled
                         settings.domStorageEnabled = false
                         settings.allowFileAccess = true
+                        settings.allowFileAccessFromFileURLs = true
+                        settings.allowUniversalAccessFromFileURLs = true
                         settings.allowContentAccess = false
                         settings.blockNetworkLoads = true
                         settings.builtInZoomControls = false
                         settings.displayZoomControls = false
                         settings.setSupportZoom(false)
                         webViewClient = object : WebViewClient() {
+                            fun dispatchEntryUrlTap(raw: String, host: WebView?): Boolean {
+                                val parsed = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
+                                if (!parsed.scheme.equals("entry", ignoreCase = true)) return false
+                                val encoded = parsed.schemeSpecificPart.orEmpty().removePrefix("//")
+                                val target = Uri.decode(encoded).trim().ifBlank { return false }
+                                val safeHost = host ?: this@apply
+                                val right = safeHost.width.toFloat().takeIf { it > 0f } ?: 1f
+                                val bottom = safeHost.height.toFloat().takeIf { it > 0f } ?: 1f
+                                val localRect = Rect(0f, 0f, right, bottom)
+                                val callback = bridge.onLookupTap
+                                if (callback == null) {
+                                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "native entry dispatch skipped callback_null target=$target")
+                                    return true
+                                }
+                                callback.invoke(
+                                    DefinitionLookupTapData(
+                                        text = target,
+                                        scanText = target,
+                                        tapSource = "entry",
+                                        sentence = target,
+                                        offset = 0,
+                                        nodeText = target,
+                                        nodePathJson = "[]",
+                                        hostView = safeHost,
+                                        screenRect = null,
+                                        localRects = listOf(localRect),
+                                        localCharRects = listOf(localRect),
+                                        screenCharRects = emptyList()
+                                    )
+                                )
+                                Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "native entry dispatch target=$target")
+                                return true
+                            }
+
+                            override fun shouldInterceptRequest(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): WebResourceResponse? {
+                                val uri = request?.url ?: return null
+                                val resource = openMountedMdictResource(context, uri) ?: return null
+                                return WebResourceResponse(resource.mimeType, null, resource.inputStream)
+                            }
+
+                            override fun shouldInterceptRequest(view: WebView?, url: String?): WebResourceResponse? {
+                                val uri = runCatching { Uri.parse(url.orEmpty()) }.getOrNull() ?: return null
+                                val resource = openMountedMdictResource(context, uri) ?: return null
+                                return WebResourceResponse(resource.mimeType, null, resource.inputStream)
+                            }
+
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                                 val uri = request?.url ?: return false
                                 if (uri.scheme.equals("entry", ignoreCase = true)) {
                                     Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "block entry navigation uri=$uri")
+                                    dispatchEntryUrlTap(uri.toString(), view)
                                     return true
                                 }
                                 return false
@@ -565,6 +619,7 @@ internal fun RichDefinitionView(
                                 val raw = url?.trim().orEmpty()
                                 if (raw.startsWith("entry://", ignoreCase = true)) {
                                     Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "block entry navigation uri=$raw")
+                                    dispatchEntryUrlTap(raw, view)
                                     return true
                                 }
                                 return false
@@ -577,7 +632,7 @@ internal fun RichDefinitionView(
                             private var downY = 0f
                             private var moved = false
                             override fun onTouch(v: View?, event: MotionEvent?): Boolean {
-                                if (event == null) return false
+                                if (!lookupEnabled || event == null) return false
                                 when (event.actionMasked) {
                                     MotionEvent.ACTION_DOWN -> {
                                         downX = event.x
@@ -611,7 +666,7 @@ internal fun RichDefinitionView(
                                         }
                                     }
                                 }
-                                return false
+                                return true
                             }
                         })
                         addJavascriptInterface(bridge, "NineLookup")
