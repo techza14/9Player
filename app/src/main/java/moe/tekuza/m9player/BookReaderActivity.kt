@@ -69,6 +69,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -108,6 +109,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -852,6 +854,7 @@ private fun BookReaderScreen(
 
     LaunchedEffect(playbackSpeed) {
         player.playbackParameters = PlaybackParameters(playbackSpeed)
+        BookReaderFloatingBridge.notifyPlaybackSpeed(playbackSpeed)
     }
 
     LaunchedEffect(isPlaying) {
@@ -2169,11 +2172,26 @@ private fun BookReaderScreen(
                                 horizontalArrangement = Arrangement.SpaceEvenly,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                OutlinedButton(onClick = { jumpToAdjacentCue(-1) }) { Text("<<") }
-                                Button(onClick = { if (player.isPlaying) player.pause() else player.play() }) {
-                                    Text(if (isPlaying) "||" else ">")
+                                IconButton(onClick = { jumpToAdjacentCue(-1) }) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_overlay_previous),
+                                        contentDescription = "Previous"
+                                    )
                                 }
-                                OutlinedButton(onClick = { jumpToAdjacentCue(1) }) { Text(">>") }
+                                IconButton(onClick = { if (player.isPlaying) player.pause() else player.play() }) {
+                                    Icon(
+                                        painter = painterResource(
+                                            id = if (isPlaying) R.drawable.ic_overlay_pause else R.drawable.ic_overlay_play
+                                        ),
+                                        contentDescription = if (isPlaying) "Pause" else "Play"
+                                    )
+                                }
+                                IconButton(onClick = { jumpToAdjacentCue(1) }) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_overlay_next),
+                                        contentDescription = "Next"
+                                    )
+                                }
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),

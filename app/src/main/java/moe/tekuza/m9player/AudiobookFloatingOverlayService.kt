@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Typeface
@@ -19,16 +20,20 @@ import android.text.Spanned
 import android.text.TextUtils
 import android.text.style.BackgroundColorSpan
 import android.view.View.MeasureSpec
+import android.view.Choreographer
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.os.SystemClock
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.unit.IntOffset
@@ -84,6 +89,7 @@ companion object {
         private const val FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG = "FloatingLookupHighlight"
         private const val FLOATING_LOOKUP_TAP_LOG_TAG = "FloatingLookupTap"
         private const val FLOATING_BUBBLE_LOG_TAG = "FloatingBubblePos"
+        private const val FLOATING_SUBTITLE_SCROLL_LOG_TAG = "FloatingSubtitleScroll"
         private const val SINGLE_FLOATING_HOST_KEY = -1
 }
 
@@ -97,6 +103,7 @@ companion object {
     private var bubbleControlsRow: LinearLayout? = null
     private var bubbleFavoriteButton: ImageButton? = null
     private var subtitleTextView: TextView? = null
+    private var subtitleOutlineTextView: TextView? = null
     private var subtitleControlsRow: LinearLayout? = null
     private var subtitleSettingsPanel: LinearLayout? = null
     private var subtitleLockButton: ImageButton? = null
@@ -106,6 +113,12 @@ companion object {
     private var subtitleSettingsExpanded: Boolean = false
     private var bubbleControlsVisible: Boolean = false
     private var overlayLocked: Boolean = false
+    private var playbackPausedByFloatingLookup: Boolean = false
+    private var lastSubtitleScrollLogAtMs: Long = 0L
+    private var subtitleTickerRunning: Boolean = false
+    private var subtitleTickerBasePositionMs: Long = 0L
+    private var subtitleTickerBaseRealtimeMs: Long = 0L
+    private var subtitlePlaybackSpeed: Float = 1f
     private var lookupRequestNonce: Long = 0L
     private var cachedLookupDictionaries: List<LoadedDictionary>? = null
     private val floatingLookupSession = ReaderLookupSession()
@@ -132,6 +145,37 @@ companion object {
         override fun onPlaybackStateChanged(isPlaying: Boolean) {
             updateBubbleIcon(isPlaying)
             updatePlayPauseIcon(isPlaying)
+            updateSubtitleAutoScroll()
+            if (isPlaying) startSubtitleTicker() else stopSubtitleTicker()
+        }
+    }
+
+    private val playbackPositionListener = object : BookReaderFloatingBridge.PlaybackPositionListener {
+        override fun onPlaybackPositionChanged(positionMs: Long) {
+            subtitleTickerBasePositionMs = positionMs
+            subtitleTickerBaseRealtimeMs = SystemClock.uptimeMillis()
+            updateSubtitleAutoScroll(positionMs)
+        }
+    }
+
+    private val playbackSpeedListener = object : BookReaderFloatingBridge.PlaybackSpeedListener {
+        override fun onPlaybackSpeedChanged(speed: Float) {
+            subtitlePlaybackSpeed = if (speed.isFinite() && speed > 0f) speed else 1f
+        }
+    }
+
+    private val subtitleFrameCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!subtitleTickerRunning) return
+            if (!BookReaderFloatingBridge.isPlaying()) {
+                subtitleTickerRunning = false
+                return
+            }
+            val now = SystemClock.uptimeMillis()
+            val elapsed = (now - subtitleTickerBaseRealtimeMs).coerceAtLeast(0L)
+            val extrapolated = subtitleTickerBasePositionMs + (elapsed * subtitlePlaybackSpeed).toLong()
+            updateSubtitleAutoScroll(extrapolated)
+            Choreographer.getInstance().postFrameCallback(this)
         }
     }
 
@@ -153,6 +197,11 @@ companion object {
         BookReaderFloatingBridge.addPlaybackStateListener(playbackListener)
         BookReaderFloatingBridge.addFavoriteStateListener(favoriteListener)
         BookReaderFloatingBridge.addSubtitleStateListener(subtitleListener)
+        BookReaderFloatingBridge.addPlaybackPositionListener(playbackPositionListener)
+        BookReaderFloatingBridge.addPlaybackSpeedListener(playbackSpeedListener)
+        subtitlePlaybackSpeed = BookReaderFloatingBridge.currentPlaybackSpeed()
+        subtitleTickerBasePositionMs = BookReaderFloatingBridge.currentPlaybackPositionMs()
+        subtitleTickerBaseRealtimeMs = SystemClock.uptimeMillis()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -177,6 +226,9 @@ companion object {
         BookReaderFloatingBridge.removePlaybackStateListener(playbackListener)
         BookReaderFloatingBridge.removeFavoriteStateListener(favoriteListener)
         BookReaderFloatingBridge.removeSubtitleStateListener(subtitleListener)
+        BookReaderFloatingBridge.removePlaybackPositionListener(playbackPositionListener)
+        BookReaderFloatingBridge.removePlaybackSpeedListener(playbackSpeedListener)
+        stopSubtitleTicker()
         serviceScope.cancel()
         removeOverlay()
         super.onDestroy()
@@ -299,6 +351,22 @@ companion object {
             }
         )
 
+        val subtitleOutlineText = TextView(this).apply {
+            setLineSpacing(0f, 1.08f)
+            maxLines = 3
+            ellipsize = null
+            gravity = Gravity.CENTER_HORIZONTAL
+            textAlignment = View.TEXT_ALIGNMENT_CENTER
+            setPadding((10 * density).toInt(), (8 * density).toInt(), (10 * density).toInt(), (8 * density).toInt())
+            layoutParams = LinearLayout.LayoutParams(
+                (320 * density).toInt(),
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            isClickable = false
+            isFocusable = false
+        }
+        subtitleOutlineTextView = subtitleOutlineText
+
         val subtitleText = TextView(this).apply {
             setLineSpacing(0f, 1.08f)
             maxLines = 3
@@ -325,7 +393,26 @@ companion object {
         }
         subtitleTextView = subtitleText
         applySubtitleTypography(settings)
-        panel.addView(subtitleText)
+        panel.addView(FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                (320 * density).toInt(),
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            addView(
+                subtitleOutlineText,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+            addView(
+                subtitleText,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+        })
 
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -391,6 +478,10 @@ companion object {
 
     private fun buildSubtitleSettingsPanel(settings: AudiobookSettingsConfig): LinearLayout {
         val density = resources.displayMetrics.density
+        val customColorHolder = intArrayOf(settings.floatingOverlaySubtitleCustomColor)
+        var currentR = Color.red(customColorHolder[0])
+        var currentG = Color.green(customColorHolder[0])
+        var currentB = Color.blue(customColorHolder[0])
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -407,6 +498,40 @@ companion object {
                 textSize = 12f
                 text = context.getString(R.string.audiobook_overlay_subtitle_style)
             })
+            val customInfo = TextView(this@AudiobookFloatingOverlayService).apply {
+                setTextColor(0xCCFFFFFF.toInt())
+                textSize = 11f
+                text = "RGB($currentR,$currentG,$currentB)"
+                visibility = View.GONE
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = (6 * density).toInt() }
+            }
+
+            lateinit var customColorButton: View
+            val customPanel = LinearLayout(this@AudiobookFloatingOverlayService).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = (6 * density).toInt() }
+            }
+
+            val refreshCustomUi = {
+                customInfo.text = "RGB($currentR,$currentG,$currentB)"
+                val selected = loadAudiobookSettingsConfig(context).floatingOverlaySubtitleColor == customColorHolder[0]
+                customColorButton.background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(customColorHolder[0])
+                    setStroke(
+                        (if (selected) 3 else 1) * density.toInt().coerceAtLeast(1),
+                        if (selected) 0xFFFFFFFF.toInt() else 0x44FFFFFF
+                    )
+                }
+            }
+
             addView(LinearLayout(this@AudiobookFloatingOverlayService).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -417,6 +542,94 @@ companion object {
                 addView(createColorButton(FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE, settings.floatingOverlaySubtitleColor))
                 addView(createColorButton(FLOATING_OVERLAY_SUBTITLE_COLOR_YELLOW, settings.floatingOverlaySubtitleColor))
                 addView(createColorButton(FLOATING_OVERLAY_SUBTITLE_COLOR_GREEN, settings.floatingOverlaySubtitleColor))
+                addView(createColorButton(FLOATING_OVERLAY_SUBTITLE_COLOR_CYAN, settings.floatingOverlaySubtitleColor))
+                customColorButton = createCustomColorButton(
+                    color = customColorHolder[0],
+                    selected = settings.floatingOverlaySubtitleColor == customColorHolder[0]
+                ) {
+                    subtitleSettingsExpanded = true
+                    customPanel.visibility = if (customPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                    customInfo.visibility = customPanel.visibility
+                    saveAudiobookFloatingOverlaySubtitleColor(context, customColorHolder[0])
+                    applySubtitleTypography(loadAudiobookSettingsConfig(context))
+                    refreshCustomUi()
+                }
+                addView(customColorButton)
+            })
+            customPanel.addView(createRgbSliderRow(
+                label = "R",
+                initial = currentR,
+                onLiveChange = { v ->
+                    currentR = v
+                    customColorHolder[0] = Color.rgb(currentR, currentG, currentB)
+                    saveAudiobookFloatingOverlaySubtitleColor(context, customColorHolder[0])
+                    applySubtitleTypography(loadAudiobookSettingsConfig(context))
+                    refreshCustomUi()
+                },
+                onFinalChange = {
+                    saveAudiobookFloatingOverlaySubtitleCustomColor(context, customColorHolder[0])
+                    saveAudiobookFloatingOverlaySubtitleColor(context, customColorHolder[0])
+                    refreshCustomUi()
+                }
+            ))
+            customPanel.addView(createRgbSliderRow(
+                label = "G",
+                initial = currentG,
+                onLiveChange = { v ->
+                    currentG = v
+                    customColorHolder[0] = Color.rgb(currentR, currentG, currentB)
+                    saveAudiobookFloatingOverlaySubtitleColor(context, customColorHolder[0])
+                    applySubtitleTypography(loadAudiobookSettingsConfig(context))
+                    refreshCustomUi()
+                },
+                onFinalChange = {
+                    saveAudiobookFloatingOverlaySubtitleCustomColor(context, customColorHolder[0])
+                    saveAudiobookFloatingOverlaySubtitleColor(context, customColorHolder[0])
+                    refreshCustomUi()
+                }
+            ))
+            customPanel.addView(createRgbSliderRow(
+                label = "B",
+                initial = currentB,
+                onLiveChange = { v ->
+                    currentB = v
+                    customColorHolder[0] = Color.rgb(currentR, currentG, currentB)
+                    saveAudiobookFloatingOverlaySubtitleColor(context, customColorHolder[0])
+                    applySubtitleTypography(loadAudiobookSettingsConfig(context))
+                    refreshCustomUi()
+                },
+                onFinalChange = {
+                    saveAudiobookFloatingOverlaySubtitleCustomColor(context, customColorHolder[0])
+                    saveAudiobookFloatingOverlaySubtitleColor(context, customColorHolder[0])
+                    refreshCustomUi()
+                }
+            ))
+            addView(customInfo)
+            addView(customPanel)
+            addView(LinearLayout(this@AudiobookFloatingOverlayService).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = (8 * density).toInt() }
+                addView(TextView(this@AudiobookFloatingOverlayService).apply {
+                    text = context.getString(R.string.audiobook_overlay_subtitle_scroll)
+                    setTextColor(0xCCFFFFFF.toInt())
+                    textSize = 12f
+                    layoutParams = LinearLayout.LayoutParams(
+                        0,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        1f
+                    )
+                })
+                addView(Switch(this@AudiobookFloatingOverlayService).apply {
+                    isChecked = settings.floatingOverlaySubtitleScrollEnabled
+                    setOnCheckedChangeListener { _, checked ->
+                        saveAudiobookFloatingOverlaySubtitleScrollEnabled(context, checked)
+                        updateSubtitleAutoScroll()
+                    }
+                })
             })
             addView(LinearLayout(this@AudiobookFloatingOverlayService).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -442,6 +655,7 @@ companion object {
                     (layoutParams as? LinearLayout.LayoutParams)?.marginEnd = 0
                 })
             })
+            refreshCustomUi()
         }
     }
 
@@ -606,7 +820,7 @@ companion object {
     private fun handleSubtitleSingleTap(event: MotionEvent) {
         val subtitle = subtitleTextView ?: return
         val layout = subtitle.layout ?: return
-        val x = (event.x - subtitle.totalPaddingLeft + subtitle.scrollX).coerceAtLeast(0f)
+        val x = (event.x - subtitle.totalPaddingLeft).coerceAtLeast(0f)
         val y = (event.y - subtitle.totalPaddingTop + subtitle.scrollY).coerceAtLeast(0f)
         val line = layout.getLineForVertical(y.toInt().coerceAtLeast(0))
         val offset = layout.getOffsetForHorizontal(line, x)
@@ -615,14 +829,81 @@ companion object {
         performFloatingLookup(offset, initialAnchorRect)
     }
 
+    private fun setSubtitleTextWidthMode(matchParent: Boolean) {
+        val widthMode = if (matchParent) FrameLayout.LayoutParams.MATCH_PARENT else FrameLayout.LayoutParams.WRAP_CONTENT
+        listOfNotNull(subtitleTextView, subtitleOutlineTextView).forEach { tv ->
+            val lp = (tv.layoutParams as? FrameLayout.LayoutParams) ?: return@forEach
+            if (lp.width != widthMode) {
+                lp.width = widthMode
+                tv.layoutParams = lp
+            }
+        }
+    }
+
+    private fun setSubtitleTextExactWidth(widthPx: Int) {
+        val safeWidth = widthPx.coerceAtLeast(1)
+        listOfNotNull(subtitleTextView, subtitleOutlineTextView).forEach { tv ->
+            val lp = (tv.layoutParams as? FrameLayout.LayoutParams) ?: return@forEach
+            if (lp.width != safeWidth) {
+                lp.width = safeWidth
+                tv.layoutParams = lp
+            }
+        }
+    }
+
+    private fun setSubtitleTranslationX(dx: Float) {
+        subtitleTextView?.translationX = dx
+        subtitleOutlineTextView?.translationX = dx
+    }
+
+    private fun applyPunctuationPause(linear: Float, text: String): Float {
+        val normalized = linear.coerceIn(0f, 1f)
+        if (normalized <= 0f) return 0f
+        val compact = text.filter { it != '\n' && it != '\r' }
+        if (compact.length <= 1) return normalized
+
+        val marks = compact.withIndex()
+            .filter { it.value == '、' }
+            .map { it.index.toFloat() / (compact.length - 1).toFloat() }
+        if (marks.isEmpty()) return normalized
+
+        // Smooth pause model:
+        // Each punctuation contributes a cumulative delay via sigmoid, creating
+        // smooth deceleration near punctuation and smooth recovery afterwards.
+        val perHold = 0.06f
+        val totalHold = (marks.size * perHold).coerceAtMost(0.45f)
+        val holdEach = (totalHold / marks.size).coerceAtLeast(0.01f)
+        val sigma = 0.03f
+        val startDelay = 0.02f
+
+        var delay = 0f
+        for (p in marks) {
+            val center = (p + startDelay).coerceIn(0f, 1f)
+            val z = ((normalized - center) / sigma).coerceIn(-12f, 12f)
+            val s = (1f / (1f + kotlin.math.exp(-z)))
+            delay += holdEach * s
+        }
+        // Keep monotonic slowdown only: do not rescale remaining timeline, otherwise
+        // non-pause segments become faster than baseline.
+        return (normalized - delay).coerceIn(0f, 1f)
+    }
+
     private fun updateSubtitleText(text: String?) {
         val subtitle = subtitleTextView ?: return
+        val outline = subtitleOutlineTextView
         val settings = loadAudiobookSettingsConfig(this)
         val normalized = text?.trim()?.takeIf { it.isNotEmpty() }
         if (!settings.floatingOverlaySubtitleEnabled || normalized == null) {
             subtitle.animate().cancel()
             subtitle.text = ""
             subtitle.visibility = View.GONE
+            subtitle.scrollTo(0, 0)
+            subtitle.translationX = 0f
+            outline?.text = ""
+            outline?.visibility = View.GONE
+            outline?.scrollTo(0, 0)
+            outline?.translationX = 0f
+            stopSubtitleTicker()
             hideFloatingLookup()
             rootView?.post { alignOverlayWindow(force = true) }
             return
@@ -632,25 +913,163 @@ companion object {
         subtitle.alpha = 1f
         subtitle.text = normalized
         subtitle.visibility = View.VISIBLE
+        subtitle.scrollTo(0, 0)
+        subtitle.translationX = 0f
+        outline?.text = normalized
+        outline?.visibility = View.VISIBLE
+        outline?.scrollTo(0, 0)
+        outline?.translationX = 0f
+        subtitleTickerBasePositionMs = BookReaderFloatingBridge.currentPlaybackPositionMs()
+        subtitleTickerBaseRealtimeMs = SystemClock.uptimeMillis()
         subtitle.post {
             alignOverlayWindow(force = true)
+            updateSubtitleAutoScroll()
+            if (BookReaderFloatingBridge.isPlaying()) {
+                startSubtitleTicker()
+            }
         }
+    }
+
+    private fun updateSubtitleAutoScroll(positionMs: Long = BookReaderFloatingBridge.currentPlaybackPositionMs()) {
+        val subtitle = subtitleTextView ?: return
+        val outline = subtitleOutlineTextView
+        if (subtitle.visibility != View.VISIBLE) return
+        val text = subtitle.text?.toString().orEmpty()
+        if (text.isBlank()) return
+        val settings = loadAudiobookSettingsConfig(this)
+        if (!settings.floatingOverlaySubtitleEnabled) return
+        val now = System.currentTimeMillis()
+        val shouldLog = now - lastSubtitleScrollLogAtMs >= 300L
+
+        if (!settings.floatingOverlaySubtitleScrollEnabled) {
+            setSubtitleTextWidthMode(matchParent = true)
+            subtitle.setSingleLine(false)
+            subtitle.maxLines = Int.MAX_VALUE
+            subtitle.ellipsize = null
+            subtitle.setHorizontallyScrolling(false)
+            subtitle.gravity = Gravity.CENTER_HORIZONTAL
+            subtitle.textAlignment = View.TEXT_ALIGNMENT_CENTER
+            outline?.setSingleLine(false)
+            outline?.maxLines = Int.MAX_VALUE
+            outline?.ellipsize = null
+            outline?.setHorizontallyScrolling(false)
+            outline?.gravity = Gravity.CENTER_HORIZONTAL
+            outline?.textAlignment = View.TEXT_ALIGNMENT_CENTER
+            if (subtitle.scrollX != 0) subtitle.scrollTo(0, 0)
+            if (outline != null && outline.scrollX != 0) outline.scrollTo(0, 0)
+            setSubtitleTranslationX(0f)
+            if (shouldLog) {
+                Log.d(
+                    FLOATING_SUBTITLE_SCROLL_LOG_TAG,
+                    "off pos=$positionMs textLen=${text.length} scrollX=${subtitle.scrollX}"
+                )
+                lastSubtitleScrollLogAtMs = now
+            }
+            return
+        }
+
+        setSubtitleTextWidthMode(matchParent = false)
+        val viewportWidth = ((subtitle.parent as? View)?.width ?: subtitle.width).toFloat()
+        if (viewportWidth <= 1f) return
+
+        subtitle.setSingleLine(true)
+        subtitle.maxLines = 1
+        subtitle.ellipsize = null
+        subtitle.setHorizontallyScrolling(true)
+        outline?.setSingleLine(true)
+        outline?.maxLines = 1
+        outline?.ellipsize = null
+        outline?.setHorizontallyScrolling(true)
+        val textWidth = subtitle.paint.measureText(text.ifEmpty { " " })
+        val contentWidth = textWidth + subtitle.totalPaddingLeft + subtitle.totalPaddingRight
+        val maxScroll = (contentWidth - viewportWidth).coerceAtLeast(0f)
+        if (maxScroll <= 1f) {
+            setSubtitleTextWidthMode(matchParent = true)
+            subtitle.gravity = Gravity.START
+            subtitle.textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+            outline?.gravity = Gravity.START
+            outline?.textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+            if (subtitle.scrollX != 0) subtitle.scrollTo(0, 0)
+            if (outline != null && outline.scrollX != 0) outline.scrollTo(0, 0)
+            val centeredDx = ((viewportWidth - contentWidth) / 2f).coerceAtLeast(0f)
+            setSubtitleTranslationX(centeredDx)
+            if (shouldLog) {
+                Log.d(
+                    FLOATING_SUBTITLE_SCROLL_LOG_TAG,
+                    "fit pos=$positionMs viewportWidth=${"%.1f".format(viewportWidth)} textWidth=${"%.1f".format(textWidth)} dx=${"%.1f".format(centeredDx)} max=${"%.1f".format(maxScroll)}"
+                )
+                lastSubtitleScrollLogAtMs = now
+            }
+            return
+        }
+
+        val contentWidthPx = kotlin.math.ceil(contentWidth.toDouble()).toInt()
+        setSubtitleTextExactWidth(contentWidthPx)
+
+        subtitle.gravity = Gravity.START
+        subtitle.textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+        outline?.gravity = Gravity.START
+        outline?.textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+        if (!BookReaderFloatingBridge.isPlaying()) {
+            if (shouldLog) {
+                Log.d(
+                    FLOATING_SUBTITLE_SCROLL_LOG_TAG,
+                    "pause pos=$positionMs width=${"%.1f".format(textWidth)} viewport=${"%.1f".format(viewportWidth)} max=${"%.1f".format(maxScroll)} scrollX=${subtitle.scrollX}"
+                )
+                lastSubtitleScrollLogAtMs = now
+            }
+            return
+        }
+        val cue = BookReaderFloatingBridge.currentCue() ?: return
+        val duration = (cue.endMs - cue.startMs).coerceAtLeast(1L)
+        val linear = ((positionMs - cue.startMs).toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+        // APlayer-style stable path: use linear progress directly.
+        val mapped = linear
+        val minDx = viewportWidth - contentWidth
+        val dx = (minDx * mapped).coerceIn(minDx, 0f)
+        setSubtitleTranslationX(dx)
+        val target = (-dx).toInt().coerceAtLeast(0)
+        if (shouldLog) {
+            Log.d(
+                FLOATING_SUBTITLE_SCROLL_LOG_TAG,
+                "tick pos=$positionMs linear=${"%.3f".format(linear)} mapped=${"%.3f".format(mapped)} viewportWidth=${"%.1f".format(viewportWidth)} textWidth=${"%.1f".format(textWidth)} dx=${"%.1f".format(dx)} max=${"%.1f".format(maxScroll)} target=$target scrollX=${subtitle.scrollX} transX=${"%.1f".format(subtitle.translationX)} contentW=$contentWidthPx playing=${BookReaderFloatingBridge.isPlaying()} speed=${"%.2f".format(subtitlePlaybackSpeed)}"
+            )
+            lastSubtitleScrollLogAtMs = now
+        }
+    }
+
+    private fun startSubtitleTicker() {
+        if (subtitleTickerRunning) return
+        subtitleTickerRunning = true
+        subtitleTickerBasePositionMs = BookReaderFloatingBridge.currentPlaybackPositionMs()
+        subtitleTickerBaseRealtimeMs = SystemClock.uptimeMillis()
+        Choreographer.getInstance().postFrameCallback(subtitleFrameCallback)
+    }
+
+    private fun stopSubtitleTicker() {
+        if (!subtitleTickerRunning) return
+        subtitleTickerRunning = false
+        Choreographer.getInstance().removeFrameCallback(subtitleFrameCallback)
     }
 
     private fun applySubtitleSelectionHighlight(selectedRange: IntRange?) {
         val subtitle = subtitleTextView ?: return
+        val outline = subtitleOutlineTextView
         val baseText = BookReaderFloatingBridge.currentSubtitle()?.trim().orEmpty()
         if (baseText.isBlank()) {
             subtitle.text = ""
+            outline?.text = ""
             return
         }
         if (selectedRange == null || selectedRange.first !in baseText.indices) {
             subtitle.text = baseText
+            outline?.text = baseText
             return
         }
         val endExclusive = (selectedRange.last + 1).coerceAtMost(baseText.length)
         if (endExclusive <= selectedRange.first) {
             subtitle.text = baseText
+            outline?.text = baseText
             return
         }
         val spannable = SpannableString(baseText)
@@ -661,6 +1080,7 @@ companion object {
             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
         )
         subtitle.text = spannable
+        outline?.text = baseText
     }
 
     private fun updateFloatingLookupPanelPosition() {
@@ -726,9 +1146,7 @@ companion object {
     private fun performFloatingLookup(offset: Int, initialAnchorRect: Rect?) {
         val subtitleText = BookReaderFloatingBridge.currentSubtitle()?.trim()?.takeIf { it.isNotEmpty() } ?: return
         val settings = loadAudiobookSettingsConfig(this)
-        if (settings.pausePlaybackOnLookup && BookReaderFloatingBridge.isPlaying()) {
-            BookReaderFloatingBridge.setPlaying(play = false)
-        }
+        pausePlaybackForFloatingLookupIfNeeded(settings)
         val selection = selectLookupScanText(subtitleText, offset) ?: run {
             hideFloatingLookup()
             return
@@ -1747,6 +2165,20 @@ companion object {
         applySubtitleSelectionHighlight(null)
         clearFloatingLookupHosts()
         updateFloatingLookupPanelPosition()
+        resumePlaybackIfPausedByFloatingLookup()
+    }
+
+    private fun pausePlaybackForFloatingLookupIfNeeded(settings: AudiobookSettingsConfig) {
+        if (settings.pausePlaybackOnLookup && BookReaderFloatingBridge.isPlaying()) {
+            BookReaderFloatingBridge.setPlaying(play = false)
+            playbackPausedByFloatingLookup = true
+        }
+    }
+
+    private fun resumePlaybackIfPausedByFloatingLookup() {
+        if (!playbackPausedByFloatingLookup) return
+        playbackPausedByFloatingLookup = false
+        BookReaderFloatingBridge.setPlaying(play = true)
     }
 
     private sealed interface FloatingCardMode {
@@ -1968,15 +2400,16 @@ companion object {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(createTextButton("←") {
-                if (layerIndex > 0) {
-                    truncateFloatingLookupLayersTo(layerIndex - 1)
+                when (val closeAction = floatingLookupSession.closeLayerOrClear(layerIndex)) {
+                    CloseLookupAction.ClearAll -> hideFloatingLookup()
+                    is CloseLookupAction.ShowLayer -> truncateFloatingLookupLayersTo(closeAction.index)
                 }
             }.apply {
                 layoutParams = LinearLayout.LayoutParams(
                     (36 * density).toInt(),
                     (32 * density).toInt()
                 ).apply { marginEnd = (8 * density).toInt() }
-                alpha = if (actionState.canGoBack) 1f else 0.45f
+                alpha = 1f
             })
             addView(View(this@AudiobookFloatingOverlayService).apply {
                 layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
@@ -2476,6 +2909,13 @@ companion object {
             setTextColor(settings.floatingOverlaySubtitleColor)
             setShadowLayer(0f, 0f, 0f, 0)
         }
+        subtitleOutlineTextView?.apply {
+            textSize = settings.floatingOverlaySubtitleSizeSp.toFloat()
+            setTextColor(settings.floatingOverlaySubtitleColor)
+            val density = resources.displayMetrics.density
+            val radius = (2.8f * density).coerceAtLeast(2f)
+            setShadowLayer(radius, 0f, 0f, 0xCC000000.toInt())
+        }
     }
 
     private fun updateBubbleIcon(isPlaying: Boolean) {
@@ -2563,6 +3003,75 @@ companion object {
         }
     }
 
+    private fun createCustomColorButton(
+        color: Int,
+        selected: Boolean,
+        onClick: () -> Unit
+    ): View {
+        val density = resources.displayMetrics.density
+        return View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                (28 * density).toInt(),
+                (28 * density).toInt()
+            ).apply { marginEnd = (8 * density).toInt() }
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(color)
+                setStroke(
+                    (if (selected) 3 else 1) * density.toInt().coerceAtLeast(1),
+                    if (selected) 0xFFFFFFFF.toInt() else 0x44FFFFFF
+                )
+            }
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun createRgbSliderRow(
+        label: String,
+        initial: Int,
+        onLiveChange: (Int) -> Unit,
+        onFinalChange: () -> Unit
+    ): LinearLayout {
+        val density = resources.displayMetrics.density
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (4 * density).toInt() }
+            addView(TextView(this@AudiobookFloatingOverlayService).apply {
+                text = label
+                setTextColor(0xCCFFFFFF.toInt())
+                textSize = 11f
+                layoutParams = LinearLayout.LayoutParams(
+                    (14 * density).toInt(),
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            })
+            addView(SeekBar(this@AudiobookFloatingOverlayService).apply {
+                max = 255
+                progress = initial.coerceIn(0, 255)
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                )
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        onLiveChange(progress.coerceIn(0, 255))
+                    }
+
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                        onFinalChange()
+                    }
+                })
+            })
+        }
+    }
+
     private fun createRoundedBackground(fillColor: Int, cornerDp: Float, strokeColor: Int): GradientDrawable {
         return GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
@@ -2588,6 +3097,7 @@ companion object {
         windowLayoutParams = null
         subtitlePanelView = null
         subtitleTextView = null
+        subtitleOutlineTextView = null
         subtitleControlsRow = null
         subtitleSettingsPanel = null
         subtitleLockButton = null
@@ -2615,9 +3125,7 @@ companion object {
     ) {
         serviceScope.launch {
             val settings = loadAudiobookSettingsConfig(this@AudiobookFloatingOverlayService)
-            if (settings.pausePlaybackOnLookup && BookReaderFloatingBridge.isPlaying()) {
-                BookReaderFloatingBridge.setPlaying(play = false)
-            }
+            pausePlaybackForFloatingLookupIfNeeded(settings)
             val term = if (tapData.tapSource.equals("entry", ignoreCase = true)) {
                 tapData.scanText.trim().ifBlank { tapData.text.trim() }
             } else {

@@ -34,6 +34,7 @@ internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE = 0xFFFFFFFF.toInt()
 internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_YELLOW = 0xFFFFF59D.toInt()
 internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_GREEN = 0xFFA5D6A7.toInt()
 internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_CYAN = 0xFF80DEEA.toInt()
+internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_PINK = 0xFFF48FB1.toInt()
 
 internal enum class LookupAudioMode(val storageValue: String) {
     LOCAL_TTS("local_tts"),

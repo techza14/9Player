@@ -274,6 +274,7 @@
     <string name="audiobook_overlay_subtitle_disabled">已关闭悬浮字幕。</string>
     <string name="audiobook_overlay_subtitle_help">悬浮字幕会显示当前播放到的字幕文本。</string>
     <string name="audiobook_overlay_subtitle_style">字幕样式</string>
+    <string name="audiobook_overlay_subtitle_scroll">字幕滚动</string>
     <string name="audiobook_unknown_file">未知文件</string>
     <string name="audiobook_import_stage_copy">复制文件...</string>
     <string name="audiobook_import_stage_validate">校验数据库...</string>
