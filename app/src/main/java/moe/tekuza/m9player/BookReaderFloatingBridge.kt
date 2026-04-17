@@ -6,7 +6,10 @@ object BookReaderFloatingBridge {
         val startMs: Long,
         val endMs: Long,
         val bookTitle: String?,
-        val audioUri: String?
+        val audioUri: String?,
+        val fullSentenceText: String?,
+        val fullSentenceStartMs: Long?,
+        val fullSentenceEndMs: Long?
     )
 
     interface Controller {
@@ -186,7 +189,10 @@ object BookReaderFloatingBridge {
         startMs: Long?,
         endMs: Long?,
         bookTitle: String?,
-        audioUri: String?
+        audioUri: String?,
+        fullSentenceText: String?,
+        fullSentenceStartMs: Long?,
+        fullSentenceEndMs: Long?
     ) {
         synchronized(this) {
             cueSnapshot = if (text.isNullOrBlank() || startMs == null || endMs == null) {
@@ -197,7 +203,10 @@ object BookReaderFloatingBridge {
                     startMs = startMs,
                     endMs = endMs,
                     bookTitle = bookTitle?.takeIf { it.isNotBlank() },
-                    audioUri = audioUri?.takeIf { it.isNotBlank() }
+                    audioUri = audioUri?.takeIf { it.isNotBlank() },
+                    fullSentenceText = fullSentenceText?.trim()?.takeIf { it.isNotBlank() },
+                    fullSentenceStartMs = fullSentenceStartMs,
+                    fullSentenceEndMs = fullSentenceEndMs
                 )
             }
         }
