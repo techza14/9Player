@@ -16,6 +16,7 @@ import androidx.compose.material.icons.outlined.LibraryAdd
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.SportsEsports
+import androidx.compose.material.icons.outlined.FolderCopy
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -36,6 +37,7 @@ internal fun SettingsPanel(
     onControlModeClick: () -> Unit,
     onControllerClick: () -> Unit,
     onAnkiClick: () -> Unit,
+    onMdxMountClick: () -> Unit,
     onLanguageClick: () -> Unit,
     onGuideClick: () -> Unit,
     onExportDiagnosticsClick: () -> Unit,
@@ -85,6 +87,17 @@ internal fun SettingsPanel(
                 title = stringResource(R.string.settings_language_title),
                 value = selectedAppLanguageLabel,
                 onClick = onLanguageClick,
+                showDivider = false
+            )
+        }
+
+        SettingsSection(
+            title = stringResource(R.string.settings_section_advanced)
+        ) {
+            SettingsListItem(
+                icon = Icons.Outlined.FolderCopy,
+                title = stringResource(R.string.settings_mdx_title),
+                onClick = onMdxMountClick,
                 showDivider = false
             )
         }

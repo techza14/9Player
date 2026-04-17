@@ -217,6 +217,154 @@ fn load_lookup_index(entries_path: &str) -> Result<Arc<LookupIndex>, String> {
     Ok(built)
 }
 
+fn load_lookup_index_from_mdx(mdx_path: &str, cache_key: &str) -> Result<Arc<LookupIndex>, String> {
+    let normalized_cache = cache_key.trim();
+    let cache_id = if normalized_cache.is_empty() {
+        format!("mdx::{mdx_path}")
+    } else {
+        format!("mdx::{normalized_cache}")
+    };
+    if let Some(cached) = LOOKUP_CACHE
+        .lock()
+        .map_err(|_| "lookup cache poisoned".to_string())?
+        .get(&cache_id)
+        .cloned()
+    {
+        return Ok(cached);
+    }
+
+    let mdx = MdxFile::open(mdx_path).map_err(|e| format!("open mdx failed: {e}"))?;
+
+    let mut entries = Vec::<NativeEntry>::new();
+    let mut by_exact = HashMap::<String, Vec<usize>>::new();
+
+    for item in mdx.entries() {
+        let record = match item {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let term = record.key.trim().to_string();
+        if term.is_empty() {
+            continue;
+        }
+        let definition = record.text.trim().to_string();
+        let normalized_term = normalize_lookup(&term);
+        if normalized_term.is_empty() {
+            continue;
+        }
+        let index = entries.len();
+        entries.push(NativeEntry {
+            term,
+            reading: String::new(),
+            definition,
+            normalized_term: normalized_term.clone(),
+        });
+        by_exact.entry(normalized_term).or_default().push(index);
+    }
+
+    if entries.is_empty() {
+        return Err("mdx has no valid terms".to_string());
+    }
+
+    let mut normalized_terms_sorted: Vec<String> = by_exact.keys().cloned().collect();
+    normalized_terms_sorted.sort();
+    normalized_terms_sorted.dedup();
+
+    let built = Arc::new(LookupIndex {
+        entries,
+        by_exact,
+        normalized_terms_sorted,
+    });
+    LOOKUP_CACHE
+        .lock()
+        .map_err(|_| "lookup cache poisoned".to_string())?
+        .insert(cache_id, built.clone());
+    Ok(built)
+}
+
+fn lookup_with_index(
+    index: &LookupIndex,
+    query: &str,
+    max_results: usize,
+    scan_length: usize,
+) -> serde_json::Value {
+    let query_candidates = build_hoshi_like_candidates(query, scan_length);
+    if query_candidates.is_empty() {
+        return json!({ "results": [] });
+    }
+
+    let mut emitted: Vec<(usize, i32)> = Vec::new();
+    let mut used = std::collections::HashSet::<usize>::new();
+
+    for candidate in &query_candidates {
+        let normalized = normalize_lookup(candidate);
+        if normalized.is_empty() {
+            continue;
+        }
+
+        let candidate_len = candidate.chars().count() as i32;
+
+        if let Some(exact_indices) = index.by_exact.get(&normalized) {
+            for idx in exact_indices {
+                if used.insert(*idx) {
+                    emitted.push((*idx, candidate_len.max(1)));
+                }
+                if emitted.len() >= max_results {
+                    break;
+                }
+            }
+        }
+        if emitted.len() >= max_results {
+            break;
+        }
+
+        let start = lower_bound(&index.normalized_terms_sorted, &normalized);
+        for term in index.normalized_terms_sorted.iter().skip(start) {
+            if !term.starts_with(&normalized) {
+                break;
+            }
+            if term == &normalized {
+                continue;
+            }
+            if let Some(prefix_indices) = index.by_exact.get(term) {
+                for idx in prefix_indices {
+                    if used.insert(*idx) {
+                        emitted.push((*idx, candidate_len.max(1)));
+                    }
+                    if emitted.len() >= max_results {
+                        break;
+                    }
+                }
+            }
+            if emitted.len() >= max_results {
+                break;
+            }
+        }
+        if emitted.len() >= max_results {
+            break;
+        }
+    }
+
+    let mut results = Vec::new();
+    for (idx, matched_len) in emitted {
+        if let Some(entry) = index.entries.get(idx) {
+            let exact = normalize_lookup(query_candidates.first().map(String::as_str).unwrap_or_default())
+                == entry.normalized_term;
+            let score = if exact { 120 } else { 92 };
+            let resolved_definition = render_definition_with_entry_link(index, &entry.definition);
+            results.push(json!({
+                "term": entry.term,
+                "reading": entry.reading,
+                "definition": resolved_definition,
+                "matchedLength": matched_len,
+                "score": score
+            }));
+        }
+    }
+
+    json!({ "results": results })
+}
+
 fn parse_mdx_link_target(raw: &str) -> Option<String> {
     let trimmed = raw.trim_start();
     if !trimmed.starts_with("@@@LINK=") {
@@ -445,81 +593,118 @@ pub extern "C" fn mdict_native_lookup_json(
         let max_results = max_results.max(1) as usize;
         let scan_length = scan_length.max(1) as usize;
         let index = load_lookup_index(&entries_path)?;
-        let query_candidates = build_hoshi_like_candidates(&query, scan_length);
-        if query_candidates.is_empty() {
+        Ok(lookup_with_index(index.as_ref(), &query, max_results, scan_length))
+    })();
+
+    match result {
+        Ok(value) => make_json_ptr(value),
+        Err(error) => make_json_ptr(json!({
+            "results": [],
+            "error": error
+        })),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mdict_native_extract_mdd_json(
+    mdd_path: *const c_char,
+    output_dir: *const c_char,
+) -> *mut c_char {
+    let result = (|| {
+        let mdd_path = c_ptr_to_string(mdd_path)?;
+        let output_dir = c_ptr_to_string(output_dir)?;
+        if !Path::new(&mdd_path).is_file() {
+            return Err("mdd file not found".to_string());
+        }
+        if output_dir.trim().is_empty() {
+            return Err("output dir is empty".to_string());
+        }
+        fs::create_dir_all(&output_dir).map_err(|e| format!("create output dir failed: {e}"))?;
+
+        let mdd = MddFile::open(&mdd_path).map_err(|e| format!("open mdd failed: {e}"))?;
+        let mut media_count: u64 = 0;
+        let mut errors: Vec<String> = Vec::new();
+
+        for item in mdd.entries() {
+            match item {
+                Ok(record) => {
+                    let rel = record.key.replace('\\', "/").trim_start_matches('/').to_string();
+                    if rel.is_empty() {
+                        continue;
+                    }
+                    let target = Path::new(&output_dir).join(&rel);
+                    if let Some(parent) = target.parent() {
+                        if let Err(e) = fs::create_dir_all(parent) {
+                            if errors.len() < 16 {
+                                errors.push(format!("create media parent failed: {e}"));
+                            }
+                            continue;
+                        }
+                    }
+                    match File::create(&target) {
+                        Ok(mut file) => {
+                            if let Err(e) = file.write_all(record.data.as_ref()) {
+                                if errors.len() < 16 {
+                                    errors.push(format!("write media failed: {e}"));
+                                }
+                                continue;
+                            }
+                            media_count = media_count.saturating_add(1);
+                        }
+                        Err(e) => {
+                            if errors.len() < 16 {
+                                errors.push(format!("create media file failed: {e}"));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    if errors.len() < 16 {
+                        errors.push(format!("decode media failed: {e}"));
+                    }
+                }
+            }
+        }
+
+        Ok(json!({
+            "success": media_count > 0,
+            "mediaCount": media_count,
+            "errors": errors
+        }))
+    })();
+
+    match result {
+        Ok(value) => make_json_ptr(value),
+        Err(error) => make_json_ptr(json!({
+            "success": false,
+            "mediaCount": 0,
+            "error": error
+        })),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mdict_native_lookup_mdx_json(
+    mdx_path: *const c_char,
+    cache_key: *const c_char,
+    query: *const c_char,
+    max_results: i32,
+    scan_length: i32,
+) -> *mut c_char {
+    let result = (|| {
+        let mdx_path = c_ptr_to_string(mdx_path)?;
+        let cache_key = c_ptr_to_string(cache_key).unwrap_or_default();
+        let query = c_ptr_to_string(query)?;
+        if mdx_path.trim().is_empty() {
+            return Err("mdx path is empty".to_string());
+        }
+        if query.trim().is_empty() {
             return Ok(json!({ "results": [] }));
         }
-
-        let mut emitted: Vec<(usize, i32)> = Vec::new();
-        let mut used = std::collections::HashSet::<usize>::new();
-
-        for candidate in &query_candidates {
-            let normalized = normalize_lookup(candidate);
-            if normalized.is_empty() {
-                continue;
-            }
-
-            let candidate_len = candidate.chars().count() as i32;
-
-            if let Some(exact_indices) = index.by_exact.get(&normalized) {
-                for idx in exact_indices {
-                    if used.insert(*idx) {
-                        emitted.push((*idx, candidate_len.max(1)));
-                    }
-                    if emitted.len() >= max_results {
-                        break;
-                    }
-                }
-            }
-            if emitted.len() >= max_results {
-                break;
-            }
-
-            let start = lower_bound(&index.normalized_terms_sorted, &normalized);
-            for term in index.normalized_terms_sorted.iter().skip(start) {
-                if !term.starts_with(&normalized) {
-                    break;
-                }
-                if term == &normalized {
-                    continue;
-                }
-                if let Some(prefix_indices) = index.by_exact.get(term) {
-                    for idx in prefix_indices {
-                        if used.insert(*idx) {
-                            emitted.push((*idx, candidate_len.max(1)));
-                        }
-                        if emitted.len() >= max_results {
-                            break;
-                        }
-                    }
-                }
-                if emitted.len() >= max_results {
-                    break;
-                }
-            }
-            if emitted.len() >= max_results {
-                break;
-            }
-        }
-
-        let mut results = Vec::new();
-        for (idx, matched_len) in emitted {
-            if let Some(entry) = index.entries.get(idx) {
-                let exact = normalize_lookup(query_candidates.first().map(String::as_str).unwrap_or_default())
-                    == entry.normalized_term;
-                let score = if exact { 120 } else { 92 };
-                let resolved_definition = render_definition_with_entry_link(index.as_ref(), &entry.definition);
-                results.push(json!({
-                    "term": entry.term,
-                    "reading": entry.reading,
-                    "definition": resolved_definition,
-                    "matchedLength": matched_len,
-                    "score": score
-                }));
-            }
-        }
-
-        Ok(json!({ "results": results }))
+        let max_results = max_results.max(1) as usize;
+        let scan_length = scan_length.max(1) as usize;
+        let index = load_lookup_index_from_mdx(&mdx_path, &cache_key)?;
+        Ok(lookup_with_index(index.as_ref(), &query, max_results, scan_length))
     })();
 
     match result {

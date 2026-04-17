@@ -19,8 +19,11 @@
 
 extern "C" {
 const char* mdict_native_import_json(const char* mdx_path, const char* output_dir);
+const char* mdict_native_extract_mdd_json(const char* mdd_path, const char* output_dir);
 const char* mdict_native_lookup_json(const char* entries_path, const char* query, int max_results,
                                      int scan_length);
+const char* mdict_native_lookup_mdx_json(const char* mdx_path, const char* cache_key,
+                                         const char* query, int max_results, int scan_length);
 void mdict_native_clear_lookup_cache();
 void mdict_native_free_string(char* ptr);
 }
@@ -418,6 +421,63 @@ Java_moe_tekuza_m9player_MdictNativeBridge_nativeLookup(JNIEnv* env,
     return to_jstring(env, json_error(e.what()));
   } catch (...) {
     return to_jstring(env, json_error("unknown native mdict lookup error"));
+  }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_moe_tekuza_m9player_MdictNativeBridge_nativeExtractMdd(JNIEnv* env,
+                                                            jclass,
+                                                            jstring j_mdd_path,
+                                                            jstring j_output_dir) {
+  try {
+    const std::string mdd_path = jstring_to_string(env, j_mdd_path);
+    const std::string output_dir = jstring_to_string(env, j_output_dir);
+    if (mdd_path.empty() || output_dir.empty()) {
+      return to_jstring(env, json_error("invalid mdd extract path"));
+    }
+    const char* raw = mdict_native_extract_mdd_json(mdd_path.c_str(), output_dir.c_str());
+    if (raw == nullptr) {
+      return to_jstring(env, json_error("mdict native extract mdd returned null"));
+    }
+    std::string payload(raw);
+    mdict_native_free_string(const_cast<char*>(raw));
+    return to_jstring(env, payload);
+  } catch (const std::exception& e) {
+    return to_jstring(env, json_error(e.what()));
+  } catch (...) {
+    return to_jstring(env, json_error("unknown native mdd extract error"));
+  }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_moe_tekuza_m9player_MdictNativeBridge_nativeLookupMdx(JNIEnv* env,
+                                                           jclass,
+                                                           jstring j_mdx_path,
+                                                           jstring j_cache_key,
+                                                           jstring j_query,
+                                                           jint j_max_results,
+                                                           jint j_scan_length) {
+  try {
+    const std::string mdx_path = jstring_to_string(env, j_mdx_path);
+    const std::string cache_key = jstring_to_string(env, j_cache_key);
+    const std::string query = jstring_to_string(env, j_query);
+    if (mdx_path.empty() || query.empty()) {
+      return to_jstring(env, "{\"results\":[]}");
+    }
+    const char* raw =
+        mdict_native_lookup_mdx_json(mdx_path.c_str(), cache_key.c_str(), query.c_str(),
+                                     static_cast<int>(j_max_results),
+                                     static_cast<int>(j_scan_length));
+    if (raw == nullptr) {
+      return to_jstring(env, json_error("mdict native mdx lookup returned null"));
+    }
+    std::string payload(raw);
+    mdict_native_free_string(const_cast<char*>(raw));
+    return to_jstring(env, payload);
+  } catch (const std::exception& e) {
+    return to_jstring(env, json_error(e.what()));
+  } catch (...) {
+    return to_jstring(env, json_error("unknown native mdict mdx lookup error"));
   }
 }
 

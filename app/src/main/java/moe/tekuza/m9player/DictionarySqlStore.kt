@@ -7,6 +7,8 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.database.sqlite.SQLiteStatement
 import android.net.Uri
+import android.provider.DocumentsContract
+import androidx.documentfile.provider.DocumentFile
 import android.util.Log
 import android.util.JsonReader
 import android.util.JsonToken
@@ -42,6 +44,7 @@ private const val LOOKUP_QUERY_CACHE_SCHEMA_VERSION = 3
 private const val FAST_IMPORT_ALIAS_FROM_DEFINITION = false
 private const val IMPORT_PROGRESS_STEP = 3
 private const val DICTIONARY_LOOKUP_TAG = "DictionaryLookup"
+private const val MDICT_MEDIA_LOG_TAG = "MdictMedia"
 
 internal enum class DictionaryQueryProfile {
     FAST,
@@ -65,6 +68,9 @@ private val HTML_IMG_SRC_QUOTED_REGEX =
     Regex("(?i)<img\\b([^>]*?)\\bsrc\\s*=\\s*(['\"])(.*?)\\2([^>]*)>")
 private val HTML_IMG_SRC_UNQUOTED_REGEX =
     Regex("(?i)<img\\b([^>]*?)\\bsrc\\s*=\\s*([^\\s>]+)([^>]*)>")
+private val HTML_TAG_REGEX = Regex("(?is)<[^>]+>")
+private val HTML_ATTR_QUOTED_REGEX = Regex("(?i)\\b(src|href)\\s*=\\s*(['\"])(.*?)\\2")
+private val HTML_ATTR_UNQUOTED_REGEX = Regex("(?i)\\b(src|href)\\s*=\\s*([^\\s\"'>]+)")
 private val URI_SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
 
 private const val TABLE_DICTIONARIES = "dictionaries"
@@ -462,6 +468,12 @@ private fun clearDictionaryLookupQueryCache() {
     }
 }
 
+internal fun invalidateDictionaryLookupCaches() {
+    clearDictionaryLookupQueryCache()
+    HoshiNativeBridge.clearLookupCache()
+    MdictNativeBridge.clearLookupCache()
+}
+
 private fun loadDictionaryLookupQueryCache(
     key: DictionaryLookupQueryCacheKey
 ): List<DictionarySearchResult>? {
@@ -663,6 +675,7 @@ internal fun importDictionaryToSqlite(
     uri: Uri,
     displayName: String,
     cacheKey: String,
+    companionDocuments: Map<String, Uri> = emptyMap(),
     onProgress: ((DictionaryImportProgress) -> Unit)? = null
 ): LoadedDictionary {
     val imported = when (detectDictionaryImportType(displayName)) {
@@ -681,6 +694,7 @@ internal fun importDictionaryToSqlite(
             uri = uri,
             displayName = displayName,
             cacheKey = cacheKey,
+            companionDocuments = companionDocuments,
             onProgress = onProgress
         )
     }
@@ -706,21 +720,23 @@ internal fun searchDictionarySql(
     maxResults: Int = MAX_LOOKUP_RESULTS,
     profile: DictionaryQueryProfile = DictionaryQueryProfile.FULL
 ): List<DictionarySearchResult> {
+    val effectiveDictionaries = includeMountedMdxDictionary(context, dictionaries)
     val normalizedQuery = normalizeLookupSql(query)
-    if (normalizedQuery.isBlank() || dictionaries.isEmpty()) return emptyList()
+    if (normalizedQuery.isBlank() || effectiveDictionaries.isEmpty()) return emptyList()
     Log.d(
         DICTIONARY_LOOKUP_TAG,
-        "search start query=$query normalized=$normalizedQuery dicts=${dictionaries.size} profile=$profile"
+        "search start query=$query normalized=$normalizedQuery dicts=${effectiveDictionaries.size} profile=$profile"
     )
-    val dictionariesKey = buildLookupCacheDictionariesKey(dictionaries)
+    val dictionariesKey = buildLookupCacheDictionariesKey(effectiveDictionaries)
     if (dictionariesKey.isBlank()) return emptyList()
+    val hasMountedMdx = effectiveDictionaries.any { it.format.contains("mounted", ignoreCase = true) }
     val lookupCacheKey = DictionaryLookupQueryCacheKey(
         dictionariesKey = dictionariesKey,
         normalizedQuery = normalizedQuery,
         maxResults = maxResults,
         profile = profile
     )
-    val cached = loadDictionaryLookupQueryCache(lookupCacheKey)
+    val cached = if (hasMountedMdx) null else loadDictionaryLookupQueryCache(lookupCacheKey)
     if (cached != null) {
         Log.d(DICTIONARY_LOOKUP_TAG, "search cacheHit count=${cached.size} query=$normalizedQuery")
         return cached
@@ -728,25 +744,26 @@ internal fun searchDictionarySql(
 
     val hoshiResults = searchDictionaryWithHoshi(
         context = context,
-        dictionaries = dictionaries,
+        dictionaries = effectiveDictionaries,
         query = query,
         maxResults = maxResults,
         profile = profile
     )
     val mdictNativeResults = searchDictionaryWithMdictNative(
         context = context,
-        dictionaries = dictionaries,
+        dictionaries = effectiveDictionaries,
         query = query,
         maxResults = maxResults,
         profile = profile
     )
-    val mdxOnly = dictionaries.isNotEmpty() && dictionaries.all { it.format.contains("MDX", ignoreCase = true) }
+    val mdxOnly = effectiveDictionaries.isNotEmpty() &&
+        effectiveDictionaries.all { it.format.contains("MDX", ignoreCase = true) }
     val sqliteResults = if (mdxOnly && mdictNativeResults.isNotEmpty()) {
         emptyList()
     } else {
         searchDictionaryWithSqlite(
             context = context,
-            dictionaries = dictionaries,
+            dictionaries = effectiveDictionaries,
             query = query,
             maxResults = maxResults,
             profile = profile
@@ -771,8 +788,41 @@ internal fun searchDictionarySql(
         DICTIONARY_LOOKUP_TAG,
         "search done hoshi=${hoshiResults.size} mdictNative=${mdictNativeResults.size} sqlite=${sqliteResults.size} merged=${results.size} query=$normalizedQuery"
     )
-    saveDictionaryLookupQueryCache(lookupCacheKey, results)
+    if (!hasMountedMdx || results.isNotEmpty()) {
+        saveDictionaryLookupQueryCache(lookupCacheKey, results)
+    }
     return results
+}
+
+internal fun includeMountedMdxDictionary(
+    context: Context,
+    dictionaries: List<LoadedDictionary>
+): List<LoadedDictionary> {
+    val mounted = mountedMdxDictionariesFromState(context)
+    if (mounted.isEmpty()) return dictionaries
+    return (dictionaries + mounted).distinctBy { dictionary ->
+        dictionary.cacheKey.trim().ifBlank { dictionary.name.trim().lowercase(Locale.ROOT) }
+    }
+}
+
+private fun mountedMdxDictionariesFromState(context: Context): List<LoadedDictionary> {
+    val mountedState = loadMdxMountState(context)
+    if (!mountedState.enabled) return emptyList()
+    return mountedState.entries
+        .asSequence()
+        .filter { it.enabled && it.cacheKey.isNotBlank() && it.mdxUri.isNotBlank() }
+        .map { entry ->
+            val displayName = entry.displayName.ifBlank { "MDX" }
+            LoadedDictionary(
+                cacheKey = entry.cacheKey,
+                name = displayName.substringBeforeLast('.').ifBlank { displayName },
+                format = "MDX (mounted)",
+                entries = emptyList(),
+                stylesCss = null,
+                entryCount = 0
+            )
+        }
+        .toList()
 }
 
 private fun searchDictionaryWithMdictNative(
@@ -796,22 +846,70 @@ private fun searchDictionaryWithMdictNative(
     }
 
     val merged = linkedMapOf<String, DictionarySearchResult>()
+    val mountedState = loadMdxMountState(context)
+    val mountedByCacheKey = if (mountedState.enabled) {
+        mountedState.entries
+            .asSequence()
+            .filter { it.enabled && it.cacheKey.isNotBlank() && it.mdxUri.isNotBlank() }
+            .associateBy { it.cacheKey }
+    } else {
+        emptyMap()
+    }
     dictionaries.forEachIndexed { order, dictionary ->
         val isMdx = dictionary.format.contains("MDX", ignoreCase = true)
         if (!isMdx) return@forEachIndexed
         val cacheKey = dictionary.cacheKey.takeIf { it.isNotBlank() } ?: return@forEachIndexed
-        val entriesFile = File(dictionaryStorageDir(context, cacheKey), "mdictnative/entries.ndjson")
-        if (!entriesFile.isFile) return@forEachIndexed
-        val mediaDir = File(dictionaryStorageDir(context, cacheKey), "mdictnative/media")
-        val nativeHits = MdictNativeBridge.lookup(
-            entriesPath = entriesFile.absolutePath,
-            query = trimmedQuery,
-            maxResults = lookupLimit,
-            scanLength = scanLength
-        )
+        val mountedEntry = mountedByCacheKey[cacheKey]
+        val mounted = mountedEntry != null
+        val mediaDir = if (mounted) {
+            null
+        } else {
+            File(dictionaryStorageDir(context, cacheKey), "mdictnative/media")
+        }
+        val nativeHits = if (mounted) {
+            val hits = lookupMountedMdictNative(
+                context = context,
+                mdxUri = mountedEntry!!.mdxUri,
+                cacheKey = cacheKey,
+                query = trimmedQuery,
+                maxResults = lookupLimit,
+                scanLength = scanLength
+            )
+            if (hits.isEmpty()) {
+                Log.d(
+                    MDICT_MEDIA_LOG_TAG,
+                    "mounted lookup empty cacheKey=$cacheKey query=$trimmedQuery mdxUri=${mountedEntry.mdxUri}"
+                )
+            }
+            hits
+        } else {
+            val entriesFile = File(dictionaryStorageDir(context, cacheKey), "mdictnative/entries.ndjson")
+            if (!entriesFile.isFile) return@forEachIndexed
+            if (mediaDir?.isDirectory == false) {
+                Log.d(
+                    MDICT_MEDIA_LOG_TAG,
+                    "lookup mediaDirMissing cacheKey=$cacheKey dict=${dictionary.name} mediaDir=${mediaDir.absolutePath}"
+                )
+            }
+            MdictNativeBridge.lookup(
+                entriesPath = entriesFile.absolutePath,
+                query = trimmedQuery,
+                maxResults = lookupLimit,
+                scanLength = scanLength
+            )
+        }
         nativeHits.forEachIndexed { rank, hit ->
             val definition = normalizeDefinitionForDisplaySql(
-                rewriteMdictImageSrcToFileUri(hit.definition, mediaDir)
+                rewriteMdictImageSrcToFileUri(
+                    definition = rewriteMdictEntryLinkForDisplay(hit.definition),
+                    mediaDir = mediaDir,
+                    fallbackUriBuilder = if (mounted) {
+                        { rawSrc -> buildMountedMdictResourceUri(cacheKey, rawSrc) }
+                    } else {
+                        null
+                    },
+                    logContext = "lookup cacheKey=$cacheKey query=$trimmedQuery term=${hit.term}"
+                )
             )
             if (definition.isBlank()) return@forEachIndexed
             val score = (hit.score - order - rank).coerceAtLeast(1)
@@ -842,6 +940,56 @@ private fun searchDictionaryWithMdictNative(
                 .thenBy { it.entry.term }
         )
         .take(maxResults.coerceAtLeast(1))
+}
+
+private fun lookupMountedMdictNative(
+    context: Context,
+    mdxUri: String,
+    cacheKey: String,
+    query: String,
+    maxResults: Int,
+    scanLength: Int
+): List<MdictNativeLookupHit> {
+    val uri = runCatching { Uri.parse(mdxUri) }.getOrNull() ?: return emptyList()
+    val pfd = runCatching { context.contentResolver.openFileDescriptor(uri, "r") }.getOrNull()
+    if (pfd != null) {
+        pfd.use {
+            val fdPath = "/proc/self/fd/${it.fd}"
+            Log.d(MDICT_MEDIA_LOG_TAG, "mounted lookup start cacheKey=$cacheKey query=$query fd=${it.fd}")
+            val hits = MdictNativeBridge.lookupMdx(
+                mdxPath = fdPath,
+                cacheKey = cacheKey,
+                query = query,
+                maxResults = maxResults,
+                scanLength = scanLength
+            )
+            if (hits.isNotEmpty()) return hits
+            Log.d(MDICT_MEDIA_LOG_TAG, "mounted lookup fd path returned empty, fallback to temp file")
+        }
+    } else {
+        Log.d(MDICT_MEDIA_LOG_TAG, "mounted lookup openFileDescriptor failed, fallback to temp file")
+    }
+    val fallbackFile = materializeMountedMdxTempFile(context, uri, cacheKey) ?: return emptyList()
+    Log.d(MDICT_MEDIA_LOG_TAG, "mounted lookup fallback file=${fallbackFile.absolutePath}")
+    return MdictNativeBridge.lookupMdx(
+        mdxPath = fallbackFile.absolutePath,
+        cacheKey = cacheKey,
+        query = query,
+        maxResults = maxResults,
+        scanLength = scanLength
+    )
+}
+
+private fun materializeMountedMdxTempFile(context: Context, uri: Uri, cacheKey: String): File? {
+    val dir = File(context.cacheDir, "mdx_mount_runtime").apply { mkdirs() }
+    val safeName = cacheKey.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "mounted" }
+    val out = File(dir, "$safeName.mdx")
+    return runCatching {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(out).use { output -> input.copyTo(output) }
+        } ?: return null
+        out
+    }.getOrNull()
 }
 
 private fun searchDictionaryWithSqlite(
@@ -1241,6 +1389,7 @@ private fun importDictionaryMdxWithNative(
     uri: Uri,
     displayName: String,
     cacheKey: String,
+    companionDocuments: Map<String, Uri>,
     onProgress: ((DictionaryImportProgress) -> Unit)?
 ): LoadedDictionary {
     if (!MdictNativeBridge.isAvailable) {
@@ -1248,13 +1397,34 @@ private fun importDictionaryMdxWithNative(
     }
 
     onProgress?.invoke(DictionaryImportProgress(stage = "Preparing MDX import", current = 0, total = 0))
-    val tempMdx = File.createTempFile("dict_import_", ".mdx", context.cacheDir)
+    val tempImportDir = File.createTempFile("mdict_import_", "", context.cacheDir).apply {
+        delete()
+        mkdirs()
+    }
+    val baseName = displayName.substringBeforeLast('.').ifBlank { "dictionary" }
+        .replace(Regex("[^A-Za-z0-9._-]"), "_")
+        .trim('_')
+        .ifBlank { "dictionary" }
+    val tempMdx = File(tempImportDir, "$baseName.mdx")
+    val tempMdd = File(tempImportDir, "$baseName.mdd")
     try {
         contentResolver.openInputStream(uri)?.use { input ->
             FileOutputStream(tempMdx).use { output ->
                 input.copyTo(output)
             }
         } ?: error("Unable to read dictionary file")
+        val copiedMdd = tryCopySiblingMddForImport(
+            context = context,
+            contentResolver = contentResolver,
+            mdxUri = uri,
+            displayName = displayName,
+            companionDocuments = companionDocuments,
+            targetMdd = tempMdd
+        )
+        Log.d(
+            MDICT_MEDIA_LOG_TAG,
+            "import prep mdx=${tempMdx.absolutePath} mddCopied=$copiedMdd mddPath=${tempMdd.absolutePath}"
+        )
 
         val mdxOutputDir = File(dictionaryStorageDir(context, cacheKey), "mdictnative")
         if (mdxOutputDir.exists()) mdxOutputDir.deleteRecursively()
@@ -1275,6 +1445,23 @@ private fun importDictionaryMdxWithNative(
             ?.takeIf { it.isFile }
             ?: error("mdict native import output missing entries file")
         val mediaDir = File(mdxOutputDir, "media")
+        mediaDir.mkdirs()
+        val copiedCompanion = copySiblingCompanionResourcesForMdict(
+            context = context,
+            contentResolver = contentResolver,
+            mdxUri = uri,
+            companionDocuments = companionDocuments,
+            targetMediaDir = mediaDir
+        )
+        val mediaFiles = if (mediaDir.isDirectory) {
+            runCatching { mediaDir.walkTopDown().count { it.isFile } }.getOrDefault(0)
+        } else {
+            0
+        }
+        Log.d(
+            MDICT_MEDIA_LOG_TAG,
+            "import done cacheKey=$cacheKey title=${result.title} terms=${result.termCount} mediaNative=${result.mediaCount} mediaCopied=$copiedCompanion mediaFiles=$mediaFiles mediaDir=${mediaDir.absolutePath}"
+        )
 
         val dictionaryName = result.title.ifBlank {
             displayName.substringBeforeLast('.').ifBlank { "MDict" }
@@ -1303,8 +1490,9 @@ private fun importDictionaryMdxWithNative(
                             val reading = json.optString("reading").trim().ifBlank { null }
                             val definition = normalizeDefinitionForDisplaySql(
                                 rewriteMdictImageSrcToFileUri(
-                                    json.optString("definition").trim(),
-                                    mediaDir
+                                    definition = json.optString("definition").trim(),
+                                    mediaDir = mediaDir,
+                                    logContext = "import cacheKey=$cacheKey term=$term"
                                 )
                             )
                             val entry = DictionaryEntry(
@@ -1377,8 +1565,146 @@ private fun importDictionaryMdxWithNative(
             entryCount = insertedCount
         )
     } finally {
-        runCatching { tempMdx.delete() }
+        runCatching { tempImportDir.deleteRecursively() }
     }
+}
+
+private fun tryCopySiblingMddForImport(
+    context: Context,
+    contentResolver: ContentResolver,
+    mdxUri: Uri,
+    displayName: String,
+    companionDocuments: Map<String, Uri>,
+    targetMdd: File
+): Boolean {
+    val expectedMddName = displayName.substringBeforeLast('.') + ".mdd"
+    val mddFromSelection = companionDocuments.entries.firstOrNull {
+        it.key.equals(expectedMddName, ignoreCase = true)
+    }?.value
+    if (mddFromSelection != null) {
+        runCatching {
+            contentResolver.openInputStream(mddFromSelection)?.use { input ->
+                FileOutputStream(targetMdd).use { output -> input.copyTo(output) }
+            } ?: error("open selected mdd failed")
+        }.onSuccess {
+            Log.d(MDICT_MEDIA_LOG_TAG, "import sibling mdd copied from selected docs: $expectedMddName")
+            return true
+        }
+    }
+
+    if (mdxUri.scheme.equals("file", ignoreCase = true)) {
+        val path = mdxUri.path.orEmpty()
+        if (path.isNotBlank()) {
+            val file = File(path).let { source ->
+                File(source.parentFile ?: return false, expectedMddName)
+            }
+            if (file.isFile) {
+                runCatching {
+                    FileInputStream(file).use { input ->
+                        FileOutputStream(targetMdd).use { output -> input.copyTo(output) }
+                    }
+                }.onSuccess {
+                    Log.d(MDICT_MEDIA_LOG_TAG, "import sibling mdd copied from file uri: ${file.absolutePath}")
+                    return true
+                }
+            }
+        }
+    }
+
+    val doc = DocumentFile.fromSingleUri(context, mdxUri)
+    val parent = doc?.parentFile
+    if (parent != null && parent.canRead()) {
+        val sibling = parent.findFile(expectedMddName)
+        if (sibling != null && sibling.isFile) {
+            contentResolver.openInputStream(sibling.uri)?.use { input ->
+                FileOutputStream(targetMdd).use { output -> input.copyTo(output) }
+            } ?: return false
+            Log.d(MDICT_MEDIA_LOG_TAG, "import sibling mdd copied from document tree: $expectedMddName")
+            return true
+        }
+    }
+
+    runCatching {
+        val docId = DocumentsContract.getDocumentId(mdxUri)
+        val expectedId = docId.substringBeforeLast(':', docId) + ":" + expectedMddName
+        val siblingUri = DocumentsContract.buildDocumentUriUsingTree(mdxUri, expectedId)
+        contentResolver.openInputStream(siblingUri)?.use { input ->
+            FileOutputStream(targetMdd).use { output -> input.copyTo(output) }
+            Log.d(MDICT_MEDIA_LOG_TAG, "import sibling mdd copied via DocumentsContract id=$expectedId")
+            return true
+        }
+    }
+
+    Log.d(MDICT_MEDIA_LOG_TAG, "import sibling mdd not found, expected=$expectedMddName uri=$mdxUri")
+    return false
+}
+
+private fun copySiblingCompanionResourcesForMdict(
+    context: Context,
+    contentResolver: ContentResolver,
+    mdxUri: Uri,
+    companionDocuments: Map<String, Uri>,
+    targetMediaDir: File
+): Int {
+    if (!targetMediaDir.exists()) targetMediaDir.mkdirs()
+    val allowedExtensions = setOf("css", "ddb", "svg", "png", "jpg", "jpeg", "gif", "webp", "woff", "woff2")
+    var copied = 0
+
+    if (companionDocuments.isNotEmpty()) {
+        companionDocuments.forEach { (name, docUri) ->
+            val ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            if (ext !in allowedExtensions) return@forEach
+            val target = File(targetMediaDir, name)
+            runCatching {
+                contentResolver.openInputStream(docUri)?.use { input ->
+                    FileOutputStream(target).use { output -> input.copyTo(output) }
+                } ?: error("open selected companion failed")
+            }.onSuccess { copied += 1 }
+        }
+        if (copied > 0) {
+            Log.d(MDICT_MEDIA_LOG_TAG, "copied companion resources from selected docs count=$copied")
+            return copied
+        }
+    }
+
+    if (mdxUri.scheme.equals("file", ignoreCase = true)) {
+        val path = mdxUri.path.orEmpty()
+        val parent = File(path).parentFile
+        if (parent != null && parent.isDirectory) {
+            parent.listFiles()?.forEach { file ->
+                if (!file.isFile) return@forEach
+                val ext = file.extension.lowercase(Locale.ROOT)
+                if (ext !in allowedExtensions) return@forEach
+                val target = File(targetMediaDir, file.name)
+                runCatching { file.copyTo(target, overwrite = true) }
+                    .onSuccess { copied += 1 }
+            }
+            if (copied > 0) {
+                Log.d(MDICT_MEDIA_LOG_TAG, "copied companion resources from file dir count=$copied")
+                return copied
+            }
+        }
+    }
+
+    val doc = DocumentFile.fromSingleUri(context, mdxUri)
+    val parent = doc?.parentFile
+    if (parent != null && parent.canRead()) {
+        parent.listFiles().forEach { child ->
+            if (!child.isFile) return@forEach
+            val name = child.name.orEmpty()
+            val ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            if (ext !in allowedExtensions) return@forEach
+            val target = File(targetMediaDir, name)
+            runCatching {
+                contentResolver.openInputStream(child.uri)?.use { input ->
+                    FileOutputStream(target).use { output -> input.copyTo(output) }
+                }
+            }.onSuccess { copied += 1 }
+        }
+    }
+
+    Log.d(MDICT_MEDIA_LOG_TAG, "copied companion resources count=$copied")
+    return copied
 }
 
 private fun saveParsedDictionaryToSqlite(
@@ -1826,6 +2152,16 @@ private fun normalizeLookupSql(value: String): String {
         .replace(NORMALIZE_WHITESPACE_REGEX, "")
 }
 
+private fun rewriteMdictEntryLinkForDisplay(definition: String): String {
+    val target = parseMdxLinkTarget(definition) ?: return definition
+    val encodedTarget = Uri.encode(target)
+    val label = target
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    return "<a href=\"entry://$encodedTarget\">$label</a>"
+}
+
 private fun escapeHtmlAttributeSql(value: String): String {
     return value
         .replace("&", "&amp;")
@@ -1834,12 +2170,25 @@ private fun escapeHtmlAttributeSql(value: String): String {
         .replace(">", "&gt;")
 }
 
-private fun rewriteMdictImageSrcToFileUri(definition: String, mediaDir: File): String {
+private fun rewriteMdictImageSrcToFileUri(
+    definition: String,
+    mediaDir: File?,
+    fallbackUriBuilder: ((String) -> String)? = null,
+    logContext: String = ""
+): String {
     if (definition.isBlank()) return definition
-    if (!definition.contains("<img", ignoreCase = true)) return definition
-    if (!mediaDir.isDirectory) return definition
+    if (!definition.contains("<img", ignoreCase = true) &&
+        !definition.contains("href=", ignoreCase = true) &&
+        !definition.contains("src=", ignoreCase = true)
+    ) return definition
+    if (mediaDir?.isDirectory != true && fallbackUriBuilder == null) return definition
+
+    var imageCount = 0
+    var resolvedCount = 0
+    val unresolved = mutableListOf<String>()
 
     fun resolveSrc(rawSrc: String): String {
+        imageCount += 1
         val src = rawSrc.trim().trim('"', '\'')
         if (src.isBlank()) return rawSrc
         if (src.startsWith("//")) return rawSrc
@@ -1860,26 +2209,45 @@ private fun rewriteMdictImageSrcToFileUri(definition: String, mediaDir: File): S
         val candidates = linkedSetOf(normalized)
         if (!decoded.isNullOrBlank()) candidates += decoded
 
-        val resolved = candidates.firstNotNullOfOrNull { candidate ->
-            val file = File(mediaDir, candidate)
-            if (file.isFile) file else null
-        } ?: return rawSrc
-        return resolved.toURI().toString()
+        if (mediaDir?.isDirectory == true) {
+            val resolved = candidates.firstNotNullOfOrNull { candidate ->
+                val file = File(mediaDir, candidate)
+                if (file.isFile) file else null
+            }
+            if (resolved != null) {
+                resolvedCount += 1
+                return resolved.toURI().toString()
+            }
+        }
+        val fallback = fallbackUriBuilder?.invoke(normalized)
+        if (!fallback.isNullOrBlank()) {
+            resolvedCount += 1
+            return fallback
+        }
+        if (unresolved.size < 3) unresolved += src
+        return rawSrc
     }
 
-    var out = HTML_IMG_SRC_QUOTED_REGEX.replace(definition) { match ->
-        val before = match.groupValues[1]
-        val quote = match.groupValues[2]
-        val src = match.groupValues[3]
-        val after = match.groupValues[4]
-        "<img$before src=$quote${escapeHtmlAttributeSql(resolveSrc(src))}$quote$after>"
+    var out = HTML_TAG_REGEX.replace(definition) { tagMatch ->
+        var tag = tagMatch.value
+        tag = HTML_ATTR_QUOTED_REGEX.replace(tag) { match ->
+            val attr = match.groupValues[1]
+            val quote = match.groupValues[2]
+            val value = match.groupValues[3]
+            "$attr=$quote${escapeHtmlAttributeSql(resolveSrc(value))}$quote"
+        }
+        tag = HTML_ATTR_UNQUOTED_REGEX.replace(tag) { match ->
+            val attr = match.groupValues[1]
+            val value = match.groupValues[2]
+            "$attr=\"${escapeHtmlAttributeSql(resolveSrc(value))}\""
+        }
+        tag
     }
-
-    out = HTML_IMG_SRC_UNQUOTED_REGEX.replace(out) { match ->
-        val before = match.groupValues[1]
-        val src = match.groupValues[2]
-        val after = match.groupValues[3]
-        "<img$before src=\"${escapeHtmlAttributeSql(resolveSrc(src))}\"$after>"
+    if (imageCount > 0) {
+        Log.d(
+            MDICT_MEDIA_LOG_TAG,
+            "rewrite imgs total=$imageCount resolved=$resolvedCount unresolved=${(imageCount - resolvedCount).coerceAtLeast(0)} ctx=$logContext sampleMiss=${unresolved.joinToString("|")}"
+        )
     }
     return out
 }

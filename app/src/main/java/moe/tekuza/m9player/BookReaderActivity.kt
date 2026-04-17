@@ -752,16 +752,7 @@ private fun BookReaderScreen(
 
     suspend fun loadReaderDictionariesSnapshot(): List<LoadedDictionary> {
         return withContext(Dispatchers.IO) {
-            val persisted = loadPersistedImports(context)
-            val refs = persisted.dictionaries.distinctBy { it.uri }
-            refs.mapNotNull { ref ->
-                val restoredUri = runCatching { Uri.parse(ref.uri) }.getOrNull()
-                val displayName = ref.name.ifBlank {
-                    restoredUri?.let { queryBookDisplayName(contentResolver, it) }.orEmpty()
-                }
-                val cacheKey = ref.cacheKey ?: buildDictionaryCacheKey(ref.uri, displayName)
-                loadDictionaryFromSqlite(context, cacheKey)
-            }
+            loadAvailableDictionaries(context, contentResolver)
         }
     }
 
@@ -1765,7 +1756,14 @@ private fun BookReaderScreen(
             onNoSourceLayer = { _ -> },
             onNoCue = { _ -> },
             onNoSelection = {
-                truncateLookupLayersTo(sourceLayerIndex)
+                if (tapData.tapSource.equals("entry", ignoreCase = true)) {
+                    Log.d(
+                        BOOK_LOOKUP_ANCHOR_LOG_TAG,
+                        "recursive keep layer on entry no_selection sourceLayer=$sourceLayerIndex scan='${tapData.scanText.take(32)}' text='${tapData.text.take(32)}'"
+                    )
+                } else {
+                    truncateLookupLayersTo(sourceLayerIndex)
+                }
             },
             onNoDictionary = {
                 Toast.makeText(context, context.getString(R.string.bookreader_lookup_no_dict), Toast.LENGTH_SHORT).show()

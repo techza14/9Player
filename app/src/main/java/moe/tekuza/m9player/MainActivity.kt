@@ -17,6 +17,7 @@ import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import android.util.Log
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -244,6 +245,47 @@ private val FIELD_VARIABLE_CHOICES = listOf(
     "{search-query}"
 )
 private const val MAIN_LOOKUP_DEBUG_LOG_TAG = "MainLookupDebug"
+private const val MDICT_MEDIA_LOG_TAG_MAIN = "MdictMedia"
+private const val DICTIONARY_ORDER_PREFS = "dictionary_order_prefs"
+private const val KEY_DICTIONARY_ORDER_IDS = "dictionary_order_ids"
+
+private data class MdxTreeMatch(
+    val document: DocumentFile,
+    val relativeDir: String
+)
+
+private enum class CombinedDictionaryType {
+    IMPORTED,
+    MOUNTED
+}
+
+private data class CombinedDictionaryItem(
+    val id: String,
+    val type: CombinedDictionaryType,
+    val title: String,
+    val countText: String,
+    val mountedEnabled: Boolean? = null
+)
+
+private fun loadDictionaryOrderIds(context: Context): List<String> {
+    val raw = context.getSharedPreferences(DICTIONARY_ORDER_PREFS, Context.MODE_PRIVATE)
+        .getString(KEY_DICTIONARY_ORDER_IDS, null)
+        ?.trim()
+        .orEmpty()
+    if (raw.isBlank()) return emptyList()
+    return raw.split('\n')
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .distinct()
+}
+
+private fun saveDictionaryOrderIds(context: Context, ids: List<String>) {
+    val normalized = ids.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+    context.getSharedPreferences(DICTIONARY_ORDER_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(KEY_DICTIONARY_ORDER_IDS, normalized.joinToString("\n"))
+        .apply()
+}
 
 internal data class ReaderBook(
     val id: String,
@@ -260,6 +302,78 @@ private data class ReturnedBookProgress(
     val positionMs: Long,
     val durationMs: Long
 )
+
+private fun warmupMountedMdictMedia(
+    context: Context,
+    treeUri: Uri,
+    mdxDisplayName: String,
+    cacheKey: String,
+    relativeDir: String = ""
+) {
+    val root = DocumentFile.fromTreeUri(context, treeUri) ?: return
+    val expectedMdd = mdxDisplayName.substringBeforeLast('.') + ".mdd"
+    val scopedPath = relativeDir.trim('/').takeIf { it.isNotBlank() }?.let { "$it/$expectedMdd" }
+    val mddDoc = when {
+        scopedPath != null -> {
+            findMountedTreeFile(root, scopedPath)
+                ?: findMountedTreeFile(root, expectedMdd)
+        }
+        else -> findMountedTreeFile(root, expectedMdd)
+    } ?: return
+    val tempMdd = File.createTempFile("mounted_mdd_", ".mdd", context.cacheDir)
+    try {
+        context.contentResolver.openInputStream(mddDoc.uri)?.use { input ->
+            tempMdd.outputStream().use { output -> input.copyTo(output) }
+        } ?: return
+        val mediaDir = mountedMdictMediaDir(context, cacheKey)
+        val result = MdictNativeBridge.extractMdd(tempMdd.absolutePath, mediaDir.absolutePath)
+        Log.d(
+            MDICT_MEDIA_LOG_TAG_MAIN,
+            "mounted mdd extract cacheKey=$cacheKey success=${result.success} media=${result.mediaCount} errors=${result.errors.firstOrNull().orEmpty()}"
+        )
+    } catch (e: Throwable) {
+        Log.d(MDICT_MEDIA_LOG_TAG_MAIN, "mounted mdd extract failed cacheKey=$cacheKey error=${e.message.orEmpty()}")
+    } finally {
+        runCatching { tempMdd.delete() }
+    }
+}
+
+private fun findMountedTreeFile(root: DocumentFile, relativePath: String): DocumentFile? {
+    val parts = relativePath.replace('\\', '/').trim('/').split('/').filter { it.isNotBlank() }
+    if (parts.isEmpty()) return null
+    var current: DocumentFile? = root
+    for (part in parts) {
+        val next = current?.findFile(part)
+            ?: current?.listFiles()?.firstOrNull { it.name.equals(part, ignoreCase = true) }
+            ?: return null
+        current = next
+    }
+    return current?.takeIf { it.isFile }
+}
+
+private fun collectMdxFilesRecursively(root: DocumentFile?): List<MdxTreeMatch> {
+    if (root == null || !root.exists()) return emptyList()
+    val out = mutableListOf<MdxTreeMatch>()
+    val stack = ArrayDeque<Pair<DocumentFile, String>>()
+    stack.add(root to "")
+    while (stack.isNotEmpty()) {
+        val (current, currentPath) = stack.removeLast()
+        current.listFiles().forEach { file ->
+            when {
+                file.isDirectory -> {
+                    val nextPath = listOf(currentPath, file.name.orEmpty())
+                        .filter { it.isNotBlank() }
+                        .joinToString("/")
+                    stack.add(file to nextPath)
+                }
+                file.isFile && file.name.orEmpty().lowercase(Locale.US).endsWith(".mdx") -> {
+                    out += MdxTreeMatch(document = file, relativeDir = currentPath)
+                }
+            }
+        }
+    }
+    return out.sortedBy { it.document.name.orEmpty().lowercase(Locale.US) }
+}
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
@@ -305,6 +419,11 @@ private fun ReaderSyncScreen() {
     var dictionaryProgressText by remember { mutableStateOf<String?>(null) }
     var dictionaryProgressValue by remember { mutableStateOf<Float?>(null) }
     var dictionaryError by remember { mutableStateOf<String?>(null) }
+    var dictionaryOrderIds by remember { mutableStateOf(loadDictionaryOrderIds(context)) }
+    var mdxMountState by remember { mutableStateOf(loadMdxMountState(context)) }
+    var mdxMountManagerVisible by remember { mutableStateOf(false) }
+    var mdxMountLoading by remember { mutableStateOf(false) }
+    var mdxMountError by remember { mutableStateOf<String?>(null) }
 
     var lookupQuery by remember { mutableStateOf("") }
     var lookupResults by remember { mutableStateOf<List<DictionarySearchResult>>(emptyList()) }
@@ -363,14 +482,57 @@ private fun ReaderSyncScreen() {
     var pendingCollectionPlayMs by remember { mutableStateOf<Long?>(null) }
     var pendingCollectionStopMs by remember { mutableStateOf<Long?>(null) }
     var collectionPlayRequestNonce by remember { mutableStateOf(0L) }
-    val dictionaryCssByName = remember(loadedDictionaries) {
-        loadedDictionaries.associate { it.name to it.stylesCss }
+    fun importedDictionaryId(ref: PersistedDictionaryRef): String {
+        val base = ref.cacheKey?.takeIf { it.isNotBlank() }
+            ?: buildDictionaryCacheKey(ref.uri, ref.name.ifBlank { "dictionary" })
+        return "imp:$base"
     }
-    val dictionaryPriorityByName = remember(loadedDictionaries) {
-        loadedDictionaries.mapIndexed { index, dictionary -> dictionary.name to index }.toMap()
+
+    val importedLookupById = remember(dictionaryRefs, loadedDictionaries) {
+        dictionaryRefs.mapIndexedNotNull { index, ref ->
+            val loaded = loadedDictionaries.getOrNull(index) ?: return@mapIndexedNotNull null
+            importedDictionaryId(ref) to loaded
+        }.toMap(LinkedHashMap())
     }
-    val dictionaryTypeByName = remember(loadedDictionaries) {
-        loadedDictionaries.associate { dictionary ->
+    val mountedLookupById = remember(mdxMountState.enabled, mdxMountState.entries) {
+        if (!mdxMountState.enabled) {
+            emptyMap()
+        } else {
+            mdxMountState.entries
+                .asSequence()
+                .filter { it.enabled && it.cacheKey.isNotBlank() && it.mdxUri.isNotBlank() }
+                .associate { entry ->
+                    val displayName = entry.displayName.ifBlank { "MDX" }
+                    "mnt:${entry.cacheKey}" to LoadedDictionary(
+                        cacheKey = entry.cacheKey,
+                        name = displayName.substringBeforeLast('.').ifBlank { displayName },
+                        format = "MDX (mounted)",
+                        entries = emptyList(),
+                        stylesCss = null,
+                        entryCount = 0
+                    )
+                }
+        }
+    }
+    val effectiveLookupDictionaries = remember(importedLookupById, mountedLookupById, dictionaryOrderIds) {
+        val all = LinkedHashMap<String, LoadedDictionary>()
+        all.putAll(importedLookupById)
+        all.putAll(mountedLookupById)
+        if (all.isEmpty()) return@remember emptyList()
+        val orderedIds = buildList {
+            dictionaryOrderIds.forEach { id -> if (all.containsKey(id)) add(id) }
+            all.keys.forEach { id -> if (!contains(id)) add(id) }
+        }
+        orderedIds.mapNotNull { all[it] }
+    }
+    val dictionaryCssByName = remember(effectiveLookupDictionaries) {
+        effectiveLookupDictionaries.associate { it.name to it.stylesCss }
+    }
+    val dictionaryPriorityByName = remember(effectiveLookupDictionaries) {
+        effectiveLookupDictionaries.mapIndexed { index, dictionary -> dictionary.name to index }.toMap()
+    }
+    val dictionaryTypeByName = remember(effectiveLookupDictionaries) {
+        effectiveLookupDictionaries.associate { dictionary ->
             dictionary.name to inferLookupDictionaryType(dictionary.name, dictionary.format)
         }
     }
@@ -425,10 +587,25 @@ private fun ReaderSyncScreen() {
         )
     }
 
+    LaunchedEffect(dictionaryRefs, mdxMountState.entries) {
+        val importedIds = dictionaryRefs.map(::importedDictionaryId)
+        val mountedIds = mdxMountState.entries.map { "mnt:${it.cacheKey}" }
+        val currentIds = (importedIds + mountedIds).distinct()
+        val normalized = buildList {
+            dictionaryOrderIds.forEach { id -> if (id in currentIds) add(id) }
+            currentIds.forEach { id -> if (id !in this) add(id) }
+        }
+        if (normalized != dictionaryOrderIds) {
+            dictionaryOrderIds = normalized
+            saveDictionaryOrderIds(context, normalized)
+        }
+    }
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 audiobookSettings = loadAudiobookSettingsConfig(context)
+                mdxMountState = loadMdxMountState(context)
                 scope.launch {
                     var loadedSnapshots = loadReaderBookPlaybackSnapshotsForBooks(
                         context = context,
@@ -1304,6 +1481,42 @@ private fun ReaderSyncScreen() {
         }
     }
 
+    fun mountMdxDictionaries(treeUri: Uri, mdxDocs: List<MdxTreeMatch>) {
+        keepReadPermission(context, treeUri)
+        val existingByKey = mdxMountState.entries.associateBy { it.cacheKey }.toMutableMap()
+        mdxDocs.forEach { match ->
+            val mdxDoc = match.document
+            val mdxUri = mdxDoc.uri
+            keepReadPermission(context, mdxUri)
+            val displayName = mdxDoc.name.orEmpty().ifBlank { "mounted.mdx" }
+            val mdxUriValue = mdxUri.toString()
+            val mountCacheKey = "mdx_mount_${buildDictionaryCacheKey(mdxUriValue, displayName)}"
+            val entry = MdxMountedEntry(
+                treeUri = treeUri.toString(),
+                mdxUri = mdxUriValue,
+                displayName = displayName,
+                cacheKey = mountCacheKey,
+                relativeDir = match.relativeDir,
+                enabled = true
+            )
+            existingByKey[mountCacheKey] = entry
+            scope.launch(Dispatchers.IO) {
+                warmupMountedMdictMedia(
+                    context = context,
+                    treeUri = treeUri,
+                    mdxDisplayName = displayName,
+                    cacheKey = mountCacheKey,
+                    relativeDir = match.relativeDir
+                )
+            }
+        }
+        mdxMountState = mdxMountState.copy(enabled = true, entries = existingByKey.values.toList())
+        saveMdxMountState(context, mdxMountState)
+        mdxMountLoading = false
+        mdxMountError = null
+        invalidateDictionaryLookupCaches()
+    }
+
     fun normalizeLookupCandidates(rawCandidates: List<String>): List<String> {
         return rawCandidates
             .map { it.trim() }
@@ -1360,7 +1573,7 @@ private fun ReaderSyncScreen() {
         }
 
         lookupQuery = candidates.first()
-        val dictionariesSnapshot = loadedDictionaries
+        val dictionariesSnapshot = effectiveLookupDictionaries
         scope.launch {
             lookupLoading = true
             val result = withContext(Dispatchers.Default) {
@@ -1387,7 +1600,7 @@ private fun ReaderSyncScreen() {
         candidates: List<String>,
         onResult: (Result<List<DictionarySearchResult>>) -> Unit
     ) {
-        val dictionariesSnapshot = loadedDictionaries
+        val dictionariesSnapshot = effectiveLookupDictionaries
         scope.launch {
             val result = withContext(Dispatchers.Default) {
                 runCatching { computeLookupResults(dictionariesSnapshot, candidates) }
@@ -1432,7 +1645,7 @@ private fun ReaderSyncScreen() {
     }
 
     fun openMainLookupCuePreview(cue: SubtitleCue, sourceBookTitle: String? = null) {
-        if (loadedDictionaries.isEmpty()) {
+        if (effectiveLookupDictionaries.isEmpty()) {
             exportStatus = context.getString(R.string.bookreader_lookup_no_dict)
             return
         }
@@ -1493,7 +1706,7 @@ private fun ReaderSyncScreen() {
     }
 
     fun startMainLookup(request: MainLookupRequest) {
-        if (loadedDictionaries.isEmpty()) {
+        if (effectiveLookupDictionaries.isEmpty()) {
             exportStatus = context.getString(R.string.bookreader_lookup_no_dict)
             return
         }
@@ -1724,7 +1937,7 @@ private fun ReaderSyncScreen() {
                         .takeIf { it.isNotEmpty() }
                         ?.let { ReaderLookupAnchor(rects = it) },
                     viewportHeight = view.height,
-                    dictionaries = loadedDictionaries,
+                    dictionaries = effectiveLookupDictionaries,
                     nextRequestNonce = {
                         val next = mainLookupRequestNonce + 1L
                         mainLookupRequestNonce = next
@@ -1855,6 +2068,7 @@ private fun ReaderSyncScreen() {
 
     fun removeDictionaryAt(index: Int) {
         val ref = dictionaryRefs.getOrNull(index) ?: return
+        val removedId = importedDictionaryId(ref)
 
         dictionaryRefs = dictionaryRefs.filterIndexed { i, _ -> i != index }
         loadedDictionaries = loadedDictionaries.filterIndexed { i, _ -> i != index }
@@ -1865,6 +2079,8 @@ private fun ReaderSyncScreen() {
             }
         }
         persistImportState()
+        dictionaryOrderIds = dictionaryOrderIds.filterNot { it == removedId }
+        saveDictionaryOrderIds(context, dictionaryOrderIds)
         if (lookupQuery.isNotBlank()) {
             triggerLookupCandidates(listOf(lookupQuery))
         }
@@ -1889,6 +2105,31 @@ private fun ReaderSyncScreen() {
         }
 
         persistImportState()
+        if (lookupQuery.isNotBlank()) {
+            triggerLookupCandidates(listOf(lookupQuery))
+        }
+    }
+
+    fun removeMountedDictionaryByCacheKey(cacheKey: String) {
+        if (cacheKey.isBlank()) return
+        mdxMountState = mdxMountState.copy(entries = mdxMountState.entries.filterNot { it.cacheKey == cacheKey })
+        saveMdxMountState(context, mdxMountState)
+        dictionaryOrderIds = dictionaryOrderIds.filterNot { it == "mnt:$cacheKey" }
+        saveDictionaryOrderIds(context, dictionaryOrderIds)
+        invalidateDictionaryLookupCaches()
+        if (lookupQuery.isNotBlank()) {
+            triggerLookupCandidates(listOf(lookupQuery))
+        }
+    }
+
+    fun moveCombinedDictionary(fromIndex: Int, toIndex: Int, combinedItems: List<CombinedDictionaryItem>) {
+        if (fromIndex == toIndex) return
+        if (fromIndex !in combinedItems.indices || toIndex !in combinedItems.indices) return
+        val ids = combinedItems.map { it.id }.toMutableList()
+        val moved = ids.removeAt(fromIndex)
+        ids.add(toIndex, moved)
+        dictionaryOrderIds = ids
+        saveDictionaryOrderIds(context, dictionaryOrderIds)
         if (lookupQuery.isNotBlank()) {
             triggerLookupCandidates(listOf(lookupQuery))
         }
@@ -1930,8 +2171,20 @@ private fun ReaderSyncScreen() {
             var nextLoadedDictionaries = loadedDictionaries
             var nextDictionaryRefs = dictionaryRefs
             val importErrors = mutableListOf<String>()
+            val selectedDocumentsByName = selectedUris
+                .associateBy { queryDisplayName(contentResolver, it) }
+            val importTargets = selectedUris.filter { uri ->
+                val name = queryDisplayName(contentResolver, uri).lowercase(Locale.US)
+                name.endsWith(".mdx") || name.endsWith(".zip")
+            }
+            if (importTargets.isEmpty()) {
+                dictionaryLoading = false
+                dictionaryError = context.getString(R.string.dictionary_error_pick_mdx_or_zip)
+                clearDictionaryProgress()
+                return@launch
+            }
 
-            selectedUris.forEachIndexed { index, uri ->
+            importTargets.forEachIndexed { index, uri ->
                 keepReadPermission(context, uri)
                 val displayName = queryDisplayName(contentResolver, uri)
                 val uriValue = uri.toString()
@@ -1943,7 +2196,7 @@ private fun ReaderSyncScreen() {
 
                 updateDictionaryProgress(
                     DictionaryImportProgress(
-                        stage = "Importing ${index + 1}/${selectedUris.size}: $displayName",
+                        stage = "Importing ${index + 1}/${importTargets.size}: $displayName",
                         current = 0,
                         total = 0
                     )
@@ -1956,11 +2209,12 @@ private fun ReaderSyncScreen() {
                             contentResolver = contentResolver,
                             uri = uri,
                             displayName = displayName,
-                            cacheKey = cacheKey
+                            cacheKey = cacheKey,
+                            companionDocuments = selectedDocumentsByName
                         ) { progress ->
                             scope.launch(Dispatchers.Main.immediate) {
                                 updateDictionaryProgress(
-                                    progress.copy(stage = "${progress.stage} (${index + 1}/${selectedUris.size})")
+                                    progress.copy(stage = "${progress.stage} (${index + 1}/${importTargets.size})")
                                 )
                             }
                         }
@@ -2010,6 +2264,26 @@ private fun ReaderSyncScreen() {
             if (lookupQuery.isNotBlank()) {
                 triggerLookupCandidates(listOf(lookupQuery))
             }
+        }
+    }
+
+    val pickMdxMountLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) {
+            mdxMountLoading = false
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            keepReadPermission(context, uri)
+            val mdxDocs = withContext(Dispatchers.IO) {
+                val root = DocumentFile.fromTreeUri(context, uri)
+                collectMdxFilesRecursively(root)
+            }
+            if (mdxDocs.isEmpty()) {
+                mdxMountLoading = false
+                mdxMountError = context.getString(R.string.mdx_error_no_file)
+                return@launch
+            }
+            mountMdxDictionaries(treeUri = uri, mdxDocs = mdxDocs)
         }
     }
 
@@ -2088,7 +2362,8 @@ private fun ReaderSyncScreen() {
         else -> (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     }
 
-    val dictionaryCount = loadedDictionaries.size
+    val mountedDictionaryCount = mdxMountState.entries.count { it.enabled }
+    val dictionaryCount = loadedDictionaries.size + mountedDictionaryCount
     val totalDictionaryEntries = loadedDictionaries.sumOf { it.entryCount }
     val cueLookupTokens = remember(activeCue?.text) {
         activeCue?.let { tokenizeLookupTerms(it.text).take(12) } ?: emptyList()
@@ -2382,6 +2657,14 @@ private fun ReaderSyncScreen() {
                             Button(onClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) }) {
                                 Text(stringResource(R.string.dictionary_import))
                             }
+                            if (mdxMountState.enabled) {
+                                OutlinedButton(
+                                    onClick = { mdxMountManagerVisible = true },
+                                    enabled = !mdxMountLoading
+                                ) {
+                                    Text(if (mdxMountLoading) stringResource(R.string.mdx_scanning) else stringResource(R.string.mdx_manage))
+                                }
+                            }
                             OutlinedButton(
                                 onClick = { showDictionaryManager = !showDictionaryManager }
                             ) {
@@ -2390,34 +2673,97 @@ private fun ReaderSyncScreen() {
                         }
 
                         if (showDictionaryManager) {
-                            if (dictionaryRefs.isEmpty()) {
+                            val importedItems = dictionaryRefs.mapIndexed { index, ref ->
+                                val loaded = loadedDictionaries.getOrNull(index)
+                                CombinedDictionaryItem(
+                                    id = importedDictionaryId(ref),
+                                    type = CombinedDictionaryType.IMPORTED,
+                                    title = ref.name.ifBlank { context.getString(R.string.dictionary_default_name, index + 1) },
+                                    countText = loaded?.entryCount?.let { context.getString(R.string.dictionary_count, it) }
+                                        ?: stringResource(R.string.dictionary_unloaded)
+                                )
+                            }
+                            val mountedItems = mdxMountState.entries.map { entry ->
+                                CombinedDictionaryItem(
+                                    id = "mnt:${entry.cacheKey}",
+                                    type = CombinedDictionaryType.MOUNTED,
+                                    title = entry.displayName.ifBlank { "mounted.mdx" },
+                                    countText = if (entry.enabled) context.getString(R.string.mdx_dict_enabled) else context.getString(R.string.mdx_dict_disabled),
+                                    mountedEnabled = entry.enabled
+                                )
+                            }
+                            val combinedById = (importedItems + mountedItems).associateBy { it.id }
+                            val combinedItems = buildList {
+                                dictionaryOrderIds.forEach { id ->
+                                    combinedById[id]?.let(::add)
+                                }
+                                (importedItems + mountedItems).forEach { item ->
+                                    if (none { it.id == item.id }) add(item)
+                                }
+                            }
+                            if (combinedItems.isEmpty()) {
                                 Text(stringResource(R.string.dictionary_empty))
                             } else {
-                                dictionaryRefs.forEachIndexed { index, ref ->
-                                    val loaded = loadedDictionaries.getOrNull(index)
-                                    val countText = loaded?.entryCount?.let { context.getString(R.string.dictionary_count, it) } ?: stringResource(R.string.dictionary_unloaded)
+                                combinedItems.forEachIndexed { index, item ->
                                     Card(modifier = Modifier.fillMaxWidth()) {
                                         Column(
                                             modifier = Modifier.padding(10.dp),
                                             verticalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
-                                            Text(ref.name.ifBlank { context.getString(R.string.dictionary_default_name, index + 1) })
-                                            Text(countText)
+                                            Text(item.title)
+                                            Text(
+                                                when (item.type) {
+                                                    CombinedDictionaryType.IMPORTED -> item.countText
+                                                    CombinedDictionaryType.MOUNTED -> stringResource(R.string.mdx_dict_prefix, item.countText)
+                                                },
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                 OutlinedButton(
-                                                    onClick = { moveDictionary(index, index - 1) },
+                                                    onClick = { moveCombinedDictionary(index, index - 1, combinedItems) },
                                                     enabled = !dictionaryLoading && index > 0
                                                 ) {
                                                     Text("↑")
                                                 }
                                                 OutlinedButton(
-                                                    onClick = { moveDictionary(index, index + 1) },
-                                                    enabled = !dictionaryLoading && index < dictionaryRefs.lastIndex
+                                                    onClick = { moveCombinedDictionary(index, index + 1, combinedItems) },
+                                                    enabled = !dictionaryLoading && index < combinedItems.lastIndex
                                                 ) {
                                                     Text("↓")
                                                 }
+                                                if (item.type == CombinedDictionaryType.MOUNTED) {
+                                                    val cacheKey = item.id.removePrefix("mnt:")
+                                                    val enabled = item.mountedEnabled == true
+                                                    OutlinedButton(
+                                                        onClick = {
+                                                            mdxMountState = mdxMountState.copy(
+                                                                entries = mdxMountState.entries.map { current ->
+                                                                    if (current.cacheKey == cacheKey) current.copy(enabled = !enabled) else current
+                                                                }
+                                                            )
+                                                            saveMdxMountState(context, mdxMountState)
+                                                            invalidateDictionaryLookupCaches()
+                                                            if (lookupQuery.isNotBlank()) {
+                                                                triggerLookupCandidates(listOf(lookupQuery))
+                                                            }
+                                                        },
+                                                        enabled = !dictionaryLoading
+                                                    ) {
+                                                        Text(if (enabled) stringResource(R.string.mdx_disable) else stringResource(R.string.mdx_enable))
+                                                    }
+                                                }
                                                 OutlinedButton(
-                                                    onClick = { removeDictionaryAt(index) },
+                                                    onClick = {
+                                                        when (item.type) {
+                                                            CombinedDictionaryType.IMPORTED -> {
+                                                                val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == item.id }
+                                                                if (targetIndex >= 0) removeDictionaryAt(targetIndex)
+                                                            }
+                                                            CombinedDictionaryType.MOUNTED -> {
+                                                                removeMountedDictionaryByCacheKey(item.id.removePrefix("mnt:"))
+                                                            }
+                                                        }
+                                                    },
                                                     enabled = !dictionaryLoading
                                                 ) {
                                                     Text(stringResource(R.string.common_delete))
@@ -2444,7 +2790,7 @@ private fun ReaderSyncScreen() {
                                     keyboardController?.hide()
                                     triggerLookupCandidates(listOf(lookupQuery))
                                 },
-                                enabled = loadedDictionaries.isNotEmpty() && lookupQuery.isNotBlank()
+                                enabled = effectiveLookupDictionaries.isNotEmpty() && lookupQuery.isNotBlank()
                             ) {
                                 Text(stringResource(R.string.dictionary_query_button))
                             }
@@ -2596,7 +2942,7 @@ private fun ReaderSyncScreen() {
                                                                                 runCatching {
                                                                                     computeLookupResultsWithWinningCandidate(
                                                                                         context = context,
-                                                                                        dictionaries = loadedDictionaries,
+                                                                                        dictionaries = effectiveLookupDictionaries,
                                                                                         candidates = tapCandidates,
                                                                                         profile = DictionaryQueryProfile.FULL,
                                                                                         expandCandidates = false
@@ -2717,7 +3063,7 @@ private fun ReaderSyncScreen() {
                                                         sourceBookTitle = item.bookTitle
                                                     )
                                                 },
-                                                enabled = loadedDictionaries.isNotEmpty()
+                                                enabled = effectiveLookupDictionaries.isNotEmpty()
                                             ) {
                                                 Text(stringResource(R.string.common_lookup))
                                             }
@@ -2739,39 +3085,130 @@ private fun ReaderSyncScreen() {
             }
 
             if (activeSection == MiningSection.SETTINGS) {
-                SettingsPanel(
-                    selectedAppLanguageLabel = selectedAppLanguage.displayLabel(context),
-                    versionName = resolveAppVersionName(context),
-                    onAudiobookClick = { context.startActivity(Intent(context, AudiobookSettingsActivity::class.java)) },
-                    onControlModeClick = { context.startActivity(Intent(context, ControlModeSettingsActivity::class.java)) },
-                    onControllerClick = { context.startActivity(Intent(context, ControllerSettingsActivity::class.java)) },
-                    onAnkiClick = { context.startActivity(Intent(context, AnkiSettingsActivity::class.java)) },
-                    onLanguageClick = { languageDialogVisible = true },
-                    onGuideClick = {
-                        val intent = Intent(
-                            Intent.ACTION_VIEW,
-                            Uri.parse("https://github.com/techza14/9Player")
-                        )
-                        runCatching { context.startActivity(intent) }
-                            .onFailure { Toast.makeText(context, context.getString(R.string.settings_open_link_failed), Toast.LENGTH_SHORT).show() }
-                    },
-                    onExportDiagnosticsClick = {
-                        runCatching { shareDiagnosticsReport(context) }
-                            .onFailure {
-                                Toast.makeText(context, context.getString(R.string.settings_export_diagnostics_failed), Toast.LENGTH_SHORT).show()
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SettingsPanel(
+                        selectedAppLanguageLabel = selectedAppLanguage.displayLabel(context),
+                        versionName = resolveAppVersionName(context),
+                        onAudiobookClick = { context.startActivity(Intent(context, AudiobookSettingsActivity::class.java)) },
+                        onControlModeClick = { context.startActivity(Intent(context, ControlModeSettingsActivity::class.java)) },
+                        onControllerClick = { context.startActivity(Intent(context, ControllerSettingsActivity::class.java)) },
+                        onAnkiClick = { context.startActivity(Intent(context, AnkiSettingsActivity::class.java)) },
+                        onMdxMountClick = { context.startActivity(Intent(context, MdxMountSettingsActivity::class.java)) },
+                        onLanguageClick = { languageDialogVisible = true },
+                        onGuideClick = {
+                            val intent = Intent(
+                                Intent.ACTION_VIEW,
+                                Uri.parse("https://github.com/techza14/9Player")
+                            )
+                            runCatching { context.startActivity(intent) }
+                                .onFailure { Toast.makeText(context, context.getString(R.string.settings_open_link_failed), Toast.LENGTH_SHORT).show() }
+                        },
+                        onExportDiagnosticsClick = {
+                            runCatching { shareDiagnosticsReport(context) }
+                                .onFailure {
+                                    Toast.makeText(context, context.getString(R.string.settings_export_diagnostics_failed), Toast.LENGTH_SHORT).show()
+                                }
+                        },
+                        onVersionClick = {
+                            val version = resolveAppVersionName(context)
+                            Toast.makeText(context, context.getString(R.string.settings_version_toast, version), Toast.LENGTH_SHORT).show()
+                            versionTapCount += 1
+                            if (versionTapCount >= 5) {
+                                versionTapCount = 0
+                                showVersionEasterGif = true
                             }
-                    },
-                    onVersionClick = {
-                        val version = resolveAppVersionName(context)
-                        Toast.makeText(context, context.getString(R.string.settings_version_toast, version), Toast.LENGTH_SHORT).show()
-                        versionTapCount += 1
-                        if (versionTapCount >= 5) {
-                            versionTapCount = 0
-                            showVersionEasterGif = true
+                        }
+                    )
+                }
+            }
+        }
+
+        if (mdxMountManagerVisible) {
+            AlertDialog(
+                onDismissRequest = { mdxMountManagerVisible = false },
+                title = { Text(stringResource(R.string.mdx_manager_title)) },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 360.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (mdxMountState.entries.isEmpty()) {
+                            Text(stringResource(R.string.mdx_manager_empty))
+                        } else {
+                            mdxMountState.entries.forEach { entry ->
+                                Card(modifier = Modifier.fillMaxWidth()) {
+                                    Column(
+                                        modifier = Modifier.padding(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Checkbox(
+                                                checked = entry.enabled,
+                                                onCheckedChange = { checked ->
+                                                    mdxMountState = mdxMountState.copy(
+                                                        entries = mdxMountState.entries.map { current ->
+                                                            if (current.cacheKey == entry.cacheKey) {
+                                                                current.copy(enabled = checked)
+                                                            } else {
+                                                                current
+                                                            }
+                                                        }
+                                                    )
+                                                    saveMdxMountState(context, mdxMountState)
+                                                    invalidateDictionaryLookupCaches()
+                                                }
+                                            )
+                                            Text(
+                                                entry.displayName.ifBlank { "mounted.mdx" },
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                        }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.End
+                                        ) {
+                                            TextButton(
+                                                onClick = {
+                                                    mdxMountState = mdxMountState.copy(
+                                                        entries = mdxMountState.entries.filterNot { it.cacheKey == entry.cacheKey }
+                                                    )
+                                                    saveMdxMountState(context, mdxMountState)
+                                                    invalidateDictionaryLookupCaches()
+                                                }
+                                            ) {
+                                                Text(stringResource(R.string.mdx_remove))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                )
-            }
+                },
+                confirmButton = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            onClick = {
+                                mdxMountLoading = true
+                                pickMdxMountLauncher.launch(null)
+                            },
+                            enabled = !mdxMountLoading
+                        ) {
+                            Text(stringResource(R.string.mdx_add_folder))
+                        }
+                        TextButton(onClick = { mdxMountManagerVisible = false }) {
+                            Text(stringResource(R.string.common_close))
+                        }
+                    }
+                }
+            )
         }
 
         if (languageDialogVisible) {

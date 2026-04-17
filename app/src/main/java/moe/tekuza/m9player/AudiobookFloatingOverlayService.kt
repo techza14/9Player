@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.core.text.HtmlCompat
 import java.util.Locale
 import android.webkit.WebView
+import android.webkit.WebResourceResponse
 import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -2682,6 +2683,8 @@ companion object {
             settings.javaScriptEnabled = enableLookupTap
             settings.domStorageEnabled = false
             settings.allowFileAccess = true
+            settings.allowFileAccessFromFileURLs = true
+            settings.allowUniversalAccessFromFileURLs = true
             settings.allowContentAccess = false
             settings.blockNetworkLoads = true
             settings.builtInZoomControls = false
@@ -2726,10 +2729,59 @@ companion object {
                             }
                         }
                     }
-                    return false
+                    return true
                 }
             })
             webViewClient = object : android.webkit.WebViewClient() {
+                fun dispatchEntryUrlTap(raw: String, host: WebView?): Boolean {
+                    val parsed = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
+                    if (!parsed.scheme.equals("entry", ignoreCase = true)) return false
+                    val encoded = parsed.schemeSpecificPart.orEmpty().removePrefix("//")
+                    val target = Uri.decode(encoded).trim().ifBlank { return false }
+                    val safeHost = host ?: this@apply
+                    val right = safeHost.width.toFloat().takeIf { it > 0f } ?: 1f
+                    val bottom = safeHost.height.toFloat().takeIf { it > 0f } ?: 1f
+                    val localRect = Rect(0f, 0f, right, bottom)
+                    val callback = bridge.onLookupTap
+                    if (callback == null) {
+                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "native entry dispatch skipped callback_null target=$target")
+                        return true
+                    }
+                    callback.invoke(
+                        DefinitionLookupTapData(
+                            text = target,
+                            scanText = target,
+                            tapSource = "entry",
+                            sentence = target,
+                            offset = 0,
+                            nodeText = target,
+                            nodePathJson = "[]",
+                            hostView = safeHost,
+                            screenRect = null,
+                            localRects = listOf(localRect),
+                            localCharRects = listOf(localRect),
+                            screenCharRects = emptyList()
+                        )
+                    )
+                    Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "native entry dispatch target=$target")
+                    return true
+                }
+
+                override fun shouldInterceptRequest(
+                    view: WebView?,
+                    request: android.webkit.WebResourceRequest?
+                ): WebResourceResponse? {
+                    val uri = request?.url ?: return null
+                    val resource = openMountedMdictResource(this@AudiobookFloatingOverlayService, uri) ?: return null
+                    return WebResourceResponse(resource.mimeType, null, resource.inputStream)
+                }
+
+                override fun shouldInterceptRequest(view: WebView?, url: String?): WebResourceResponse? {
+                    val uri = runCatching { Uri.parse(url.orEmpty()) }.getOrNull() ?: return null
+                    val resource = openMountedMdictResource(this@AudiobookFloatingOverlayService, uri) ?: return null
+                    return WebResourceResponse(resource.mimeType, null, resource.inputStream)
+                }
+
                 override fun shouldOverrideUrlLoading(
                     view: WebView?,
                     request: android.webkit.WebResourceRequest?
@@ -2737,6 +2789,7 @@ companion object {
                     val uri = request?.url ?: return false
                     if (uri.scheme.equals("entry", ignoreCase = true)) {
                         Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block entry navigation uri=$uri")
+                        dispatchEntryUrlTap(uri.toString(), view)
                         return true
                     }
                     return false
@@ -2746,6 +2799,7 @@ companion object {
                     val raw = url?.trim().orEmpty()
                     if (raw.startsWith("entry://", ignoreCase = true)) {
                         Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block entry navigation uri=$raw")
+                        dispatchEntryUrlTap(raw, view)
                         return true
                     }
                     return false
@@ -3190,6 +3244,10 @@ companion object {
         tapData: DefinitionLookupTapData
     ) {
         serviceScope.launch {
+            Log.d(
+                FLOATING_LOOKUP_TAP_LOG_TAG,
+                "recursive start sourceLayer=$sourceLayerIndex key=$definitionKey tapSource=${tapData.tapSource} scan='${tapData.scanText.take(32)}' text='${tapData.text.take(32)}'"
+            )
             val settings = loadAudiobookSettingsConfig(this@AudiobookFloatingOverlayService)
             pausePlaybackForFloatingLookupIfNeeded(settings)
             val term = if (tapData.tapSource.equals("entry", ignoreCase = true)) {
@@ -3197,7 +3255,14 @@ companion object {
             } else {
                 selectLookupScanText(tapData.scanText.ifBlank { tapData.text }, 0)?.text?.trim().orEmpty()
             }.takeIf { it.isNotBlank() } ?: run {
-                truncateFloatingLookupLayersTo(sourceLayerIndex)
+                if (tapData.tapSource.equals("entry", ignoreCase = true)) {
+                    Log.d(
+                        FLOATING_LOOKUP_TAP_LOG_TAG,
+                        "recursive keep layer on entry empty_term sourceLayer=$sourceLayerIndex"
+                    )
+                } else {
+                    truncateFloatingLookupLayersTo(sourceLayerIndex)
+                }
                 return@launch
             }
             val requestNonce = lookupRequestNonce + 1L
@@ -3208,6 +3273,10 @@ companion object {
                     cachedLookupDictionaries = it
                 }
             }
+            Log.d(
+                FLOATING_LOOKUP_TAP_LOG_TAG,
+                "recursive query term=$term dicts=${dictionaries.size} tapSource=${tapData.tapSource}"
+            )
             if (lookupRequestNonce != requestNonce) return@launch
             if (dictionaries.isEmpty()) {
                 renderFloatingLookupError(getString(R.string.bookreader_lookup_no_dict))
@@ -3215,22 +3284,35 @@ companion object {
             }
             val result = withContext(Dispatchers.Default) {
                 runCatching {
-                    computeTapLookupResultsWithWinningCandidate(
+                    executeRecursiveLookupQuery(
                         context = this@AudiobookFloatingOverlayService,
                         dictionaries = dictionaries,
-                        query = term
+                        term = term,
+                        tapSource = tapData.tapSource,
+                        sourceDictionaryName = lookupDictionaryNameFromDefinitionKey(definitionKey)
                     )
                 }
             }
             if (lookupRequestNonce != requestNonce) return@launch
-            result.onSuccess { computed ->
-                val hits = computed?.hits.orEmpty()
+            result.onSuccess { queryResult ->
+                val hits = queryResult.hits
                 val matchedLength = hits.firstOrNull { it.matchedLength > 0 }?.matchedLength
-                    ?: computed?.query?.length
+                    ?: queryResult.term.length
                     ?: term.length
                     ?: 1
+                Log.d(
+                    FLOATING_LOOKUP_TAP_LOG_TAG,
+                    "recursive result hits=${hits.size} term=$term matched=$matchedLength tapSource=${tapData.tapSource}"
+                )
                 if (hits.isEmpty()) {
-                    truncateFloatingLookupLayersTo(sourceLayerIndex)
+                    if (tapData.tapSource.equals("entry", ignoreCase = true)) {
+                        Log.d(
+                            FLOATING_LOOKUP_TAP_LOG_TAG,
+                            "recursive keep layer on entry no_hits sourceLayer=$sourceLayerIndex term=$term"
+                        )
+                    } else {
+                        truncateFloatingLookupLayersTo(sourceLayerIndex)
+                    }
                     Toast.makeText(
                         this@AudiobookFloatingOverlayService,
                         getString(R.string.bookreader_lookup_failed),

@@ -93,6 +93,12 @@ private val SINGLE_FREQUENCY_NUMBER_DICT_MARKER_REGEX =
 private val SINGLE_FREQUENCY_DICT_MARKER_REGEX = Regex("\\{single-frequency-([^{}]+)\\}", RegexOption.IGNORE_CASE)
 private val NON_ALNUM_TEMPLATE_KEY_REGEX = Regex("[^a-z0-9]")
 private val DICTIONARY_TOKEN_STRIP_REGEX = Regex("[\\s\\p{Punct}\\p{S}]")
+private val ANKI_LINK_TAG_REGEX = Regex("(?is)<link\\b[^>]*>")
+private val ANKI_IMG_TAG_REGEX = Regex("(?is)<img\\b[^>]*>")
+private val ANKI_ATTR_QUOTED_REGEX = Regex("(?i)\\b%s\\s*=\\s*(['\"])(.*?)\\1")
+private val ANKI_ATTR_UNQUOTED_REGEX = Regex("(?i)\\b%s\\s*=\\s*([^\\s\"'<>`]+)")
+private val ANKI_URI_SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
+private val ANKI_IMG_SRC_IN_TAG_REGEX = Regex("(?is)\\bsrc\\s*=\\s*(['\"])(.*?)\\1")
 private const val ANKI_AUDIO_LOG_TAG = "AnkiAudio"
 private const val ANKI_EXPORT_DEBUG_TAG = "AnkiExportDebug"
 
@@ -484,11 +490,254 @@ private fun buildAnkiVariables(
         variables[templateSingleGlossaryKey("single-glossary-no-dictionary", normalizedName)] =
             source.definitions.joinToString("<br>")
     }
+    val mediaSrcCache = mutableMapOf<String, String>()
+    variables.replaceAll { key, value ->
+        rewriteHtmlForAnkiExport(
+            context = context,
+            api = api,
+            html = value,
+            sourceLabel = key,
+            mediaSrcCache = mediaSrcCache
+        )
+    }
     Log.d(
         ANKI_EXPORT_DEBUG_TAG,
         "variables done primary=${primaryGlossarySource?.dictionaryName.orEmpty()} dynamicSingleKeys=${variables.keys.count { it.startsWith("__single-glossary::") }}"
     )
     return variables
+}
+
+private fun rewriteHtmlForAnkiExport(
+    context: Context,
+    api: AddContentApi,
+    html: String,
+    sourceLabel: String,
+    mediaSrcCache: MutableMap<String, String>
+): String {
+    if (html.isBlank()) return html
+    if (!html.contains("<img", ignoreCase = true) && !html.contains("<link", ignoreCase = true)) {
+        return html
+    }
+
+    val cssChunks = mutableListOf<String>()
+    var output = ANKI_LINK_TAG_REGEX.replace(html) { match ->
+        val tag = match.value
+        val rel = findHtmlAttributeValue(tag, "rel")?.lowercase(Locale.ROOT).orEmpty()
+        if (!rel.contains("stylesheet")) return@replace tag
+        val hrefRaw = findHtmlAttributeValue(tag, "href").orEmpty()
+        val hrefUri = resolveAnkiHtmlResourceUri(hrefRaw)
+        if (hrefUri == null) return@replace tag
+        val cssText = runCatching {
+            openInputStreamForUri(context, hrefUri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+        }.getOrNull()
+        if (cssText.isNullOrBlank()) return@replace tag
+        cssChunks += cssText
+        ""
+    }
+    if (cssChunks.isNotEmpty()) {
+        output = "<style>${cssChunks.joinToString("\n")}</style>$output"
+    }
+
+    var imageIndex = 0
+    output = ANKI_IMG_TAG_REGEX.replace(output) { match ->
+        var tag = match.value
+        val quotedSrcRegex = Regex(ANKI_ATTR_QUOTED_REGEX.pattern.format("src"), setOf(RegexOption.IGNORE_CASE))
+        val unquotedSrcRegex = Regex(ANKI_ATTR_UNQUOTED_REGEX.pattern.format("src"), setOf(RegexOption.IGNORE_CASE))
+        var replaced = false
+        tag = quotedSrcRegex.replace(tag) { attrMatch ->
+            val quote = attrMatch.groupValues[1]
+            val rawSrc = attrMatch.groupValues[2]
+            val rewritten = rewriteAnkiImageSrc(
+                context = context,
+                api = api,
+                rawSrc = rawSrc,
+                sourceLabel = sourceLabel,
+                imageIndex = imageIndex,
+                mediaSrcCache = mediaSrcCache
+            )
+            replaced = true
+            imageIndex += 1
+            "src=$quote${escapeHtmlAttributeAnki(rewritten)}$quote"
+        }
+        if (!replaced) {
+            tag = unquotedSrcRegex.replace(tag) { attrMatch ->
+                val rawSrc = attrMatch.groupValues[1]
+                val rewritten = rewriteAnkiImageSrc(
+                    context = context,
+                    api = api,
+                    rawSrc = rawSrc,
+                    sourceLabel = sourceLabel,
+                    imageIndex = imageIndex,
+                    mediaSrcCache = mediaSrcCache
+                )
+                imageIndex += 1
+                "src=\"${escapeHtmlAttributeAnki(rewritten)}\""
+            }
+        }
+        tag
+    }
+    return output
+}
+
+private fun rewriteAnkiImageSrc(
+    context: Context,
+    api: AddContentApi,
+    rawSrc: String,
+    sourceLabel: String,
+    imageIndex: Int,
+    mediaSrcCache: MutableMap<String, String>
+): String {
+    val src = rawSrc.trim().trim('"', '\'')
+    if (src.isBlank()) return rawSrc
+    if (src.startsWith("#")) return rawSrc
+    if (src.startsWith("//")) return rawSrc
+    if (src.startsWith("data:", ignoreCase = true)) return rawSrc
+    if (src.startsWith("http://", ignoreCase = true) || src.startsWith("https://", ignoreCase = true)) return rawSrc
+
+    mediaSrcCache[src]?.let { return it }
+
+    val uri = resolveAnkiHtmlResourceUri(src) ?: return rawSrc
+    val preferredName = buildPreferredImageMediaName(context, uri, sourceLabel, imageIndex)
+    val resolvedSrc = addMediaAsImageSrc(
+        api = api,
+        context = context,
+        sourceUri = uri,
+        preferredName = preferredName
+    ) ?: rawSrc
+    mediaSrcCache[src] = resolvedSrc
+    return resolvedSrc
+}
+
+private fun addMediaAsImageSrc(
+    api: AddContentApi,
+    context: Context,
+    sourceUri: Uri,
+    preferredName: String
+): String? {
+    val extension = preferredName.substringAfterLast('.', "png")
+    val temp = createAnkiMediaTempFile(context, prefix = "anki-img", extension = extension)
+    return try {
+        openInputStreamForUri(context, sourceUri)?.use { input ->
+            temp.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        } ?: return null
+        if (temp.length() <= 0L) return null
+
+        fun callAddMedia(uri: Uri, grantPermission: Boolean): String? {
+            if (grantPermission && uri.scheme.equals("content", ignoreCase = true)) {
+                runCatching {
+                    context.grantUriPermission(
+                        requireAnkiPackageName(context),
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+            }
+            return try {
+                val mediaTag = runCatching {
+                    api.addMediaFromUri(uri, preferredName, "image")
+                }.getOrNull().orEmpty()
+                parseImageSrcFromAnkiTag(mediaTag).ifBlank { preferredName }
+            } finally {
+                if (grantPermission && uri.scheme.equals("content", ignoreCase = true)) {
+                    runCatching { context.revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                }
+            }
+        }
+
+        val providerUri = runCatching {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", temp)
+        }.getOrNull()
+        val fromProvider = providerUri?.let { callAddMedia(it, grantPermission = true) }
+        if (!fromProvider.isNullOrBlank()) return fromProvider
+
+        val fromFile = callAddMedia(Uri.fromFile(temp), grantPermission = false)
+        if (!fromFile.isNullOrBlank()) return fromFile
+        null
+    } catch (_: Exception) {
+        null
+    } finally {
+        runCatching { temp.delete() }
+    }
+}
+
+private fun parseImageSrcFromAnkiTag(tag: String): String {
+    if (tag.isBlank()) return ""
+    val matched = ANKI_IMG_SRC_IN_TAG_REGEX.find(tag)?.groupValues?.getOrNull(2).orEmpty().trim()
+    return if (matched.isNotBlank()) matched else ""
+}
+
+private fun buildPreferredImageMediaName(
+    context: Context,
+    uri: Uri,
+    sourceLabel: String,
+    imageIndex: Int
+): String {
+    val ext = resolveImageExtension(context, uri, fallback = "png")
+    val safeLabel = sourceLabel
+        .lowercase(Locale.ROOT)
+        .replace(Regex("[^a-z0-9]+"), "-")
+        .trim('-')
+        .ifBlank { "glossary" }
+    return "mdict-$safeLabel-${System.currentTimeMillis()}-$imageIndex.$ext"
+}
+
+private fun resolveImageExtension(
+    context: Context,
+    uri: Uri,
+    fallback: String
+): String {
+    val fromPath = uri.lastPathSegment
+        ?.substringAfterLast('.', "")
+        ?.trim()
+        ?.trimStart('.')
+        ?.lowercase(Locale.ROOT)
+        .orEmpty()
+    if (fromPath.isNotBlank()) return fromPath
+
+    val fromMime = runCatching { context.contentResolver.getType(uri) }
+        .getOrNull()
+        ?.let { MimeTypeMap.getSingleton().getExtensionFromMimeType(it) }
+        ?.trim()
+        ?.lowercase(Locale.ROOT)
+        .orEmpty()
+    if (fromMime.isNotBlank()) return fromMime
+    return fallback.lowercase(Locale.ROOT)
+}
+
+private fun resolveAnkiHtmlResourceUri(raw: String): Uri? {
+    val src = raw.trim().trim('"', '\'')
+    if (src.isBlank()) return null
+    if (src.startsWith("#")) return null
+    if (src.startsWith("//")) return null
+    if (src.startsWith("data:", ignoreCase = true)) return null
+    if (src.startsWith("http://", ignoreCase = true) || src.startsWith("https://", ignoreCase = true)) return null
+
+    return if (ANKI_URI_SCHEME_REGEX.containsMatchIn(src)) {
+        runCatching { Uri.parse(src) }.getOrNull()
+    } else {
+        runCatching {
+            val asFile = File(src)
+            if (asFile.isAbsolute) Uri.fromFile(asFile) else null
+        }.getOrNull()
+    }
+}
+
+private fun findHtmlAttributeValue(tag: String, attribute: String): String? {
+    val quotedRegex = Regex(ANKI_ATTR_QUOTED_REGEX.pattern.format(attribute), setOf(RegexOption.IGNORE_CASE))
+    quotedRegex.find(tag)?.let { return it.groupValues.getOrNull(2) }
+    val unquotedRegex = Regex(ANKI_ATTR_UNQUOTED_REGEX.pattern.format(attribute), setOf(RegexOption.IGNORE_CASE))
+    unquotedRegex.find(tag)?.let { return it.groupValues.getOrNull(1) }
+    return null
+}
+
+private fun escapeHtmlAttributeAnki(value: String): String {
+    return value
+        .replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
 }
 
 private data class MinedCardGlossarySource(
@@ -1117,6 +1366,10 @@ private fun stageAudioInMediaStore(
 
 private fun openInputStreamForUri(context: Context, uri: Uri): InputStream? {
     return when (uri.scheme?.lowercase(Locale.ROOT)) {
+        "mdictres" -> runCatching {
+            openMountedMdictResource(context, uri)?.inputStream
+        }.getOrNull()
+
         "file" -> runCatching {
             val path = uri.path ?: return@runCatching null
             File(path).inputStream()
