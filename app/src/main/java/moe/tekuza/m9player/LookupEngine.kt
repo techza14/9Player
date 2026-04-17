@@ -154,7 +154,7 @@ internal fun computeLookupResultsWithWinningCandidate(
 
     val finalQuery = primaryQuery ?: return null
     val fallbackMatchedLength = finalQuery.length.coerceAtLeast(1)
-    val finalHits = mergedByKey.values
+    val sortedHits = mergedByKey.values
         .sortedWith(
             compareByDescending<DictionarySearchResult> { it.score }
                 .thenBy { it.entry.term.length }
@@ -163,7 +163,30 @@ internal fun computeLookupResultsWithWinningCandidate(
         .map { hit ->
             if (hit.matchedLength > 0) hit else hit.copy(matchedLength = fallbackMatchedLength)
         }
-        .take(MAX_LOOKUP_RESULTS)
+
+    val finalHits = buildList {
+        if (MAX_LOOKUP_RESULTS <= 0) return@buildList
+
+        val pickedKeys = linkedSetOf<String>()
+
+        // Keep one top hit per dictionary first so mixed imports (e.g. JMDICT + MDICT)
+        // can both appear instead of being crowded out by a single dictionary.
+        for (hit in sortedHits) {
+            if (size >= MAX_LOOKUP_RESULTS) break
+            val dictionaryName = hit.entry.dictionary.trim().lowercase()
+            if (dictionaryName.isBlank()) continue
+            if (pickedKeys.add(dictionaryName)) {
+                add(hit)
+            }
+        }
+
+        // Fill remaining slots by global score ordering.
+        for (hit in sortedHits) {
+            if (size >= MAX_LOOKUP_RESULTS) break
+            if (contains(hit)) continue
+            add(hit)
+        }
+    }
 
     if (finalHits.isEmpty()) return null
     return LookupComputationResult(

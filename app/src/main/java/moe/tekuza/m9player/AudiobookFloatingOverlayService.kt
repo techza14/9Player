@@ -883,9 +883,24 @@ companion object {
             val s = (1f / (1f + kotlin.math.exp(-z)))
             delay += holdEach * s
         }
-        // Keep monotonic slowdown only: do not rescale remaining timeline, otherwise
-        // non-pause segments become faster than baseline.
-        return (normalized - delay).coerceIn(0f, 1f)
+        // Re-normalize to keep fixed endpoints: f(0)=0, f(1)=1.
+        fun rawAt(t: Float): Float {
+            var d = 0f
+            for (p in marks) {
+                val center = (p + startDelay).coerceIn(0f, 1f)
+                val z = ((t - center) / sigma).coerceIn(-12f, 12f)
+                val s = (1f / (1f + kotlin.math.exp(-z)))
+                d += holdEach * s
+            }
+            return (t - d)
+        }
+
+        val raw0 = rawAt(0f)
+        val raw1 = rawAt(1f)
+        val denom = (raw1 - raw0)
+        if (denom <= 1e-5f) return normalized
+        val raw = (normalized - delay)
+        return ((raw - raw0) / denom).coerceIn(0f, 1f)
     }
 
     private fun updateSubtitleText(text: String?) {
@@ -1023,8 +1038,8 @@ companion object {
         val cue = BookReaderFloatingBridge.currentCue() ?: return
         val duration = (cue.endMs - cue.startMs).coerceAtLeast(1L)
         val linear = ((positionMs - cue.startMs).toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-        // APlayer-style stable path: use linear progress directly.
-        val mapped = linear
+        // Slow down near punctuation while preserving exact end progress.
+        val mapped = applyPunctuationPause(linear, text)
         val minDx = viewportWidth - contentWidth
         val dx = (minDx * mapped).coerceIn(minDx, 0f)
         setSubtitleTranslationX(dx)
@@ -3275,6 +3290,7 @@ companion object {
     private fun exportFloatingLookupToAnki(grouped: GroupedLookupResult, layerIndex: Int, layer: ReaderLookupLayer) {
         val dictionaryGroup = grouped.dictionaries.firstOrNull() ?: return
         val cueSnapshot = BookReaderFloatingBridge.currentCue() ?: return
+        val settings = loadAudiobookSettingsConfig(this)
         val closeAction = floatingLookupSession.afterAddToAnki(layerIndex)
         when (closeAction) {
             CloseLookupAction.ClearAll -> hideFloatingLookup()
@@ -3283,7 +3299,25 @@ companion object {
         val audioUri = cueSnapshot.audioUri
             ?.takeIf { layer.sourceTerm == null }
             ?.let { runCatching { Uri.parse(it) }.getOrNull() }
-        val sentence = layer.popupSentence?.trim().takeIf { !it.isNullOrBlank() } ?: cueSnapshot.text
+        val exportStartMs = if (settings.lookupExportFullSentence) {
+            cueSnapshot.fullSentenceStartMs ?: cueSnapshot.startMs
+        } else {
+            cueSnapshot.startMs
+        }
+        val exportEndMs = if (settings.lookupExportFullSentence) {
+            cueSnapshot.fullSentenceEndMs ?: cueSnapshot.endMs
+        } else {
+            cueSnapshot.endMs
+        }
+        val sentence = if (settings.lookupExportFullSentence) {
+            cueSnapshot.fullSentenceText ?: cueSnapshot.text
+        } else {
+            layer.popupSentence?.trim().takeIf { !it.isNullOrBlank() } ?: cueSnapshot.text
+        }
+        Log.d(
+            FLOATING_LOOKUP_LOG_TAG,
+            "ankiExport fullSentence=${settings.lookupExportFullSentence} sentenceLen=${sentence.length} popupLen=${layer.popupSentence?.length ?: 0} cueLen=${cueSnapshot.text.length} fullCueLen=${cueSnapshot.fullSentenceText?.length ?: 0} start=$exportStartMs end=$exportEndMs"
+        )
         val popupSelectionText = layer.selectionText?.trim()?.takeIf { it.isNotBlank() }
         val exportDefinitionHtml = dictionaryGroup.definitions
             .map { it.trim() }
@@ -3303,8 +3337,8 @@ companion object {
                         addLookupDefinitionToAnkiShared(
                             context = this@AudiobookFloatingOverlayService,
                             cueText = cueSnapshot.text,
-                            cueStartMs = cueSnapshot.startMs,
-                            cueEndMs = cueSnapshot.endMs,
+                            cueStartMs = exportStartMs,
+                            cueEndMs = exportEndMs,
                             audioUri = audioUri,
                             lookupAudioUri = preparedLookupAudio?.uri,
                             bookTitle = cueSnapshot.bookTitle,

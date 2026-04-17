@@ -2009,18 +2009,43 @@ private fun BookReaderScreen(
         BookReaderFloatingBridge.attach(controller)
         onDispose {
             BookReaderFloatingBridge.notifySubtitle(null)
-            BookReaderFloatingBridge.setCurrentCue(null, null, null, null, null)
+            BookReaderFloatingBridge.setCurrentCue(null, null, null, null, null, null, null, null)
             BookReaderFloatingBridge.detach(controller)
         }
     }
 
-    LaunchedEffect(activeCue, title, audioUri) {
+    LaunchedEffect(activeCue, activeCueIndex, cues, title, audioUri) {
+        val fullSentenceSelection = if (activeCueIndex in cues.indices) {
+            extractFullSentenceLikeHoshiFromCues(
+                cues = cues,
+                cueIndex = activeCueIndex,
+                anchorText = null,
+                selectedRangeInCue = null,
+                rawAnchorOffsetInCue = null
+            )
+        } else {
+            null
+        }
+        val fullSentence = fullSentenceSelection?.text?.trim()?.takeIf { it.isNotBlank() }
+        val fullSentenceStartMs = fullSentenceSelection
+            ?.cueRange
+            ?.first
+            ?.takeIf { it in cues.indices }
+            ?.let { cues[it].startMs }
+        val fullSentenceEndMs = fullSentenceSelection
+            ?.cueRange
+            ?.last
+            ?.takeIf { it in cues.indices }
+            ?.let { cues[it].endMs }
         BookReaderFloatingBridge.setCurrentCue(
             text = activeCue?.text,
             startMs = activeCue?.startMs,
             endMs = activeCue?.endMs,
             bookTitle = title,
-            audioUri = audioUri?.toString()
+            audioUri = audioUri?.toString(),
+            fullSentenceText = fullSentence,
+            fullSentenceStartMs = fullSentenceStartMs,
+            fullSentenceEndMs = fullSentenceEndMs
         )
     }
 
@@ -3063,7 +3088,7 @@ private fun findSentenceBoundsLikeHoshi(
                 if (next.isLetterOrDigit() || Character.getType(next) == Character.OTHER_LETTER.toInt()) {
                     break
                 }
-                if (next !in setOf('\u300D', '\u300F', '\uFF09', '\u3011', '!', '?', '\uFF01', '\uFF1F', '\u2026')) {
+                if (next !in setOf('\u300D', '\u300F', '\uFF09', '\u3011', '!', '?', '\uFF01', '\uFF1F')) {
                     break
                 }
                 endExclusive += 1
