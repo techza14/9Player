@@ -117,6 +117,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import com.kyant.taglib.TagLib
 import moe.tekuza.m9player.ui.theme.TsetTheme
@@ -245,14 +246,8 @@ private val FIELD_VARIABLE_CHOICES = listOf(
     "{search-query}"
 )
 private const val MAIN_LOOKUP_DEBUG_LOG_TAG = "MainLookupDebug"
-private const val MDICT_MEDIA_LOG_TAG_MAIN = "MdictMedia"
 private const val DICTIONARY_ORDER_PREFS = "dictionary_order_prefs"
 private const val KEY_DICTIONARY_ORDER_IDS = "dictionary_order_ids"
-
-private data class MdxTreeMatch(
-    val document: DocumentFile,
-    val relativeDir: String
-)
 
 private enum class CombinedDictionaryType {
     IMPORTED,
@@ -303,80 +298,9 @@ private data class ReturnedBookProgress(
     val durationMs: Long
 )
 
-private fun warmupMountedMdictMedia(
-    context: Context,
-    treeUri: Uri,
-    mdxDisplayName: String,
-    cacheKey: String,
-    relativeDir: String = ""
-) {
-    val root = DocumentFile.fromTreeUri(context, treeUri) ?: return
-    val expectedMdd = mdxDisplayName.substringBeforeLast('.') + ".mdd"
-    val scopedPath = relativeDir.trim('/').takeIf { it.isNotBlank() }?.let { "$it/$expectedMdd" }
-    val mddDoc = when {
-        scopedPath != null -> {
-            findMountedTreeFile(root, scopedPath)
-                ?: findMountedTreeFile(root, expectedMdd)
-        }
-        else -> findMountedTreeFile(root, expectedMdd)
-    } ?: return
-    val tempMdd = File.createTempFile("mounted_mdd_", ".mdd", context.cacheDir)
-    try {
-        context.contentResolver.openInputStream(mddDoc.uri)?.use { input ->
-            tempMdd.outputStream().use { output -> input.copyTo(output) }
-        } ?: return
-        val mediaDir = mountedMdictMediaDir(context, cacheKey)
-        val result = MdictNativeBridge.extractMdd(tempMdd.absolutePath, mediaDir.absolutePath)
-        Log.d(
-            MDICT_MEDIA_LOG_TAG_MAIN,
-            "mounted mdd extract cacheKey=$cacheKey success=${result.success} media=${result.mediaCount} errors=${result.errors.firstOrNull().orEmpty()}"
-        )
-    } catch (e: Throwable) {
-        Log.d(MDICT_MEDIA_LOG_TAG_MAIN, "mounted mdd extract failed cacheKey=$cacheKey error=${e.message.orEmpty()}")
-    } finally {
-        runCatching { tempMdd.delete() }
-    }
-}
-
-private fun findMountedTreeFile(root: DocumentFile, relativePath: String): DocumentFile? {
-    val parts = relativePath.replace('\\', '/').trim('/').split('/').filter { it.isNotBlank() }
-    if (parts.isEmpty()) return null
-    var current: DocumentFile? = root
-    for (part in parts) {
-        val next = current?.findFile(part)
-            ?: current?.listFiles()?.firstOrNull { it.name.equals(part, ignoreCase = true) }
-            ?: return null
-        current = next
-    }
-    return current?.takeIf { it.isFile }
-}
-
-private fun collectMdxFilesRecursively(root: DocumentFile?): List<MdxTreeMatch> {
-    if (root == null || !root.exists()) return emptyList()
-    val out = mutableListOf<MdxTreeMatch>()
-    val stack = ArrayDeque<Pair<DocumentFile, String>>()
-    stack.add(root to "")
-    while (stack.isNotEmpty()) {
-        val (current, currentPath) = stack.removeLast()
-        current.listFiles().forEach { file ->
-            when {
-                file.isDirectory -> {
-                    val nextPath = listOf(currentPath, file.name.orEmpty())
-                        .filter { it.isNotBlank() }
-                        .joinToString("/")
-                    stack.add(file to nextPath)
-                }
-                file.isFile && file.name.orEmpty().lowercase(Locale.US).endsWith(".mdx") -> {
-                    out += MdxTreeMatch(document = file, relativeDir = currentPath)
-                }
-            }
-        }
-    }
-    return out.sortedBy { it.document.name.orEmpty().lowercase(Locale.US) }
-}
-
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
+@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 private fun ReaderSyncScreen() {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -421,9 +345,6 @@ private fun ReaderSyncScreen() {
     var dictionaryError by remember { mutableStateOf<String?>(null) }
     var dictionaryOrderIds by remember { mutableStateOf(loadDictionaryOrderIds(context)) }
     var mdxMountState by remember { mutableStateOf(loadMdxMountState(context)) }
-    var mdxMountManagerVisible by remember { mutableStateOf(false) }
-    var mdxMountLoading by remember { mutableStateOf(false) }
-    var mdxMountError by remember { mutableStateOf<String?>(null) }
 
     var lookupQuery by remember { mutableStateOf("") }
     var lookupResults by remember { mutableStateOf<List<DictionarySearchResult>>(emptyList()) }
@@ -1481,42 +1402,6 @@ private fun ReaderSyncScreen() {
         }
     }
 
-    fun mountMdxDictionaries(treeUri: Uri, mdxDocs: List<MdxTreeMatch>) {
-        keepReadPermission(context, treeUri)
-        val existingByKey = mdxMountState.entries.associateBy { it.cacheKey }.toMutableMap()
-        mdxDocs.forEach { match ->
-            val mdxDoc = match.document
-            val mdxUri = mdxDoc.uri
-            keepReadPermission(context, mdxUri)
-            val displayName = mdxDoc.name.orEmpty().ifBlank { "mounted.mdx" }
-            val mdxUriValue = mdxUri.toString()
-            val mountCacheKey = "mdx_mount_${buildDictionaryCacheKey(mdxUriValue, displayName)}"
-            val entry = MdxMountedEntry(
-                treeUri = treeUri.toString(),
-                mdxUri = mdxUriValue,
-                displayName = displayName,
-                cacheKey = mountCacheKey,
-                relativeDir = match.relativeDir,
-                enabled = true
-            )
-            existingByKey[mountCacheKey] = entry
-            scope.launch(Dispatchers.IO) {
-                warmupMountedMdictMedia(
-                    context = context,
-                    treeUri = treeUri,
-                    mdxDisplayName = displayName,
-                    cacheKey = mountCacheKey,
-                    relativeDir = match.relativeDir
-                )
-            }
-        }
-        mdxMountState = mdxMountState.copy(enabled = true, entries = existingByKey.values.toList())
-        saveMdxMountState(context, mdxMountState)
-        mdxMountLoading = false
-        mdxMountError = null
-        invalidateDictionaryLookupCaches()
-    }
-
     fun normalizeLookupCandidates(rawCandidates: List<String>): List<String> {
         return rawCandidates
             .map { it.trim() }
@@ -2171,15 +2056,13 @@ private fun ReaderSyncScreen() {
             var nextLoadedDictionaries = loadedDictionaries
             var nextDictionaryRefs = dictionaryRefs
             val importErrors = mutableListOf<String>()
-            val selectedDocumentsByName = selectedUris
-                .associateBy { queryDisplayName(contentResolver, it) }
             val importTargets = selectedUris.filter { uri ->
                 val name = queryDisplayName(contentResolver, uri).lowercase(Locale.US)
-                name.endsWith(".mdx") || name.endsWith(".zip")
+                name.endsWith(".zip")
             }
             if (importTargets.isEmpty()) {
                 dictionaryLoading = false
-                dictionaryError = context.getString(R.string.dictionary_error_pick_mdx_or_zip)
+                dictionaryError = context.getString(R.string.dictionary_error_pick_zip_only)
                 clearDictionaryProgress()
                 return@launch
             }
@@ -2209,8 +2092,7 @@ private fun ReaderSyncScreen() {
                             contentResolver = contentResolver,
                             uri = uri,
                             displayName = displayName,
-                            cacheKey = cacheKey,
-                            companionDocuments = selectedDocumentsByName
+                            cacheKey = cacheKey
                         ) { progress ->
                             scope.launch(Dispatchers.Main.immediate) {
                                 updateDictionaryProgress(
@@ -2264,26 +2146,6 @@ private fun ReaderSyncScreen() {
             if (lookupQuery.isNotBlank()) {
                 triggerLookupCandidates(listOf(lookupQuery))
             }
-        }
-    }
-
-    val pickMdxMountLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri == null) {
-            mdxMountLoading = false
-            return@rememberLauncherForActivityResult
-        }
-        scope.launch {
-            keepReadPermission(context, uri)
-            val mdxDocs = withContext(Dispatchers.IO) {
-                val root = DocumentFile.fromTreeUri(context, uri)
-                collectMdxFilesRecursively(root)
-            }
-            if (mdxDocs.isEmpty()) {
-                mdxMountLoading = false
-                mdxMountError = context.getString(R.string.mdx_error_no_file)
-                return@launch
-            }
-            mountMdxDictionaries(treeUri = uri, mdxDocs = mdxDocs)
         }
     }
 
@@ -2657,13 +2519,10 @@ private fun ReaderSyncScreen() {
                             Button(onClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) }) {
                                 Text(stringResource(R.string.dictionary_import))
                             }
-                            if (mdxMountState.enabled) {
-                                OutlinedButton(
-                                    onClick = { mdxMountManagerVisible = true },
-                                    enabled = !mdxMountLoading
-                                ) {
-                                    Text(if (mdxMountLoading) stringResource(R.string.mdx_scanning) else stringResource(R.string.mdx_manage))
-                                }
+                            OutlinedButton(
+                                onClick = { context.startActivity(Intent(context, MdxMountSettingsActivity::class.java)) }
+                            ) {
+                                Text(stringResource(R.string.settings_mdx_title))
                             }
                             OutlinedButton(
                                 onClick = { showDictionaryManager = !showDictionaryManager }
@@ -3123,94 +2982,6 @@ private fun ReaderSyncScreen() {
             }
         }
 
-        if (mdxMountManagerVisible) {
-            AlertDialog(
-                onDismissRequest = { mdxMountManagerVisible = false },
-                title = { Text(stringResource(R.string.mdx_manager_title)) },
-                text = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 360.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        if (mdxMountState.entries.isEmpty()) {
-                            Text(stringResource(R.string.mdx_manager_empty))
-                        } else {
-                            mdxMountState.entries.forEach { entry ->
-                                Card(modifier = Modifier.fillMaxWidth()) {
-                                    Column(
-                                        modifier = Modifier.padding(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Checkbox(
-                                                checked = entry.enabled,
-                                                onCheckedChange = { checked ->
-                                                    mdxMountState = mdxMountState.copy(
-                                                        entries = mdxMountState.entries.map { current ->
-                                                            if (current.cacheKey == entry.cacheKey) {
-                                                                current.copy(enabled = checked)
-                                                            } else {
-                                                                current
-                                                            }
-                                                        }
-                                                    )
-                                                    saveMdxMountState(context, mdxMountState)
-                                                    invalidateDictionaryLookupCaches()
-                                                }
-                                            )
-                                            Text(
-                                                entry.displayName.ifBlank { "mounted.mdx" },
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                        }
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.End
-                                        ) {
-                                            TextButton(
-                                                onClick = {
-                                                    mdxMountState = mdxMountState.copy(
-                                                        entries = mdxMountState.entries.filterNot { it.cacheKey == entry.cacheKey }
-                                                    )
-                                                    saveMdxMountState(context, mdxMountState)
-                                                    invalidateDictionaryLookupCaches()
-                                                }
-                                            ) {
-                                                Text(stringResource(R.string.mdx_remove))
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(
-                            onClick = {
-                                mdxMountLoading = true
-                                pickMdxMountLauncher.launch(null)
-                            },
-                            enabled = !mdxMountLoading
-                        ) {
-                            Text(stringResource(R.string.mdx_add_folder))
-                        }
-                        TextButton(onClick = { mdxMountManagerVisible = false }) {
-                            Text(stringResource(R.string.common_close))
-                        }
-                    }
-                }
-            )
-        }
-
         if (languageDialogVisible) {
             AppLanguageDialog(
                 selectedAppLanguage = selectedAppLanguage,
@@ -3486,23 +3257,19 @@ private fun VersionEasterGifPopup(
                     ImageView(popupContext).apply {
                         scaleType = ImageView.ScaleType.FIT_CENTER
                         adjustViewBounds = true
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                            val animated = runCatching {
-                                ImageDecoder.decodeDrawable(
-                                    ImageDecoder.createSource(resources, R.raw.easter_chibi)
-                                )
-                            }.getOrNull()
-                            if (animated != null) {
-                                setImageDrawable(animated)
-                                (animated as? AnimatedImageDrawable)?.apply {
-                                    repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
-                                    start()
-                                }
-                            } else {
-                                setImageResource(R.mipmap.ic_launcher_foreground)
+                        val animated = runCatching {
+                            ImageDecoder.decodeDrawable(
+                                ImageDecoder.createSource(resources, R.raw.easter_chibi)
+                            )
+                        }.getOrNull()
+                        if (animated != null) {
+                            setImageDrawable(animated)
+                            (animated as? AnimatedImageDrawable)?.apply {
+                                repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+                                start()
                             }
                         } else {
-                            setImageResource(R.mipmap.ic_launcher_foreground)
+                            setImageResource(R.mipmap.ic_launcher)
                         }
                     }
                 }
@@ -3526,7 +3293,7 @@ private fun resolveAppVersionCode(context: Context): Long {
     return runCatching {
         @Suppress("DEPRECATION")
         val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) packageInfo.longVersionCode else packageInfo.versionCode.toLong()
+        packageInfo.longVersionCode
     }.getOrDefault(-1L)
 }
 

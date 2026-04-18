@@ -22,7 +22,7 @@ Export to Anki (Only support japanese now)
 
 ### Extended Features
 - [Control Mode](#control-mode)
-- [Floating Bubble](#floating-bubble)
+- [Floating Overlay](#floating-overlay)
 - Sentence bookmarking
 - [Controller](#controller) support
 
@@ -103,13 +103,16 @@ Used for gesture-based control.
 
 In control mode, the screen does not turn off naturally.
 
-## Floating Bubble
+## Floating Overlay
 
 Enable in `Settings -> Audiobooks`.
 
-While playing an audiobook, return to home/switch apps to show it.
+In `Test Floating Overlay`, you can switch:
+floating subtitles / floating bubble / floating subtitles + floating bubble.
 
-Single tap: Play/Pause.  
+While playing an audiobook, return to home or switch apps to show it.
+
+Floating bubble:  
 Double tap: Expand the control bar.
 
 ## Credits
@@ -121,6 +124,9 @@ Double tap: Expand the control bar.
 - [Voice](https://github.com/PaulWoitaschek/Voice)
 - [AudioConverter](https://github.com/renezuidhof/AudioConverter)
 - [taglib](https://github.com/Kyant0/taglib)
+- [Ciyue](https://github.com/mumu-lhl/Ciyue/)
+- [APlayer](https://github.com/rRemix/APlayer)
+- [mdict-rs](https://crates.io/crates/mdict-rs)
 
 ## License
 

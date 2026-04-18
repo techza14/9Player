@@ -54,7 +54,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private fun hasOverlayPermission(context: Context): Boolean {
-    return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
+    return Settings.canDrawOverlays(context)
 }
 
 internal fun startAudiobookFloatingOverlayService(context: Context) {
@@ -303,12 +303,7 @@ companion object {
     }
 
     private fun createOverlayLayoutParams(x: Int, y: Int): WindowManager.LayoutParams {
-        val windowType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
+        val windowType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         return WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -1693,12 +1688,7 @@ companion object {
     }
 
     private fun createFloatingLookupWindowLayoutParams(position: IntOffset): WindowManager.LayoutParams {
-        val windowType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
+        val windowType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         return WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,

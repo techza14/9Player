@@ -6,10 +6,10 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.graphics.Bitmap
-import android.os.Build
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerNotificationManager
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +22,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.Locale
 
+@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 internal class PlaybackNotificationController(
     context: Context,
     private val player: Player,
@@ -167,7 +168,6 @@ internal class PlaybackNotificationController(
     }
 
     private fun ensureNotificationChannel(context: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val notificationService = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             ?: return
         val existing = notificationService.getNotificationChannel(CHANNEL_ID)
