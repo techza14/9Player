@@ -105,12 +105,12 @@ In control mode, the screen does not turn off naturally.
 
 ## Floating Overlay
 
-Enable in `Settings -> Audiobooks`.
+Enable in `Settings -> Audiobooks`.  
 
-In `Test Floating Overlay`, you can switch:
-floating subtitles / floating bubble / floating subtitles + floating bubble.
+In `Test Floating Overlay`, you can switch:  
+floating subtitles / floating bubble / floating subtitles + floating bubble.  
 
-While playing an audiobook, return to home or switch apps to show it.
+While playing an audiobook, return to home or switch apps to show it.  
 
 Floating bubble:  
 Double tap: Expand the control bar.
