@@ -3269,7 +3269,7 @@ private fun VersionEasterGifPopup(
                                 start()
                             }
                         } else {
-                            setImageResource(R.mipmap.ic_launcher)
+                            setImageResource(R.mipmap.ic_launcher_foreground)
                         }
                     }
                 }
