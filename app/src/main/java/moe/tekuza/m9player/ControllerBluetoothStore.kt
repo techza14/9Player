@@ -1,5 +1,6 @@
 package moe.tekuza.m9player
 
+import android.annotation.SuppressLint
 import android.Manifest
 import android.bluetooth.BluetoothClass
 import android.bluetooth.BluetoothDevice
@@ -64,6 +65,7 @@ internal fun saveControllerBluetoothBehaviorConfig(
         .apply()
 }
 
+@SuppressLint("MissingPermission")
 internal fun detectConnectedControllerInfo(context: Context): TargetControllerInfo? {
     val fromInput = detectControllerInfoFromInputDevices()
     if (fromInput != null) {
@@ -157,6 +159,7 @@ private fun readInputDeviceBluetoothAddress(device: InputDevice): String? {
     return address
 }
 
+@SuppressLint("MissingPermission")
 private fun scoreLikelyController(device: BluetoothDevice): Int {
     var score = 0
     val name = device.name?.lowercase(Locale.US).orEmpty()

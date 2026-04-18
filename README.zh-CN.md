@@ -105,13 +105,16 @@ Anki模板:[Lapis](https://github.com/donkuri/lapis)
 用于手势操控  
 处于控制模式时，屏幕不会自然熄屏。
 
-## 悬浮球
+## 悬浮窗
 
-悬浮球 设置 -> 有声书 可开启  
+设置 -> 有声书 可开启  
+测试悬浮窗可切换：  
+悬浮字幕/悬浮球/悬浮字幕+悬浮球
+
 播放有声书时 回到桌面/切换app 即可显示
 
-Single tap: Play/Pause.  
-Double tap: Expand the control bar.
+悬浮球：  
+双击：展开控制栏
 
 ##  特别感谢
 
@@ -122,6 +125,9 @@ Double tap: Expand the control bar.
 - [Voice](https://github.com/PaulWoitaschek/Voice)
 - [AudioConverter](https://github.com/renezuidhof/AudioConverter)
 - [taglib](https://github.com/Kyant0/taglib)
+- [Ciyue](https://github.com/mumu-lhl/Ciyue/)
+- [APlayer](https://github.com/rRemix/APlayer)
+- [mdict-rs](https://crates.io/crates/mdict-rs)
 
 ## License
 

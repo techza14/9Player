@@ -19,6 +19,7 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
@@ -95,6 +96,7 @@ private val NON_ALNUM_TEMPLATE_KEY_REGEX = Regex("[^a-z0-9]")
 private val DICTIONARY_TOKEN_STRIP_REGEX = Regex("[\\s\\p{Punct}\\p{S}]")
 private val ANKI_LINK_TAG_REGEX = Regex("(?is)<link\\b[^>]*>")
 private val ANKI_IMG_TAG_REGEX = Regex("(?is)<img\\b[^>]*>")
+private val ANKI_STYLE_TAG_REGEX = Regex("(?is)<style\\b[^>]*>(.*?)</style>")
 private val ANKI_ATTR_QUOTED_REGEX = Regex("(?i)\\b%s\\s*=\\s*(['\"])(.*?)\\1")
 private val ANKI_ATTR_UNQUOTED_REGEX = Regex("(?i)\\b%s\\s*=\\s*([^\\s\"'<>`]+)")
 private val ANKI_URI_SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
@@ -520,7 +522,15 @@ private fun rewriteHtmlForAnkiExport(
     }
 
     val cssChunks = mutableListOf<String>()
-    var output = ANKI_LINK_TAG_REGEX.replace(html) { match ->
+    val cssSet = linkedSetOf<String>()
+    var output = ANKI_STYLE_TAG_REGEX.replace(html) { match ->
+        val css = match.groupValues.getOrNull(1).orEmpty().trim()
+        if (css.isNotBlank() && cssSet.add(css)) {
+            cssChunks += css
+        }
+        ""
+    }
+    output = ANKI_LINK_TAG_REGEX.replace(output) { match ->
         val tag = match.value
         val rel = findHtmlAttributeValue(tag, "rel")?.lowercase(Locale.ROOT).orEmpty()
         if (!rel.contains("stylesheet")) return@replace tag
@@ -531,7 +541,10 @@ private fun rewriteHtmlForAnkiExport(
             openInputStreamForUri(context, hrefUri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
         }.getOrNull()
         if (cssText.isNullOrBlank()) return@replace tag
-        cssChunks += cssText
+        val normalizedCss = cssText.trim()
+        if (normalizedCss.isNotBlank() && cssSet.add(normalizedCss)) {
+            cssChunks += normalizedCss
+        }
         ""
     }
     if (cssChunks.isNotEmpty()) {
@@ -901,14 +914,15 @@ private fun buildStyledGlossary(
     val safeName = escapeHtmlText(dictName)
     val safeAttr = escapeHtmlAttribute(dictName)
     val scopedCss = buildScopedDictionaryCss(dictionaryCss.orEmpty(), dictName)
+    val styleBlock = if (scopedCss.isBlank()) "" else "<style>$scopedCss</style>"
     return """
         <div style="text-align: left;" class="yomitan-glossary">
             <ol>
                 <li data-dictionary="$safeAttr">
                     <i>($safeName)</i> <span>$body</span>
                 </li>
-                <style>$scopedCss</style>
             </ol>
+            $styleBlock
         </div>
     """.trimIndent()
 }
@@ -1332,10 +1346,8 @@ private fun stageAudioInMediaStore(
     val values = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
         put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.MediaColumns.RELATIVE_PATH, "Music/tset")
-            put(MediaStore.MediaColumns.IS_PENDING, 1)
-        }
+        put(MediaStore.MediaColumns.RELATIVE_PATH, "Music/tset")
+        put(MediaStore.MediaColumns.IS_PENDING, 1)
     }
 
     val stagedUri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values) ?: return null
@@ -1346,12 +1358,10 @@ private fun stageAudioInMediaStore(
             } ?: error("Cannot open MediaStore output stream.")
         } ?: error("Cannot open audio input stream.")
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val publishValues = ContentValues().apply {
-                put(MediaStore.MediaColumns.IS_PENDING, 0)
-            }
-            resolver.update(stagedUri, publishValues, null, null)
+        val publishValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.IS_PENDING, 0)
         }
+        resolver.update(stagedUri, publishValues, null, null)
 
         StagedAnkiAudio(
             uri = stagedUri,
@@ -1507,6 +1517,7 @@ private fun createCueAudioClip(
     return null
 }
 
+@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 private fun createCueAudioClipByExoDecodeToWav(
     context: Context,
     sourceUri: Uri,
@@ -1659,6 +1670,7 @@ private fun createCueAudioClipByExoDecodeToWav(
     return wavFile
 }
 
+@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 private fun createCueAudioClipByRemux(
     context: Context,
     sourceUri: Uri,
@@ -1761,7 +1773,15 @@ private fun createCueAudioClipByRemux(
             if (sampleTimeUs > endUs) break
 
             bufferInfo.presentationTimeUs = sampleTimeUs - startUs
-            bufferInfo.flags = extractor.sampleFlags
+            val sampleFlags = extractor.sampleFlags
+            var codecFlags = 0
+            if ((sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC) != 0) {
+                codecFlags = codecFlags or MediaCodec.BUFFER_FLAG_KEY_FRAME
+            }
+            if ((sampleFlags and MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME) != 0) {
+                codecFlags = codecFlags or MediaCodec.BUFFER_FLAG_PARTIAL_FRAME
+            }
+            bufferInfo.flags = codecFlags
             muxer.writeSampleData(outputTrack, buffer, bufferInfo)
             wroteAnySample = true
 
@@ -1792,6 +1812,7 @@ private fun createCueAudioClipByRemux(
     }
 }
 
+@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 private fun transcodeAudioToM4a(
     context: Context,
     sourceUri: Uri,
@@ -2094,6 +2115,7 @@ private fun createCueMp3ClipBySampleCopy(
     }
 }
 
+@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 private fun createCueAudioClipByTransformer(
     context: Context,
     sourceUri: Uri,

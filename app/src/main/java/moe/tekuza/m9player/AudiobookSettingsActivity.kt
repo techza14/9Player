@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import java.io.File
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -671,7 +672,7 @@ internal fun overlayModeLabel(context: android.content.Context, mode: FloatingOv
 }
 
 private fun canDrawOverlaysCompat(context: android.content.Context): Boolean {
-    return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
+    return Settings.canDrawOverlays(context)
 }
 
 private fun persistLookupAudioReadPermission(context: android.content.Context, uri: Uri) {
@@ -841,9 +842,9 @@ private fun formatBytes(bytes: Long): String {
     val mb = kb * 1024.0
     val gb = mb * 1024.0
     return when {
-        safe >= gb -> String.format("%.2f GB", safe / gb)
-        safe >= mb -> String.format("%.2f MB", safe / mb)
-        safe >= kb -> String.format("%.2f KB", safe / kb)
+        safe >= gb -> String.format(Locale.US, "%.2f GB", safe / gb)
+        safe >= mb -> String.format(Locale.US, "%.2f MB", safe / mb)
+        safe >= kb -> String.format(Locale.US, "%.2f KB", safe / kb)
         else -> "$safe B"
     }
 }

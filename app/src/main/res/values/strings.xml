@@ -40,25 +40,18 @@
     <string name="settings_section_advanced">进阶</string>
     <string name="settings_section_about">关于</string>
     <string name="settings_audiobook_title">有声书</string>
-    <string name="settings_audiobook_subtitle">播放步长、查词行为、悬浮球和导入方式</string>
     <string name="settings_control_mode_title">控制模式</string>
-    <string name="settings_control_mode_subtitle">黑屏、省电和控制方式</string>
     <string name="settings_controller_title">手柄</string>
-    <string name="settings_controller_subtitle">按键映射、蓝牙断开和 Shizuku 相关设置</string>
     <string name="settings_anki_title">Anki</string>
-    <string name="settings_anki_subtitle">牌组、模板字段和导出音频</string>
     <string name="settings_mdx_title">MDX</string>
     <string name="settings_language_title">语言</string>
     <string name="settings_language_follow_system">跟随系统</string>
-    <string name="settings_language_subtitle">切换应用界面语言</string>
     <string name="settings_guide_title">使用说明</string>
-    <string name="settings_guide_subtitle">打开 GitHub 项目主页</string>
     <string name="settings_export_diagnostics_title">导出诊断</string>
     <string name="settings_export_diagnostics_subtitle">导出版本、设备、最近日志和当前设置摘要</string>
     <string name="settings_export_diagnostics_subject">9Player 诊断信息</string>
     <string name="settings_export_diagnostics_failed">导出诊断失败。</string>
     <string name="settings_version_title">当前版本</string>
-    <string name="settings_version_subtitle">点击显示版本，连续点击 5 次显示彩蛋</string>
     <string name="settings_version_toast">当前版本：%1$s</string>
     <string name="settings_open_link_failed">无法打开链接。</string>
     <string name="settings_language_dialog_title">语言</string>
@@ -83,7 +76,7 @@
     <string name="dictionary_summary">辞典：%1$d（共 %2$d 条）</string>
     <string name="dictionary_importing">正在导入辞典...</string>
     <string name="dictionary_error">辞典错误：%1$s</string>
-    <string name="dictionary_error_pick_mdx_or_zip">请选择 .mdx 或 .zip 辞典文件</string>
+    <string name="dictionary_error_pick_zip_only">请选择 .zip 辞典文件</string>
     <string name="dictionary_import">导入辞典</string>
     <string name="dictionary_hide_list">隐藏辞典列表</string>
     <string name="dictionary_show_list">查看辞典列表</string>
@@ -94,9 +87,6 @@
     <string name="dictionary_query_label">查词</string>
     <string name="dictionary_query_button">查询</string>
     <string name="dictionary_querying">正在查询辞典...</string>
-    <string name="mdx_manage">管理 MDX</string>
-    <string name="mdx_manager_title">MDX 挂载管理</string>
-    <string name="mdx_manager_empty">暂无挂载的 MDX</string>
     <string name="mdx_error_no_file">目录里没有 .mdx 文件</string>
     <string name="mdx_error_prefix">错误：%1$s</string>
     <string name="mdx_scanning">扫描中...</string>
@@ -208,7 +198,6 @@
     <string name="add_book_pick_audio">选择音频/m4b</string>
     <string name="add_book_srt_label">SRT（可选）: %1$s</string>
     <string name="add_book_pick_srt">选择字幕 SRT（可选）</string>
-    <string name="lookup_error_prefix">查询错误：%1$s</string>
     <string name="lookup_audio_enable_first">请先在设置 &gt; 有声书开启查词播放音频。</string>
     <string name="lookup_audio_empty_term">当前词条为空，无法播放。</string>
     <string name="lookup_audio_android_db_missing">未导入 android.db。</string>
@@ -276,13 +265,9 @@
     <string name="audiobook_overlay_mode_value">当前模式：%1$s</string>
     <string name="audiobook_overlay_mode_changed">已切换悬浮窗：%1$s</string>
     <string name="audiobook_overlay_test_button">测试悬浮窗</string>
-    <string name="audiobook_overlay_test_title">测试悬浮窗</string>
     <string name="audiobook_overlay_mode_subtitle">悬浮字幕</string>
     <string name="audiobook_overlay_mode_bubble">悬浮球</string>
     <string name="audiobook_overlay_mode_both">悬浮字幕 + 悬浮球</string>
-    <string name="audiobook_overlay_bubble_enable">退出 App 后显示悬浮球</string>
-    <string name="audiobook_overlay_bubble_enabled">已开启悬浮球。</string>
-    <string name="audiobook_overlay_bubble_disabled">已关闭悬浮球。</string>
     <string name="audiobook_overlay_permission_granted">悬浮窗权限：已授予</string>
     <string name="audiobook_overlay_permission_denied">悬浮窗权限：未授予</string>
     <string name="audiobook_overlay_permission_button">授予悬浮窗权限</string>
@@ -290,9 +275,6 @@
     <string name="audiobook_overlay_size_reset_button">恢复默认大小</string>
     <string name="audiobook_overlay_size_reset">已恢复默认悬浮球大小。</string>
     <string name="audiobook_overlay_help">悬浮球：单击播放/暂停，双击展开前进/后退/收藏。</string>
-    <string name="audiobook_overlay_subtitle_enable">显示悬浮字幕</string>
-    <string name="audiobook_overlay_subtitle_enabled">已开启悬浮字幕。</string>
-    <string name="audiobook_overlay_subtitle_disabled">已关闭悬浮字幕。</string>
     <string name="audiobook_overlay_subtitle_help">悬浮字幕会显示当前播放到的字幕文本。</string>
     <string name="audiobook_overlay_subtitle_style">字幕样式</string>
     <string name="audiobook_overlay_subtitle_scroll">字幕滚动</string>
@@ -327,9 +309,6 @@
     <string name="bookreader_controls_shown">已显示播放条。</string>
     <string name="bookreader_controls_hidden">已隐藏播放条。</string>
     <string name="bookreader_control_mode_entered">已进入控制模式。</string>
-    <string name="bookreader_range_selection">范围</string>
-    <string name="bookreader_range_selection_cancel">取消范围</string>
-    <string name="bookreader_range_selection_cleared">已取消句子范围选择。</string>
     <string name="bookreader_range_select_start">请选择起点句子。</string>
     <string name="bookreader_range_start_selected">已选择起点：第 %1$d 句。</string>
     <string name="bookreader_range_end_selected">已选择范围：第 %1$d 到第 %2$d 句，共 %3$d 句。</string>
@@ -389,7 +368,6 @@
     <string name="controller_key_up">上</string>
     <string name="controller_key_down">下</string>
 
-    <string name="controller_bluetooth_title">手柄蓝牙</string>
     <string name="controller_bluetooth_target_title">目标手柄</string>
     <string name="controller_bluetooth_address">地址：%1$s</string>
     <string name="controller_bluetooth_name">名称：%1$s</string>
@@ -436,8 +414,6 @@
     <string name="anki_default_deck">默认</string>
     <string name="anki_load_failed">加载 Anki 牌组/模板失败</string>
     <string name="anki_access_granted">Anki 访问：已授权</string>
-    <string name="anki_access_denied">Anki 访问：未授权</string>
-    <string name="anki_access_button_granted">Anki 已授权</string>
     <string name="anki_access_button_request">授权 Anki 访问</string>
     <string name="anki_open_app_button">打开 AnkiDroid</string>
     <string name="anki_refresh_catalog">刷新牌组/模板</string>

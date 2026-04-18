@@ -135,6 +135,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import moe.tekuza.m9player.ui.theme.TsetTheme
 import kotlinx.coroutines.CancellationException
@@ -445,6 +446,7 @@ private enum class AdjacentJumpMode {
 }
 
 @Composable
+@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 private fun BookReaderScreen(
     title: String,
     audioUri: Uri?,

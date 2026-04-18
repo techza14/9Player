@@ -22,7 +22,7 @@
 
 ### 擴展功能
 - [控制模式](#控制模式)
-- [懸浮球](#懸浮球)
+- [懸浮窗](#懸浮窗)
 - 收藏句子
 - [手柄](#手柄)支援
 
@@ -108,14 +108,16 @@ Anki模板：[Lapis](https://github.com/donkuri/lapis)
 
 處於控制模式時，螢幕不會自然熄屏。
 
-## 懸浮球
+## 懸浮窗
 
-懸浮球在 設定 -> 有聲書 可開啟。
+設定 -> 有聲書 可開啟。
+測試懸浮窗可切換：
+懸浮字幕 / 懸浮球 / 懸浮字幕 + 懸浮球
 
-播放有聲書時回到桌面/切換 app 即可顯示。
+播放有聲書時，回到桌面 / 切換 app 即可顯示。
 
-Single tap: Play/Pause.  
-Double tap: Expand the control bar.
+懸浮球：
+雙擊：展開控制欄
 
 ## 特別感謝
 
@@ -126,6 +128,9 @@ Double tap: Expand the control bar.
 - [Voice](https://github.com/PaulWoitaschek/Voice)
 - [AudioConverter](https://github.com/renezuidhof/AudioConverter)
 - [taglib](https://github.com/Kyant0/taglib)
+- [Ciyue](https://github.com/mumu-lhl/Ciyue/)
+- [APlayer](https://github.com/rRemix/APlayer)
+- [mdict-rs](https://crates.io/crates/mdict-rs)
 
 ## License
 
