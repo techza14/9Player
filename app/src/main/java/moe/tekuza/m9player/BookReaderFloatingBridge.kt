@@ -62,6 +62,8 @@ object BookReaderFloatingBridge {
     @Volatile
     private var cueSnapshot: CueSnapshot? = null
     @Volatile
+    private var subtitleTrackAvailableSnapshot: Boolean = false
+    @Volatile
     private var playbackPositionSnapshot: Long = 0L
     @Volatile
     private var playbackSpeedSnapshot: Float = 1f
@@ -87,6 +89,7 @@ object BookReaderFloatingBridge {
                 favoriteSnapshot = false
                 subtitleSnapshot = null
                 cueSnapshot = null
+                subtitleTrackAvailableSnapshot = false
             }
         }
         notifyPlaybackState(playingSnapshot)
@@ -175,6 +178,7 @@ object BookReaderFloatingBridge {
     fun currentAudioUri(): String? = currentAudioUriSnapshot
     fun currentSubtitle(): String? = subtitleSnapshot
     fun currentCue(): CueSnapshot? = cueSnapshot
+    fun hasSubtitleTrack(): Boolean = subtitleTrackAvailableSnapshot
     fun currentPlaybackPositionMs(): Long = playbackPositionSnapshot
     fun currentPlaybackSpeed(): Float = playbackSpeedSnapshot
 
@@ -210,6 +214,10 @@ object BookReaderFloatingBridge {
                 )
             }
         }
+    }
+
+    fun setSubtitleTrackAvailable(available: Boolean) {
+        subtitleTrackAvailableSnapshot = available
     }
 
     fun notifySubtitle(text: String?) {

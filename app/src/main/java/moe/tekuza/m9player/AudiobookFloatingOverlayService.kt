@@ -238,6 +238,8 @@ companion object {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun hasSubtitleTimeline(): Boolean = BookReaderFloatingBridge.hasSubtitleTrack()
+
     private fun ensureOverlayVisible() {
         if (!hasOverlayPermission(this)) {
             stopSelf()
@@ -252,10 +254,15 @@ companion object {
             stopSelf()
             return
         }
+        val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleTimeline()
+        if (!settings.floatingOverlayEnabled && !subtitleEnabledByData) {
+            stopSelf()
+            return
+        }
         val density = resources.displayMetrics.density
         val bubbleSizeDp = settings.floatingOverlaySizeDp
         val bubbleSizePx = (bubbleSizeDp * density).toInt()
-        if (settings.floatingOverlaySubtitleEnabled) {
+        if (subtitleEnabledByData) {
             if (rootView == null) {
                 val container = FrameLayout(this).apply {
                     clipChildren = false
@@ -295,7 +302,7 @@ companion object {
         }
         updateBubbleIcon(BookReaderFloatingBridge.isPlaying())
         updatePlayPauseIcon(BookReaderFloatingBridge.isPlaying())
-        if (settings.floatingOverlaySubtitleEnabled) {
+        if (subtitleEnabledByData) {
             updateSubtitleText(BookReaderFloatingBridge.currentSubtitle())
             updateSubtitleControlsVisibility(settings)
         }
@@ -924,8 +931,9 @@ companion object {
         val subtitle = subtitleTextView ?: return
         val outline = subtitleOutlineTextView
         val settings = loadAudiobookSettingsConfig(this)
+        val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleTimeline()
         val normalized = text?.trim()?.takeIf { it.isNotEmpty() }
-        if (!settings.floatingOverlaySubtitleEnabled || normalized == null) {
+        if (!subtitleEnabledByData || normalized == null) {
             subtitle.animate().cancel()
             subtitle.text = ""
             subtitle.visibility = View.GONE
@@ -1197,7 +1205,7 @@ companion object {
             }
             if (lookupRequestNonce != requestNonce) return@launch
             if (dictionaries.isEmpty()) {
-                renderFloatingLookupError(getString(R.string.bookreader_lookup_no_dict))
+                hideFloatingLookup()
                 return@launch
             }
             val result = withContext(Dispatchers.Default) {
@@ -3269,7 +3277,7 @@ companion object {
             )
             if (lookupRequestNonce != requestNonce) return@launch
             if (dictionaries.isEmpty()) {
-                renderFloatingLookupError(getString(R.string.bookreader_lookup_no_dict))
+                hideFloatingLookup()
                 return@launch
             }
             val result = withContext(Dispatchers.Default) {
