@@ -24,6 +24,7 @@ internal fun selectLookupScanText(
     while (endExclusive < text.length && (endExclusive - anchor) < maxLength) {
         val ch = text[endExclusive]
         if (isLookupScanBoundary(ch)) break
+        if (endExclusive > anchor && isParticleBoundary(text, endExclusive)) break
         endExclusive += 1
     }
     if (endExclusive <= anchor) return null
@@ -45,6 +46,24 @@ internal fun trimSelectionRangeByMatchedLength(
 
     val length = matchedLength.coerceAtLeast(1).coerceAtMost(fullLength)
     return start until (start + length)
+}
+
+private fun isParticleBoundary(text: String, index: Int): Boolean {
+    val current = text.getOrNull(index) ?: return false
+    if (current != 'の') return false
+    val next = text.getOrNull(index + 1) ?: return false
+    // Keep lookup focused on the clicked headword for patterns like:
+    // 世界の七不思議 / 国の王族 -> 世界 / 国
+    return isKanjiLike(next)
+}
+
+private fun isKanjiLike(ch: Char): Boolean {
+    return ch in '\u4E00'..'\u9FFF' ||
+        ch in '\u3400'..'\u4DBF' ||
+        ch in '\uF900'..'\uFAFF' ||
+        ch == '々' ||
+        ch == '〆' ||
+        ch == 'ヶ'
 }
 
 private fun isLookupScanBoundary(ch: Char): Boolean {

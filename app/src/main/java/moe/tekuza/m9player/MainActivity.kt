@@ -3321,7 +3321,6 @@ private fun shareDiagnosticsReport(context: Context) {
     val shareIntent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_SUBJECT, context.getString(R.string.settings_export_diagnostics_subject))
-        putExtra(Intent.EXTRA_TEXT, report)
         putExtra(Intent.EXTRA_STREAM, reportUri)
         clipData = android.content.ClipData.newUri(context.contentResolver, reportFile.name, reportUri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

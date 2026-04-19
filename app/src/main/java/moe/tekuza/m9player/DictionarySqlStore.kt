@@ -883,6 +883,11 @@ private fun searchDictionaryWithMdictNative(
         } else {
             val entriesFile = File(dictionaryStorageDir(context, cacheKey), "mdictnative/entries.ndjson")
             if (!entriesFile.isFile) return@forEachIndexed
+            logMdictIdxbinState(
+                context = "lookup-imported",
+                cacheKey = cacheKey,
+                entriesPath = entriesFile.absolutePath
+            )
             if (mediaDir?.isDirectory == false) {
                 Log.d(
                     MDICT_MEDIA_LOG_TAG,
@@ -950,6 +955,11 @@ private fun lookupMountedMdictNative(
 ): List<MdictNativeLookupHit> {
     val uri = runCatching { Uri.parse(mdxUri) }.getOrNull() ?: return emptyList()
     getMountedMdxEntriesPath(context, cacheKey, mdxUri)?.let { entriesPath ->
+        logMdictIdxbinState(
+            context = "lookup-mounted",
+            cacheKey = cacheKey,
+            entriesPath = entriesPath
+        )
         return MdictNativeBridge.lookup(
             entriesPath = entriesPath,
             query = query,
@@ -991,6 +1001,21 @@ private fun lookupMountedMdictNative(
         query = query,
         maxResults = maxResults,
         scanLength = scanLength
+    )
+}
+
+private fun logMdictIdxbinState(
+    context: String,
+    cacheKey: String,
+    entriesPath: String
+) {
+    val entriesFile = File(entriesPath)
+    val idxFile = File("$entriesPath.idxbin")
+    Log.d(
+        MDICT_MEDIA_LOG_TAG,
+        "idxbin state ctx=$context cacheKey=$cacheKey entries=${entriesFile.absolutePath} " +
+            "entriesExists=${entriesFile.isFile} entriesSize=${entriesFile.length()} " +
+            "idx=${idxFile.absolutePath} idxExists=${idxFile.isFile} idxSize=${idxFile.length()}"
     )
 }
 
@@ -1063,7 +1088,11 @@ private fun ensureMountedMdxEntriesPath(
                 entriesPath = candidate
             )
         }
-        Log.d(MDICT_MEDIA_LOG_TAG, "mounted prebuild ok cacheKey=$cacheKey entries=$candidate")
+        val idxPath = "$candidate.idxbin"
+        Log.d(
+            MDICT_MEDIA_LOG_TAG,
+            "mounted prebuild ok cacheKey=$cacheKey entries=$candidate idxExists=${File(idxPath).isFile} idxSize=${File(idxPath).length()}"
+        )
     }
     return candidate
 }
