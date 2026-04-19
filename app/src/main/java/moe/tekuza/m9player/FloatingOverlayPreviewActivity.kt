@@ -83,14 +83,17 @@ private fun FloatingOverlayPreviewRoute(
     val mode = modes[modeIndex.coerceIn(0, modes.lastIndex)]
     val context = LocalContext.current
     val previousSubtitle = remember { BookReaderFloatingBridge.currentSubtitle() }
+    val previousSubtitleTrackAvailable = remember { BookReaderFloatingBridge.hasSubtitleTrack() }
 
     BackHandler {
         onClose(mode)
     }
 
     DisposableEffect(Unit) {
+        BookReaderFloatingBridge.setSubtitleTrackAvailable(true)
         BookReaderFloatingBridge.notifySubtitle("test")
         onDispose {
+            BookReaderFloatingBridge.setSubtitleTrackAvailable(previousSubtitleTrackAvailable)
             BookReaderFloatingBridge.notifySubtitle(previousSubtitle)
         }
     }

@@ -148,7 +148,14 @@ class MainActivity : AppCompatActivity() {
         super.onStart()
         floatingOverlayStartJob?.cancel()
         floatingOverlayStartJob = null
-        stopAudiobookFloatingOverlayService(this)
+        val settings = loadAudiobookSettingsConfig(this)
+        val keepOverlay =
+            (settings.floatingOverlayEnabled || settings.floatingOverlaySubtitleEnabled) &&
+                BookReaderFloatingBridge.currentAudioUri() != null &&
+                BookReaderFloatingBridge.isPlaying()
+        if (!keepOverlay) {
+            stopAudiobookFloatingOverlayService(this)
+        }
     }
 
     override fun onStop() {
@@ -2519,10 +2526,12 @@ private fun ReaderSyncScreen() {
                             Button(onClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) }) {
                                 Text(stringResource(R.string.dictionary_import))
                             }
-                            OutlinedButton(
-                                onClick = { context.startActivity(Intent(context, MdxMountSettingsActivity::class.java)) }
-                            ) {
-                                Text(stringResource(R.string.settings_mdx_title))
+                            if (mdxMountState.enabled) {
+                                OutlinedButton(
+                                    onClick = { context.startActivity(Intent(context, MdxMountSettingsActivity::class.java)) }
+                                ) {
+                                    Text(stringResource(R.string.settings_mdx_title))
+                                }
                             }
                             OutlinedButton(
                                 onClick = { showDictionaryManager = !showDictionaryManager }
@@ -2542,14 +2551,18 @@ private fun ReaderSyncScreen() {
                                         ?: stringResource(R.string.dictionary_unloaded)
                                 )
                             }
-                            val mountedItems = mdxMountState.entries.map { entry ->
-                                CombinedDictionaryItem(
-                                    id = "mnt:${entry.cacheKey}",
-                                    type = CombinedDictionaryType.MOUNTED,
-                                    title = entry.displayName.ifBlank { "mounted.mdx" },
-                                    countText = if (entry.enabled) context.getString(R.string.mdx_dict_enabled) else context.getString(R.string.mdx_dict_disabled),
-                                    mountedEnabled = entry.enabled
-                                )
+                            val mountedItems = if (mdxMountState.enabled) {
+                                mdxMountState.entries.map { entry ->
+                                    CombinedDictionaryItem(
+                                        id = "mnt:${entry.cacheKey}",
+                                        type = CombinedDictionaryType.MOUNTED,
+                                        title = entry.displayName.ifBlank { "mounted.mdx" },
+                                        countText = if (entry.enabled) context.getString(R.string.mdx_dict_enabled) else context.getString(R.string.mdx_dict_disabled),
+                                        mountedEnabled = entry.enabled
+                                    )
+                                }
+                            } else {
+                                emptyList()
                             }
                             val combinedById = (importedItems + mountedItems).associateBy { it.id }
                             val combinedItems = buildList {

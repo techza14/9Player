@@ -211,6 +211,8 @@ class BookReaderActivity : AppCompatActivity() {
                             putExtra(EXTRA_RETURN_POSITION_MS, normalized)
                             putExtra(EXTRA_RETURN_DURATION_MS, currentDurationMs.coerceAtLeast(0L))
                         }
+                        // Exiting reader should immediately surface overlay controls.
+                        startAudiobookFloatingOverlayService(this)
                         startActivity(intent)
                     }
                 )
@@ -616,6 +618,7 @@ private fun BookReaderScreen(
     }
 
     LaunchedEffect(hasSubtitleFile) {
+        BookReaderFloatingBridge.setSubtitleTrackAvailable(hasSubtitleFile)
         if (!hasSubtitleFile && controlModeEnabled) {
             controlModeEnabled = false
             controlModeStatus = null
