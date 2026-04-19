@@ -749,8 +749,7 @@ internal fun searchDictionarySql(
         context = context,
         dictionaries = effectiveDictionaries,
         query = query,
-        maxResults = maxResults,
-        profile = profile
+        maxResults = maxResults
     )
     val mdxOnly = effectiveDictionaries.isNotEmpty() &&
         effectiveDictionaries.all { it.format.contains("MDX", ignoreCase = true) }
@@ -825,23 +824,15 @@ private fun searchDictionaryWithMdictNative(
     context: Context,
     dictionaries: List<LoadedDictionary>,
     query: String,
-    maxResults: Int,
-    profile: DictionaryQueryProfile
+    maxResults: Int
 ): List<DictionarySearchResult> {
     if (!MdictNativeBridge.isAvailable) return emptyList()
     val trimmedQuery = query.trim()
     if (trimmedQuery.isBlank()) return emptyList()
 
-    // Keep MDX branch fast by default; FULL remains for non-MDX (JMDICT/SQLite/Hoshi).
-    val mdxProfile = DictionaryQueryProfile.FAST
-    val scanLength = when (mdxProfile) {
-        DictionaryQueryProfile.FAST -> 8
-        DictionaryQueryProfile.FULL -> 16
-    }
-    val lookupLimit = when (mdxProfile) {
-        DictionaryQueryProfile.FAST -> maxResults.coerceIn(8, 48)
-        DictionaryQueryProfile.FULL -> (maxResults * 2).coerceIn(16, 96)
-    }
+    // MDX mounted path is fixed to the fast profile.
+    val scanLength = 8
+    val lookupLimit = maxResults.coerceIn(8, 48)
 
     val merged = linkedMapOf<String, DictionarySearchResult>()
     val mountedState = loadMdxMountState(context)

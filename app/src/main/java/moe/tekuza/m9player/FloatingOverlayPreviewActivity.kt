@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import moe.tekuza.m9player.ui.theme.TsetTheme
 
@@ -147,7 +148,7 @@ private fun FloatingOverlayPreviewRoute(
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
-                text = "左右滑动切换真实悬浮组件，双击退出并应用",
+                text = stringResource(R.string.audiobook_overlay_preview_swipe_hint),
                 color = Color(0xCC0F172A),
                 style = MaterialTheme.typography.bodyMedium
             )

@@ -258,6 +258,7 @@
     <string name="audiobook_overlay_mode_value">現在のモード：%1$s</string>
     <string name="audiobook_overlay_mode_changed">フローティングを切り替えました：%1$s</string>
     <string name="audiobook_overlay_test_button">フローティングをテスト</string>
+    <string name="audiobook_overlay_preview_swipe_hint">左右にスワイプして実際のフローティングを切り替え、ダブルタップで終了して適用します。</string>
     <string name="audiobook_overlay_mode_subtitle">フローティング字幕</string>
     <string name="audiobook_overlay_mode_bubble">フローティングバブル</string>
     <string name="audiobook_overlay_mode_both">字幕 + バブル</string>

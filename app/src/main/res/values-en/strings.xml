@@ -258,6 +258,7 @@
     <string name="audiobook_overlay_mode_value">Current mode: %1$s</string>
     <string name="audiobook_overlay_mode_changed">Floating overlay changed to: %1$s</string>
     <string name="audiobook_overlay_test_button">Test overlay</string>
+    <string name="audiobook_overlay_preview_swipe_hint">Swipe left or right to switch real overlay components. Double tap to exit and apply.</string>
     <string name="audiobook_overlay_mode_subtitle">Floating subtitles</string>
     <string name="audiobook_overlay_mode_bubble">Floating bubble</string>
     <string name="audiobook_overlay_mode_both">Subtitles + bubble</string>

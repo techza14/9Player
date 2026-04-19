@@ -265,6 +265,7 @@
     <string name="audiobook_overlay_mode_value">当前模式：%1$s</string>
     <string name="audiobook_overlay_mode_changed">已切换悬浮窗：%1$s</string>
     <string name="audiobook_overlay_test_button">测试悬浮窗</string>
+    <string name="audiobook_overlay_preview_swipe_hint">左右滑动切换真实悬浮组件，双击退出并应用</string>
     <string name="audiobook_overlay_mode_subtitle">悬浮字幕</string>
     <string name="audiobook_overlay_mode_bubble">悬浮球</string>
     <string name="audiobook_overlay_mode_both">悬浮字幕 + 悬浮球</string>

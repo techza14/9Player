@@ -27,11 +27,6 @@ static LOOKUP_CACHE: Lazy<Mutex<HashMap<String, Arc<LookupIndex>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 const LOOKUP_INDEX_BIN_MAGIC: u32 = 0x4D49_4458; // "MIDX"
 const LOOKUP_INDEX_BIN_VERSION: u32 = 1;
-const LOG_TAG: &str = "MdictMedia";
-
-fn mdict_log(message: &str) {
-    eprintln!("{LOG_TAG}: {}", message.replace('\0', ""));
-}
 
 fn c_ptr_to_string(ptr: *const c_char) -> Result<String, String> {
     if ptr.is_null() {
@@ -277,17 +272,12 @@ fn load_lookup_index(entries_path: &str) -> Result<Arc<LookupIndex>, String> {
         .get(entries_path)
         .cloned()
     {
-        mdict_log(&format!("idxbin runtime cache hit entries={entries_path}"));
         return Ok(cached);
     }
 
     let parsed_entries = match load_lookup_entries_binary(entries_path) {
-        Ok(entries) => {
-            mdict_log(&format!("idxbin hit entries={entries_path} count={}", entries.len()));
-            entries
-        }
-        Err(error) => {
-            mdict_log(&format!("idxbin miss entries={entries_path} reason={error}"));
+        Ok(entries) => entries,
+        Err(_) => {
             let file = File::open(entries_path).map_err(|e| format!("open entries failed: {e}"))?;
             let reader = BufReader::new(file);
             let mut entries = Vec::<NativeEntry>::new();
@@ -331,10 +321,7 @@ fn load_lookup_index(entries_path: &str) -> Result<Arc<LookupIndex>, String> {
                     normalized_term,
                 });
             }
-            match save_lookup_entries_binary(entries_path, &entries) {
-                Ok(_) => mdict_log(&format!("idxbin rebuild ok entries={entries_path} count={}", entries.len())),
-                Err(e) => mdict_log(&format!("idxbin rebuild failed entries={entries_path} error={e}")),
-            }
+            let _ = save_lookup_entries_binary(entries_path, &entries);
             entries
         }
     };
