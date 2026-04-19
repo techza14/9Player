@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.database.sqlite.SQLiteStatement
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import android.util.Log
@@ -134,6 +135,25 @@ private val dictionaryTermIndexCache =
             return size > DICTIONARY_TERM_INDEX_CACHE_LIMIT
         }
     }
+
+private data class MountedMdxFdHandle(
+    val mdxUri: String,
+    val pfd: ParcelFileDescriptor
+)
+
+private data class MountedMdxFallbackPath(
+    val mdxUri: String,
+    val filePath: String
+)
+
+private data class MountedMdxEntriesIndex(
+    val mdxUri: String,
+    val entriesPath: String
+)
+
+private val mountedMdxFdHandleCache = mutableMapOf<String, MountedMdxFdHandle>()
+private val mountedMdxFallbackPathCache = mutableMapOf<String, MountedMdxFallbackPath>()
+private val mountedMdxEntriesIndexCache = mutableMapOf<String, MountedMdxEntriesIndex>()
 
 
 private class DictionaryDbHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
@@ -465,6 +485,7 @@ private fun clearDictionaryLookupQueryCache() {
 
 internal fun invalidateDictionaryLookupCaches() {
     clearDictionaryLookupQueryCache()
+    clearMountedMdxRuntimeCaches()
     HoshiNativeBridge.clearLookupCache()
     MdictNativeBridge.clearLookupCache()
 }
@@ -705,14 +726,13 @@ internal fun searchDictionarySql(
     )
     val dictionariesKey = buildLookupCacheDictionariesKey(effectiveDictionaries)
     if (dictionariesKey.isBlank()) return emptyList()
-    val hasMountedMdx = effectiveDictionaries.any { it.format.contains("mounted", ignoreCase = true) }
     val lookupCacheKey = DictionaryLookupQueryCacheKey(
         dictionariesKey = dictionariesKey,
         normalizedQuery = normalizedQuery,
         maxResults = maxResults,
         profile = profile
     )
-    val cached = if (hasMountedMdx) null else loadDictionaryLookupQueryCache(lookupCacheKey)
+    val cached = loadDictionaryLookupQueryCache(lookupCacheKey)
     if (cached != null) {
         Log.d(DICTIONARY_LOOKUP_TAG, "search cacheHit count=${cached.size} query=$normalizedQuery")
         return cached
@@ -764,7 +784,7 @@ internal fun searchDictionarySql(
         DICTIONARY_LOOKUP_TAG,
         "search done hoshi=${hoshiResults.size} mdictNative=${mdictNativeResults.size} sqlite=${sqliteResults.size} merged=${results.size} query=$normalizedQuery"
     )
-    if (!hasMountedMdx || results.isNotEmpty()) {
+    if (results.isNotEmpty()) {
         saveDictionaryLookupQueryCache(lookupCacheKey, results)
     }
     return results
@@ -812,11 +832,13 @@ private fun searchDictionaryWithMdictNative(
     val trimmedQuery = query.trim()
     if (trimmedQuery.isBlank()) return emptyList()
 
-    val scanLength = when (profile) {
+    // Keep MDX branch fast by default; FULL remains for non-MDX (JMDICT/SQLite/Hoshi).
+    val mdxProfile = DictionaryQueryProfile.FAST
+    val scanLength = when (mdxProfile) {
         DictionaryQueryProfile.FAST -> 8
         DictionaryQueryProfile.FULL -> 16
     }
-    val lookupLimit = when (profile) {
+    val lookupLimit = when (mdxProfile) {
         DictionaryQueryProfile.FAST -> maxResults.coerceIn(8, 48)
         DictionaryQueryProfile.FULL -> (maxResults * 2).coerceIn(16, 96)
     }
@@ -927,25 +949,41 @@ private fun lookupMountedMdictNative(
     scanLength: Int
 ): List<MdictNativeLookupHit> {
     val uri = runCatching { Uri.parse(mdxUri) }.getOrNull() ?: return emptyList()
-    val pfd = runCatching { context.contentResolver.openFileDescriptor(uri, "r") }.getOrNull()
-    if (pfd != null) {
-        pfd.use {
-            val fdPath = "/proc/self/fd/${it.fd}"
-            Log.d(MDICT_MEDIA_LOG_TAG, "mounted lookup start cacheKey=$cacheKey query=$query fd=${it.fd}")
-            val hits = MdictNativeBridge.lookupMdx(
-                mdxPath = fdPath,
-                cacheKey = cacheKey,
-                query = query,
-                maxResults = maxResults,
-                scanLength = scanLength
-            )
-            if (hits.isNotEmpty()) return hits
-            Log.d(MDICT_MEDIA_LOG_TAG, "mounted lookup fd path returned empty, fallback to temp file")
-        }
+    getMountedMdxEntriesPath(context, cacheKey, mdxUri)?.let { entriesPath ->
+        return MdictNativeBridge.lookup(
+            entriesPath = entriesPath,
+            query = query,
+            maxResults = maxResults,
+            scanLength = scanLength
+        )
+    }
+    getMountedMdxFallbackPath(cacheKey, mdxUri)?.takeIf { File(it).isFile }?.let { fallbackPath ->
+        return MdictNativeBridge.lookupMdx(
+            mdxPath = fallbackPath,
+            cacheKey = cacheKey,
+            query = query,
+            maxResults = maxResults,
+            scanLength = scanLength
+        )
+    }
+
+    val fdPath = getOrCreateMountedMdxFdPath(context, cacheKey, uri, mdxUri)
+    if (fdPath != null) {
+        val hits = MdictNativeBridge.lookupMdx(
+            mdxPath = fdPath,
+            cacheKey = cacheKey,
+            query = query,
+            maxResults = maxResults,
+            scanLength = scanLength
+        )
+        if (hits.isNotEmpty()) return hits
+        Log.d(MDICT_MEDIA_LOG_TAG, "mounted lookup fd path returned empty, fallback to temp file")
     } else {
         Log.d(MDICT_MEDIA_LOG_TAG, "mounted lookup openFileDescriptor failed, fallback to temp file")
     }
+
     val fallbackFile = materializeMountedMdxTempFile(context, uri, cacheKey) ?: return emptyList()
+    cacheMountedMdxFallbackPath(cacheKey, mdxUri, fallbackFile.absolutePath)
     Log.d(MDICT_MEDIA_LOG_TAG, "mounted lookup fallback file=${fallbackFile.absolutePath}")
     return MdictNativeBridge.lookupMdx(
         mdxPath = fallbackFile.absolutePath,
@@ -966,6 +1004,152 @@ private fun materializeMountedMdxTempFile(context: Context, uri: Uri, cacheKey: 
         } ?: return null
         out
     }.getOrNull()
+}
+
+private fun mountedMdxNativeIndexDir(context: Context, cacheKey: String): File {
+    val dir = File(dictionaryStorageDir(context, cacheKey), "mdictnative_mounted")
+    if (!dir.exists()) dir.mkdirs()
+    return dir
+}
+
+private fun getMountedMdxEntriesPath(
+    context: Context,
+    cacheKey: String,
+    mdxUri: String
+): String? {
+    synchronized(mountedMdxEntriesIndexCache) {
+        val cached = mountedMdxEntriesIndexCache[cacheKey]
+        if (cached != null && cached.mdxUri == mdxUri && File(cached.entriesPath).isFile) {
+            return cached.entriesPath
+        }
+    }
+    val dir = mountedMdxNativeIndexDir(context, cacheKey)
+    val persisted = File(dir, "entries.ndjson")
+    if (persisted.isFile) {
+        synchronized(mountedMdxEntriesIndexCache) {
+            mountedMdxEntriesIndexCache[cacheKey] = MountedMdxEntriesIndex(
+                mdxUri = mdxUri,
+                entriesPath = persisted.absolutePath
+            )
+        }
+        return persisted.absolutePath
+    }
+    return ensureMountedMdxEntriesPath(context, cacheKey, mdxUri)
+}
+
+private fun ensureMountedMdxEntriesPath(
+    context: Context,
+    cacheKey: String,
+    mdxUri: String
+): String? {
+    val uri = runCatching { Uri.parse(mdxUri) }.getOrNull() ?: return null
+    val tempMdx = materializeMountedMdxTempFile(context, uri, cacheKey) ?: return null
+    val outDir = mountedMdxNativeIndexDir(context, cacheKey)
+    val result = MdictNativeBridge.importMdx(tempMdx.absolutePath, outDir.absolutePath)
+    if (!result.success) {
+        Log.d(
+            MDICT_MEDIA_LOG_TAG,
+            "mounted prebuild failed cacheKey=$cacheKey mdxUri=$mdxUri errors=${result.errors.joinToString("|")}"
+        )
+        return null
+    }
+    val candidate = result.entriesFile
+        .takeIf { it.isNotBlank() && File(it).isFile }
+        ?: File(outDir, "entries.ndjson").absolutePath.takeIf { File(it).isFile }
+    if (candidate != null) {
+        synchronized(mountedMdxEntriesIndexCache) {
+            mountedMdxEntriesIndexCache[cacheKey] = MountedMdxEntriesIndex(
+                mdxUri = mdxUri,
+                entriesPath = candidate
+            )
+        }
+        Log.d(MDICT_MEDIA_LOG_TAG, "mounted prebuild ok cacheKey=$cacheKey entries=$candidate")
+    }
+    return candidate
+}
+
+internal fun prebuildMountedMdxIndexesAsync(
+    context: Context,
+    state: MdxMountState = loadMdxMountState(context)
+) {
+    if (!state.enabled) return
+    val targets = state.entries.filter { it.enabled && it.cacheKey.isNotBlank() && it.mdxUri.isNotBlank() }
+    if (targets.isEmpty()) return
+    Thread {
+        targets.forEach { entry ->
+            runCatching {
+                ensureMountedMdxEntriesPath(
+                    context = context.applicationContext,
+                    cacheKey = entry.cacheKey,
+                    mdxUri = entry.mdxUri
+                )
+            }
+        }
+    }.apply {
+        name = "mdx-prebuild"
+        isDaemon = true
+        start()
+    }
+}
+
+private fun getOrCreateMountedMdxFdPath(
+    context: Context,
+    cacheKey: String,
+    uri: Uri,
+    mdxUri: String
+): String? {
+    synchronized(mountedMdxFdHandleCache) {
+        val existing = mountedMdxFdHandleCache[cacheKey]
+        if (existing != null) {
+            if (existing.mdxUri == mdxUri) {
+                return "/proc/self/fd/${existing.pfd.fd}"
+            }
+            runCatching { existing.pfd.close() }
+            mountedMdxFdHandleCache.remove(cacheKey)
+        }
+        val pfd = runCatching { context.contentResolver.openFileDescriptor(uri, "r") }.getOrNull()
+            ?: return null
+        mountedMdxFdHandleCache[cacheKey] = MountedMdxFdHandle(mdxUri = mdxUri, pfd = pfd)
+        return "/proc/self/fd/${pfd.fd}"
+    }
+}
+
+private fun cacheMountedMdxFallbackPath(cacheKey: String, mdxUri: String, filePath: String) {
+    synchronized(mountedMdxFallbackPathCache) {
+        mountedMdxFallbackPathCache[cacheKey] = MountedMdxFallbackPath(
+            mdxUri = mdxUri,
+            filePath = filePath
+        )
+    }
+}
+
+private fun getMountedMdxFallbackPath(cacheKey: String, mdxUri: String): String? {
+    return synchronized(mountedMdxFallbackPathCache) {
+        val existing = mountedMdxFallbackPathCache[cacheKey] ?: return null
+        if (existing.mdxUri != mdxUri) return null
+        existing.filePath
+    }
+}
+
+private fun clearMountedMdxRuntimeCaches() {
+    synchronized(mountedMdxFdHandleCache) {
+        mountedMdxFdHandleCache.values.forEach { handle ->
+            runCatching { handle.pfd.close() }
+        }
+        mountedMdxFdHandleCache.clear()
+    }
+    synchronized(mountedMdxFallbackPathCache) {
+        mountedMdxFallbackPathCache.values.forEach { cached ->
+            runCatching {
+                val file = File(cached.filePath)
+                if (file.exists()) file.delete()
+            }
+        }
+        mountedMdxFallbackPathCache.clear()
+    }
+    synchronized(mountedMdxEntriesIndexCache) {
+        mountedMdxEntriesIndexCache.clear()
+    }
 }
 
 private fun searchDictionaryWithSqlite(

@@ -51,6 +51,8 @@ internal fun saveMdxMountState(context: Context, state: MdxMountState) {
         .putBoolean(KEY_ENABLED, normalized.enabled)
         .putString(KEY_ENTRIES_JSON, json.toString())
         .apply()
+    invalidateDictionaryLookupCaches()
+    prebuildMountedMdxIndexesAsync(context.applicationContext, normalized)
 }
 
 private fun parseEntriesJson(raw: String?): List<MdxMountedEntry> {
