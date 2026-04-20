@@ -229,6 +229,9 @@
     <string name="audiobook_lookup_range_selection_enable">开启选中范围功能</string>
     <string name="audiobook_lookup_range_selection_enabled">已开启：可以在查词弹窗中选择句子范围。</string>
     <string name="audiobook_lookup_range_selection_disabled">已关闭：已隐藏句子范围功能。</string>
+    <string name="audiobook_lookup_root_full_width_enable">首层弹窗全宽</string>
+    <string name="audiobook_lookup_root_full_width_enabled">已开启：仅书内第一层查词弹窗全宽并显示在下方。</string>
+    <string name="audiobook_lookup_root_full_width_disabled">已关闭：书内查词弹窗使用默认布局。</string>
     <string name="audiobook_play_audio">播放音频</string>
     <string name="audiobook_play_audio_enabled">已开启：查词时可播放音频。</string>
     <string name="audiobook_play_audio_disabled">已关闭：查词时播放音频。</string>

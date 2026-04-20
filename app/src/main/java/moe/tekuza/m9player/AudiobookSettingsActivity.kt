@@ -451,6 +451,28 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                         )
                     }
                 }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.audiobook_lookup_root_full_width_enable),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
+                    Switch(
+                        checked = config.lookupRootFullWidthEnabled,
+                        onCheckedChange = { checked ->
+                            saveLookupRootFullWidthEnabled(context, checked)
+                            refreshConfig()
+                            statusText = if (checked) {
+                                context.getString(R.string.audiobook_lookup_root_full_width_enabled)
+                            } else {
+                                context.getString(R.string.audiobook_lookup_root_full_width_disabled)
+                            }
+                        }
+                    )
+                }
                 Text(stringResource(R.string.audiobook_active_cue_position))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(

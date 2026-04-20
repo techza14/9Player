@@ -222,6 +222,9 @@
     <string name="audiobook_lookup_range_selection_enable">開啟選取範圍功能</string>
     <string name="audiobook_lookup_range_selection_enabled">已開啟：可在查詞彈窗中選取句子範圍。</string>
     <string name="audiobook_lookup_range_selection_disabled">已關閉：已隱藏句子範圍功能。</string>
+    <string name="audiobook_lookup_root_full_width_enable">首層彈窗全寬</string>
+    <string name="audiobook_lookup_root_full_width_enabled">已開啟：僅書內第一層查詞彈窗全寬並顯示在下方。</string>
+    <string name="audiobook_lookup_root_full_width_disabled">已關閉：書內查詞彈窗使用預設版面。</string>
     <string name="audiobook_play_audio">播放音訊</string>
     <string name="audiobook_play_audio_enabled">已開啟：查詞時可播放音訊。</string>
     <string name="audiobook_play_audio_disabled">已關閉：查詞時播放音訊。</string>

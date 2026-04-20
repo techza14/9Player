@@ -2,6 +2,7 @@ package moe.tekuza.m9player
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Alignment
@@ -39,47 +41,57 @@ internal fun LookupPopupHost(
     onRangeSelection: ((Int) -> Unit)? = null,
     onPlayAudio: ((Int, GroupedLookupResult) -> Unit)? = null,
     onAddToAnki: ((Int, GroupedLookupResult) -> Unit)? = null,
-    onCloseAll: (() -> Unit)? = null
+    onCloseAll: (() -> Unit)? = null,
+    forcePlaceBelowForLayer: ((Int, ReaderLookupLayer) -> Boolean)? = null,
+    fullWidthForLayer: ((Int, ReaderLookupLayer) -> Boolean)? = null,
+    dockBottomForLayer: ((Int, ReaderLookupLayer) -> Boolean)? = null
 ) {
     if (!visible) return
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val gapPx = with(density) { 14.dp.roundToPx() }
     val screenPaddingPx = with(density) { 12.dp.roundToPx() }
+    val swipeCloseThresholdPx = with(density) { 56.dp.toPx() }
 
     session.layers.forEachIndexed { index, layer ->
         val isTopLayer = index == session.lastIndex
         val isPreviousLayer = index == session.lastIndex - 1
+        val forcePlaceBelow = forcePlaceBelowForLayer?.invoke(index, layer) == true
+        val forceFullWidth = fullWidthForLayer?.invoke(index, layer) == true
+        val forceDockBottom = dockBottomForLayer?.invoke(index, layer) == true
+        val effectivePlaceBelow = if (forcePlaceBelow) true else layer.placeBelow
         val effectiveAnchor = resolveAnchor(index, layer)
-        val useTopCenterHost = effectiveAnchor == null
+        val useTopCenterHost = effectiveAnchor == null || forceDockBottom
         val popupSizeSpec = remember(
             configuration.screenWidthDp,
             configuration.screenHeightDp,
             effectiveAnchor,
-            layer.placeBelow,
+            effectivePlaceBelow,
             layer.preferSidePlacement,
-            density.density
+            density.density,
+            forcePlaceBelow
         ) {
             computeSharedLookupPopupSizeSpec(
                 screenWidthDp = configuration.screenWidthDp,
                 screenHeightDp = configuration.screenHeightDp,
                 anchor = effectiveAnchor,
-                placeBelow = layer.placeBelow,
+                placeBelow = effectivePlaceBelow,
                 preferSidePlacement = layer.preferSidePlacement,
                 density = density.density
             )
         }
         val positionProvider = remember(
             effectiveAnchor,
-            layer.placeBelow,
+            effectivePlaceBelow,
             layer.preferSidePlacement,
             popupSizeSpec.preferredDirection,
             gapPx,
-            screenPaddingPx
+            screenPaddingPx,
+            forcePlaceBelow
         ) {
             SharedLookupPopupPositionProvider(
                 anchor = effectiveAnchor,
-                placeBelow = layer.placeBelow,
+                placeBelow = effectivePlaceBelow,
                 preferSidePlacement = layer.preferSidePlacement,
                 preferredDirection = popupSizeSpec.preferredDirection,
                 gapPx = gapPx,
@@ -87,7 +99,8 @@ internal fun LookupPopupHost(
                 logTag = logTag
             )
         }
-        val baseContentMaxHeightDp = if (useTopCenterHost) {
+        val useTopCenterHeightSpec = useTopCenterHost && !forceDockBottom
+        val baseContentMaxHeightDp = if (useTopCenterHeightSpec) {
             if (layer.groupedResults.isEmpty()) {
                 (configuration.screenHeightDp * 0.26f).toInt().coerceIn(150, 220)
             } else {
@@ -106,17 +119,36 @@ internal fun LookupPopupHost(
                         .alpha(0f)
                 )
             } else {
+                val closeCurrentLayer = {
+                    if (isTopLayer) {
+                        onDismissTopLayer()
+                    } else {
+                        onTruncateToLayer?.invoke(index)
+                    }
+                }
                 Surface(
                     modifier = Modifier
                         .then(
                             if (useTopCenterHost) {
-                                Modifier
-                                    .fillMaxWidth(0.96f)
-                                    .padding(top = 72.dp)
+                                if (forceDockBottom) {
+                                    Modifier
+                                        .fillMaxWidth(0.96f)
+                                        .padding(bottom = 72.dp)
+                                } else {
+                                    Modifier
+                                        .fillMaxWidth(0.96f)
+                                        .padding(top = 72.dp)
+                                }
                             } else {
-                                Modifier
-                                    .width(popupSizeSpec.widthDp.dp)
-                                    .padding(horizontal = 6.dp, vertical = 10.dp)
+                                if (forceFullWidth) {
+                                    Modifier
+                                        .fillMaxWidth(0.96f)
+                                        .padding(horizontal = 6.dp, vertical = 10.dp)
+                                } else {
+                                    Modifier
+                                        .width(popupSizeSpec.widthDp.dp)
+                                        .padding(horizontal = 6.dp, vertical = 10.dp)
+                                }
                             }
                         )
                         .then(
@@ -125,7 +157,23 @@ internal fun LookupPopupHost(
                             } else {
                                 Modifier
                             }
-                        ),
+                        )
+                        .pointerInput(isTopLayer, isPreviousLayer, index, temporarilyHidden, swipeCloseThresholdPx) {
+                            if (temporarilyHidden) return@pointerInput
+                            var totalDrag = 0f
+                            detectHorizontalDragGestures(
+                                onHorizontalDrag = { change, dragAmount ->
+                                    totalDrag += dragAmount
+                                },
+                                onDragEnd = {
+                                    if (kotlin.math.abs(totalDrag) >= swipeCloseThresholdPx) {
+                                        closeCurrentLayer()
+                                    }
+                                    totalDrag = 0f
+                                },
+                                onDragCancel = { totalDrag = 0f }
+                            )
+                        },
                     shape = MaterialTheme.shapes.large,
                     tonalElevation = if (isTopLayer) 8.dp else 6.dp,
                     shadowElevation = if (isTopLayer) 10.dp else 6.dp,
@@ -179,7 +227,7 @@ internal fun LookupPopupHost(
 
         if (useTopCenterHost) {
             Popup(
-                alignment = Alignment.TopCenter,
+                alignment = if (forceDockBottom) Alignment.BottomCenter else Alignment.TopCenter,
                 onDismissRequest = {
                     if (isTopLayer) onDismissTopLayer()
                 },
