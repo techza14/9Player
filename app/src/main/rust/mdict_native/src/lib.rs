@@ -350,48 +350,41 @@ fn load_lookup_index_from_mdx(mdx_path: &str, cache_key: &str) -> Result<Arc<Loo
         return Ok(cached);
     }
 
-    let mdx = MdxFile::open(mdx_path).map_err(|e| format!("open mdx failed: {e}"))?;
-
-    let mut entries = Vec::<NativeEntry>::new();
-    let mut by_exact = HashMap::<String, Vec<usize>>::new();
-
-    for item in mdx.entries() {
-        let record = match item {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let term = record.key.trim().to_string();
-        if term.is_empty() {
-            continue;
+    let parsed_entries = match load_lookup_entries_binary_for_source(mdx_path, &mdx_index_cache_sidecar_path(mdx_path)) {
+        Ok(entries) => entries,
+        Err(_) => {
+            let mdx = MdxFile::open(mdx_path).map_err(|e| format!("open mdx failed: {e}"))?;
+            let mut entries = Vec::<NativeEntry>::new();
+            for item in mdx.entries() {
+                let record = match item {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let term = record.key.trim().to_string();
+                if term.is_empty() {
+                    continue;
+                }
+                let definition = record.text.trim().to_string();
+                let normalized_term = normalize_lookup(&term);
+                if normalized_term.is_empty() {
+                    continue;
+                }
+                entries.push(NativeEntry {
+                    term,
+                    reading: String::new(),
+                    definition,
+                    normalized_term,
+                });
+            }
+            let _ = save_lookup_entries_binary_for_source(
+                mdx_path,
+                &mdx_index_cache_sidecar_path(mdx_path),
+                &entries
+            );
+            entries
         }
-        let definition = record.text.trim().to_string();
-        let normalized_term = normalize_lookup(&term);
-        if normalized_term.is_empty() {
-            continue;
-        }
-        let index = entries.len();
-        entries.push(NativeEntry {
-            term,
-            reading: String::new(),
-            definition,
-            normalized_term: normalized_term.clone(),
-        });
-        by_exact.entry(normalized_term).or_default().push(index);
-    }
-
-    if entries.is_empty() {
-        return Err("mdx has no valid terms".to_string());
-    }
-
-    let mut normalized_terms_sorted: Vec<String> = by_exact.keys().cloned().collect();
-    normalized_terms_sorted.sort();
-    normalized_terms_sorted.dedup();
-
-    let built = Arc::new(LookupIndex {
-        entries,
-        by_exact,
-        normalized_terms_sorted,
-    });
+    };
+    let built = Arc::new(build_lookup_maps(parsed_entries)?);
     LOOKUP_CACHE
         .lock()
         .map_err(|_| "lookup cache poisoned".to_string())?
@@ -524,6 +517,10 @@ fn index_cache_sidecar_path(entries_path: &str) -> String {
     format!("{entries_path}.idxbin")
 }
 
+fn mdx_index_cache_sidecar_path(mdx_path: &str) -> String {
+    format!("{mdx_path}.idxbin")
+}
+
 fn write_u32(writer: &mut dyn Write, value: u32) -> Result<(), String> {
     writer
         .write_all(&value.to_le_bytes())
@@ -573,7 +570,15 @@ fn read_string(reader: &mut dyn Read) -> Result<String, String> {
 }
 
 fn save_lookup_entries_binary(entries_path: &str, entries: &[NativeEntry]) -> Result<(), String> {
-    let source_meta = fs::metadata(entries_path).map_err(|e| format!("entries metadata failed: {e}"))?;
+    save_lookup_entries_binary_for_source(entries_path, &index_cache_sidecar_path(entries_path), entries)
+}
+
+fn save_lookup_entries_binary_for_source(
+    source_path: &str,
+    sidecar: &str,
+    entries: &[NativeEntry],
+) -> Result<(), String> {
+    let source_meta = fs::metadata(source_path).map_err(|e| format!("entries metadata failed: {e}"))?;
     let source_size = source_meta.len();
     let source_mtime = source_meta
         .modified()
@@ -582,7 +587,6 @@ fn save_lookup_entries_binary(entries_path: &str, entries: &[NativeEntry]) -> Re
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    let sidecar = index_cache_sidecar_path(entries_path);
     let temp = format!("{sidecar}.tmp");
     let mut writer =
         BufWriter::new(File::create(&temp).map_err(|e| format!("create sidecar temp failed: {e}"))?);
@@ -608,7 +612,11 @@ fn save_lookup_entries_binary(entries_path: &str, entries: &[NativeEntry]) -> Re
 }
 
 fn load_lookup_entries_binary(entries_path: &str) -> Result<Vec<NativeEntry>, String> {
-    let source_meta = fs::metadata(entries_path).map_err(|e| format!("entries metadata failed: {e}"))?;
+    load_lookup_entries_binary_for_source(entries_path, &index_cache_sidecar_path(entries_path))
+}
+
+fn load_lookup_entries_binary_for_source(source_path: &str, sidecar: &str) -> Result<Vec<NativeEntry>, String> {
+    let source_meta = fs::metadata(source_path).map_err(|e| format!("entries metadata failed: {e}"))?;
     let source_size = source_meta.len();
     let source_mtime = source_meta
         .modified()
@@ -616,9 +624,7 @@ fn load_lookup_entries_binary(entries_path: &str) -> Result<Vec<NativeEntry>, St
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0);
-
-    let sidecar = index_cache_sidecar_path(entries_path);
-    let mut reader = BufReader::new(File::open(&sidecar).map_err(|e| format!("open sidecar failed: {e}"))?);
+    let mut reader = BufReader::new(File::open(sidecar).map_err(|e| format!("open sidecar failed: {e}"))?);
 
     let magic = read_u32(&mut reader)?;
     if magic != LOOKUP_INDEX_BIN_MAGIC {

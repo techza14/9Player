@@ -23,7 +23,8 @@ internal data class DictionaryEntry(
 internal data class DictionarySearchResult(
     val entry: DictionaryEntry,
     val score: Int,
-    val matchedLength: Int = 0
+    val matchedLength: Int = 0,
+    val sourceCacheKey: String = ""
 )
 
 internal data class MinedCard(

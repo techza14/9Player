@@ -34,6 +34,8 @@ internal fun loadAvailableDictionaries(
     context: Context,
     contentResolver: ContentResolver = context.contentResolver
 ): List<LoadedDictionary> {
+    // Prewarm mounted MDX runtime/cache at startup to reduce first-query latency.
+    prebuildMountedMdxIndexesAsync(context.applicationContext)
     val persisted = loadPersistedImports(context)
     val refs = persisted.dictionaries.distinctBy { it.uri }
     val imported = refs.mapNotNull { ref ->
@@ -77,7 +79,7 @@ internal fun computeTapLookupResultsWithWinningCandidate(
     context: Context,
     dictionaries: List<LoadedDictionary>,
     query: String,
-    profile: DictionaryQueryProfile = DictionaryQueryProfile.FULL
+    profile: DictionaryQueryProfile = DictionaryQueryProfile.FAST
 ): LookupComputationResult? {
     val normalizedQuery = query.trim()
     if (normalizedQuery.isBlank()) return null
@@ -94,7 +96,7 @@ internal fun computeLookupResultsWithWinningCandidate(
     context: Context,
     dictionaries: List<LoadedDictionary>,
     candidates: List<String>,
-    profile: DictionaryQueryProfile = DictionaryQueryProfile.FULL,
+    profile: DictionaryQueryProfile = DictionaryQueryProfile.FAST,
     expandCandidates: Boolean = true
 ): LookupComputationResult? {
     val effectiveDictionaries = includeMountedMdxDictionary(context, dictionaries)

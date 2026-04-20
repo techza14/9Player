@@ -64,9 +64,10 @@ SRT reference:
 Supports Yomitan vocabulary, pitch accent, and frequency dictionaries.
 
 Collection
-- [marv](https://github.com/MarvNC/yomitan-dictionaries?tab=readme-ov-file#dictionary-collection)
-- [uchagikun](https://github.com/SalwynnJP/yomitan-dictionaries)
-- [Shoui](https://learnjapanese.moe/yomichan/#acquiring-dictionaries)
+- [MarvNC](https://drive.google.com/drive/folders/1LXMIOoaWASIntlx1w08njNU005lS5lez)
+- [SalwynnJP](https://drive.google.com/drive/folders/1CPPAgKzz_PDEb7JUPHGioONTEQg0aCHW)
+- [Shoui](https://drive.google.com/drive/folders/1tTdLppnqMfVC5otPlX_cs4ixlIgjv_lH)
+- [Bint](https://drive.proton.me/urls/GH0GV6DMEC#RP55zc2DL8vD)
 
 You can refer to the settings below:
 

@@ -136,6 +136,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         applySavedAppLanguage(this)
         super.onCreate(savedInstanceState)
+        prebuildMountedMdxIndexesAsync(applicationContext)
         enableEdgeToEdge()
         setContent {
             TsetTheme {
@@ -301,6 +302,7 @@ internal data class ReaderBook(
 
 private data class ReturnedBookProgress(
     val audioUri: String,
+    val srtUri: String?,
     val positionMs: Long,
     val durationMs: Long
 )
@@ -539,24 +541,130 @@ private fun ReaderSyncScreen() {
                         context = context,
                         books = readerBooks
                     )
+                    run {
+                        val persistedNow = loadPersistedImports(context)
+                        if (persistedNow.books.isNotEmpty() && readerBooks.isNotEmpty()) {
+                            val persistedByAudio = persistedNow.books.associateBy { it.audioUri }
+                            var changed = false
+                            val mergedBooks = readerBooks.map { book ->
+                                val persistedBook = persistedByAudio[book.audioUri.toString()] ?: return@map book
+                                val persistedSrtRaw = persistedBook.srtUri?.trim().orEmpty()
+                                if (persistedSrtRaw.isBlank()) return@map book
+                                val persistedSrt = runCatching { Uri.parse(persistedSrtRaw) }.getOrNull()
+                                    ?: return@map book
+                                if ((book.srtUri?.toString().orEmpty()) == persistedSrtRaw) return@map book
+                                changed = true
+                                val mergedSrtName = persistedBook.srtName?.ifBlank { null }
+                                    ?: queryDisplayName(contentResolver, persistedSrt)
+                                val mergedTitle = buildBookTitle(book.audioName, mergedSrtName)
+                                val mergedId = buildDictionaryCacheKey(
+                                    uri = "book|${book.audioUri}|$persistedSrtRaw",
+                                    displayName = "${book.audioName}|${mergedSrtName.orEmpty()}"
+                                )
+                                book.copy(
+                                    id = mergedId,
+                                    title = mergedTitle,
+                                    srtUri = persistedSrt,
+                                    srtName = mergedSrtName
+                                )
+                            }
+                            if (changed) {
+                                readerBooks = mergedBooks
+                                val selected = mergedBooks.firstOrNull { it.id == selectedBookId }
+                                    ?: mergedBooks.firstOrNull { it.audioUri.toString() == audioUri?.toString().orEmpty() }
+                                if (selected != null) {
+                                    selectedBookId = selected.id
+                                    audioUri = selected.audioUri
+                                    audioName = selected.audioName
+                                    srtUri = selected.srtUri
+                                    srtName = selected.srtName
+                                }
+                            }
+                        }
+                    }
                     val returnedProgress = consumeReturnedBookProgress(activity?.intent)
-                    if (returnedProgress != null && returnedProgress.durationMs > 0L) {
+                    if (returnedProgress != null) {
                         val targetBook = readerBooks.firstOrNull {
                             it.audioUri.toString() == returnedProgress.audioUri
                         }
                         if (targetBook != null) {
-                            val immediate = BookReaderPlaybackSnapshot(
-                                positionMs = returnedProgress.positionMs.coerceAtLeast(0L),
-                                durationMs = returnedProgress.durationMs.coerceAtLeast(0L)
-                            )
-                            loadedSnapshots = loadedSnapshots + (targetBook.id to immediate)
-                            withContext(Dispatchers.IO) {
-                                saveBookReaderPlaybackPosition(
-                                    context = context,
-                                    bookKey = buildReaderBookPlaybackKey(targetBook),
-                                    positionMs = immediate.positionMs,
-                                    durationMs = immediate.durationMs
+                            val returnedSrt = returnedProgress.srtUri
+                                ?.trim()
+                                ?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+                                ?.let { raw -> runCatching { Uri.parse(raw) }.getOrNull() }
+                            if ((targetBook.srtUri?.toString().orEmpty()) != (returnedSrt?.toString().orEmpty())) {
+                                val updatedSrtName = returnedSrt?.let { queryDisplayName(contentResolver, it) }
+                                val updatedTitle = buildBookTitle(targetBook.audioName, updatedSrtName)
+                                val updatedId = buildDictionaryCacheKey(
+                                    uri = "book|${targetBook.audioUri}|${returnedSrt?.toString().orEmpty()}",
+                                    displayName = "${targetBook.audioName}|${updatedSrtName.orEmpty()}"
                                 )
+                                val updatedBook = ReaderBook(
+                                    id = updatedId,
+                                    title = updatedTitle,
+                                    audioUri = targetBook.audioUri,
+                                    audioName = targetBook.audioName,
+                                    srtUri = returnedSrt,
+                                    srtName = updatedSrtName,
+                                    coverUri = targetBook.coverUri
+                                )
+                                val wasSelected = selectedBookId == targetBook.id
+                                readerBooks = listOf(updatedBook) + readerBooks.filterNot {
+                                    it.audioUri.toString() == targetBook.audioUri.toString()
+                                }
+                                if (wasSelected) {
+                                    selectedBookId = updatedBook.id
+                                    audioUri = updatedBook.audioUri
+                                    audioName = updatedBook.audioName
+                                    srtUri = updatedBook.srtUri
+                                    srtName = updatedBook.srtName
+                                }
+                                // Persist immediately so "no SRT -> replaced SRT" survives app restart.
+                                val persistedBooks = readerBooks.map { book ->
+                                    PersistedReaderBook(
+                                        id = book.id,
+                                        title = book.title,
+                                        audioUri = book.audioUri.toString(),
+                                        audioName = book.audioName,
+                                        srtUri = book.srtUri?.toString(),
+                                        srtName = book.srtName
+                                    )
+                                }
+                                savePersistedImports(
+                                    context = context,
+                                    state = PersistedImports(
+                                        audioUri = audioUri?.toString(),
+                                        audioName = audioName,
+                                        srtUri = srtUri?.toString(),
+                                        srtName = srtName,
+                                        audiobookFolderUri = addBookFolderUri?.toString(),
+                                        audiobookFolderName = addBookFolderName,
+                                        autoMoveToAudiobookFolder = autoMoveToAudiobookFolder,
+                                        importOnboardingCompleted = importOnboardingCompleted,
+                                        books = persistedBooks,
+                                        selectedBookId = selectedBookId,
+                                        homeLibraryView = homeLibraryView.name,
+                                        dictionaries = dictionaryRefs
+                                    )
+                                )
+                            }
+                            if (returnedProgress.positionMs >= 0L && returnedProgress.durationMs > 0L) {
+                                val effectiveBook = readerBooks.firstOrNull {
+                                    it.audioUri.toString() == targetBook.audioUri.toString()
+                                } ?: targetBook
+                                val immediate = BookReaderPlaybackSnapshot(
+                                    positionMs = returnedProgress.positionMs.coerceAtLeast(0L),
+                                    durationMs = returnedProgress.durationMs.coerceAtLeast(0L)
+                                )
+                                loadedSnapshots = loadedSnapshots + (effectiveBook.id to immediate)
+                                withContext(Dispatchers.IO) {
+                                    saveBookReaderPlaybackPosition(
+                                        context = context,
+                                        bookKey = buildReaderBookPlaybackKey(effectiveBook),
+                                        positionMs = immediate.positionMs,
+                                        durationMs = immediate.durationMs
+                                    )
+                                }
                             }
                         }
                     }
@@ -666,23 +774,42 @@ private fun ReaderSyncScreen() {
         }
 
     fun persistImportState() {
+        val previous = loadPersistedImports(context)
+        val previousByAudio = previous.books.associateBy { it.audioUri }
         val persistedBooks = readerBooks.map { book ->
+            val audioKey = book.audioUri.toString()
+            val previousBook = previousByAudio[audioKey]
+            val currentSrt = book.srtUri?.toString()?.takeIf { it.isNotBlank() }
+            val mergedSrt = currentSrt ?: previousBook?.srtUri?.takeIf { it.isNotBlank() }
+            val mergedSrtName = if (currentSrt != null) {
+                book.srtName
+            } else {
+                book.srtName ?: previousBook?.srtName
+            }
             PersistedReaderBook(
                 id = book.id,
                 title = book.title,
-                audioUri = book.audioUri.toString(),
+                audioUri = audioKey,
                 audioName = book.audioName,
-                srtUri = book.srtUri?.toString(),
-                srtName = book.srtName
+                srtUri = mergedSrt,
+                srtName = mergedSrtName
             )
+        }
+        val previousSelectedSrt = previous.srtUri?.takeIf { it.isNotBlank() }
+        val currentSelectedSrt = srtUri?.toString()?.takeIf { it.isNotBlank() }
+        val mergedSelectedSrt = currentSelectedSrt ?: previousSelectedSrt
+        val mergedSelectedSrtName = if (currentSelectedSrt != null) {
+            srtName
+        } else {
+            srtName ?: previous.srtName
         }
         savePersistedImports(
             context = context,
             state = PersistedImports(
                 audioUri = audioUri?.toString(),
                 audioName = audioName,
-                srtUri = srtUri?.toString(),
-                srtName = srtName,
+                srtUri = mergedSelectedSrt,
+                srtName = mergedSelectedSrtName,
                 audiobookFolderUri = addBookFolderUri?.toString(),
                 audiobookFolderName = addBookFolderName,
                 autoMoveToAudiobookFolder = autoMoveToAudiobookFolder,
@@ -1438,7 +1565,7 @@ private fun ReaderSyncScreen() {
             context = context,
             dictionaries = dictionaries,
             candidates = candidates,
-            profile = DictionaryQueryProfile.FULL,
+            profile = DictionaryQueryProfile.FAST,
             expandCandidates = false
         )?.hits.orEmpty()
         if (strictHits.isNotEmpty()) return strictHits
@@ -1446,7 +1573,7 @@ private fun ReaderSyncScreen() {
             context = context,
             dictionaries = dictionaries,
             candidates = candidates,
-            profile = DictionaryQueryProfile.FULL,
+            profile = DictionaryQueryProfile.FAST,
             expandCandidates = true
         )?.hits.orEmpty()
     }
@@ -2816,7 +2943,7 @@ private fun ReaderSyncScreen() {
                                                                                         context = context,
                                                                                         dictionaries = effectiveLookupDictionaries,
                                                                                         candidates = tapCandidates,
-                                                                                        profile = DictionaryQueryProfile.FULL,
+                                                                                        profile = DictionaryQueryProfile.FAST,
                                                                                         expandCandidates = false
                                                                                     )
                                                                                 }.getOrNull()
@@ -3089,12 +3216,19 @@ private fun ReaderSyncScreen() {
                     pickBookAudioLauncher.launch(
                         arrayOf(
                             "audio/*",
+                            "video/*",
                             "audio/mp4",
                             "audio/x-m4a",
                             "audio/m4a",
                             "audio/x-m4b",
                             "audio/m4b",
-                            "application/mp4"
+                            "application/mp4",
+                            "video/mp4",
+                            "video/x-matroska",
+                            "video/webm",
+                            "video/quicktime",
+                            "video/x-msvideo",
+                            "video/3gpp"
                         )
                     )
                 },
@@ -3946,10 +4080,14 @@ private fun isAudioDocumentFile(file: DocumentFile): Boolean {
     val extension = name.substringAfterLast('.', missingDelimiterValue = "")
         .trim()
         .lowercase(Locale.ROOT)
-    if (extension in setOf("m4b", "m4a", "mp3", "aac", "flac", "wav", "ogg", "opus")) {
+    if (extension in setOf(
+            "m4b", "m4a", "mp3", "aac", "flac", "wav", "ogg", "opus",
+            "mp4", "m4v", "mkv", "webm", "mov", "avi", "3gp", "ts"
+        )
+    ) {
         return true
     }
-    return mime.startsWith("audio/") || mime == "application/mp4"
+    return mime.startsWith("audio/") || mime.startsWith("video/") || mime == "application/mp4"
 }
 
 private fun isSrtDocumentFile(file: DocumentFile): Boolean {
@@ -3974,6 +4112,13 @@ private fun resolveMimeTypeForDocument(fileName: String, sourceMime: String?): S
         "wav" -> "audio/wav"
         "ogg" -> "audio/ogg"
         "opus" -> "audio/opus"
+        "mp4", "m4v" -> "video/mp4"
+        "mkv" -> "video/x-matroska"
+        "webm" -> "video/webm"
+        "mov" -> "video/quicktime"
+        "avi" -> "video/x-msvideo"
+        "3gp" -> "video/3gpp"
+        "ts" -> "video/mp2t"
         "srt" -> "application/x-subrip"
         "txt" -> "text/plain"
         else -> "application/octet-stream"
@@ -4251,14 +4396,20 @@ private fun consumeReturnedBookProgress(intent: Intent?): ReturnedBookProgress? 
         .getStringExtra(BookReaderActivity.EXTRA_RETURN_AUDIO_URI)
         ?.trim()
         .orEmpty()
+    val srtUri = sourceIntent
+        .getStringExtra(BookReaderActivity.EXTRA_RETURN_SRT_URI)
+        ?.trim()
+        ?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
     val positionMs = sourceIntent.getLongExtra(BookReaderActivity.EXTRA_RETURN_POSITION_MS, -1L)
     val durationMs = sourceIntent.getLongExtra(BookReaderActivity.EXTRA_RETURN_DURATION_MS, -1L)
     sourceIntent.removeExtra(BookReaderActivity.EXTRA_RETURN_AUDIO_URI)
+    sourceIntent.removeExtra(BookReaderActivity.EXTRA_RETURN_SRT_URI)
     sourceIntent.removeExtra(BookReaderActivity.EXTRA_RETURN_POSITION_MS)
     sourceIntent.removeExtra(BookReaderActivity.EXTRA_RETURN_DURATION_MS)
-    if (audioUri.isBlank() || positionMs < 0L || durationMs <= 0L) return null
+    if (audioUri.isBlank()) return null
     return ReturnedBookProgress(
         audioUri = audioUri,
+        srtUri = srtUri,
         positionMs = positionMs,
         durationMs = durationMs
     )

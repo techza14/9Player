@@ -65,13 +65,14 @@ SRT 可參考：
 支援 Yomitan 詞彙、音調、詞頻辭典
 
 辭典連結
-- [明鏡日漢雙解辭典](https://forum.freemdict.com/t/topic/38630)
-- [小學館日中辭典第三版](https://github.com/DgnFBJkH5k/Golden-Parcel)
+- [明镜日汉双解辞典](https://forum.freemdict.com/t/topic/38630)
+- [小学馆日中辞典第三版](https://github.com/DgnFBJkH5k/Golden-Parcel)
 
 Collection
-- [marv](https://github.com/MarvNC/yomitan-dictionaries?tab=readme-ov-file#dictionary-collection)
-- [uchagikun](https://github.com/SalwynnJP/yomitan-dictionaries)
-- [Shoui](https://learnjapanese.moe/yomichan/#acquiring-dictionaries)
+- [MarvNC](https://drive.google.com/drive/folders/1LXMIOoaWASIntlx1w08njNU005lS5lez)
+- [SalwynnJP](https://drive.google.com/drive/folders/1CPPAgKzz_PDEb7JUPHGioONTEQg0aCHW)
+- [Shoui](https://drive.google.com/drive/folders/1tTdLppnqMfVC5otPlX_cs4ixlIgjv_lH)
+- [Bint](https://drive.proton.me/urls/GH0GV6DMEC#RP55zc2DL8vD)
 
 可參考以下設定：
 

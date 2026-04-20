@@ -33,6 +33,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.documentfile.provider.DocumentFile
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -208,6 +209,7 @@ class BookReaderActivity : AppCompatActivity() {
                             addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
                             putExtra(EXTRA_RETURN_AUDIO_URI, audioUri?.toString())
+                            putExtra(EXTRA_RETURN_SRT_URI, srtUri?.toString())
                             putExtra(EXTRA_RETURN_POSITION_MS, normalized)
                             putExtra(EXTRA_RETURN_DURATION_MS, currentDurationMs.coerceAtLeast(0L))
                         }
@@ -412,6 +414,7 @@ class BookReaderActivity : AppCompatActivity() {
         const val EXTRA_SRT_URI = "extra_srt_uri"
         const val EXTRA_COVER_URI = "extra_cover_uri"
         const val EXTRA_RETURN_AUDIO_URI = "extra_return_audio_uri"
+        const val EXTRA_RETURN_SRT_URI = "extra_return_srt_uri"
         const val EXTRA_RETURN_POSITION_MS = "extra_return_position_ms"
         const val EXTRA_RETURN_DURATION_MS = "extra_return_duration_ms"
         @Volatile
@@ -530,6 +533,14 @@ private fun BookReaderScreen(
                 } else {
                     pickedUri
                 }
+            } else if (currentSrtUri == null) {
+                movePickedSrtToBookFolder(
+                    context = context,
+                    resolver = resolver,
+                    pickedSrtUri = pickedUri,
+                    title = title,
+                    audioUri = audioUri
+                ) ?: pickedUri
             } else {
                 pickedUri
             }
@@ -541,6 +552,12 @@ private fun BookReaderScreen(
             ).show()
             pickedUri
         }
+        persistReplacedSrtToImportState(
+            context = context,
+            resolver = resolver,
+            audioUri = audioUri,
+            targetSrtUri = targetSrtUri
+        )
 
         saveBookReaderPlaybackPosition(
             context = context,
@@ -3672,6 +3689,154 @@ private fun swapSrtDocumentContents(
         Log.e("BookReaderSrtReplace", "swap srt failed", it)
         false
     }
+}
+
+private fun persistReplacedSrtToImportState(
+    context: Context,
+    resolver: ContentResolver,
+    audioUri: Uri?,
+    targetSrtUri: Uri?
+) {
+    val audioKey = audioUri?.toString()?.trim().orEmpty()
+    val srtKey = targetSrtUri?.toString()?.trim().orEmpty()
+    if (audioKey.isBlank() || srtKey.isBlank()) return
+
+    val state = loadPersistedImports(context)
+    val srtName = runCatching { queryBookDisplayName(resolver, targetSrtUri!!) }.getOrNull()
+
+    var matched = false
+    val updatedBooks = state.books.map { book ->
+        if (book.audioUri == audioKey) {
+            matched = true
+            book.copy(
+                srtUri = srtKey,
+                srtName = srtName ?: book.srtName
+            )
+        } else {
+            book
+        }
+    }
+    val updatedState = state.copy(
+        srtUri = if (state.audioUri == audioKey) srtKey else state.srtUri,
+        srtName = if (state.audioUri == audioKey) (srtName ?: state.srtName) else state.srtName,
+        books = updatedBooks
+    )
+    savePersistedImports(context, updatedState)
+}
+
+private fun movePickedSrtToBookFolder(
+    context: Context,
+    resolver: ContentResolver,
+    pickedSrtUri: Uri,
+    title: String,
+    audioUri: Uri?
+): Uri? {
+    return runCatching {
+        val sourceName = queryBookDisplayName(resolver, pickedSrtUri)
+            .trim()
+            .ifBlank { "${title.ifBlank { "book" }}.srt" }
+        val normalizedSourceName = if (sourceName.lowercase(Locale.ROOT).endsWith(".srt")) {
+            sourceName
+        } else {
+            "$sourceName.srt"
+        }
+
+        val targetUri = when (audioUri?.scheme?.lowercase(Locale.ROOT)) {
+            "file" -> {
+                val audioPath = audioUri.path ?: return@runCatching null
+                val parent = File(audioPath).parentFile ?: return@runCatching null
+                if (!parent.exists()) return@runCatching null
+                val targetFile = resolveUniqueFileName(parent, normalizedSourceName)
+                openReaderInputStream(resolver, pickedSrtUri)?.use { src ->
+                    targetFile.outputStream().use { out ->
+                        src.copyTo(out)
+                        out.flush()
+                    }
+                } ?: return@runCatching null
+                Uri.fromFile(targetFile)
+            }
+            "content" -> {
+                val parentFolder = resolveAudioParentFolder(context, audioUri) ?: return@runCatching null
+                val targetName = resolveUniqueDocumentNameLocal(parentFolder, normalizedSourceName)
+                val created = parentFolder.createFile("application/x-subrip", targetName)
+                    ?: return@runCatching null
+                openReaderInputStream(resolver, pickedSrtUri)?.use { src ->
+                    resolver.openOutputStream(created.uri, "w")?.use { out ->
+                        src.copyTo(out)
+                        out.flush()
+                    } ?: return@runCatching null
+                } ?: return@runCatching null
+                created.uri
+            }
+            else -> return@runCatching null
+        }
+        if (targetUri.toString() != pickedSrtUri.toString() && !deleteSourceSrtUri(context, resolver, pickedSrtUri)) {
+            Log.w("BookReaderSrtReplace", "move source delete failed uri=$pickedSrtUri")
+        }
+        targetUri
+    }.getOrNull()
+}
+
+private fun resolveAudioParentFolder(context: Context, audioUri: Uri): DocumentFile? {
+    return runCatching {
+        val docId = DocumentsContract.getDocumentId(audioUri)
+        val parentDocId = docId.substringBeforeLast('/', "")
+        if (parentDocId.isBlank() || parentDocId == docId) return@runCatching null
+        val parentDocUri = DocumentsContract.buildDocumentUriUsingTree(audioUri, parentDocId)
+        DocumentFile.fromTreeUri(context, parentDocUri)
+            ?: DocumentFile.fromSingleUri(context, parentDocUri)
+    }.getOrNull()
+}
+
+private fun resolveUniqueDocumentNameLocal(folder: DocumentFile, originalName: String): String {
+    val cleaned = originalName.trim().ifBlank { "subtitle.srt" }
+    if (folder.findFile(cleaned) == null) return cleaned
+
+    val dot = cleaned.lastIndexOf('.')
+    val hasExtension = dot > 0 && dot < cleaned.lastIndex
+    val base = if (hasExtension) cleaned.substring(0, dot) else cleaned
+    val ext = if (hasExtension) cleaned.substring(dot) else ""
+    var index = 2
+    while (index <= 9999) {
+        val candidate = "$base ($index)$ext"
+        if (folder.findFile(candidate) == null) return candidate
+        index += 1
+    }
+    return "$base-${System.currentTimeMillis()}$ext"
+}
+
+private fun resolveUniqueFileName(parent: File, originalName: String): File {
+    val cleaned = originalName.trim().ifBlank { "subtitle.srt" }
+    val first = File(parent, cleaned)
+    if (!first.exists()) return first
+
+    val dot = cleaned.lastIndexOf('.')
+    val hasExtension = dot > 0 && dot < cleaned.lastIndex
+    val base = if (hasExtension) cleaned.substring(0, dot) else cleaned
+    val ext = if (hasExtension) cleaned.substring(dot) else ""
+    var index = 2
+    while (index <= 9999) {
+        val candidate = File(parent, "$base ($index)$ext")
+        if (!candidate.exists()) return candidate
+        index += 1
+    }
+    return File(parent, "$base-${System.currentTimeMillis()}$ext")
+}
+
+private fun deleteSourceSrtUri(
+    context: Context,
+    resolver: ContentResolver,
+    uri: Uri
+): Boolean {
+    if (uri.scheme.equals("file", ignoreCase = true)) {
+        val path = uri.path ?: return false
+        return runCatching { File(path).delete() }.getOrDefault(false)
+    }
+    val documentDeleted = runCatching {
+        DocumentFile.fromSingleUri(context, uri)?.delete()
+    }.getOrNull()
+    if (documentDeleted == true) return true
+    return runCatching { resolver.delete(uri, null, null) > 0 }.getOrDefault(false)
 }
 
 private fun findBookChapterIndexAtTime(chapters: List<ReaderAudioChapter>, timeMs: Long): Int {

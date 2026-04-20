@@ -104,6 +104,7 @@ companion object {
     private var bubbleButton: ImageButton? = null
     private var bubbleControlsRow: LinearLayout? = null
     private var bubbleFavoriteButton: ImageButton? = null
+    private var bubbleLockButton: ImageButton? = null
     private var subtitleTextView: TextView? = null
     private var subtitleOutlineTextView: TextView? = null
     private var subtitleControlsRow: LinearLayout? = null
@@ -114,7 +115,8 @@ companion object {
     private var subtitleControlsVisible: Boolean = true
     private var subtitleSettingsExpanded: Boolean = false
     private var bubbleControlsVisible: Boolean = false
-    private var overlayLocked: Boolean = false
+    private var subtitleOverlayLocked: Boolean = false
+    private var bubbleOverlayLocked: Boolean = false
     private var playbackPausedByFloatingLookup: Boolean = false
     private var lastSubtitleScrollLogAtMs: Long = 0L
     private var subtitleTickerRunning: Boolean = false
@@ -385,7 +387,7 @@ companion object {
             setOnTouchListener(
                 OverlayDragTouchListener(
                     gestureDetector = subtitleGestureDetector,
-                    dragAllowed = { !overlayLocked },
+                    dragAllowed = { !subtitleOverlayLocked },
                     verticalOnly = true,
                     layoutParamsProvider = { windowLayoutParams },
                     hostViewProvider = { rootView },
@@ -432,7 +434,7 @@ companion object {
             setOnTouchListener(
                 OverlayDragTouchListener(
                     gestureDetector = null,
-                    dragAllowed = { !overlayLocked },
+                    dragAllowed = { !subtitleOverlayLocked },
                     verticalOnly = true,
                     layoutParamsProvider = { windowLayoutParams },
                     hostViewProvider = { rootView },
@@ -445,12 +447,12 @@ companion object {
         subtitleControlsRow = controls
 
         val lockButton = createControlButton(R.drawable.ic_overlay_lock) {
-            overlayLocked = !overlayLocked
-            if (overlayLocked) {
+            subtitleOverlayLocked = !subtitleOverlayLocked
+            if (subtitleOverlayLocked) {
                 subtitleControlsVisible = false
                 subtitleSettingsExpanded = false
             }
-            updateLockIcon()
+            updateSubtitleLockIcon()
             updateSubtitleControlsVisibility(loadAudiobookSettingsConfig(this))
         }
         subtitleLockButton = lockButton
@@ -470,7 +472,7 @@ companion object {
             subtitleSettingsExpanded = !subtitleSettingsExpanded
             subtitleSettingsPanel?.visibility = if (subtitleSettingsExpanded) View.VISIBLE else View.GONE
         })
-        updateLockIcon()
+        updateSubtitleLockIcon()
         panel.addView(controls)
 
         val settingsPanel = buildSubtitleSettingsPanel(settings)
@@ -733,7 +735,7 @@ companion object {
                             override fun onDown(e: MotionEvent): Boolean = true
                         }
                     ),
-                    dragAllowed = { !overlayLocked },
+                    dragAllowed = { !bubbleOverlayLocked },
                     layoutParamsProvider = { bubbleWindowLayoutParams },
                     hostViewProvider = { bubbleRootView },
                     horizontalBoundsProvider = {
@@ -770,6 +772,16 @@ companion object {
                 (16 * density * bubbleScale).toInt(),
                 (5 * density * bubbleScale).toInt()
             )
+            addView(createControlButton(R.drawable.ic_overlay_lock, bubbleScale) {
+                bubbleOverlayLocked = !bubbleOverlayLocked
+                if (bubbleOverlayLocked) {
+                    bubbleControlsVisible = false
+                    bubbleControlsRow?.animate()?.cancel()
+                    bubbleControlsRow?.visibility = View.GONE
+                    bubbleControlsRow?.alpha = 0f
+                }
+                updateBubbleLockIcon()
+            }.also { bubbleLockButton = it })
             addView(createControlButton(R.drawable.ic_overlay_previous, bubbleScale) {
                 BookReaderFloatingBridge.seekPrevious()
             })
@@ -790,6 +802,7 @@ companion object {
             alpha = 1f
         }
         bubbleControlsRow = controls
+        updateBubbleLockIcon()
         row.addView(bubble)
         row.addView(controls)
         host.addView(row)
@@ -3026,9 +3039,15 @@ companion object {
         )
     }
 
-    private fun updateLockIcon() {
+    private fun updateSubtitleLockIcon() {
         subtitleLockButton?.setImageResource(
-            if (overlayLocked) R.drawable.ic_overlay_lock else R.drawable.ic_overlay_unlock
+            if (subtitleOverlayLocked) R.drawable.ic_overlay_lock else R.drawable.ic_overlay_unlock
+        )
+    }
+
+    private fun updateBubbleLockIcon() {
+        bubbleLockButton?.setImageResource(
+            if (bubbleOverlayLocked) R.drawable.ic_overlay_lock else R.drawable.ic_overlay_unlock
         )
     }
 
@@ -3233,6 +3252,7 @@ companion object {
         bubbleButton = null
         bubbleControlsRow = null
         bubbleFavoriteButton = null
+        bubbleLockButton = null
         bubbleControlsVisible = false
     }
 
