@@ -2664,13 +2664,13 @@ companion object {
                 topMargin = (topMarginDp * density).toInt()
             }
         }
-        val bridge = DefinitionLookupBridge { tapData ->
+        val bridge = DefinitionLookupBridge(onLookupTap = { tapData ->
             Log.d(
                 FLOATING_LOOKUP_TAP_LOG_TAG,
                 "bridge onTap layer=$layerIndex key=$definitionKey scanLen=${tapData.scanText.length} textLen=${tapData.text.length} screenChars=${tapData.screenCharRects.size}"
             )
             performFloatingRecursiveLookup(layerIndex, definitionKey, tapData)
-        }
+        })
         val html = buildDefinitionHtml(
             definitionHtml = definition.trim(),
             indexLabel = "",

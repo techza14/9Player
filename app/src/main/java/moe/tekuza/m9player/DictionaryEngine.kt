@@ -21,6 +21,9 @@ private const val MAX_DEF_LENGTH = 1200
 private const val MAX_ENTRIES_PER_DICTIONARY = 90_000
 
 private val STRUCTURED_DATA_KEY_SANITIZE_REGEX = Regex("[^a-z0-9_-]")
+private val MARKDOWN_IMAGE_REGEX = Regex("!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)")
+private val MARKDOWN_LINK_REGEX = Regex("\\[([^\\]]+)\\]\\(([^)\\s]+)\\)")
+private val PLAIN_URL_REGEX = Regex("https?://[^\\s<]+")
 
 private data class TermMeta(
     val pitches: MutableSet<String> = linkedSetOf(),
@@ -1067,10 +1070,20 @@ private fun isVoidHtmlTag(tag: String): Boolean {
 }
 
 private fun buildInlineHtmlAttributes(obj: JSONObject): String {
-    val allowed = listOf("src", "href", "alt", "title", "target", "rel", "width", "height", "colspan", "rowspan")
-    return allowed.joinToString(separator = "") { key ->
+    val attrs = linkedMapOf<String, String>()
+    val src = firstNonBlank(
+        obj.optString("src"),
+        obj.optString("path"),
+        obj.optString("url")
+    )?.trim().orEmpty()
+    if (src.isNotBlank()) attrs["src"] = src
+    val allowed = listOf("href", "alt", "title", "target", "rel", "width", "height", "colspan", "rowspan")
+    allowed.forEach { key ->
         val value = obj.optString(key).trim()
-        if (value.isBlank()) "" else " $key=\"${escapeHtmlAttribute(value)}\""
+        if (value.isNotBlank()) attrs[key] = value
+    }
+    return attrs.entries.joinToString(separator = "") { (key, value) ->
+        " $key=\"${escapeHtmlAttribute(value)}\""
     }
 }
 
@@ -1108,21 +1121,98 @@ private fun camelToKebab(value: String): String {
 
 private fun normalizeDefinitionForDisplay(raw: String): String {
     val trimmed = raw.trim()
-    return if (looksLikeHtml(trimmed)) {
-        trimmed
-    } else {
-        normalizeTextLine(trimmed)
-    }
+    if (trimmed.isBlank()) return ""
+    return if (looksLikeHtml(trimmed)) trimmed else plainDefinitionToHtml(trimmed).take(MAX_DEF_LENGTH)
 }
 
 private fun looksLikeHtml(text: String): Boolean {
     return Regex("<\\s*/?\\s*[a-zA-Z][^>]*>").containsMatchIn(text)
 }
 
+private fun plainDefinitionToHtml(raw: String): String {
+    val normalized = raw
+        .replace("\r\n", "\n")
+        .replace('\r', '\n')
+        .trim()
+    if (normalized.isBlank()) return ""
+    val linked = linkifyPlainTextWithMarkdown(normalized)
+    return linked.replace("\n", "<br/>")
+}
+
+private fun linkifyPlainTextWithMarkdown(text: String): String {
+    val out = StringBuilder()
+    var cursor = 0
+
+    data class Token(val start: Int, val end: Int, val html: String)
+
+    fun sanitizeUrlOrNull(raw: String): String? {
+        val candidate = raw.trim().trim('"', '\'')
+        if (candidate.isBlank()) return null
+        val lower = candidate.lowercase(Locale.ROOT)
+        if (lower.startsWith("javascript:")) return null
+        return candidate
+    }
+
+    val tokens = mutableListOf<Token>()
+
+    MARKDOWN_IMAGE_REGEX.findAll(text).forEach { match ->
+        val alt = match.groupValues[1]
+        val src = sanitizeUrlOrNull(match.groupValues[2]) ?: return@forEach
+        tokens += Token(
+            start = match.range.first,
+            end = match.range.last + 1,
+            html = "<img src=\"${escapeHtmlAttribute(src)}\" alt=\"${escapeHtmlAttribute(alt)}\" />"
+        )
+    }
+    MARKDOWN_LINK_REGEX.findAll(text).forEach { match ->
+        val label = match.groupValues[1]
+        val href = sanitizeUrlOrNull(match.groupValues[2]) ?: return@forEach
+        tokens += Token(
+            start = match.range.first,
+            end = match.range.last + 1,
+            html = "<a href=\"${escapeHtmlAttribute(href)}\">${escapeHtmlTextEngine(label)}</a>"
+        )
+    }
+
+    val occupied = tokens.sortedBy { it.start }
+    PLAIN_URL_REGEX.findAll(text).forEach { match ->
+        val start = match.range.first
+        val end = match.range.last + 1
+        if (occupied.any { start < it.end && end > it.start }) return@forEach
+        val href = sanitizeUrlOrNull(match.value) ?: return@forEach
+        val safeHref = escapeHtmlAttribute(href)
+        val safeLabel = escapeHtmlTextEngine(href)
+        tokens += Token(start = start, end = end, html = "<a href=\"$safeHref\">$safeLabel</a>")
+    }
+
+    tokens
+        .sortedBy { it.start }
+        .forEach { token ->
+            if (token.start < cursor) return@forEach
+            if (token.start > cursor) {
+                out.append(escapeHtmlTextEngine(text.substring(cursor, token.start)))
+            }
+            out.append(token.html)
+            cursor = token.end
+        }
+
+    if (cursor < text.length) {
+        out.append(escapeHtmlTextEngine(text.substring(cursor)))
+    }
+    return out.toString()
+}
+
 private fun escapeHtmlAttribute(value: String): String {
     return value
         .replace("&", "&amp;")
         .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+}
+
+private fun escapeHtmlTextEngine(value: String): String {
+    return value
+        .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
 }
