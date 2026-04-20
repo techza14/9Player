@@ -1,5 +1,7 @@
 package moe.tekuza.m9player
 
+import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -14,6 +16,7 @@ import android.os.Looper
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,6 +24,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -30,22 +34,33 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
+import java.util.Locale
 
 internal data class MetaBadge(val label: String, val value: String)
 internal data class PitchBadgeGroup(val label: String, val reading: String?, val values: List<String>)
@@ -511,6 +526,8 @@ internal fun RichDefinitionView(
 ) {
     val trimmed = definition.trim()
     if (trimmed.isBlank()) return
+    val context = LocalContext.current
+    var previewImageSrc by remember(trimmed) { mutableStateOf<String?>(null) }
 
     if (looksLikeHtmlDefinition(trimmed)) {
         val bodyTextColor = MaterialTheme.colorScheme.onSurface
@@ -530,7 +547,10 @@ internal fun RichDefinitionView(
             AndroidView(
                 modifier = Modifier.fillMaxWidth(),
                 factory = { context ->
-                    val bridge = DefinitionLookupBridge(onLookupTap)
+                    val bridge = DefinitionLookupBridge(
+                        onLookupTap = onLookupTap,
+                        onImageTap = { src -> previewImageSrc = src }
+                    )
                     val viewTag = DefinitionLookupViewTag(bridge)
                     WebView(context).apply {
                         tag = viewTag
@@ -556,6 +576,16 @@ internal fun RichDefinitionView(
                         settings.displayZoomControls = false
                         settings.setSupportZoom(false)
                         webViewClient = object : WebViewClient() {
+                            fun openExternalUrl(raw: String): Boolean {
+                                val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
+                                val scheme = uri.scheme?.lowercase() ?: return false
+                                if (scheme !in setOf("http", "https", "mailto", "tel")) return false
+                                val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                return runCatching {
+                                    context.startActivity(intent)
+                                }.isSuccess
+                            }
+
                             fun dispatchEntryUrlTap(raw: String, host: WebView?): Boolean {
                                 val parsed = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
                                 if (!parsed.scheme.equals("entry", ignoreCase = true)) return false
@@ -595,12 +625,20 @@ internal fun RichDefinitionView(
                                 request: WebResourceRequest?
                             ): WebResourceResponse? {
                                 val uri = request?.url ?: return null
+                                val bundled = openBundledDictionaryResource(context, uri)
+                                if (bundled != null) {
+                                    return WebResourceResponse(bundled.mimeType, null, bundled.inputStream)
+                                }
                                 val resource = openMountedMdictResource(context, uri) ?: return null
                                 return WebResourceResponse(resource.mimeType, null, resource.inputStream)
                             }
 
                             override fun shouldInterceptRequest(view: WebView?, url: String?): WebResourceResponse? {
                                 val uri = runCatching { Uri.parse(url.orEmpty()) }.getOrNull() ?: return null
+                                val bundled = openBundledDictionaryResource(context, uri)
+                                if (bundled != null) {
+                                    return WebResourceResponse(bundled.mimeType, null, bundled.inputStream)
+                                }
                                 val resource = openMountedMdictResource(context, uri) ?: return null
                                 return WebResourceResponse(resource.mimeType, null, resource.inputStream)
                             }
@@ -612,6 +650,7 @@ internal fun RichDefinitionView(
                                     dispatchEntryUrlTap(uri.toString(), view)
                                     return true
                                 }
+                                if (openExternalUrl(uri.toString())) return true
                                 return false
                             }
 
@@ -622,6 +661,7 @@ internal fun RichDefinitionView(
                                     dispatchEntryUrlTap(raw, view)
                                     return true
                                 }
+                                if (openExternalUrl(raw)) return true
                                 return false
                             }
                         }
@@ -675,6 +715,7 @@ internal fun RichDefinitionView(
                 update = { webView ->
                     (webView.tag as? DefinitionLookupViewTag)?.apply {
                         bridge.onLookupTap = onLookupTap
+                        bridge.onImageTap = { src -> previewImageSrc = src }
                         bridge.hostView = webView
                         if (lastLookupEnabled != lookupEnabled) {
                             webView.settings.javaScriptEnabled = lookupEnabled
@@ -715,6 +756,38 @@ internal fun RichDefinitionView(
                                 shape = RoundedCornerShape(4.dp)
                             )
                     )
+                }
+            }
+        }
+        val activePreviewSrc = previewImageSrc
+        if (!activePreviewSrc.isNullOrBlank()) {
+            val previewBitmap = produceState<ImageBitmap?>(initialValue = null, key1 = activePreviewSrc) {
+                value = withContext(Dispatchers.IO) {
+                    decodePreviewImage(context, activePreviewSrc)
+                }
+            }.value
+            Dialog(
+                onDismissRequest = { previewImageSrc = null },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xE6000000))
+                        .clickable { previewImageSrc = null },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (previewBitmap != null) {
+                        Image(
+                            bitmap = previewBitmap,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(12.dp)
+                                .clickable { previewImageSrc = null },
+                            contentScale = ContentScale.Fit
+                        )
+                    }
                 }
             }
         }
@@ -1067,14 +1140,44 @@ internal fun buildDefinitionHtml(
                 const sentence = text.slice(start, end).trim();
                 return sentence || text.trim();
             }
-            function findEntryAnchor(target) {
+            function findAnchorWithHref(target) {
                 if (!target || !target.closest) return null;
                 const anchor = target.closest('a[href]');
-                if (!anchor) return null;
+                return anchor || null;
+            }
+            function findImageTarget(target) {
+                if (!target || !target.closest) return null;
+                const image = target.closest('img[src]');
+                return image || null;
+            }
+            function dispatchImageTap(image) {
+                if (!image || !window.NineLookup || !window.NineLookup.onImageTap) return false;
+                const src = (image.getAttribute('src') || '').trim();
+                if (!src) return false;
+                window.NineLookup.onImageTap(src);
+                if (window.NineLookup.onDebug) {
+                    window.NineLookup.onDebug('image tap src=' + src);
+                }
+                return true;
+            }
+            function isEntryHref(href) {
+                return /^entry:/i.test(String(href || '').trim());
+            }
+            function dispatchAnchorTap(anchor, clientX, clientY) {
+                if (!anchor) return false;
                 const href = (anchor.getAttribute('href') || '').trim();
-                if (!href) return null;
-                if (/^entry:/i.test(href)) return anchor;
-                return null;
+                if (!href) return false;
+                if (isEntryHref(href)) {
+                    return dispatchEntryTap(anchor, clientX, clientY);
+                }
+                if (window.NineLookup && window.NineLookup.onOpenExternalUrl) {
+                    window.NineLookup.onOpenExternalUrl(href);
+                    if (window.NineLookup.onDebug) {
+                        window.NineLookup.onDebug('external link tap=' + href);
+                    }
+                    return true;
+                }
+                return false;
             }
             function normalizeEntryScanText(raw) {
                 if (!raw) return '';
@@ -1140,9 +1243,16 @@ internal fun buildDefinitionHtml(
                 if (!window.NineLookup || !window.NineLookup.onTap) return;
                 if (Date.now() < suppressClickUntil) return;
                 const directTarget = document.elementFromPoint(clientX || 0, clientY || 0);
-                const directEntryAnchor = findEntryAnchor(directTarget);
-                if (directEntryAnchor) {
-                    if (dispatchEntryTap(directEntryAnchor, clientX || 0, clientY || 0)) {
+                const directImage = findImageTarget(directTarget);
+                if (directImage) {
+                    if (dispatchImageTap(directImage)) {
+                        suppressClickUntil = Date.now() + 260;
+                        return;
+                    }
+                }
+                const directAnchor = findAnchorWithHref(directTarget);
+                if (directAnchor) {
+                    if (dispatchAnchorTap(directAnchor, clientX || 0, clientY || 0)) {
                         suppressClickUntil = Date.now() + 260;
                         return;
                     }
@@ -1258,11 +1368,19 @@ internal fun buildDefinitionHtml(
                 const t = e.changedTouches && e.changedTouches[0];
                 if (!t) return;
                 const touched = document.elementFromPoint(t.clientX || 0, t.clientY || 0);
-                const entryAnchor = findEntryAnchor(touched);
-                if (entryAnchor) {
+                const image = findImageTarget(touched);
+                if (image) {
                     e.preventDefault();
                     e.stopPropagation();
-                    dispatchEntryTap(entryAnchor, t.clientX || 0, t.clientY || 0);
+                    dispatchImageTap(image);
+                    suppressClickUntil = Date.now() + 260;
+                    return;
+                }
+                const anchor = findAnchorWithHref(touched);
+                if (anchor) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dispatchAnchorTap(anchor, t.clientX || 0, t.clientY || 0);
                     suppressClickUntil = Date.now() + 260;
                     return;
                 }
@@ -1270,11 +1388,19 @@ internal fun buildDefinitionHtml(
             }, true);
             document.addEventListener('click', function(e) {
                 if (Date.now() < suppressClickUntil) return;
-                const entryAnchor = findEntryAnchor(e.target);
-                if (entryAnchor) {
+                const image = findImageTarget(e.target);
+                if (image) {
                     e.preventDefault();
                     e.stopPropagation();
-                    dispatchEntryTap(entryAnchor, e.clientX || 0, e.clientY || 0);
+                    dispatchImageTap(image);
+                    suppressClickUntil = Date.now() + 260;
+                    return;
+                }
+                const anchor = findAnchorWithHref(e.target);
+                if (anchor) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dispatchAnchorTap(anchor, e.clientX || 0, e.clientY || 0);
                     suppressClickUntil = Date.now() + 260;
                     return;
                 }
@@ -1338,7 +1464,7 @@ internal fun buildDefinitionHtml(
             <meta charset="utf-8"/>
             <style>
                 body { margin: 0; padding: 0; font-size: 14px; line-height: 1.4; color: $bodyTextColorCss; }
-                img { max-width: 100%; height: auto; }
+                img { max-width: 100%; height: auto; cursor: zoom-in; }
                 .yomitan-glossary { text-align: left; }
                 .nine-lookup-highlight { background: rgba(161, 161, 170, 0.22); border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(161, 161, 170, 0.40); }
                 .yomitan-glossary ol { margin: 0; padding-left: 1.1em; }
@@ -1353,6 +1479,26 @@ internal fun buildDefinitionHtml(
         </body>
         </html>
     """.trimIndent()
+}
+
+private fun decodePreviewImage(context: android.content.Context, rawSrc: String): ImageBitmap? {
+    val src = rawSrc.trim()
+    if (src.isBlank()) return null
+    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "image preview decode src=$src")
+    val uri = runCatching { Uri.parse(src) }.getOrNull() ?: return null
+    return runCatching {
+        val stream = when (uri.scheme?.lowercase(Locale.ROOT)) {
+            "dictres" -> openBundledDictionaryResource(context, uri)?.inputStream
+            "mdictres" -> openMountedMdictResource(context, uri)?.inputStream
+            "content", "file", "android.resource" -> context.contentResolver.openInputStream(uri)
+            else -> null
+        } ?: return null
+        stream.use { input ->
+            BitmapFactory.decodeStream(input)?.asImageBitmap().also { bitmap ->
+                Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "image preview decode result=${bitmap != null} uri=$uri")
+            }
+        }
+    }.getOrNull()
 }
 
 private fun looksLikeHtmlDefinition(text: String): Boolean {
@@ -1410,7 +1556,8 @@ private fun colorToCssHex(color: Color): String {
 }
 
 internal class DefinitionLookupBridge(
-    var onLookupTap: ((DefinitionLookupTapData) -> Unit)?
+    var onLookupTap: ((DefinitionLookupTapData) -> Unit)?,
+    var onImageTap: ((String) -> Unit)? = null
 ) {
     var hostView: WebView? = null
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -1420,6 +1567,29 @@ internal class DefinitionLookupBridge(
     @JavascriptInterface
     fun onDebug(message: String?) {
         Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "js ${message.orEmpty()}")
+    }
+
+    @JavascriptInterface
+    fun onOpenExternalUrl(rawUrl: String?) {
+        val raw = rawUrl?.trim().orEmpty()
+        if (raw.isBlank()) return
+        val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return
+        val scheme = uri.scheme?.lowercase() ?: return
+        if (scheme !in setOf("http", "https", "mailto", "tel")) return
+        val ctx = hostView?.context ?: return
+        val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { ctx.startActivity(intent) }
+            .onFailure { Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "openExternal failed url=$raw") }
+    }
+
+    @JavascriptInterface
+    fun onImageTap(rawSrc: String?) {
+        val src = rawSrc?.trim().orEmpty()
+        if (src.isBlank()) return
+        Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge onImageTap src=$src")
+        val callback = onImageTap ?: return
+        val dispatch = Runnable { callback.invoke(src) }
+        if (Looper.myLooper() == Looper.getMainLooper()) dispatch.run() else mainHandler.post(dispatch)
     }
 
     @JavascriptInterface

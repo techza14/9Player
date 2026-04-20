@@ -63,6 +63,9 @@ private val STRIP_HTML_TAGS_REGEX = Regex("<[^>]+>")
 private val LOOKS_LIKE_HTML_REGEX = Regex("<\\s*/?\\s*[a-zA-Z][^>]*>")
 private val CAMEL_CASE_BOUNDARY_REGEX = Regex("([a-z])([A-Z])")
 private val STRUCTURED_DATA_KEY_SANITIZE_REGEX = Regex("[^a-z0-9_-]")
+private val MARKDOWN_IMAGE_REGEX = Regex("!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)")
+private val MARKDOWN_LINK_REGEX = Regex("\\[([^\\]]+)\\]\\(([^)\\s]+)\\)")
+private val PLAIN_URL_REGEX = Regex("https?://[^\\s<]+")
 private val KANJI_TOKEN_REGEX = Regex("[\\u4E00-\\u9FFF\\u3400-\\u4DBF\\uF900-\\uFAFF\\u3005\\u3006\\u30F6]{1,12}")
 private val HTML_IMG_SRC_QUOTED_REGEX =
     Regex("(?i)<img\\b([^>]*?)\\bsrc\\s*=\\s*(['\"])(.*?)\\2([^>]*)>")
@@ -566,6 +569,14 @@ private fun searchDictionaryWithHoshi(
     val dictionaryOrder = bindings
         .mapIndexed { index, binding -> binding.dictionary.name to index }
         .toMap()
+    val dictionaryCacheKeyByName = bindings
+        .asSequence()
+        .mapNotNull { binding ->
+            val name = binding.dictionary.name.trim()
+            val cacheKey = binding.dictionary.cacheKey.trim()
+            if (name.isBlank() || cacheKey.isBlank()) null else name.lowercase(Locale.ROOT) to cacheKey
+        }
+        .toMap()
     val lookupLimit = when (profile) {
         DictionaryQueryProfile.FAST -> maxResults.coerceIn(16, 64)
         DictionaryQueryProfile.FULL -> (maxResults * 2).coerceIn(24, 140)
@@ -600,12 +611,15 @@ private fun searchDictionaryWithHoshi(
             dictionary = dictionaryName
         )
         val order = dictionaryOrder[dictionaryName] ?: dictionaryOrder.size
+        val sourceCacheKey = dictionaryCacheKeyByName[dictionaryName.trim().lowercase(Locale.ROOT)]
+            ?: bindings.singleOrNull()?.dictionary?.cacheKey?.trim()?.ifBlank { null }
         val score = hit.score + (dictionaryOrder.size - order) * 2 - (index / 8)
         val key = entryStableKey(entry)
         val next = DictionarySearchResult(
             entry = entry,
             score = score,
-            matchedLength = hit.matchedLength
+            matchedLength = hit.matchedLength,
+            sourceCacheKey = sourceCacheKey.orEmpty()
         )
         val existing = merged[key]
         if (existing == null || next.score > existing.score) {
@@ -833,22 +847,26 @@ private fun finalizeLookupResultsForDisplay(
     rewriteLimit: Int
 ): List<DictionarySearchResult> {
     if (results.isEmpty()) return emptyList()
-    if (rewriteLimit <= 0) return results
     val limit = rewriteLimit.coerceAtLeast(1)
     val rewriteContextByCacheKey = buildLookupRewriteContextMap(context, dictionaries)
     return results.mapIndexed { index, result ->
         val cacheKey = result.sourceCacheKey.takeIf { it.isNotBlank() }
         val rewriteContext = cacheKey?.let(rewriteContextByCacheKey::get)
-        if (index >= limit || rewriteContext == null) return@mapIndexed result
         val rewrittenDefinitions = result.entry.definitions
             .map { definition ->
-                normalizeDefinitionForDisplaySql(
+                val mdxRewritten = if (index < limit && rewriteContext != null) {
                     rewriteMdictImageSrcToFileUri(
                         definition = definition,
                         mediaDir = rewriteContext.mediaDir,
                         fallbackUriBuilder = rewriteContext.fallbackUriBuilder,
                         logContext = "lookup cacheKey=${cacheKey ?: "unknown"} query=$query term=${result.entry.term}"
                     )
+                } else {
+                    definition
+                }
+                normalizeDefinitionForDisplaySql(
+                    cacheKey?.let { rewriteBundledDictionaryResourceSrcForDisplay(mdxRewritten, it) }
+                        ?: mdxRewritten
                 )
             }
         result.copy(entry = result.entry.copy(definitions = rewrittenDefinitions))
@@ -1451,10 +1469,12 @@ private fun addCursorEntryResult(
     if (term.isBlank()) return
     val reading = cursor.getString(1)?.trim()?.ifBlank { null }
     val definitionRaw = cursor.getString(2).orEmpty()
-    val definition = resolveLinkedDefinitionFromSqlite(
-        db = db,
-        cacheKey = cacheKey,
-        initialDefinition = definitionRaw
+    val definition = normalizeDefinitionForDisplaySql(
+        resolveLinkedDefinitionFromSqlite(
+            db = db,
+            cacheKey = cacheKey,
+            initialDefinition = definitionRaw
+        )
     )
     val pitch = cursor.getString(3)?.trim()?.ifBlank { null }
     val frequency = cursor.getString(4)?.trim()?.ifBlank { null }
@@ -1921,10 +1941,20 @@ private fun isVoidHtmlTagSql(tag: String): Boolean {
 }
 
 private fun buildInlineHtmlAttributesSql(value: Map<*, *>): String {
-    val allowed = listOf("src", "href", "alt", "title", "target", "rel", "width", "height", "colspan", "rowspan")
-    return allowed.joinToString(separator = "") { key ->
+    val attrs = linkedMapOf<String, String>()
+    val src = listOf("src", "path", "url")
+        .asSequence()
+        .map { key -> value[key]?.toString()?.trim().orEmpty() }
+        .firstOrNull { it.isNotBlank() }
+        .orEmpty()
+    if (src.isNotBlank()) attrs["src"] = src
+    val allowed = listOf("href", "alt", "title", "target", "rel", "width", "height", "colspan", "rowspan")
+    allowed.forEach { key ->
         val raw = value[key]?.toString()?.trim().orEmpty()
-        if (raw.isBlank()) "" else " $key=\"${escapeHtmlAttributeSql(raw)}\""
+        if (raw.isNotBlank()) attrs[key] = raw
+    }
+    return attrs.entries.joinToString(separator = "") { (key, raw) ->
+        " $key=\"${escapeHtmlAttributeSql(raw)}\""
     }
 }
 
@@ -1964,7 +1994,27 @@ private fun compactDefinitionsSql(rawDefinitions: List<String>): List<String> {
 
 private fun normalizeDefinitionForDisplaySql(raw: String): String {
     val trimmed = raw.trim()
-    return if (looksLikeHtmlSql(trimmed)) trimmed else normalizeTextLineSql(trimmed)
+    if (trimmed.isBlank()) return ""
+    return if (looksLikeHtmlSql(trimmed)) trimmed else plainDefinitionToHtmlSql(trimmed)
+}
+
+internal fun lookupDictionarySourceUriByCacheKey(context: Context, cacheKey: String): String? {
+    if (cacheKey.isBlank()) return null
+    return runCatching {
+        readableDb(context).query(
+            TABLE_DICTIONARIES,
+            arrayOf(COL_URI),
+            "$COL_CACHE_KEY = ?",
+            arrayOf(cacheKey),
+            null,
+            null,
+            null,
+            "1"
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            cursor.getString(0)?.trim()?.takeIf { it.isNotBlank() }
+        }
+    }.getOrNull()
 }
 
 private fun looksLikeHtmlSql(text: String): Boolean {
@@ -1983,6 +2033,79 @@ private fun normalizeTextLineSql(raw: String): String {
         .replace('\u0000', ' ')
         .replace(NORMALIZE_WHITESPACE_REGEX, " ")
         .trim()
+}
+
+private fun plainDefinitionToHtmlSql(raw: String): String {
+    val normalized = raw
+        .replace("\r\n", "\n")
+        .replace('\r', '\n')
+        .trim()
+    if (normalized.isBlank()) return ""
+    val linked = linkifyPlainTextWithMarkdownSql(normalized)
+    return linked.replace("\n", "<br/>")
+}
+
+private fun linkifyPlainTextWithMarkdownSql(text: String): String {
+    val out = StringBuilder()
+    var cursor = 0
+
+    data class Token(val start: Int, val end: Int, val html: String)
+
+    fun sanitizeUrlOrNull(raw: String): String? {
+        val candidate = raw.trim().trim('"', '\'')
+        if (candidate.isBlank()) return null
+        val lower = candidate.lowercase(Locale.ROOT)
+        if (lower.startsWith("javascript:")) return null
+        return candidate
+    }
+
+    val tokens = mutableListOf<Token>()
+
+    MARKDOWN_IMAGE_REGEX.findAll(text).forEach { match ->
+        val alt = match.groupValues[1]
+        val src = sanitizeUrlOrNull(match.groupValues[2]) ?: return@forEach
+        tokens += Token(
+            start = match.range.first,
+            end = match.range.last + 1,
+            html = "<img src=\"${escapeHtmlAttributeSql(src)}\" alt=\"${escapeHtmlAttributeSql(alt)}\" />"
+        )
+    }
+    MARKDOWN_LINK_REGEX.findAll(text).forEach { match ->
+        val label = match.groupValues[1]
+        val href = sanitizeUrlOrNull(match.groupValues[2]) ?: return@forEach
+        tokens += Token(
+            start = match.range.first,
+            end = match.range.last + 1,
+            html = "<a href=\"${escapeHtmlAttributeSql(href)}\">${escapeHtmlTextSql(label)}</a>"
+        )
+    }
+
+    val occupied = tokens.sortedBy { it.start }
+    PLAIN_URL_REGEX.findAll(text).forEach { match ->
+        val start = match.range.first
+        val end = match.range.last + 1
+        if (occupied.any { start < it.end && end > it.start }) return@forEach
+        val href = sanitizeUrlOrNull(match.value) ?: return@forEach
+        val safeHref = escapeHtmlAttributeSql(href)
+        val safeLabel = escapeHtmlTextSql(href)
+        tokens += Token(start = start, end = end, html = "<a href=\"$safeHref\">$safeLabel</a>")
+    }
+
+    tokens
+        .sortedBy { it.start }
+        .forEach { token ->
+            if (token.start < cursor) return@forEach
+            if (token.start > cursor) {
+                out.append(escapeHtmlTextSql(text.substring(cursor, token.start)))
+            }
+            out.append(token.html)
+            cursor = token.end
+        }
+
+    if (cursor < text.length) {
+        out.append(escapeHtmlTextSql(text.substring(cursor)))
+    }
+    return out.toString()
 }
 
 private fun stripHtmlTagsSql(value: String): String {
@@ -2052,6 +2175,55 @@ private fun escapeHtmlAttributeSql(value: String): String {
     return value
         .replace("&", "&amp;")
         .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+}
+
+private fun rewriteBundledDictionaryResourceSrcForDisplay(
+    definition: String,
+    cacheKey: String
+): String {
+    if (definition.isBlank()) return definition
+    if (!definition.contains("href=", ignoreCase = true) &&
+        !definition.contains("src=", ignoreCase = true)
+    ) return definition
+
+    fun resolveSrc(rawSrc: String): String {
+        val src = rawSrc.trim().trim('"', '\'')
+        if (src.isBlank()) return rawSrc
+        if (src.startsWith("//")) return rawSrc
+        if (src.startsWith("#")) return rawSrc
+        if (src.startsWith("data:", ignoreCase = true)) return rawSrc
+        if (URI_SCHEME_REGEX.containsMatchIn(src)) return rawSrc
+        val normalized = src
+            .replace('\\', '/')
+            .trimStart('/')
+            .removePrefix("./")
+            .trim()
+        if (normalized.isBlank()) return rawSrc
+        return buildBundledDictionaryResourceUri(cacheKey, normalized)
+    }
+
+    return HTML_TAG_REGEX.replace(definition) { tagMatch ->
+        var tag = tagMatch.value
+        tag = HTML_ATTR_QUOTED_REGEX.replace(tag) { match ->
+            val attr = match.groupValues[1]
+            val quote = match.groupValues[2]
+            val value = match.groupValues[3]
+            "$attr=$quote${escapeHtmlAttributeSql(resolveSrc(value))}$quote"
+        }
+        tag = HTML_ATTR_UNQUOTED_REGEX.replace(tag) { match ->
+            val attr = match.groupValues[1]
+            val value = match.groupValues[2]
+            "$attr=\"${escapeHtmlAttributeSql(resolveSrc(value))}\""
+        }
+        tag
+    }
+}
+
+private fun escapeHtmlTextSql(value: String): String {
+    return value
+        .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
 }
