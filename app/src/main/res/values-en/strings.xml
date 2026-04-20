@@ -222,6 +222,9 @@
     <string name="audiobook_lookup_range_selection_enable">Enable range selection</string>
     <string name="audiobook_lookup_range_selection_enabled">Enabled: sentence range selection is available in the lookup popup.</string>
     <string name="audiobook_lookup_range_selection_disabled">Disabled: sentence range selection has been hidden.</string>
+    <string name="audiobook_lookup_root_full_width_enable">Root popup full width</string>
+    <string name="audiobook_lookup_root_full_width_enabled">Enabled: only the first lookup popup layer in book view is full width and shown below.</string>
+    <string name="audiobook_lookup_root_full_width_disabled">Disabled: book lookup popup uses the default layout.</string>
     <string name="audiobook_play_audio">Play audio</string>
     <string name="audiobook_play_audio_enabled">Enabled: lookup audio can be played.</string>
     <string name="audiobook_play_audio_disabled">Disabled: lookup audio playback.</string>

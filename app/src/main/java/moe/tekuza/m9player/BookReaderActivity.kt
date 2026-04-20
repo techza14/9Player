@@ -2340,7 +2340,7 @@ private fun BookReaderScreen(
                             listOf(0.8f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { speed ->
                                 val isCurrent = abs(speed - playbackSpeed) < 0.001f
                                 DropdownMenuItem(
-                                    text = { Text((if (isCurrent) "�?" else "") + "${speed}x") },
+                                    text = { Text((if (isCurrent) "> " else "") + "${speed}x") },
                                     onClick = {
                                         playbackSpeed = speed
                                         speedMenuExpanded = false
@@ -2907,6 +2907,15 @@ private fun BookReaderScreen(
         },
         onCloseAll = {
             closeLookupPopup()
+        },
+        forcePlaceBelowForLayer = { layerIndex, _ ->
+            audiobookSettings.lookupRootFullWidthEnabled && layerIndex == 0
+        },
+        fullWidthForLayer = { layerIndex, _ ->
+            audiobookSettings.lookupRootFullWidthEnabled && layerIndex == 0
+        },
+        dockBottomForLayer = { layerIndex, _ ->
+            audiobookSettings.lookupRootFullWidthEnabled && layerIndex == 0
         }
     )
 }

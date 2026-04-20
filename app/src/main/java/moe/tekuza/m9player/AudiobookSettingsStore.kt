@@ -23,6 +23,7 @@ private const val AUDIOBOOK_LOOKUP_AUDIO_MODE_KEY = "audiobook_lookup_audio_mode
 private const val AUDIOBOOK_LOOKUP_LOCAL_AUDIO_URI_KEY = "audiobook_lookup_local_audio_uri"
 private const val AUDIOBOOK_LOOKUP_FULL_SENTENCE_KEY = "audiobook_lookup_full_sentence"
 private const val AUDIOBOOK_LOOKUP_RANGE_SELECTION_ENABLED_KEY = "audiobook_lookup_range_selection_enabled"
+private const val AUDIOBOOK_LOOKUP_ROOT_FULL_WIDTH_ENABLED_KEY = "audiobook_lookup_root_full_width_enabled"
 private const val DEFAULT_AUDIOBOOK_SKIP_MILLIS = 10_000L
 internal const val DEFAULT_FLOATING_OVERLAY_SIZE_DP = 58
 internal const val MIN_FLOATING_OVERLAY_SIZE_DP = 36
@@ -70,6 +71,7 @@ internal data class AudiobookSettingsConfig(
     val lookupPlaybackAudioAutoPlay: Boolean = false,
     val lookupExportFullSentence: Boolean = false,
     val lookupRangeSelectionEnabled: Boolean = false,
+    val lookupRootFullWidthEnabled: Boolean = false,
     val lookupAudioMode: LookupAudioMode = LookupAudioMode.LOCAL_TTS,
     val lookupLocalAudioUri: Uri? = null,
     val floatingOverlaySizeDp: Int = DEFAULT_FLOATING_OVERLAY_SIZE_DP,
@@ -111,6 +113,7 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
         lookupPlaybackAudioAutoPlay = prefs.getBoolean(AUDIOBOOK_LOOKUP_AUDIO_AUTO_PLAY_KEY, false),
         lookupExportFullSentence = prefs.getBoolean(AUDIOBOOK_LOOKUP_FULL_SENTENCE_KEY, false),
         lookupRangeSelectionEnabled = prefs.getBoolean(AUDIOBOOK_LOOKUP_RANGE_SELECTION_ENABLED_KEY, false),
+        lookupRootFullWidthEnabled = prefs.getBoolean(AUDIOBOOK_LOOKUP_ROOT_FULL_WIDTH_ENABLED_KEY, false),
         lookupAudioMode = LookupAudioMode.fromStorage(prefs.getString(AUDIOBOOK_LOOKUP_AUDIO_MODE_KEY, null)),
         lookupLocalAudioUri = lookupAudioUri,
         floatingOverlaySizeDp = prefs.getInt(
@@ -269,6 +272,13 @@ internal fun saveLookupRangeSelectionEnabled(context: Context, enabled: Boolean)
     context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
         .edit()
         .putBoolean(AUDIOBOOK_LOOKUP_RANGE_SELECTION_ENABLED_KEY, enabled)
+        .apply()
+}
+
+internal fun saveLookupRootFullWidthEnabled(context: Context, enabled: Boolean) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(AUDIOBOOK_LOOKUP_ROOT_FULL_WIDTH_ENABLED_KEY, enabled)
         .apply()
 }
 

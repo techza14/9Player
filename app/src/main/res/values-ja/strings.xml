@@ -222,6 +222,9 @@
     <string name="audiobook_lookup_range_selection_enable">範囲選択を有効化</string>
     <string name="audiobook_lookup_range_selection_enabled">有効：辞書ポップアップで文の範囲選択が使えます。</string>
     <string name="audiobook_lookup_range_selection_disabled">無効：文の範囲選択を非表示にしました。</string>
+    <string name="audiobook_lookup_root_full_width_enable">第一層ポップアップ全幅</string>
+    <string name="audiobook_lookup_root_full_width_enabled">有効：書籍内の1層目辞書ポップアップのみ全幅で下側に表示します。</string>
+    <string name="audiobook_lookup_root_full_width_disabled">無効：書籍内の辞書ポップアップは標準レイアウトを使います。</string>
     <string name="audiobook_play_audio">音声を再生</string>
     <string name="audiobook_play_audio_enabled">有効：辞書音声を再生できます。</string>
     <string name="audiobook_play_audio_disabled">無効：辞書音声の再生。</string>
