@@ -820,10 +820,11 @@ internal fun buildDefinitionHtml(
             </ol>
         </div>
     """.trimIndent()
-    val customCss = buildScopedDictionaryCss(
+    val customCss = scopeDictionaryCssLikeHoshi(
         rawCss = dictionaryCss.orEmpty(),
         dictionaryName = resolvedDictionaryAttr
     )
+    val commonParityCss = glossaryDisplayParityCss()
     logLookupRenderDebug(
         dictionaryName = dictionaryLabel,
         definitionHtml = definitionHtml,
@@ -1484,23 +1485,10 @@ internal fun buildDefinitionHtml(
                 .yomitan-glossary ol { margin: 0; padding-left: 1.1em; }
                 .yomitan-glossary li { margin: 0; }
                 $customCss
-                /* Keep 字義 in normal size under current scoped CSS behavior. */
-                .yomitan-glossary [data-sc-div][data-sc字義],
-                .yomitan-glossary [data-sc-div][data-sc-字義] {
-                    font-size: 14px !important;
-                    line-height: 1.4;
-                }
-                [data-sc筆順], [data-sc-筆順] { display: block; overflow: visible; }
+                $commonParityCss
                 .nine-brushorder-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 0.5em; }
                 .nine-brushorder-scroll > table {
-                    border-collapse: collapse;
-                    border-spacing: 0;
                     margin: 0;
-                    border-top: 0.5px solid #444 !important;
-                    border-left: 0.5px solid #444 !important;
-                }
-                .nine-brushorder-scroll > table td {
-                    border: 0.5px solid #444 !important;
                 }
             </style>
             $lookupTapScript
@@ -1604,38 +1592,6 @@ private fun escapeHtmlText(value: String): String {
 
 private fun escapeHtmlAttributeForHtml(value: String): String {
     return escapeHtmlText(value).replace("\"", "&quot;")
-}
-
-private fun buildScopedDictionaryCss(rawCss: String, dictionaryName: String): String {
-    val trimmed = rawCss.trim()
-    if (trimmed.isBlank()) return ""
-    val prefix = if (dictionaryName.isBlank()) {
-        ".yomitan-glossary"
-    } else {
-        val dictionaryAttr = escapeCssString(dictionaryName)
-        ".yomitan-glossary [data-dictionary=\"$dictionaryAttr\"]"
-    }
-    val ruleRegex = Regex("([^{}]+)\\{([^}]*)\\}")
-    val scoped = ruleRegex.replace(trimmed) { match ->
-        val selectors = match.groupValues[1]
-        val body = match.groupValues[2]
-        if (selectors.trim().startsWith("@")) return@replace match.value
-        val prefixed = selectors
-            .split(',')
-            .map { selector ->
-                val s = selector.trim()
-                if (s.isBlank()) s else "$prefix $s"
-            }
-            .joinToString(", ")
-        "$prefixed {$body}"
-    }
-    return scoped.trim()
-}
-
-private fun escapeCssString(value: String): String {
-    return value
-        .replace("\\", "\\\\")
-        .replace("\"", "\\\"")
 }
 
 private fun colorToCssHex(color: Color): String {
