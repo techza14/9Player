@@ -2316,7 +2316,7 @@ companion object {
             orientation = LinearLayout.VERTICAL
             setPadding((12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt(), (10 * density).toInt())
         }
-        content.addView(createLookupHeader(layerIndex, actionState))
+        content.addView(createLookupHeader(layerIndex))
         when (mode) {
             FloatingCardMode.Loading -> {
                 content.addView(createLookupTitle(layer.selectionText.orEmpty(), reading = null, palette = palette))
@@ -2418,7 +2418,7 @@ companion object {
         val cardContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(scrollView)
-            createLookupFooter(actionState, palette)?.let(::addView)
+            addView(createLookupFooter(palette))
         }
 
         return FloatingLookupHostLayout(this).apply {
@@ -2442,16 +2442,13 @@ companion object {
         }
     }
 
-    private fun createLookupHeader(layerIndex: Int, actionState: LookupCardActionState): LinearLayout {
+    private fun createLookupHeader(layerIndex: Int): LinearLayout {
         val density = resources.displayMetrics.density
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(createTextButton("←") {
-                when (val closeAction = floatingLookupSession.closeLayerOrClear(layerIndex)) {
-                    CloseLookupAction.ClearAll -> hideFloatingLookup()
-                    is CloseLookupAction.ShowLayer -> truncateFloatingLookupLayersTo(closeAction.index)
-                }
+                closeFloatingLookupLayer(layerIndex)
             }.apply {
                 layoutParams = LinearLayout.LayoutParams(
                     (36 * density).toInt(),
@@ -2465,7 +2462,18 @@ companion object {
         }
     }
 
-    private fun createLookupFooter(actionState: LookupCardActionState, palette: FloatingLookupPalette): LinearLayout? {
+    private fun closeFloatingLookupLayer(layerIndex: Int) {
+        applyCloseLookupAction(floatingLookupSession.closeLayerOrClear(layerIndex))
+    }
+
+    private fun applyCloseLookupAction(closeAction: CloseLookupAction) {
+        when (closeAction) {
+            CloseLookupAction.ClearAll -> hideFloatingLookup()
+            is CloseLookupAction.ShowLayer -> truncateFloatingLookupLayersTo(closeAction.index)
+        }
+    }
+
+    private fun createLookupFooter(palette: FloatingLookupPalette): LinearLayout {
         val density = resources.displayMetrics.density
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -2710,6 +2718,7 @@ companion object {
                 private var downX = 0f
                 private var downY = 0f
                 private var moved = false
+                private var swipeCloseTriggered = false
                 override fun onTouch(v: View?, event: MotionEvent?): Boolean {
                     if (!enableLookupTap || event == null) return false
                     when (event.actionMasked) {
@@ -2717,16 +2726,29 @@ companion object {
                             downX = event.x
                             downY = event.y
                             moved = false
+                            swipeCloseTriggered = false
                         }
                         MotionEvent.ACTION_MOVE -> {
+                            val dx = event.x - downX
+                            val dy = event.y - downY
                             if (
-                                kotlin.math.abs(event.x - downX) > 14f ||
-                                kotlin.math.abs(event.y - downY) > 14f
+                                !swipeCloseTriggered &&
+                                kotlin.math.abs(dx) > 56f &&
+                                kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.2f
+                            ) {
+                                swipeCloseTriggered = true
+                                closeFloatingLookupLayer(layerIndex)
+                                return true
+                            }
+                            if (
+                                kotlin.math.abs(dx) > 14f ||
+                                kotlin.math.abs(dy) > 14f
                             ) {
                                 moved = true
                             }
                         }
                         MotionEvent.ACTION_UP -> {
+                            if (swipeCloseTriggered) return true
                             if (!moved) {
                                 val effectiveScale = this@apply.scale.takeIf { it.isFinite() && it > 0f } ?: 1f
                                 val clientX = event.x / effectiveScale
@@ -2741,6 +2763,9 @@ companion object {
                                     )
                                 }
                             }
+                        }
+                        MotionEvent.ACTION_CANCEL -> {
+                            swipeCloseTriggered = false
                         }
                     }
                     return true
@@ -3446,10 +3471,7 @@ companion object {
         val cueSnapshot = BookReaderFloatingBridge.currentCue() ?: return
         val settings = loadAudiobookSettingsConfig(this)
         val closeAction = floatingLookupSession.afterAddToAnki(layerIndex)
-        when (closeAction) {
-            CloseLookupAction.ClearAll -> hideFloatingLookup()
-            is CloseLookupAction.ShowLayer -> truncateFloatingLookupLayersTo(closeAction.index)
-        }
+        applyCloseLookupAction(closeAction)
         val audioUri = cueSnapshot.audioUri
             ?.takeIf { layer.sourceTerm == null }
             ?.let { runCatching { Uri.parse(it) }.getOrNull() }
