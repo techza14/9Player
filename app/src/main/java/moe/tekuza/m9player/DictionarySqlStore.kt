@@ -1815,7 +1815,7 @@ private fun extractTextSnippetSql(value: Any?): String? {
         else -> value.toString()
     }.trim()
     if (raw.isBlank()) return null
-    return normalizeDefinitionForDisplaySql(raw).take(3200)
+    return clampDefinitionLengthForStorageSql(normalizeDefinitionForDisplaySql(raw))
 }
 
 private fun structuredMapToHtmlSql(value: Map<*, *>): String {
@@ -1917,22 +1917,29 @@ private fun normalizeStructuredDataKeySql(rawKey: String?): String {
         .orEmpty()
     if (base.isBlank()) return ""
 
-    val canonical = when (base.lowercase(Locale.ROOT)) {
+    return when (base.lowercase(Locale.ROOT)) {
         "sc-class", "scclass", "class" -> "class"
+        // Yomitan dictionary packs commonly use dic-item while CSS targets dic_item.
+        "dic-item" -> "dic_item"
         else -> base
-            .replace(CAMEL_CASE_BOUNDARY_REGEX, "$1_$2")
-            .lowercase(Locale.ROOT)
     }
-    return canonical
-        .replace(STRUCTURED_DATA_KEY_SANITIZE_REGEX, "")
-        .trim('_', '-')
 }
 
 private fun buildStructuredDataScAttributesSql(data: Map<String, String>): String {
     if (data.isEmpty()) return ""
-    return data.entries.joinToString(separator = "") { (key, value) ->
-        val attrName = "data-sc-$key"
-        " $attrName=\"${escapeHtmlAttributeSql(value)}\""
+    val classAttr = data["class"]?.trim().takeIf { !it.isNullOrBlank() }
+    val dataAttrs = data.entries.joinToString(separator = "") { (key, value) ->
+        val escapedValue = escapeHtmlAttributeSql(value)
+        buildString {
+            append(" data-sc-$key=\"$escapedValue\"")
+            append(" data-sc$key=\"$escapedValue\"")
+        }
+    }
+    return buildString {
+        if (!classAttr.isNullOrBlank()) {
+            append(" class=\"${escapeHtmlAttributeSql(classAttr)}\"")
+        }
+        append(dataAttrs)
     }
 }
 
@@ -1987,7 +1994,7 @@ private fun compactDefinitionsSql(rawDefinitions: List<String>): List<String> {
     return rawDefinitions
         .map(::normalizeDefinitionForDisplaySql)
         .filter { it.isNotBlank() && isLikelyDefinitionSql(it) }
-        .map { it.take(3200) }
+        .map(::clampDefinitionLengthForStorageSql)
         .distinct()
         .take(2)
 }
@@ -1996,6 +2003,12 @@ private fun normalizeDefinitionForDisplaySql(raw: String): String {
     val trimmed = raw.trim()
     if (trimmed.isBlank()) return ""
     return if (looksLikeHtmlSql(trimmed)) trimmed else plainDefinitionToHtmlSql(trimmed)
+}
+
+private fun clampDefinitionLengthForStorageSql(value: String): String {
+    val trimmed = value.trim()
+    if (trimmed.isBlank()) return ""
+    return if (looksLikeHtmlSql(trimmed)) trimmed else trimmed.take(3200)
 }
 
 internal fun lookupDictionarySourceUriByCacheKey(context: Context, cacheKey: String): String? {

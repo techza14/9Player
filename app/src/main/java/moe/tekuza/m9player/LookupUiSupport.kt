@@ -706,7 +706,8 @@ internal fun RichDefinitionView(
                                         }
                                     }
                                 }
-                                return true
+                                // Keep tap-to-lookup, but allow native WebView scroll/drag.
+                                return false
                             }
                         })
                         addJavascriptInterface(bridge, "NineLookup")
@@ -806,24 +807,27 @@ internal fun buildDefinitionHtml(
 ): String {
     val prefix = if (indexLabel.isBlank()) "" else "<div>${escapeHtmlText(indexLabel)}</div>"
     val dictionaryLabel = dictionaryName?.trim().orEmpty()
-    val wrappedBody = if (dictionaryLabel.isBlank()) {
-        definitionHtml
-    } else {
-        val safeDictionaryLabel = escapeHtmlText(dictionaryLabel)
-        val safeDictionaryAttr = escapeHtmlAttributeForHtml(dictionaryLabel)
-        """
+    val resolvedDictionaryAttr = dictionaryLabel.ifBlank { "__default__" }
+    val safeDictionaryLabel = escapeHtmlText(dictionaryLabel)
+    val safeDictionaryAttr = escapeHtmlAttributeForHtml(resolvedDictionaryAttr)
+    val leadingLabel = if (dictionaryLabel.isBlank()) "" else "<i>($safeDictionaryLabel)</i> "
+    val wrappedBody = """
         <div class="yomitan-glossary">
             <ol>
                 <li data-dictionary="$safeDictionaryAttr">
-                    <i>($safeDictionaryLabel)</i> $definitionHtml
+                    $leadingLabel$definitionHtml
                 </li>
             </ol>
         </div>
-        """.trimIndent()
-    }
+    """.trimIndent()
     val customCss = buildScopedDictionaryCss(
         rawCss = dictionaryCss.orEmpty(),
-        dictionaryName = dictionaryLabel
+        dictionaryName = resolvedDictionaryAttr
+    )
+    logLookupRenderDebug(
+        dictionaryName = dictionaryLabel,
+        definitionHtml = definitionHtml,
+        customCss = customCss
     )
     val lookupTapScript = if (!enableLookupTap) {
         ""
@@ -1463,15 +1467,67 @@ internal fun buildDefinitionHtml(
         <head>
             <meta charset="utf-8"/>
             <style>
-                body { margin: 0; padding: 0; font-size: 14px; line-height: 1.4; color: $bodyTextColorCss; }
+                :root {
+                    --text-color: $bodyTextColorCss;
+                    --background-color-light: #ffffff;
+                    --danger-color: #c62828;
+                    --danger-color-lighter: #ef9a9a;
+                    --oko12-light-red: #f6c5c5;
+                    --oko12-red: #e57373;
+                    --sidebar-button-danger-background-color-hover: #fce4e4;
+                    --tag-archaism-background-color: #eeeeee;
+                }
+                body { margin: 0; padding: 0; font-size: 14px; line-height: 1.4; color: var(--text-color); }
                 img { max-width: 100%; height: auto; cursor: zoom-in; }
                 .yomitan-glossary { text-align: left; }
                 .nine-lookup-highlight { background: rgba(161, 161, 170, 0.22); border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(161, 161, 170, 0.40); }
                 .yomitan-glossary ol { margin: 0; padding-left: 1.1em; }
                 .yomitan-glossary li { margin: 0; }
                 $customCss
+                /* Keep 字義 in normal size under current scoped CSS behavior. */
+                .yomitan-glossary [data-sc-div][data-sc字義],
+                .yomitan-glossary [data-sc-div][data-sc-字義] {
+                    font-size: 14px !important;
+                    line-height: 1.4;
+                }
+                [data-sc筆順], [data-sc-筆順] { display: block; overflow: visible; }
+                .nine-brushorder-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 0.5em; }
+                .nine-brushorder-scroll > table {
+                    border-collapse: collapse;
+                    border-spacing: 0;
+                    margin: 0;
+                    border-top: 0.5px solid #444 !important;
+                    border-left: 0.5px solid #444 !important;
+                }
+                .nine-brushorder-scroll > table td {
+                    border: 0.5px solid #444 !important;
+                }
             </style>
             $lookupTapScript
+            <script>
+                (function() {
+                    function wrapBrushOrderTables() {
+                        var roots = document.querySelectorAll('[data-sc筆順], [data-sc-筆順]');
+                        roots.forEach(function(root) {
+                            var children = Array.prototype.slice.call(root.children || []);
+                            children.forEach(function(child) {
+                                if (!child || !child.tagName) return;
+                                if (child.tagName.toLowerCase() !== 'table') return;
+                                if (child.parentElement && child.parentElement.classList.contains('nine-brushorder-scroll')) return;
+                                var wrapper = document.createElement('div');
+                                wrapper.className = 'nine-brushorder-scroll';
+                                root.insertBefore(wrapper, child);
+                                wrapper.appendChild(child);
+                            });
+                        });
+                    }
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', wrapBrushOrderTables, { once: true });
+                    } else {
+                        wrapBrushOrderTables();
+                    }
+                })();
+            </script>
         </head>
         <body>
             $prefix
@@ -1479,6 +1535,40 @@ internal fun buildDefinitionHtml(
         </body>
         </html>
     """.trimIndent()
+}
+
+private fun logLookupRenderDebug(
+    dictionaryName: String,
+    definitionHtml: String,
+    customCss: String
+) {
+    val dict = dictionaryName.ifBlank { "(blank)" }
+    val hasDataScNoDash = definitionHtml.contains("data-sc", ignoreCase = true)
+    val hasDataScDash = definitionHtml.contains("data-sc-", ignoreCase = true)
+    val hasBrushOrderAttr = definitionHtml.contains("data-sc筆順") || definitionHtml.contains("data-sc-筆順")
+    val hasTableTag = definitionHtml.contains("<table", ignoreCase = true)
+    val hasTrTag = definitionHtml.contains("<tr", ignoreCase = true)
+    val hasTdTag = definitionHtml.contains("<td", ignoreCase = true)
+    val trCount = Regex("<tr\\b", RegexOption.IGNORE_CASE).findAll(definitionHtml).count()
+    val tdCount = Regex("<td\\b", RegexOption.IGNORE_CASE).findAll(definitionHtml).count()
+    val hasCssBrushOrderSelector = customCss.contains("[data-sc筆順]") || customCss.contains("[data-sc-筆順]")
+    val hasCssTableSelector = customCss.contains("table")
+    val defSnippet = definitionHtml
+        .replace("\n", " ")
+        .replace(Regex("\\s+"), " ")
+        .take(220)
+    val cssSnippet = customCss
+        .replace("\n", " ")
+        .replace(Regex("\\s+"), " ")
+        .take(220)
+    Log.d(
+        BOOK_LOOKUP_TAP_LOG_TAG,
+        "render debug dict=$dict defLen=${definitionHtml.length} cssLen=${customCss.length} " +
+            "hasDataSc=$hasDataScNoDash hasDataScDash=$hasDataScDash hasBrushOrderAttr=$hasBrushOrderAttr " +
+            "hasTable=$hasTableTag hasTr=$hasTrTag hasTd=$hasTdTag trCount=$trCount tdCount=$tdCount " +
+            "cssHasBrushOrderSelector=$hasCssBrushOrderSelector " +
+            "cssHasTableSelector=$hasCssTableSelector defSnippet=$defSnippet cssSnippet=$cssSnippet"
+    )
 }
 
 private fun decodePreviewImage(context: android.content.Context, rawSrc: String): ImageBitmap? {
@@ -1519,10 +1609,12 @@ private fun escapeHtmlAttributeForHtml(value: String): String {
 private fun buildScopedDictionaryCss(rawCss: String, dictionaryName: String): String {
     val trimmed = rawCss.trim()
     if (trimmed.isBlank()) return ""
-    if (dictionaryName.isBlank()) return trimmed
-
-    val dictionaryAttr = escapeCssString(dictionaryName)
-    val prefix = ".yomitan-glossary [data-dictionary=\"$dictionaryAttr\"]"
+    val prefix = if (dictionaryName.isBlank()) {
+        ".yomitan-glossary"
+    } else {
+        val dictionaryAttr = escapeCssString(dictionaryName)
+        ".yomitan-glossary [data-dictionary=\"$dictionaryAttr\"]"
+    }
     val ruleRegex = Regex("([^{}]+)\\{([^}]*)\\}")
     val scoped = ruleRegex.replace(trimmed) { match ->
         val selectors = match.groupValues[1]
@@ -1537,10 +1629,7 @@ private fun buildScopedDictionaryCss(rawCss: String, dictionaryName: String): St
             .joinToString(", ")
         "$prefixed {$body}"
     }
-    return buildString {
-        appendLine(scoped)
-        appendLine(trimmed)
-    }.trim()
+    return scoped.trim()
 }
 
 private fun escapeCssString(value: String): String {

@@ -825,7 +825,9 @@ private fun buildStyledGlossaryFromSources(sources: List<MinedCardGlossarySource
     val items = sources.joinToString("") { source ->
         val safeName = escapeHtmlText(source.dictionaryName)
         val safeAttr = escapeHtmlAttribute(source.dictionaryName)
-        val body = source.definitions.joinToString("<br>")
+        val body = source.definitions
+            .map(::sanitizeAnkiDefinitionHtml)
+            .joinToString("<br>")
         """
             <li data-dictionary="$safeAttr">
                 <i>($safeName)</i> <span>$body</span>
@@ -888,6 +890,7 @@ private fun buildStyledGlossary(
     val normalizedDefinitions = definitions
         .map { it.trim() }
         .filter { it.isNotBlank() }
+        .map(::sanitizeAnkiDefinitionHtml)
     if (normalizedDefinitions.isEmpty()) return ""
     val dictName = dictionaryName?.trim().orEmpty()
     if (dictName.isBlank()) {
@@ -925,6 +928,24 @@ private fun buildStyledGlossary(
             $styleBlock
         </div>
     """.trimIndent()
+}
+
+private val ANKI_EXPORT_NON_DASHED_DATA_SC_ATTR_REGEX = Regex(
+    "\\sdata-sc(?!-)[A-Za-z0-9_:.]+\\s*=\\s*\"[^\"]*\"",
+    RegexOption.IGNORE_CASE
+)
+private val ANKI_EXPORT_CLASS_ATTR_REGEX = Regex(
+    "\\sclass\\s*=\\s*\"[^\"]*\"",
+    RegexOption.IGNORE_CASE
+)
+
+private fun sanitizeAnkiDefinitionHtml(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.isBlank()) return ""
+    if (!trimmed.contains("<")) return trimmed
+    return trimmed
+        .replace(ANKI_EXPORT_NON_DASHED_DATA_SC_ATTR_REGEX, "")
+        .replace(ANKI_EXPORT_CLASS_ATTR_REGEX, "")
 }
 
 internal fun classifyAnkiExportFailure(
