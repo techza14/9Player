@@ -1323,8 +1323,10 @@ private fun stageAudioInMediaStore(
 
 private fun openInputStreamForUri(context: Context, uri: Uri): InputStream? {
     return when (uri.scheme?.lowercase(Locale.ROOT)) {
-        "mdictres" -> runCatching {
-            openMountedMdictResource(context, uri)?.inputStream
+        "dictres", "mdictres" -> runCatching {
+            loadDictionaryMediaPayload(context, uri)?.let { payload ->
+                java.io.ByteArrayInputStream(payload.bytes)
+            }
         }.getOrNull()
 
         "file" -> runCatching {

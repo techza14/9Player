@@ -1,23 +1,34 @@
 package moe.tekuza.m9player
 
 import android.app.Application
-import android.os.Handler
-import android.os.Looper
 import android.webkit.WebView
 
 class NinePlayerApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        Handler(Looper.getMainLooper()).post {
-            Looper.myQueue().addIdleHandler {
-                runCatching {
-                    WebView(this).apply {
-                        loadUrl("about:blank")
-                        stopLoading()
-                        destroy()
-                    }
-                }
-                false
+        WebViewPreloader.warmup(this)
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        clearDictionaryMediaPayloadCache()
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        clearDictionaryMediaPayloadCache()
+    }
+}
+
+private object WebViewPreloader {
+    private var dummy: WebView? = null
+
+    fun warmup(app: Application) {
+        if (dummy != null) return
+        runCatching {
+            dummy = WebView(app).apply {
+                // Keep one preloaded instance alive to reduce first real WebView startup cost.
+                loadDataWithBaseURL(null, "", "text/html", "utf-8", null)
             }
         }
     }

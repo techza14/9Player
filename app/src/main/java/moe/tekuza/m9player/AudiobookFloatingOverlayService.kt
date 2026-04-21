@@ -2698,6 +2698,9 @@ companion object {
             settings.allowUniversalAccessFromFileURLs = true
             settings.allowContentAccess = false
             settings.blockNetworkLoads = true
+            settings.blockNetworkImage = false
+            settings.loadsImagesAutomatically = true
+            settings.offscreenPreRaster = true
             settings.builtInZoomControls = false
             settings.displayZoomControls = false
             settings.setSupportZoom(false)
@@ -2783,14 +2786,14 @@ companion object {
                     request: android.webkit.WebResourceRequest?
                 ): WebResourceResponse? {
                     val uri = request?.url ?: return null
-                    val resource = openMountedMdictResource(this@AudiobookFloatingOverlayService, uri) ?: return null
-                    return WebResourceResponse(resource.mimeType, null, resource.inputStream)
+                    val payload = loadDictionaryMediaPayload(this@AudiobookFloatingOverlayService, uri) ?: return null
+                    return buildDictionaryWebResourceResponse(payload)
                 }
 
                 override fun shouldInterceptRequest(view: WebView?, url: String?): WebResourceResponse? {
                     val uri = runCatching { Uri.parse(url.orEmpty()) }.getOrNull() ?: return null
-                    val resource = openMountedMdictResource(this@AudiobookFloatingOverlayService, uri) ?: return null
-                    return WebResourceResponse(resource.mimeType, null, resource.inputStream)
+                    val payload = loadDictionaryMediaPayload(this@AudiobookFloatingOverlayService, uri) ?: return null
+                    return buildDictionaryWebResourceResponse(payload)
                 }
 
                 override fun shouldOverrideUrlLoading(

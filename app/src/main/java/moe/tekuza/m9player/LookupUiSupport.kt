@@ -572,6 +572,9 @@ internal fun RichDefinitionView(
                         settings.allowUniversalAccessFromFileURLs = true
                         settings.allowContentAccess = false
                         settings.blockNetworkLoads = true
+                        settings.blockNetworkImage = false
+                        settings.loadsImagesAutomatically = true
+                        settings.offscreenPreRaster = true
                         settings.builtInZoomControls = false
                         settings.displayZoomControls = false
                         settings.setSupportZoom(false)
@@ -625,22 +628,14 @@ internal fun RichDefinitionView(
                                 request: WebResourceRequest?
                             ): WebResourceResponse? {
                                 val uri = request?.url ?: return null
-                                val bundled = openBundledDictionaryResource(context, uri)
-                                if (bundled != null) {
-                                    return WebResourceResponse(bundled.mimeType, null, bundled.inputStream)
-                                }
-                                val resource = openMountedMdictResource(context, uri) ?: return null
-                                return WebResourceResponse(resource.mimeType, null, resource.inputStream)
+                                val payload = loadDictionaryMediaPayload(context, uri) ?: return null
+                                return buildDictionaryWebResourceResponse(payload)
                             }
 
                             override fun shouldInterceptRequest(view: WebView?, url: String?): WebResourceResponse? {
                                 val uri = runCatching { Uri.parse(url.orEmpty()) }.getOrNull() ?: return null
-                                val bundled = openBundledDictionaryResource(context, uri)
-                                if (bundled != null) {
-                                    return WebResourceResponse(bundled.mimeType, null, bundled.inputStream)
-                                }
-                                val resource = openMountedMdictResource(context, uri) ?: return null
-                                return WebResourceResponse(resource.mimeType, null, resource.inputStream)
+                                val payload = loadDictionaryMediaPayload(context, uri) ?: return null
+                                return buildDictionaryWebResourceResponse(payload)
                             }
 
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -1518,6 +1513,33 @@ internal fun buildDefinitionHtml(
                 }
                 body { margin: 0; padding: 0; font-size: 14px; line-height: 1.4; color: var(--text-color); }
                 img { max-width: 100%; height: auto; cursor: zoom-in; }
+                .gloss-image-link {
+                    display: inline-block;
+                    line-height: 1;
+                    max-width: 100%;
+                }
+                .gloss-image-container {
+                    display: inline-block;
+                    position: relative;
+                    max-width: 100%;
+                    line-height: 0;
+                    overflow: hidden;
+                    vertical-align: top;
+                }
+                .gloss-image-link[data-has-aspect-ratio=true] .gloss-image {
+                    position: absolute;
+                    left: 0;
+                    top: 0;
+                    width: 100%;
+                    height: 100%;
+                    object-fit: contain;
+                }
+                .gloss-image-link[data-has-aspect-ratio=true] .gloss-image-sizer {
+                    display: inline-block;
+                    width: 0;
+                    vertical-align: top;
+                    font-size: 0;
+                }
                 .yomitan-glossary { text-align: left; }
                 .nine-lookup-highlight { background: rgba(161, 161, 170, 0.22); border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(161, 161, 170, 0.40); }
                 .yomitan-glossary ol { margin: 0; padding-left: 1.1em; }
@@ -1552,6 +1574,20 @@ internal fun buildDefinitionHtml(
                     } else {
                         wrapBrushOrderTables();
                     }
+                    function primeGlossImages() {
+                        var images = document.querySelectorAll('.gloss-image-link .gloss-image, img.gloss-image, img[data-sc-img], img');
+                        images.forEach(function(img) {
+                            if (!img || !img.getAttribute) return;
+                            if (!img.getAttribute('loading')) img.setAttribute('loading', 'eager');
+                            if (!img.getAttribute('decoding')) img.setAttribute('decoding', 'sync');
+                            if (!img.getAttribute('fetchpriority')) img.setAttribute('fetchpriority', 'high');
+                        });
+                    }
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', primeGlossImages, { once: true });
+                    } else {
+                        primeGlossImages();
+                    }
                 })();
             </script>
         </head>
@@ -1568,15 +1604,21 @@ private fun decodePreviewImage(context: android.content.Context, rawSrc: String)
     Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "image preview decode src=$src")
     val uri = runCatching { Uri.parse(src) }.getOrNull() ?: return null
     return runCatching {
-        val stream = when (uri.scheme?.lowercase(Locale.ROOT)) {
-            "dictres" -> openBundledDictionaryResource(context, uri)?.inputStream
-            "mdictres" -> openMountedMdictResource(context, uri)?.inputStream
-            "content", "file", "android.resource" -> context.contentResolver.openInputStream(uri)
+        val bitmap = when (uri.scheme?.lowercase(Locale.ROOT)) {
+            "dictres", "mdictres" -> {
+                val payload = loadDictionaryMediaPayload(context, uri) ?: return null
+                BitmapFactory.decodeByteArray(payload.bytes, 0, payload.bytes.size)
+            }
+            "content", "file", "android.resource" -> {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    BitmapFactory.decodeStream(input)
+                }
+            }
             else -> null
         } ?: return null
-        stream.use { input ->
-            BitmapFactory.decodeStream(input)?.asImageBitmap().also { bitmap ->
-                Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "image preview decode result=${bitmap != null} uri=$uri")
+        bitmap.asImageBitmap().also { image ->
+            runCatching {
+                Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "image preview decode result=true uri=$uri")
             }
         }
     }.getOrNull()
