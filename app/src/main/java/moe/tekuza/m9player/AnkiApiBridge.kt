@@ -405,16 +405,8 @@ private fun buildAnkiVariables(
     }.orEmpty()
     val singleGlossaryFirst = primaryGlossarySource?.definitions?.firstOrNull().orEmpty()
     val singleGlossaryNoDictionary = primaryGlossarySource?.definitions?.joinToString("<br>").orEmpty()
-    val styledGlossaryFirst = if (glossaryFirst.isBlank()) {
-        ""
-    } else {
-        val firstSource = glossarySources.firstOrNull()
-        buildStyledGlossary(
-            definitions = listOf(glossaryFirst),
-            dictionaryName = firstSource?.dictionaryName ?: dictionaryName,
-            dictionaryCss = firstSource?.dictionaryCss ?: card.dictionaryCss
-        )
-    }
+    // Hoshi parity: glossary-first is the first dictionary's full glossary HTML.
+    val styledGlossaryFirst = singleGlossaryHtml
     val cutAudio = if (includeCutAudio) {
         attachAudio(api, context, card).orEmpty()
     } else {
@@ -455,7 +447,7 @@ private fun buildAnkiVariables(
         "glossary-no-dictionary" to glossaryNoDictionary,
         "glossary-first" to styledGlossaryFirst,
         "glossary-first-brief" to glossaryFirst,
-        "glossary-first-no-dictionary" to glossaryFirst,
+        "glossary-first-no-dictionary" to singleGlossaryNoDictionary,
         "single-glossary" to singleGlossaryHtml,
         "single-glossary-brief" to singleGlossaryFirst,
         "single-glossary-no-dictionary" to singleGlossaryNoDictionary,
@@ -814,40 +806,17 @@ private fun selectPrimaryGlossarySource(
 
 private fun buildStyledGlossaryFromSources(sources: List<MinedCardGlossarySource>): String {
     if (sources.isEmpty()) return ""
-    if (sources.size == 1) {
-        val source = sources.first()
-        return buildStyledGlossary(
-            definitions = source.definitions,
-            dictionaryName = source.dictionaryName,
-            dictionaryCss = source.dictionaryCss
-        )
-    }
-    val items = sources.joinToString("") { source ->
-        val safeName = escapeHtmlText(source.dictionaryName)
-        val safeAttr = escapeHtmlAttribute(source.dictionaryName)
-        val body = source.definitions
-            .map(::sanitizeAnkiDefinitionHtml)
-            .joinToString("<br>")
-        """
-            <li data-dictionary="$safeAttr">
-                <i>($safeName)</i> <span>$body</span>
-            </li>
-        """.trimIndent()
-    }
-    val scopedCss = sources
-        .asSequence()
-        .map { source -> buildScopedDictionaryCss(source.dictionaryCss.orEmpty(), source.dictionaryName) }
-        .filter { it.isNotBlank() }
-        .joinToString("\n")
-    val styleBlock = if (scopedCss.isBlank()) "" else "<style>$scopedCss</style>"
-    return """
-        <div style="text-align: left;" class="yomitan-glossary">
-            <ol>
-                $items
-                $styleBlock
-            </ol>
-        </div>
-    """.trimIndent()
+    return renderYomitanGlossaryHtml(
+        items = sources.map { source ->
+            GlossaryHtmlItem(
+                dictionaryName = source.dictionaryName,
+                definitions = source.definitions.map(::sanitizeAnkiDefinitionHtml),
+                dictionaryCss = source.dictionaryCss
+            )
+        },
+        includeDictionaryLabel = true,
+        includeParityCss = true
+    )
 }
 
 private fun resolveBookTitle(context: Context, card: MinedCard): String {
@@ -886,66 +855,23 @@ private fun buildStyledGlossary(
     dictionaryName: String?,
     dictionaryCss: String?
 ): String {
-    if (definitions.isEmpty()) return ""
-    val normalizedDefinitions = definitions
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
-        .map(::sanitizeAnkiDefinitionHtml)
-    if (normalizedDefinitions.isEmpty()) return ""
-    val dictName = dictionaryName?.trim().orEmpty()
-    if (dictName.isBlank()) {
-        val rawCss = dictionaryCss?.trim().orEmpty()
-        val styleBlock = if (rawCss.isBlank()) {
-            ""
-        } else {
-            "<style>$rawCss</style>"
-        }
-        val body = if (normalizedDefinitions.all { it.startsWith("<li") }) {
-            "<ol>${normalizedDefinitions.joinToString("")}</ol>"
-        } else {
-            normalizedDefinitions.joinToString("<br>")
-        }
-        return """
-            <div style="text-align: left;" class="yomitan-glossary">
-                $body
-                $styleBlock
-            </div>
-        """.trimIndent()
-    }
-
-    val body = normalizedDefinitions.joinToString("<br>")
-    val safeName = escapeHtmlText(dictName)
-    val safeAttr = escapeHtmlAttribute(dictName)
-    val scopedCss = buildScopedDictionaryCss(dictionaryCss.orEmpty(), dictName)
-    val styleBlock = if (scopedCss.isBlank()) "" else "<style>$scopedCss</style>"
-    return """
-        <div style="text-align: left;" class="yomitan-glossary">
-            <ol>
-                <li data-dictionary="$safeAttr">
-                    <i>($safeName)</i> <span>$body</span>
-                </li>
-            </ol>
-            $styleBlock
-        </div>
-    """.trimIndent()
+    return renderYomitanGlossaryHtml(
+        items = listOf(
+            GlossaryHtmlItem(
+                dictionaryName = dictionaryName.orEmpty(),
+                definitions = definitions.map(::sanitizeAnkiDefinitionHtml),
+                dictionaryCss = dictionaryCss
+            )
+        ),
+        includeDictionaryLabel = true,
+        includeParityCss = true
+    )
 }
-
-private val ANKI_EXPORT_NON_DASHED_DATA_SC_ATTR_REGEX = Regex(
-    "\\sdata-sc(?!-)[A-Za-z0-9_:.]+\\s*=\\s*\"[^\"]*\"",
-    RegexOption.IGNORE_CASE
-)
-private val ANKI_EXPORT_CLASS_ATTR_REGEX = Regex(
-    "\\sclass\\s*=\\s*\"[^\"]*\"",
-    RegexOption.IGNORE_CASE
-)
 
 private fun sanitizeAnkiDefinitionHtml(raw: String): String {
     val trimmed = raw.trim()
     if (trimmed.isBlank()) return ""
-    if (!trimmed.contains("<")) return trimmed
     return trimmed
-        .replace(ANKI_EXPORT_NON_DASHED_DATA_SC_ATTR_REGEX, "")
-        .replace(ANKI_EXPORT_CLASS_ATTR_REGEX, "")
 }
 
 internal fun classifyAnkiExportFailure(
@@ -1397,8 +1323,10 @@ private fun stageAudioInMediaStore(
 
 private fun openInputStreamForUri(context: Context, uri: Uri): InputStream? {
     return when (uri.scheme?.lowercase(Locale.ROOT)) {
-        "mdictres" -> runCatching {
-            openMountedMdictResource(context, uri)?.inputStream
+        "dictres", "mdictres" -> runCatching {
+            loadDictionaryMediaPayload(context, uri)?.let { payload ->
+                java.io.ByteArrayInputStream(payload.bytes)
+            }
         }.getOrNull()
 
         "file" -> runCatching {
@@ -2338,48 +2266,6 @@ private fun normalizeDictionaryToken(value: String): String {
         .replace(DICTIONARY_TOKEN_STRIP_REGEX, "")
         .replace("\u8bcd\u5178", "\u8f9e\u5178")
         .replace("\u93e1", "\u955c")
-}
-
-private fun escapeHtmlText(value: String): String {
-    return value
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-}
-
-private fun escapeHtmlAttribute(value: String): String {
-    return escapeHtmlText(value).replace("\"", "&quot;")
-}
-
-private fun escapeCssString(value: String): String {
-    return value
-        .replace("\\", "\\\\")
-        .replace("\"", "\\\"")
-}
-
-private fun buildScopedDictionaryCss(rawCss: String, dictionaryName: String): String {
-    val trimmed = rawCss.trim()
-    if (trimmed.isBlank()) return ""
-    if (dictionaryName.isBlank()) return trimmed
-
-    val dictionaryAttr = escapeCssString(dictionaryName)
-    val prefix = ".yomitan-glossary [data-dictionary=\"$dictionaryAttr\"]"
-    val ruleRegex = Regex("([^{}]+)\\{([^}]*)\\}")
-    val scoped = ruleRegex.replace(trimmed) { match ->
-        val selectors = match.groupValues[1]
-        val body = match.groupValues[2]
-        if (selectors.trim().startsWith("@")) return@replace match.value
-        val prefixed = selectors
-            .split(',')
-            .map { selector ->
-                val s = selector.trim()
-                if (s.isBlank()) s else "$prefix $s"
-            }
-            .joinToString(", ")
-        "$prefixed {$body}"
-    }
-
-    return scoped.trim()
 }
 
 private fun splitCloze(sentence: String, word: String): Triple<String, String, String> {

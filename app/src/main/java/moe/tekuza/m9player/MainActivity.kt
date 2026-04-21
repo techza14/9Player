@@ -2921,6 +2921,7 @@ private fun ReaderSyncScreen() {
                                                             ) {
                                                                 RichDefinitionView(
                                                                     definition = definition,
+                                                                    indexLabel = (definitionIndex + 1).toString(),
                                                                     dictionaryName = null,
                                                                     dictionaryCss = dictionaryGroup.css,
                                                                     highlightedRects = if (dictionaryPageHighlightedDefinitionKey == definitionKey) {

@@ -572,6 +572,9 @@ internal fun RichDefinitionView(
                         settings.allowUniversalAccessFromFileURLs = true
                         settings.allowContentAccess = false
                         settings.blockNetworkLoads = true
+                        settings.blockNetworkImage = false
+                        settings.loadsImagesAutomatically = true
+                        settings.offscreenPreRaster = true
                         settings.builtInZoomControls = false
                         settings.displayZoomControls = false
                         settings.setSupportZoom(false)
@@ -625,22 +628,14 @@ internal fun RichDefinitionView(
                                 request: WebResourceRequest?
                             ): WebResourceResponse? {
                                 val uri = request?.url ?: return null
-                                val bundled = openBundledDictionaryResource(context, uri)
-                                if (bundled != null) {
-                                    return WebResourceResponse(bundled.mimeType, null, bundled.inputStream)
-                                }
-                                val resource = openMountedMdictResource(context, uri) ?: return null
-                                return WebResourceResponse(resource.mimeType, null, resource.inputStream)
+                                val payload = loadDictionaryMediaPayload(context, uri) ?: return null
+                                return buildDictionaryWebResourceResponse(payload)
                             }
 
                             override fun shouldInterceptRequest(view: WebView?, url: String?): WebResourceResponse? {
                                 val uri = runCatching { Uri.parse(url.orEmpty()) }.getOrNull() ?: return null
-                                val bundled = openBundledDictionaryResource(context, uri)
-                                if (bundled != null) {
-                                    return WebResourceResponse(bundled.mimeType, null, bundled.inputStream)
-                                }
-                                val resource = openMountedMdictResource(context, uri) ?: return null
-                                return WebResourceResponse(resource.mimeType, null, resource.inputStream)
+                                val payload = loadDictionaryMediaPayload(context, uri) ?: return null
+                                return buildDictionaryWebResourceResponse(payload)
                             }
 
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -671,6 +666,9 @@ internal fun RichDefinitionView(
                             private var downX = 0f
                             private var downY = 0f
                             private var moved = false
+                            private var disallowParentIntercept = false
+                            private var touchOnTableZone = false
+                            private var touchOnDraggableTable = false
                             override fun onTouch(v: View?, event: MotionEvent?): Boolean {
                                 if (!lookupEnabled || event == null) return false
                                 when (event.actionMasked) {
@@ -678,16 +676,47 @@ internal fun RichDefinitionView(
                                         downX = event.x
                                         downY = event.y
                                         moved = false
+                                        disallowParentIntercept = false
+                                        touchOnTableZone = false
+                                        touchOnDraggableTable = false
+                                        val effectiveScale = this@apply.scale.takeIf { it.isFinite() && it > 0f } ?: 1f
+                                        val clientX = event.x / effectiveScale
+                                        val clientY = event.y / effectiveScale
+                                        evaluateJavascript(
+                                            "(function(){try{var el=document.elementFromPoint($clientX,$clientY);if(!el){return '0|0';}var zone=el.closest('table,.gloss-sc-table-container,[data-sc筆順],[data-sc-筆順]');if(!zone){return '0|0';}var sc=zone.closest('.gloss-sc-table-container,.nine-brushorder-scroll,[data-sc筆順],[data-sc-筆順]')||zone;var draggable=(sc.scrollWidth-sc.clientWidth)>1;return '1|' + (draggable?'1':'0');}catch(e){return '0|0';}})();"
+                                        ) { result ->
+                                            val parts = (decodeEvaluateJavascriptJson(result) ?: "").trim().split('|')
+                                            touchOnTableZone = parts.getOrNull(0) == "1"
+                                            touchOnDraggableTable = parts.getOrNull(1) == "1"
+                                        }
                                     }
                                     MotionEvent.ACTION_MOVE -> {
+                                        val dx = event.x - downX
+                                        val dy = event.y - downY
                                         if (
-                                            kotlin.math.abs(event.x - downX) > 14f ||
-                                            kotlin.math.abs(event.y - downY) > 14f
+                                            touchOnTableZone &&
+                                            touchOnDraggableTable &&
+                                            !disallowParentIntercept &&
+                                            kotlin.math.abs(dx) > 8f &&
+                                            kotlin.math.abs(dx) > kotlin.math.abs(dy)
+                                        ) {
+                                            v?.parent?.requestDisallowInterceptTouchEvent(true)
+                                            disallowParentIntercept = true
+                                        }
+                                        if (
+                                            kotlin.math.abs(dx) > 14f ||
+                                            kotlin.math.abs(dy) > 14f
                                         ) {
                                             moved = true
                                         }
                                     }
                                     MotionEvent.ACTION_UP -> {
+                                        if (disallowParentIntercept) {
+                                            v?.parent?.requestDisallowInterceptTouchEvent(false)
+                                            disallowParentIntercept = false
+                                        }
+                                        touchOnTableZone = false
+                                        touchOnDraggableTable = false
                                         if (!moved) {
                                             val effectiveScale = this@apply.scale.takeIf { it.isFinite() && it > 0f } ?: 1f
                                             val clientX = event.x / effectiveScale
@@ -704,6 +733,14 @@ internal fun RichDefinitionView(
                                                 }
                                             }
                                         }
+                                    }
+                                    MotionEvent.ACTION_CANCEL -> {
+                                        if (disallowParentIntercept) {
+                                            v?.parent?.requestDisallowInterceptTouchEvent(false)
+                                            disallowParentIntercept = false
+                                        }
+                                        touchOnTableZone = false
+                                        touchOnDraggableTable = false
                                     }
                                 }
                                 // Keep tap-to-lookup, but allow native WebView scroll/drag.
@@ -805,7 +842,8 @@ internal fun buildDefinitionHtml(
     bodyTextColorCss: String,
     enableLookupTap: Boolean
 ): String {
-    val prefix = if (indexLabel.isBlank()) "" else "<div>${escapeHtmlText(indexLabel)}</div>"
+    val listStart = Regex("""\d+""").find(indexLabel)?.value?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+    val normalizedDefinitionHtml = normalizeStructuredContentLikeHoshi(definitionHtml)
     val dictionaryLabel = dictionaryName?.trim().orEmpty()
     val resolvedDictionaryAttr = dictionaryLabel.ifBlank { "__default__" }
     val safeDictionaryLabel = escapeHtmlText(dictionaryLabel)
@@ -813,22 +851,18 @@ internal fun buildDefinitionHtml(
     val leadingLabel = if (dictionaryLabel.isBlank()) "" else "<i>($safeDictionaryLabel)</i> "
     val wrappedBody = """
         <div class="yomitan-glossary">
-            <ol>
+            <ol start="$listStart">
                 <li data-dictionary="$safeDictionaryAttr">
-                    $leadingLabel$definitionHtml
+                    $leadingLabel$normalizedDefinitionHtml
                 </li>
             </ol>
         </div>
     """.trimIndent()
-    val customCss = buildScopedDictionaryCss(
+    val customCss = scopeDictionaryCssLikeHoshi(
         rawCss = dictionaryCss.orEmpty(),
         dictionaryName = resolvedDictionaryAttr
     )
-    logLookupRenderDebug(
-        dictionaryName = dictionaryLabel,
-        definitionHtml = definitionHtml,
-        customCss = customCss
-    )
+    val commonParityCss = glossaryDisplayParityCss()
     val lookupTapScript = if (!enableLookupTap) {
         ""
     } else {
@@ -1479,28 +1513,42 @@ internal fun buildDefinitionHtml(
                 }
                 body { margin: 0; padding: 0; font-size: 14px; line-height: 1.4; color: var(--text-color); }
                 img { max-width: 100%; height: auto; cursor: zoom-in; }
+                .gloss-image-link {
+                    display: inline-block;
+                    line-height: 1;
+                    max-width: 100%;
+                }
+                .gloss-image-container {
+                    display: inline-block;
+                    position: relative;
+                    max-width: 100%;
+                    line-height: 0;
+                    overflow: hidden;
+                    vertical-align: top;
+                }
+                .gloss-image-link[data-has-aspect-ratio=true] .gloss-image {
+                    position: absolute;
+                    left: 0;
+                    top: 0;
+                    width: 100%;
+                    height: 100%;
+                    object-fit: contain;
+                }
+                .gloss-image-link[data-has-aspect-ratio=true] .gloss-image-sizer {
+                    display: inline-block;
+                    width: 0;
+                    vertical-align: top;
+                    font-size: 0;
+                }
                 .yomitan-glossary { text-align: left; }
                 .nine-lookup-highlight { background: rgba(161, 161, 170, 0.22); border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(161, 161, 170, 0.40); }
                 .yomitan-glossary ol { margin: 0; padding-left: 1.1em; }
                 .yomitan-glossary li { margin: 0; }
                 $customCss
-                /* Keep 字義 in normal size under current scoped CSS behavior. */
-                .yomitan-glossary [data-sc-div][data-sc字義],
-                .yomitan-glossary [data-sc-div][data-sc-字義] {
-                    font-size: 14px !important;
-                    line-height: 1.4;
-                }
-                [data-sc筆順], [data-sc-筆順] { display: block; overflow: visible; }
+                $commonParityCss
                 .nine-brushorder-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 0.5em; }
                 .nine-brushorder-scroll > table {
-                    border-collapse: collapse;
-                    border-spacing: 0;
                     margin: 0;
-                    border-top: 0.5px solid #444 !important;
-                    border-left: 0.5px solid #444 !important;
-                }
-                .nine-brushorder-scroll > table td {
-                    border: 0.5px solid #444 !important;
                 }
             </style>
             $lookupTapScript
@@ -1526,49 +1574,28 @@ internal fun buildDefinitionHtml(
                     } else {
                         wrapBrushOrderTables();
                     }
+                    function primeGlossImages() {
+                        var images = document.querySelectorAll('.gloss-image-link .gloss-image, img.gloss-image, img[data-sc-img], img');
+                        images.forEach(function(img) {
+                            if (!img || !img.getAttribute) return;
+                            if (!img.getAttribute('loading')) img.setAttribute('loading', 'eager');
+                            if (!img.getAttribute('decoding')) img.setAttribute('decoding', 'sync');
+                            if (!img.getAttribute('fetchpriority')) img.setAttribute('fetchpriority', 'high');
+                        });
+                    }
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', primeGlossImages, { once: true });
+                    } else {
+                        primeGlossImages();
+                    }
                 })();
             </script>
         </head>
         <body>
-            $prefix
             $wrappedBody
         </body>
         </html>
     """.trimIndent()
-}
-
-private fun logLookupRenderDebug(
-    dictionaryName: String,
-    definitionHtml: String,
-    customCss: String
-) {
-    val dict = dictionaryName.ifBlank { "(blank)" }
-    val hasDataScNoDash = definitionHtml.contains("data-sc", ignoreCase = true)
-    val hasDataScDash = definitionHtml.contains("data-sc-", ignoreCase = true)
-    val hasBrushOrderAttr = definitionHtml.contains("data-sc筆順") || definitionHtml.contains("data-sc-筆順")
-    val hasTableTag = definitionHtml.contains("<table", ignoreCase = true)
-    val hasTrTag = definitionHtml.contains("<tr", ignoreCase = true)
-    val hasTdTag = definitionHtml.contains("<td", ignoreCase = true)
-    val trCount = Regex("<tr\\b", RegexOption.IGNORE_CASE).findAll(definitionHtml).count()
-    val tdCount = Regex("<td\\b", RegexOption.IGNORE_CASE).findAll(definitionHtml).count()
-    val hasCssBrushOrderSelector = customCss.contains("[data-sc筆順]") || customCss.contains("[data-sc-筆順]")
-    val hasCssTableSelector = customCss.contains("table")
-    val defSnippet = definitionHtml
-        .replace("\n", " ")
-        .replace(Regex("\\s+"), " ")
-        .take(220)
-    val cssSnippet = customCss
-        .replace("\n", " ")
-        .replace(Regex("\\s+"), " ")
-        .take(220)
-    Log.d(
-        BOOK_LOOKUP_TAP_LOG_TAG,
-        "render debug dict=$dict defLen=${definitionHtml.length} cssLen=${customCss.length} " +
-            "hasDataSc=$hasDataScNoDash hasDataScDash=$hasDataScDash hasBrushOrderAttr=$hasBrushOrderAttr " +
-            "hasTable=$hasTableTag hasTr=$hasTrTag hasTd=$hasTdTag trCount=$trCount tdCount=$tdCount " +
-            "cssHasBrushOrderSelector=$hasCssBrushOrderSelector " +
-            "cssHasTableSelector=$hasCssTableSelector defSnippet=$defSnippet cssSnippet=$cssSnippet"
-    )
 }
 
 private fun decodePreviewImage(context: android.content.Context, rawSrc: String): ImageBitmap? {
@@ -1577,15 +1604,21 @@ private fun decodePreviewImage(context: android.content.Context, rawSrc: String)
     Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "image preview decode src=$src")
     val uri = runCatching { Uri.parse(src) }.getOrNull() ?: return null
     return runCatching {
-        val stream = when (uri.scheme?.lowercase(Locale.ROOT)) {
-            "dictres" -> openBundledDictionaryResource(context, uri)?.inputStream
-            "mdictres" -> openMountedMdictResource(context, uri)?.inputStream
-            "content", "file", "android.resource" -> context.contentResolver.openInputStream(uri)
+        val bitmap = when (uri.scheme?.lowercase(Locale.ROOT)) {
+            "dictres", "mdictres" -> {
+                val payload = loadDictionaryMediaPayload(context, uri) ?: return null
+                BitmapFactory.decodeByteArray(payload.bytes, 0, payload.bytes.size)
+            }
+            "content", "file", "android.resource" -> {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    BitmapFactory.decodeStream(input)
+                }
+            }
             else -> null
         } ?: return null
-        stream.use { input ->
-            BitmapFactory.decodeStream(input)?.asImageBitmap().also { bitmap ->
-                Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "image preview decode result=${bitmap != null} uri=$uri")
+        bitmap.asImageBitmap().also { image ->
+            runCatching {
+                Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "image preview decode result=true uri=$uri")
             }
         }
     }.getOrNull()
@@ -1604,38 +1637,6 @@ private fun escapeHtmlText(value: String): String {
 
 private fun escapeHtmlAttributeForHtml(value: String): String {
     return escapeHtmlText(value).replace("\"", "&quot;")
-}
-
-private fun buildScopedDictionaryCss(rawCss: String, dictionaryName: String): String {
-    val trimmed = rawCss.trim()
-    if (trimmed.isBlank()) return ""
-    val prefix = if (dictionaryName.isBlank()) {
-        ".yomitan-glossary"
-    } else {
-        val dictionaryAttr = escapeCssString(dictionaryName)
-        ".yomitan-glossary [data-dictionary=\"$dictionaryAttr\"]"
-    }
-    val ruleRegex = Regex("([^{}]+)\\{([^}]*)\\}")
-    val scoped = ruleRegex.replace(trimmed) { match ->
-        val selectors = match.groupValues[1]
-        val body = match.groupValues[2]
-        if (selectors.trim().startsWith("@")) return@replace match.value
-        val prefixed = selectors
-            .split(',')
-            .map { selector ->
-                val s = selector.trim()
-                if (s.isBlank()) s else "$prefix $s"
-            }
-            .joinToString(", ")
-        "$prefixed {$body}"
-    }
-    return scoped.trim()
-}
-
-private fun escapeCssString(value: String): String {
-    return value
-        .replace("\\", "\\\\")
-        .replace("\"", "\\\"")
 }
 
 private fun colorToCssHex(color: Color): String {
