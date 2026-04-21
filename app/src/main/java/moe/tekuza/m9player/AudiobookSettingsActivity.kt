@@ -31,7 +31,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -238,21 +237,18 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
         )
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+    SettingsScaffold(
+        title = stringResource(R.string.audiobook_settings_title),
+        onBack = onBack
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            TextButton(onClick = onBack) { Text(stringResource(R.string.common_back)) }
-            Text(stringResource(R.string.audiobook_settings_title), style = MaterialTheme.typography.titleLarge)
-        }
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(
@@ -689,6 +685,7 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
 
         statusText?.let {
             Text(it)
+        }
         }
     }
 }

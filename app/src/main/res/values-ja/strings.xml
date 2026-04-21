@@ -41,6 +41,14 @@
     <string name="settings_controller_title">コントローラー</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX</string>
+    <string name="settings_other_title">その他</string>
+    <string name="settings_font_title">フォント</string>
+    <string name="settings_font_import">フォントをインポート</string>
+    <string name="settings_font_imported">フォントをインポートしました</string>
+    <string name="settings_font_import_failed">フォントのインポートに失敗しました</string>
+    <string name="settings_font_none">デフォルト</string>
+    <string name="settings_font_default_scope">デフォルト</string>
+    <string name="settings_font_apply_subtitles">全体に適用（アプリ全体）</string>
     <string name="settings_language_title">言語</string>
     <string name="settings_language_follow_system">システムに従う</string>
     <string name="settings_guide_title">使い方</string>

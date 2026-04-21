@@ -141,7 +141,15 @@ private fun ControllerSettingsScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    SettingsScaffold(
+        title = stringResource(R.string.controller_title),
+        onBack = onBack
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -149,15 +157,6 @@ private fun ControllerSettingsScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Row(
-                modifier = Modifier.padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = onBack) { Text(stringResource(R.string.common_back)) }
-                Text(stringResource(R.string.controller_title), style = MaterialTheme.typography.titleLarge)
-            }
-
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -323,6 +322,7 @@ private fun ControllerSettingsScreen(
                     }
                 }
             }
+        }
         }
     }
 }

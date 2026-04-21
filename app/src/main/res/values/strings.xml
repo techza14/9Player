@@ -44,6 +44,14 @@
     <string name="settings_controller_title">手柄</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX</string>
+    <string name="settings_other_title">其他</string>
+    <string name="settings_font_title">字体</string>
+    <string name="settings_font_import">导入字体</string>
+    <string name="settings_font_imported">字体已导入</string>
+    <string name="settings_font_import_failed">字体导入失败</string>
+    <string name="settings_font_none">默认</string>
+    <string name="settings_font_default_scope">默认</string>
+    <string name="settings_font_apply_subtitles">全局应用（整个界面）</string>
     <string name="settings_language_title">语言</string>
     <string name="settings_language_follow_system">跟随系统</string>
     <string name="settings_guide_title">使用说明</string>

@@ -22,7 +22,6 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -136,20 +135,17 @@ private fun MdxMountSettingsScreen(onBack: () -> Unit) {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+    SettingsScaffold(
+        title = stringResource(R.string.settings_mdx_title),
+        onBack = onBack
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            TextButton(onClick = onBack) { Text(stringResource(R.string.common_back)) }
-            Text(stringResource(R.string.settings_mdx_title), style = MaterialTheme.typography.titleLarge)
-        }
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -238,6 +234,7 @@ private fun MdxMountSettingsScreen(onBack: () -> Unit) {
                     }
                 }
             }
+        }
         }
     }
 }

@@ -116,6 +116,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
@@ -858,9 +859,17 @@ private fun BookReaderScreen(
             onBack(current, total)
         }
     }
+    val subtitleFontFamily = remember(
+        audiobookSettings.subtitleCustomFontUri
+    ) {
+        resolveSubtitleTypeface(context, audiobookSettings.subtitleCustomFontUri)?.let { typeface ->
+            runCatching { FontFamily(typeface) }.getOrNull()
+        }
+    }
     val activeSubtitleStyle = MaterialTheme.typography.headlineMedium.copy(
         fontSize = 34.sp,
         lineHeight = 42.sp,
+        fontFamily = subtitleFontFamily,
         color = MaterialTheme.colorScheme.onSurface
     )
 
@@ -2535,6 +2544,7 @@ private fun BookReaderScreen(
                                                     activeSubtitleStyle
                                                 } else {
                                                     MaterialTheme.typography.titleLarge.copy(
+                                                        fontFamily = subtitleFontFamily,
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
                                                 },

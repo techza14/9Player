@@ -75,6 +75,18 @@
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
+            android:name=".OtherSettingsActivity"
+            android:exported="false"
+            android:label="其他"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Tset" />
+        <activity
+            android:name=".FontSettingsActivity"
+            android:exported="false"
+            android:label="字体"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Tset" />
+        <activity
             android:name=".MainActivity"
             android:exported="true"
             android:screenOrientation="portrait"

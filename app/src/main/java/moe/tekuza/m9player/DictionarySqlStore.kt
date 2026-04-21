@@ -1845,7 +1845,10 @@ private fun structuredMapToHtmlSql(value: Map<*, *>): String {
         val langAttr = mapString("lang").trim().takeIf { it.isNotBlank() }?.let {
             " lang=\"${escapeHtmlAttributeSql(it)}\""
         } ?: ""
-        val styleAttr = styleValueToCssSql(value["style"]).takeIf { it.isNotBlank() }?.let {
+        val styleAttr = mergeInlineStyleSql(
+            styleValueToCssSql(value["style"]),
+            supplementalInlineStyleSql(value, tag)
+        ).takeIf { it.isNotBlank() }?.let {
             " style=\"${escapeHtmlAttributeSql(it)}\""
         } ?: ""
         val inlineAttrs = buildInlineHtmlAttributesSql(value)
@@ -1949,13 +1952,19 @@ private fun isVoidHtmlTagSql(tag: String): Boolean {
 
 private fun buildInlineHtmlAttributesSql(value: Map<*, *>): String {
     val attrs = linkedMapOf<String, String>()
+    val tag = value["tag"]?.toString()?.trim()?.lowercase(Locale.ROOT).orEmpty()
+    val suppressWidthHeightAttr = tag == "img" && !value["sizeUnits"]?.toString().isNullOrBlank()
     val src = listOf("src", "path", "url")
         .asSequence()
         .map { key -> value[key]?.toString()?.trim().orEmpty() }
         .firstOrNull { it.isNotBlank() }
         .orEmpty()
     if (src.isNotBlank()) attrs["src"] = src
-    val allowed = listOf("href", "alt", "title", "target", "rel", "width", "height", "colspan", "rowspan")
+    val allowed = if (suppressWidthHeightAttr) {
+        listOf("href", "alt", "title", "target", "rel", "colspan", "rowspan")
+    } else {
+        listOf("href", "alt", "title", "target", "rel", "width", "height", "colspan", "rowspan")
+    }
     allowed.forEach { key ->
         val raw = value[key]?.toString()?.trim().orEmpty()
         if (raw.isNotBlank()) attrs[key] = raw
@@ -1963,6 +1972,38 @@ private fun buildInlineHtmlAttributesSql(value: Map<*, *>): String {
     return attrs.entries.joinToString(separator = "") { (key, raw) ->
         " $key=\"${escapeHtmlAttributeSql(raw)}\""
     }
+}
+
+private fun supplementalInlineStyleSql(value: Map<*, *>, tag: String): String {
+    if (tag != "img") return ""
+    val unit = normalizeCssUnitSql(value["sizeUnits"]?.toString().orEmpty()) ?: return ""
+    val width = toCssLengthSql(value["width"]?.toString().orEmpty(), unit)
+    val height = toCssLengthSql(value["height"]?.toString().orEmpty(), unit)
+    val verticalAlign = value["verticalAlign"]?.toString()?.trim().orEmpty()
+
+    val styles = mutableListOf<String>()
+    if (width.isNotBlank()) styles += "width: $width"
+    if (height.isNotBlank()) styles += "height: $height"
+    if (verticalAlign.isNotBlank()) styles += "vertical-align: $verticalAlign"
+    return styles.joinToString("; ")
+}
+
+private fun normalizeCssUnitSql(rawUnit: String): String? {
+    val unit = rawUnit.trim().lowercase(Locale.ROOT)
+    if (unit.isBlank()) return null
+    return if (unit.matches(Regex("^[a-z%]+$"))) unit else null
+}
+
+private fun toCssLengthSql(raw: String, unit: String): String {
+    val text = raw.trim()
+    if (text.isBlank()) return ""
+    return if (text.matches(Regex("^[+-]?(?:\\d+\\.?\\d*|\\.\\d+)$"))) "$text$unit" else text
+}
+
+private fun mergeInlineStyleSql(base: String, extra: String): String {
+    val parts = listOf(base.trim().trimEnd(';'), extra.trim().trimEnd(';'))
+        .filter { it.isNotBlank() }
+    return parts.joinToString("; ")
 }
 
 private fun styleValueToCssSql(value: Any?): String {

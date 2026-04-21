@@ -10,13 +10,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.LibraryAdd
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.SportsEsports
-import androidx.compose.material.icons.outlined.FolderCopy
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -37,7 +37,7 @@ internal fun SettingsPanel(
     onControlModeClick: () -> Unit,
     onControllerClick: () -> Unit,
     onAnkiClick: () -> Unit,
-    onMdxMountClick: () -> Unit,
+    onAdvancedOtherClick: () -> Unit,
     onLanguageClick: () -> Unit,
     onGuideClick: () -> Unit,
     onExportDiagnosticsClick: () -> Unit,
@@ -95,9 +95,9 @@ internal fun SettingsPanel(
             title = stringResource(R.string.settings_section_advanced)
         ) {
             SettingsListItem(
-                icon = Icons.Outlined.FolderCopy,
-                title = stringResource(R.string.settings_mdx_title),
-                onClick = onMdxMountClick,
+                icon = Icons.Outlined.MoreHoriz,
+                title = stringResource(R.string.settings_other_title),
+                onClick = onAdvancedOtherClick,
                 showDivider = false
             )
         }

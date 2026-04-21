@@ -2772,18 +2772,18 @@ companion object {
                 }
             })
             webViewClient = object : android.webkit.WebViewClient() {
-                fun dispatchEntryUrlTap(raw: String, host: WebView?): Boolean {
+                fun dispatchLookupUrlTap(raw: String, host: WebView?): Boolean {
                     val parsed = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
-                    if (!parsed.scheme.equals("entry", ignoreCase = true)) return false
-                    val encoded = parsed.schemeSpecificPart.orEmpty().removePrefix("//")
-                    val target = Uri.decode(encoded).trim().ifBlank { return false }
+                    val scheme = parsed.scheme?.lowercase(Locale.ROOT).orEmpty()
+                    if (scheme !in setOf("entry", "dictres")) return false
+                    val target = resolveLookupTargetFromCustomUrl(raw) ?: return false
                     val safeHost = host ?: this@apply
                     val right = safeHost.width.toFloat().takeIf { it > 0f } ?: 1f
                     val bottom = safeHost.height.toFloat().takeIf { it > 0f } ?: 1f
                     val localRect = Rect(0f, 0f, right, bottom)
                     val callback = bridge.onLookupTap
                     if (callback == null) {
-                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "native entry dispatch skipped callback_null target=$target")
+                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "native link dispatch skipped callback_null scheme=$scheme target=$target")
                         return true
                     }
                     callback.invoke(
@@ -2802,7 +2802,7 @@ companion object {
                             screenCharRects = emptyList()
                         )
                     )
-                    Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "native entry dispatch target=$target")
+                    Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "native link dispatch scheme=$scheme target=$target")
                     return true
                 }
 
@@ -2826,9 +2826,10 @@ companion object {
                     request: android.webkit.WebResourceRequest?
                 ): Boolean {
                     val uri = request?.url ?: return false
-                    if (uri.scheme.equals("entry", ignoreCase = true)) {
-                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block entry navigation uri=$uri")
-                        dispatchEntryUrlTap(uri.toString(), view)
+                    val scheme = uri.scheme?.lowercase(Locale.ROOT).orEmpty()
+                    if (scheme in setOf("entry", "dictres")) {
+                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$uri")
+                        dispatchLookupUrlTap(uri.toString(), view)
                         return true
                     }
                     return false
@@ -2836,9 +2837,10 @@ companion object {
 
                 override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                     val raw = url?.trim().orEmpty()
-                    if (raw.startsWith("entry://", ignoreCase = true)) {
-                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block entry navigation uri=$raw")
-                        dispatchEntryUrlTap(raw, view)
+                    val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
+                    if (scheme in setOf("entry", "dictres")) {
+                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
+                        dispatchLookupUrlTap(raw, view)
                         return true
                     }
                     return false
@@ -3033,14 +3035,17 @@ companion object {
     }
 
     private fun applySubtitleTypography(settings: AudiobookSettingsConfig) {
+        val customTypeface = resolveSubtitleTypeface(this, settings.subtitleCustomFontUri)
         subtitleTextView?.apply {
             textSize = settings.floatingOverlaySubtitleSizeSp.toFloat()
             setTextColor(settings.floatingOverlaySubtitleColor)
+            typeface = customTypeface ?: Typeface.DEFAULT
             setShadowLayer(0f, 0f, 0f, 0)
         }
         subtitleOutlineTextView?.apply {
             textSize = settings.floatingOverlaySubtitleSizeSp.toFloat()
             setTextColor(settings.floatingOverlaySubtitleColor)
+            typeface = customTypeface ?: Typeface.DEFAULT
             val density = resources.displayMetrics.density
             val radius = (2.8f * density).coerceAtLeast(2f)
             setShadowLayer(radius, 0f, 0f, 0xCC000000.toInt())
