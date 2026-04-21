@@ -15,6 +15,7 @@ internal fun renderYomitanGlossaryHtml(
         val defs = item.definitions
             .map { it.trim() }
             .filter { it.isNotBlank() }
+            .map(::normalizeStructuredContentLikeHoshi)
         if (defs.isEmpty()) {
             null
         } else {
@@ -49,23 +50,47 @@ internal fun renderYomitanGlossaryHtml(
         val dictionaryAttr = resolveDictionaryAttr(dictionaryLabel)
         val safeAttr = escapeHtmlAttributeShared(dictionaryAttr)
         val safeLabel = escapeHtmlTextShared(dictionaryLabel)
-        val leadingLabel = if (includeDictionaryLabel && dictionaryLabel.isNotBlank()) {
-            "<i>($safeLabel)</i> "
+        val definitions = item.definitions
+        if (definitions.size <= 1) {
+            val leadingLabel = if (includeDictionaryLabel && dictionaryLabel.isNotBlank()) {
+                "<i>($safeLabel)</i> "
+            } else {
+                ""
+            }
+            val def = definitions.firstOrNull().orEmpty()
+            val wrappedContent = if (def.trimStart().startsWith("<li", ignoreCase = true)) {
+                "<ol>$def</ol>"
+            } else {
+                "<span>$def</span>"
+            }
+            """
+                <li data-dictionary="$safeAttr">
+                    $leadingLabel$wrappedContent
+                </li>
+            """.trimIndent()
         } else {
-            ""
+            definitions.mapIndexed { index, def ->
+                val leadingLabel = if (includeDictionaryLabel) {
+                    if (dictionaryLabel.isNotBlank()) {
+                        if (index == 0) "<i>(${index + 1}, $safeLabel)</i> " else "<i>(${index + 1})</i> "
+                    } else {
+                        "<i>(${index + 1})</i> "
+                    }
+                } else {
+                    ""
+                }
+                val wrappedContent = if (def.trimStart().startsWith("<li", ignoreCase = true)) {
+                    "<ol>$def</ol>"
+                } else {
+                    "<span>$def</span>"
+                }
+                """
+                    <li data-dictionary="$safeAttr">
+                        $leadingLabel$wrappedContent
+                    </li>
+                """.trimIndent()
+            }.joinToString(separator = "")
         }
-        val allLi = item.definitions.all { it.trimStart().startsWith("<li", ignoreCase = true) }
-        val content = if (allLi) {
-            "<ol>${item.definitions.joinToString(separator = "")}</ol>"
-        } else {
-            item.definitions.joinToString(separator = "<br>")
-        }
-        val wrappedContent = if (allLi) content else "<span>$content</span>"
-        """
-            <li data-dictionary="$safeAttr">
-                $leadingLabel$wrappedContent
-            </li>
-        """.trimIndent()
     }
 
     return """
@@ -76,6 +101,56 @@ internal fun renderYomitanGlossaryHtml(
             $styleBlock
         </div>
     """.trimIndent()
+}
+
+internal fun normalizeStructuredContentLikeHoshi(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.isBlank()) return ""
+    if (!trimmed.contains("data-sc", ignoreCase = true)) return trimmed
+
+    var out = trimmed
+    out = normalizeDataScAttributeNames(out)
+    out = stripNonDashedDataScAttrs(out)
+    out = addGlossClass(out, "span", "gloss-sc-span")
+    out = addGlossClass(out, "div", "gloss-sc-div")
+    out = addGlossClass(out, "table", "gloss-sc-table")
+    out = addGlossClass(out, "tr", "gloss-sc-tr")
+    out = addGlossClass(out, "td", "gloss-sc-td")
+    out = addGlossClass(out, "th", "gloss-sc-th")
+    out = addGlossClass(out, "thead", "gloss-sc-thead")
+    out = addGlossClass(out, "tbody", "gloss-sc-tbody")
+    out = addGlossClass(out, "tfoot", "gloss-sc-tfoot")
+
+    // Hoshi-like table styling and wrapping.
+    out = applyHoshiTableInlineStyles(out)
+    out = out.replace(
+        Regex("<table\\b([^>]*)>", RegexOption.IGNORE_CASE),
+        "<div class=\"gloss-sc-table-container\"><table$1>"
+    ).replace(
+        Regex("</table>", RegexOption.IGNORE_CASE),
+        "</table></div>"
+    )
+
+    return if (out.contains("class=\"structured-content\"")) out else "<span class=\"structured-content\">$out</span>"
+}
+
+private fun normalizeDataScAttributeNames(html: String): String {
+    var out = html
+    // 1) Normalize ascii data-sc keys: data-sc-dic_item -> data-sc-dic-item
+    out = out.replace(
+        Regex("""(\sdata-sc-)([A-Za-z0-9_:-]+)(\s*=\s*"[^"]*")""")
+    ) { m ->
+        val prefix = m.groupValues[1]
+        val key = m.groupValues[2].replace('_', '-')
+        val suffix = m.groupValues[3]
+        "$prefix$key$suffix"
+    }
+    // 2) Drop dashed CJK variants (e.g. data-sc-標準), keep canonical data-sc標準.
+    out = out.replace(
+        Regex("""\sdata-sc-[^\x00-\x7F][^\s=]*\s*=\s*"[^"]*""""),
+        ""
+    )
+    return out
 }
 
 internal fun scopeDictionaryCssLikeHoshi(rawCss: String, dictionaryName: String): String {
@@ -92,10 +167,23 @@ internal fun scopeDictionaryCssLikeHoshi(rawCss: String, dictionaryName: String)
 
 internal fun glossaryDisplayParityCss(): String {
     return """
-        .yomitan-glossary [data-sc-div][data-sc字義],
-        .yomitan-glossary [data-sc-div][data-sc-字義] {
-            font-size: 14px !important;
-            line-height: 1.4;
+        .yomitan-glossary {
+            overflow-x: hidden;
+        }
+        .yomitan-glossary .structured-content,
+        .yomitan-glossary [data-sc-body] {
+            overflow-x: hidden;
+            max-width: 100%;
+        }
+        .yomitan-glossary .gloss-sc-table-container {
+            display: block;
+            overflow-x: auto;
+            overflow-y: hidden;
+            max-width: 100%;
+            -webkit-overflow-scrolling: touch;
+        }
+        .yomitan-glossary .gloss-sc-table {
+            width: max-content;
         }
         [data-sc筆順], [data-sc-筆順] {
             display: block;
@@ -139,11 +227,11 @@ private fun resolveDictionaryAttr(dictionaryName: String): String {
 }
 
 private fun scopeCssRecursive(css: String, prefix: String): String {
-    val parts = StringBuilder()
+    val out = StringBuilder()
     var i = 0
     while (i < css.length) {
         while (i < css.length && css[i].isWhitespace()) {
-            parts.append(css[i])
+            out.append(css[i])
             i += 1
         }
         if (i >= css.length) break
@@ -151,39 +239,21 @@ private fun scopeCssRecursive(css: String, prefix: String): String {
         if (i + 1 < css.length && css[i] == '/' && css[i + 1] == '*') {
             val end = css.indexOf("*/", i + 2)
             if (end == -1) break
-            parts.append(css.substring(i, end + 2))
+            out.append(css.substring(i, end + 2))
             i = end + 2
             continue
         }
 
         val bracePos = css.indexOf('{', i)
         if (bracePos == -1) {
-            parts.append(css.substring(i))
+            out.append(css.substring(i))
             break
         }
 
-        val selectorPart = css.substring(i, bracePos)
-        val selectorTrimmed = selectorPart.trim()
-        val isAtRule = selectorTrimmed.startsWith("@")
-
-        val scopedSelector = if (isAtRule) {
-            selectorPart
-        } else {
-            selectorPart.split(",").joinToString(", ") { raw ->
-                val s = raw.trim()
-                when {
-                    s.isBlank() -> ""
-                    s.startsWith("&") -> s
-                    else -> "$prefix $s"
-                }
-            }
-        }
-
-        parts.append(scopedSelector).append(" {")
-
+        val header = css.substring(i, bracePos).trim()
         i = bracePos + 1
         var depth = 1
-        val blockStart = i
+        val bodyStart = i
         while (i < css.length && depth > 0) {
             when (css[i]) {
                 '{' -> depth += 1
@@ -191,34 +261,36 @@ private fun scopeCssRecursive(css: String, prefix: String): String {
             }
             i += 1
         }
-        val blockContent = if (depth == 0) {
-            css.substring(blockStart, i - 1)
-        } else {
-            css.substring(blockStart)
+        val body = if (depth == 0) css.substring(bodyStart, i - 1) else css.substring(bodyStart)
+
+        if (header.isBlank()) continue
+
+        if (header.startsWith("@")) {
+            val shouldRecurse = header.startsWith("@media") ||
+                header.startsWith("@supports") ||
+                header.startsWith("@document") ||
+                header.startsWith("@layer")
+            val inner = if (shouldRecurse) scopeCssRecursive(body, prefix) else body
+            out.append(header).append(" {").append(inner).append("}")
+            continue
         }
 
-        if (isAtRule) {
-            val shouldScopeNested = selectorTrimmed.startsWith("@media") ||
-                selectorTrimmed.startsWith("@supports") ||
-                selectorTrimmed.startsWith("@document") ||
-                selectorTrimmed.startsWith("@layer")
-            parts.append(
-                if (shouldScopeNested) scopeCssRecursive(blockContent, prefix) else blockContent
-            )
-        } else if (blockContent.contains('{')) {
-            val parsed = splitPropertiesAndNestedRules(blockContent)
-            parts.append(parsed.first)
-            if (parsed.second.isNotBlank()) {
-                parts.append(scopeCssRecursive(parsed.second, prefix))
+        val scopedSelector = header
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .filterNot(::isDisallowedBodyScaleSelector)
+            .joinToString(", ") { s ->
+                if (s.startsWith("&")) s else "$prefix $s"
             }
-        } else {
-            parts.append(blockContent)
+        if (scopedSelector.isBlank()) continue
+        val (properties, nestedRules) = splitPropertiesAndNestedRules(body)
+        out.append(scopedSelector).append(" {").append(properties).append("}")
+        if (nestedRules.isNotBlank()) {
+            out.append(scopeNestedRulesWithinSelector(nestedRules, scopedSelector))
         }
-
-        parts.append("}")
     }
-
-    return parts.toString()
+    return out.toString()
 }
 
 private fun splitPropertiesAndNestedRules(blockContent: String): Pair<String, String> {
@@ -227,6 +299,7 @@ private fun splitPropertiesAndNestedRules(blockContent: String): Pair<String, St
     var pos = 0
     while (pos < blockContent.length) {
         while (pos < blockContent.length && blockContent[pos].isWhitespace()) {
+            properties.append(blockContent[pos])
             pos += 1
         }
         if (pos >= blockContent.length) break
@@ -256,6 +329,93 @@ private fun splitPropertiesAndNestedRules(blockContent: String): Pair<String, St
     return properties.toString() to nested.toString()
 }
 
+private fun scopeNestedRulesWithinSelector(nestedRules: String, parentSelector: String): String {
+    val out = StringBuilder()
+    var i = 0
+    while (i < nestedRules.length) {
+        while (i < nestedRules.length && nestedRules[i].isWhitespace()) {
+            out.append(nestedRules[i])
+            i += 1
+        }
+        if (i >= nestedRules.length) break
+
+        if (i + 1 < nestedRules.length && nestedRules[i] == '/' && nestedRules[i + 1] == '*') {
+            val end = nestedRules.indexOf("*/", i + 2)
+            if (end == -1) break
+            out.append(nestedRules.substring(i, end + 2))
+            i = end + 2
+            continue
+        }
+
+        val bracePos = nestedRules.indexOf('{', i)
+        if (bracePos == -1) {
+            out.append(nestedRules.substring(i))
+            break
+        }
+
+        val header = nestedRules.substring(i, bracePos).trim()
+        i = bracePos + 1
+        var depth = 1
+        val bodyStart = i
+        while (i < nestedRules.length && depth > 0) {
+            when (nestedRules[i]) {
+                '{' -> depth += 1
+                '}' -> depth -= 1
+            }
+            i += 1
+        }
+        val body = if (depth == 0) nestedRules.substring(bodyStart, i - 1) else nestedRules.substring(bodyStart)
+        if (header.isBlank()) continue
+
+        if (header.startsWith("@")) {
+            val shouldRecurse = header.startsWith("@media") ||
+                header.startsWith("@supports") ||
+                header.startsWith("@document") ||
+                header.startsWith("@layer")
+            val inner = if (shouldRecurse) scopeCssRecursive(body, parentSelector) else body
+            out.append(header).append(" {").append(inner).append("}")
+            continue
+        }
+
+        val scopedNestedSelector = header
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .filterNot(::isDisallowedBodyScaleSelector)
+            .joinToString(", ") { s ->
+                if (s.startsWith("&")) {
+                    s.replaceFirst("&", parentSelector)
+                } else {
+                    "$parentSelector $s"
+                }
+            }
+        out.append(scopedNestedSelector).append(" {").append(body).append("}")
+    }
+    return out.toString()
+}
+
+private fun isDisallowedBodyScaleSelector(selector: String): Boolean {
+    val normalized = selector.lowercase()
+    // Hoshi-like fine-grained sizing: keep headword scaling, but do not scale
+    // the whole dic item container.
+    if (
+        (normalized.contains("[data-sc-dic_item]") || normalized.contains("[data-sc-dic-item]")) &&
+        normalized.contains("[data-sc漢字]")
+    ) {
+        return true
+    }
+
+    // Do not force tiny historical/modern kana in our current rendering path.
+    if (
+        normalized.contains("[data-sc-headword]") &&
+        (normalized.contains("[data-sc歴史かな]") || normalized.contains("[data-sc現代かな]"))
+    ) {
+        return true
+    }
+
+    return false
+}
+
 private fun escapeHtmlTextShared(value: String): String {
     return value
         .replace("&", "&amp;")
@@ -271,4 +431,45 @@ private fun escapeCssStringShared(value: String): String {
     return value
         .replace("\\", "\\\\")
         .replace("\"", "\\\"")
+}
+
+private fun addGlossClass(html: String, tag: String, token: String): String {
+    val openTagRegex = Regex("<$tag\\b([^>]*)>", RegexOption.IGNORE_CASE)
+    return html.replace(openTagRegex) { match ->
+        val attrs = match.groupValues[1]
+        // Match only a real `class="..."` attribute, never `data-sc-class="..."`.
+        val classRegex = Regex("(^|\\s)class\\s*=\\s*\"([^\"]*)\"", RegexOption.IGNORE_CASE)
+        if (classRegex.containsMatchIn(attrs)) {
+            val updatedAttrs = classRegex.replace(attrs) { classMatch ->
+                val leadingSpace = classMatch.groupValues[1]
+                val existing = classMatch.groupValues[2]
+                    .split(Regex("\\s+"))
+                    .filter { it.isNotBlank() }
+                    .toMutableList()
+                if (!existing.contains(token)) {
+                    existing.add(token)
+                }
+                "${leadingSpace}class=\"${existing.joinToString(" ")}\""
+            }
+            "<$tag$updatedAttrs>"
+        } else {
+            "<$tag class=\"$token\"$attrs>"
+        }
+    }
+}
+
+private fun stripNonDashedDataScAttrs(html: String): String {
+    // Remove attributes like data-scbody/data-scclass/data-schtml, keep canonical dashed form.
+    val nonDashed = Regex("\\sdata-sc(?!-)[A-Za-z0-9_:.]+\\s*=\\s*\"[^\"]*\"", RegexOption.IGNORE_CASE)
+    return html.replace(nonDashed, "")
+}
+
+private fun applyHoshiTableInlineStyles(html: String): String {
+    val tableStyle = "table-layout:auto;border-collapse:collapse;"
+    val cellStyle = "border-style:solid;padding:0.25em;vertical-align:top;border-width:1px;border-color:currentColor;"
+    val thStyle = "font-weight:bold;$cellStyle"
+    return html
+        .replace(Regex("<table(?=[>\\s])", RegexOption.IGNORE_CASE), "<table style=\"$tableStyle\"")
+        .replace(Regex("<th(?=[>\\s])", RegexOption.IGNORE_CASE), "<th style=\"$thStyle\"")
+        .replace(Regex("<td(?=[>\\s])", RegexOption.IGNORE_CASE), "<td style=\"$cellStyle\"")
 }

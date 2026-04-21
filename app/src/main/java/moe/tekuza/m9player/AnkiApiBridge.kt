@@ -405,16 +405,8 @@ private fun buildAnkiVariables(
     }.orEmpty()
     val singleGlossaryFirst = primaryGlossarySource?.definitions?.firstOrNull().orEmpty()
     val singleGlossaryNoDictionary = primaryGlossarySource?.definitions?.joinToString("<br>").orEmpty()
-    val styledGlossaryFirst = if (glossaryFirst.isBlank()) {
-        ""
-    } else {
-        val firstSource = glossarySources.firstOrNull()
-        buildStyledGlossary(
-            definitions = listOf(glossaryFirst),
-            dictionaryName = firstSource?.dictionaryName ?: dictionaryName,
-            dictionaryCss = firstSource?.dictionaryCss ?: card.dictionaryCss
-        )
-    }
+    // Hoshi parity: glossary-first is the first dictionary's full glossary HTML.
+    val styledGlossaryFirst = singleGlossaryHtml
     val cutAudio = if (includeCutAudio) {
         attachAudio(api, context, card).orEmpty()
     } else {
@@ -455,7 +447,7 @@ private fun buildAnkiVariables(
         "glossary-no-dictionary" to glossaryNoDictionary,
         "glossary-first" to styledGlossaryFirst,
         "glossary-first-brief" to glossaryFirst,
-        "glossary-first-no-dictionary" to glossaryFirst,
+        "glossary-first-no-dictionary" to singleGlossaryNoDictionary,
         "single-glossary" to singleGlossaryHtml,
         "single-glossary-brief" to singleGlossaryFirst,
         "single-glossary-no-dictionary" to singleGlossaryNoDictionary,

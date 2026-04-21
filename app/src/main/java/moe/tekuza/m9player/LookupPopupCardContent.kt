@@ -189,7 +189,7 @@ internal fun LookupPopupCardContent(
                                         }
                                     )
                                     if (dictionaryPresentation.expanded) {
-                                        dictionaryPresentation.definitions.forEach { definitionPresentation ->
+                                        dictionaryPresentation.definitions.forEachIndexed { definitionIndex, definitionPresentation ->
                                             Card(modifier = Modifier.fillMaxWidth()) {
                                                 Column(
                                                     modifier = Modifier.padding(8.dp),
@@ -197,6 +197,7 @@ internal fun LookupPopupCardContent(
                                                 ) {
                                                     RichDefinitionView(
                                                         definition = definitionPresentation.definitionHtml,
+                                                        indexLabel = (definitionIndex + 1).toString(),
                                                         dictionaryName = null,
                                                         dictionaryCss = definitionPresentation.dictionaryCss,
                                                         highlightedRects = definitionPresentation.highlightedRects,

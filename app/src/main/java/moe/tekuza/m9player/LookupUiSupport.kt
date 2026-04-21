@@ -671,6 +671,9 @@ internal fun RichDefinitionView(
                             private var downX = 0f
                             private var downY = 0f
                             private var moved = false
+                            private var disallowParentIntercept = false
+                            private var touchOnTableZone = false
+                            private var touchOnDraggableTable = false
                             override fun onTouch(v: View?, event: MotionEvent?): Boolean {
                                 if (!lookupEnabled || event == null) return false
                                 when (event.actionMasked) {
@@ -678,16 +681,47 @@ internal fun RichDefinitionView(
                                         downX = event.x
                                         downY = event.y
                                         moved = false
+                                        disallowParentIntercept = false
+                                        touchOnTableZone = false
+                                        touchOnDraggableTable = false
+                                        val effectiveScale = this@apply.scale.takeIf { it.isFinite() && it > 0f } ?: 1f
+                                        val clientX = event.x / effectiveScale
+                                        val clientY = event.y / effectiveScale
+                                        evaluateJavascript(
+                                            "(function(){try{var el=document.elementFromPoint($clientX,$clientY);if(!el){return '0|0';}var zone=el.closest('table,.gloss-sc-table-container,[data-sc筆順],[data-sc-筆順]');if(!zone){return '0|0';}var sc=zone.closest('.gloss-sc-table-container,.nine-brushorder-scroll,[data-sc筆順],[data-sc-筆順]')||zone;var draggable=(sc.scrollWidth-sc.clientWidth)>1;return '1|' + (draggable?'1':'0');}catch(e){return '0|0';}})();"
+                                        ) { result ->
+                                            val parts = (decodeEvaluateJavascriptJson(result) ?: "").trim().split('|')
+                                            touchOnTableZone = parts.getOrNull(0) == "1"
+                                            touchOnDraggableTable = parts.getOrNull(1) == "1"
+                                        }
                                     }
                                     MotionEvent.ACTION_MOVE -> {
+                                        val dx = event.x - downX
+                                        val dy = event.y - downY
                                         if (
-                                            kotlin.math.abs(event.x - downX) > 14f ||
-                                            kotlin.math.abs(event.y - downY) > 14f
+                                            touchOnTableZone &&
+                                            touchOnDraggableTable &&
+                                            !disallowParentIntercept &&
+                                            kotlin.math.abs(dx) > 8f &&
+                                            kotlin.math.abs(dx) > kotlin.math.abs(dy)
+                                        ) {
+                                            v?.parent?.requestDisallowInterceptTouchEvent(true)
+                                            disallowParentIntercept = true
+                                        }
+                                        if (
+                                            kotlin.math.abs(dx) > 14f ||
+                                            kotlin.math.abs(dy) > 14f
                                         ) {
                                             moved = true
                                         }
                                     }
                                     MotionEvent.ACTION_UP -> {
+                                        if (disallowParentIntercept) {
+                                            v?.parent?.requestDisallowInterceptTouchEvent(false)
+                                            disallowParentIntercept = false
+                                        }
+                                        touchOnTableZone = false
+                                        touchOnDraggableTable = false
                                         if (!moved) {
                                             val effectiveScale = this@apply.scale.takeIf { it.isFinite() && it > 0f } ?: 1f
                                             val clientX = event.x / effectiveScale
@@ -704,6 +738,14 @@ internal fun RichDefinitionView(
                                                 }
                                             }
                                         }
+                                    }
+                                    MotionEvent.ACTION_CANCEL -> {
+                                        if (disallowParentIntercept) {
+                                            v?.parent?.requestDisallowInterceptTouchEvent(false)
+                                            disallowParentIntercept = false
+                                        }
+                                        touchOnTableZone = false
+                                        touchOnDraggableTable = false
                                     }
                                 }
                                 // Keep tap-to-lookup, but allow native WebView scroll/drag.
@@ -805,7 +847,8 @@ internal fun buildDefinitionHtml(
     bodyTextColorCss: String,
     enableLookupTap: Boolean
 ): String {
-    val prefix = if (indexLabel.isBlank()) "" else "<div>${escapeHtmlText(indexLabel)}</div>"
+    val listStart = Regex("""\d+""").find(indexLabel)?.value?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+    val normalizedDefinitionHtml = normalizeStructuredContentLikeHoshi(definitionHtml)
     val dictionaryLabel = dictionaryName?.trim().orEmpty()
     val resolvedDictionaryAttr = dictionaryLabel.ifBlank { "__default__" }
     val safeDictionaryLabel = escapeHtmlText(dictionaryLabel)
@@ -813,9 +856,9 @@ internal fun buildDefinitionHtml(
     val leadingLabel = if (dictionaryLabel.isBlank()) "" else "<i>($safeDictionaryLabel)</i> "
     val wrappedBody = """
         <div class="yomitan-glossary">
-            <ol>
+            <ol start="$listStart">
                 <li data-dictionary="$safeDictionaryAttr">
-                    $leadingLabel$definitionHtml
+                    $leadingLabel$normalizedDefinitionHtml
                 </li>
             </ol>
         </div>
@@ -827,7 +870,7 @@ internal fun buildDefinitionHtml(
     val commonParityCss = glossaryDisplayParityCss()
     logLookupRenderDebug(
         dictionaryName = dictionaryLabel,
-        definitionHtml = definitionHtml,
+        definitionHtml = normalizedDefinitionHtml,
         customCss = customCss
     )
     val lookupTapScript = if (!enableLookupTap) {
@@ -1518,7 +1561,6 @@ internal fun buildDefinitionHtml(
             </script>
         </head>
         <body>
-            $prefix
             $wrappedBody
         </body>
         </html>
