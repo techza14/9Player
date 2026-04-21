@@ -58,16 +58,11 @@ internal fun renderYomitanGlossaryHtml(
                 ""
             }
             val def = definitions.firstOrNull().orEmpty()
-            val wrappedContent = if (def.trimStart().startsWith("<li", ignoreCase = true)) {
-                "<ol>$def</ol>"
-            } else {
-                "<span>$def</span>"
-            }
-            """
-                <li data-dictionary="$safeAttr">
-                    $leadingLabel$wrappedContent
-                </li>
-            """.trimIndent()
+            buildGlossaryListItem(
+                dictionaryAttr = safeAttr,
+                leadingLabel = leadingLabel,
+                definition = def
+            )
         } else {
             definitions.mapIndexed { index, def ->
                 val leadingLabel = if (includeDictionaryLabel) {
@@ -79,16 +74,11 @@ internal fun renderYomitanGlossaryHtml(
                 } else {
                     ""
                 }
-                val wrappedContent = if (def.trimStart().startsWith("<li", ignoreCase = true)) {
-                    "<ol>$def</ol>"
-                } else {
-                    "<span>$def</span>"
-                }
-                """
-                    <li data-dictionary="$safeAttr">
-                        $leadingLabel$wrappedContent
-                    </li>
-                """.trimIndent()
+                buildGlossaryListItem(
+                    dictionaryAttr = safeAttr,
+                    leadingLabel = leadingLabel,
+                    definition = def
+                )
             }.joinToString(separator = "")
         }
     }
@@ -279,7 +269,6 @@ private fun scopeCssRecursive(css: String, prefix: String): String {
             .split(",")
             .map { it.trim() }
             .filter { it.isNotBlank() }
-            .filterNot(::isDisallowedBodyScaleSelector)
             .joinToString(", ") { s ->
                 if (s.startsWith("&")) s else "$prefix $s"
             }
@@ -381,7 +370,6 @@ private fun scopeNestedRulesWithinSelector(nestedRules: String, parentSelector: 
             .split(",")
             .map { it.trim() }
             .filter { it.isNotBlank() }
-            .filterNot(::isDisallowedBodyScaleSelector)
             .joinToString(", ") { s ->
                 if (s.startsWith("&")) {
                     s.replaceFirst("&", parentSelector)
@@ -392,28 +380,6 @@ private fun scopeNestedRulesWithinSelector(nestedRules: String, parentSelector: 
         out.append(scopedNestedSelector).append(" {").append(body).append("}")
     }
     return out.toString()
-}
-
-private fun isDisallowedBodyScaleSelector(selector: String): Boolean {
-    val normalized = selector.lowercase()
-    // Hoshi-like fine-grained sizing: keep headword scaling, but do not scale
-    // the whole dic item container.
-    if (
-        (normalized.contains("[data-sc-dic_item]") || normalized.contains("[data-sc-dic-item]")) &&
-        normalized.contains("[data-sc漢字]")
-    ) {
-        return true
-    }
-
-    // Do not force tiny historical/modern kana in our current rendering path.
-    if (
-        normalized.contains("[data-sc-headword]") &&
-        (normalized.contains("[data-sc歴史かな]") || normalized.contains("[data-sc現代かな]"))
-    ) {
-        return true
-    }
-
-    return false
 }
 
 private fun escapeHtmlTextShared(value: String): String {
@@ -472,4 +438,21 @@ private fun applyHoshiTableInlineStyles(html: String): String {
         .replace(Regex("<table(?=[>\\s])", RegexOption.IGNORE_CASE), "<table style=\"$tableStyle\"")
         .replace(Regex("<th(?=[>\\s])", RegexOption.IGNORE_CASE), "<th style=\"$thStyle\"")
         .replace(Regex("<td(?=[>\\s])", RegexOption.IGNORE_CASE), "<td style=\"$cellStyle\"")
+}
+
+private fun buildGlossaryListItem(
+    dictionaryAttr: String,
+    leadingLabel: String,
+    definition: String
+): String {
+    val wrappedContent = if (definition.trimStart().startsWith("<li", ignoreCase = true)) {
+        "<ol>$definition</ol>"
+    } else {
+        "<span>$definition</span>"
+    }
+    return """
+        <li data-dictionary="$dictionaryAttr">
+            $leadingLabel$wrappedContent
+        </li>
+    """.trimIndent()
 }

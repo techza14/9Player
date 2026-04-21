@@ -868,11 +868,6 @@ internal fun buildDefinitionHtml(
         dictionaryName = resolvedDictionaryAttr
     )
     val commonParityCss = glossaryDisplayParityCss()
-    logLookupRenderDebug(
-        dictionaryName = dictionaryLabel,
-        definitionHtml = normalizedDefinitionHtml,
-        customCss = customCss
-    )
     val lookupTapScript = if (!enableLookupTap) {
         ""
     } else {
@@ -1565,40 +1560,6 @@ internal fun buildDefinitionHtml(
         </body>
         </html>
     """.trimIndent()
-}
-
-private fun logLookupRenderDebug(
-    dictionaryName: String,
-    definitionHtml: String,
-    customCss: String
-) {
-    val dict = dictionaryName.ifBlank { "(blank)" }
-    val hasDataScNoDash = definitionHtml.contains("data-sc", ignoreCase = true)
-    val hasDataScDash = definitionHtml.contains("data-sc-", ignoreCase = true)
-    val hasBrushOrderAttr = definitionHtml.contains("data-sc筆順") || definitionHtml.contains("data-sc-筆順")
-    val hasTableTag = definitionHtml.contains("<table", ignoreCase = true)
-    val hasTrTag = definitionHtml.contains("<tr", ignoreCase = true)
-    val hasTdTag = definitionHtml.contains("<td", ignoreCase = true)
-    val trCount = Regex("<tr\\b", RegexOption.IGNORE_CASE).findAll(definitionHtml).count()
-    val tdCount = Regex("<td\\b", RegexOption.IGNORE_CASE).findAll(definitionHtml).count()
-    val hasCssBrushOrderSelector = customCss.contains("[data-sc筆順]") || customCss.contains("[data-sc-筆順]")
-    val hasCssTableSelector = customCss.contains("table")
-    val defSnippet = definitionHtml
-        .replace("\n", " ")
-        .replace(Regex("\\s+"), " ")
-        .take(220)
-    val cssSnippet = customCss
-        .replace("\n", " ")
-        .replace(Regex("\\s+"), " ")
-        .take(220)
-    Log.d(
-        BOOK_LOOKUP_TAP_LOG_TAG,
-        "render debug dict=$dict defLen=${definitionHtml.length} cssLen=${customCss.length} " +
-            "hasDataSc=$hasDataScNoDash hasDataScDash=$hasDataScDash hasBrushOrderAttr=$hasBrushOrderAttr " +
-            "hasTable=$hasTableTag hasTr=$hasTrTag hasTd=$hasTdTag trCount=$trCount tdCount=$tdCount " +
-            "cssHasBrushOrderSelector=$hasCssBrushOrderSelector " +
-            "cssHasTableSelector=$hasCssTableSelector defSnippet=$defSnippet cssSnippet=$cssSnippet"
-    )
 }
 
 private fun decodePreviewImage(context: android.content.Context, rawSrc: String): ImageBitmap? {
