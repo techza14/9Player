@@ -16,7 +16,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,21 +54,18 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
         mutableStateOf(config.powerSaveBlackScreenInControlMode)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+    SettingsScaffold(
+        title = stringResource(R.string.control_mode_title),
+        onBack = onBack
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            TextButton(onClick = onBack) { Text(stringResource(R.string.common_back)) }
-            Text(stringResource(R.string.control_mode_title), style = MaterialTheme.typography.titleLarge)
-        }
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(
@@ -147,6 +143,7 @@ private fun ControlModeSettingsScreen(onBack: () -> Unit) {
                 }
                 Text(stringResource(R.string.control_mode_black_screen_help))
             }
+        }
         }
     }
 }

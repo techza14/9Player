@@ -3093,7 +3093,7 @@ private fun ReaderSyncScreen() {
                         onControlModeClick = { context.startActivity(Intent(context, ControlModeSettingsActivity::class.java)) },
                         onControllerClick = { context.startActivity(Intent(context, ControllerSettingsActivity::class.java)) },
                         onAnkiClick = { context.startActivity(Intent(context, AnkiSettingsActivity::class.java)) },
-                        onMdxMountClick = { context.startActivity(Intent(context, MdxMountSettingsActivity::class.java)) },
+                        onAdvancedOtherClick = { context.startActivity(Intent(context, OtherSettingsActivity::class.java)) },
                         onLanguageClick = { languageDialogVisible = true },
                         onGuideClick = {
                             val intent = Intent(

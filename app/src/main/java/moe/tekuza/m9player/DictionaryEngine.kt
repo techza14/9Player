@@ -956,7 +956,10 @@ private fun structuredJsonToHtml(obj: JSONObject): String {
         if (tag.isBlank()) return content
 
         val dataAttributes = extractStructuredDataAttributes(obj.opt("data")).toMutableMap()
-        val styleValue = styleValueToCss(obj.opt("style"))
+        val styleValue = mergeInlineStyle(
+            styleValueToCss(obj.opt("style")),
+            supplementalInlineStyle(obj, tag)
+        )
         val styleAttr = styleValue.takeIf { it.isNotBlank() }?.let {
             " style=\"${escapeHtmlAttribute(it)}\""
         } ?: ""
@@ -1078,13 +1081,19 @@ private fun isVoidHtmlTag(tag: String): Boolean {
 
 private fun buildInlineHtmlAttributes(obj: JSONObject): String {
     val attrs = linkedMapOf<String, String>()
+    val tag = obj.optString("tag").trim().lowercase(Locale.ROOT)
+    val suppressWidthHeightAttr = tag == "img" && obj.optString("sizeUnits").trim().isNotBlank()
     val src = firstNonBlank(
         obj.optString("src"),
         obj.optString("path"),
         obj.optString("url")
     )?.trim().orEmpty()
     if (src.isNotBlank()) attrs["src"] = src
-    val allowed = listOf("href", "alt", "title", "target", "rel", "width", "height", "colspan", "rowspan")
+    val allowed = if (suppressWidthHeightAttr) {
+        listOf("href", "alt", "title", "target", "rel", "colspan", "rowspan")
+    } else {
+        listOf("href", "alt", "title", "target", "rel", "width", "height", "colspan", "rowspan")
+    }
     allowed.forEach { key ->
         val value = obj.optString(key).trim()
         if (value.isNotBlank()) attrs[key] = value
@@ -1092,6 +1101,38 @@ private fun buildInlineHtmlAttributes(obj: JSONObject): String {
     return attrs.entries.joinToString(separator = "") { (key, value) ->
         " $key=\"${escapeHtmlAttribute(value)}\""
     }
+}
+
+private fun supplementalInlineStyle(value: JSONObject, tag: String): String {
+    if (tag != "img") return ""
+    val unit = normalizeCssUnit(value.optString("sizeUnits")) ?: return ""
+    val width = toCssLength(value.optString("width"), unit)
+    val height = toCssLength(value.optString("height"), unit)
+    val verticalAlign = value.optString("verticalAlign").trim()
+
+    val styles = mutableListOf<String>()
+    if (width.isNotBlank()) styles += "width: $width"
+    if (height.isNotBlank()) styles += "height: $height"
+    if (verticalAlign.isNotBlank()) styles += "vertical-align: $verticalAlign"
+    return styles.joinToString("; ")
+}
+
+private fun normalizeCssUnit(rawUnit: String): String? {
+    val unit = rawUnit.trim().lowercase(Locale.ROOT)
+    if (unit.isBlank()) return null
+    return if (unit.matches(Regex("^[a-z%]+$"))) unit else null
+}
+
+private fun toCssLength(raw: String, unit: String): String {
+    val text = raw.trim()
+    if (text.isBlank()) return ""
+    return if (text.matches(Regex("^[+-]?(?:\\d+\\.?\\d*|\\.\\d+)$"))) "$text$unit" else text
+}
+
+private fun mergeInlineStyle(base: String, extra: String): String {
+    val parts = listOf(base.trim().trimEnd(';'), extra.trim().trimEnd(';'))
+        .filter { it.isNotBlank() }
+    return parts.joinToString("; ")
 }
 
 private fun styleValueToCss(value: Any?): String {

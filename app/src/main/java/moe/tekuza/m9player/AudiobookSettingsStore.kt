@@ -24,12 +24,14 @@ private const val AUDIOBOOK_LOOKUP_LOCAL_AUDIO_URI_KEY = "audiobook_lookup_local
 private const val AUDIOBOOK_LOOKUP_FULL_SENTENCE_KEY = "audiobook_lookup_full_sentence"
 private const val AUDIOBOOK_LOOKUP_RANGE_SELECTION_ENABLED_KEY = "audiobook_lookup_range_selection_enabled"
 private const val AUDIOBOOK_LOOKUP_ROOT_FULL_WIDTH_ENABLED_KEY = "audiobook_lookup_root_full_width_enabled"
+private const val AUDIOBOOK_SUBTITLE_GLOBAL_FONT_ENABLED_KEY = "audiobook_subtitle_global_font_enabled"
+private const val AUDIOBOOK_SUBTITLE_CUSTOM_FONT_URI_KEY = "audiobook_subtitle_custom_font_uri"
 private const val DEFAULT_AUDIOBOOK_SKIP_MILLIS = 10_000L
 internal const val DEFAULT_FLOATING_OVERLAY_SIZE_DP = 58
 internal const val MIN_FLOATING_OVERLAY_SIZE_DP = 36
 internal const val MAX_FLOATING_OVERLAY_SIZE_DP = 72
 internal const val DEFAULT_FLOATING_OVERLAY_SUBTITLE_SIZE_SP = 26
-internal const val MIN_FLOATING_OVERLAY_SUBTITLE_SIZE_SP = 18
+internal const val MIN_FLOATING_OVERLAY_SUBTITLE_SIZE_SP = 12
 internal const val MAX_FLOATING_OVERLAY_SUBTITLE_SIZE_SP = 40
 internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE = 0xFFFFFFFF.toInt()
 internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_YELLOW = 0xFFFFF59D.toInt()
@@ -72,6 +74,8 @@ internal data class AudiobookSettingsConfig(
     val lookupExportFullSentence: Boolean = false,
     val lookupRangeSelectionEnabled: Boolean = false,
     val lookupRootFullWidthEnabled: Boolean = false,
+    val subtitleGlobalFontEnabled: Boolean = false,
+    val subtitleCustomFontUri: Uri? = null,
     val lookupAudioMode: LookupAudioMode = LookupAudioMode.LOCAL_TTS,
     val lookupLocalAudioUri: Uri? = null,
     val floatingOverlaySizeDp: Int = DEFAULT_FLOATING_OVERLAY_SIZE_DP,
@@ -99,6 +103,11 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
         ?.trim()
         ?.takeIf { it.isNotBlank() }
         ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+    val subtitleFontUriRaw = prefs.getString(AUDIOBOOK_SUBTITLE_CUSTOM_FONT_URI_KEY, null)
+    val subtitleFontUri = subtitleFontUriRaw
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.let { runCatching { Uri.parse(it) }.getOrNull() }
     return AudiobookSettingsConfig(
         seekStepMillis = prefs.getLong(AUDIOBOOK_SKIP_MILLIS_KEY, DEFAULT_AUDIOBOOK_SKIP_MILLIS)
             .coerceIn(1_000L, 300_000L),
@@ -114,6 +123,8 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
         lookupExportFullSentence = prefs.getBoolean(AUDIOBOOK_LOOKUP_FULL_SENTENCE_KEY, false),
         lookupRangeSelectionEnabled = prefs.getBoolean(AUDIOBOOK_LOOKUP_RANGE_SELECTION_ENABLED_KEY, false),
         lookupRootFullWidthEnabled = prefs.getBoolean(AUDIOBOOK_LOOKUP_ROOT_FULL_WIDTH_ENABLED_KEY, false),
+        subtitleGlobalFontEnabled = prefs.getBoolean(AUDIOBOOK_SUBTITLE_GLOBAL_FONT_ENABLED_KEY, false),
+        subtitleCustomFontUri = subtitleFontUri,
         lookupAudioMode = LookupAudioMode.fromStorage(prefs.getString(AUDIOBOOK_LOOKUP_AUDIO_MODE_KEY, null)),
         lookupLocalAudioUri = lookupAudioUri,
         floatingOverlaySizeDp = prefs.getInt(
@@ -143,6 +154,20 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
         floatingOverlayBubbleX = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_X_KEY, 24),
         floatingOverlayBubbleY = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_Y_KEY, 0)
     )
+}
+
+internal fun saveSubtitleGlobalFontEnabled(context: Context, enabled: Boolean) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(AUDIOBOOK_SUBTITLE_GLOBAL_FONT_ENABLED_KEY, enabled)
+        .apply()
+}
+
+internal fun saveSubtitleCustomFontUri(context: Context, uri: Uri?) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(AUDIOBOOK_SUBTITLE_CUSTOM_FONT_URI_KEY, uri?.toString())
+        .apply()
 }
 
 internal fun saveAudiobookSeekStepMillis(context: Context, millis: Long) {
