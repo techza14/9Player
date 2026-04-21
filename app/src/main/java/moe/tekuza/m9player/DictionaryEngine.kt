@@ -878,7 +878,7 @@ private fun extractTextSnippet(value: Any?): String? {
     }.trim()
 
     if (raw.isBlank()) return null
-    return normalizeDefinitionForDisplay(raw).take(MAX_DEF_LENGTH)
+    return clampDefinitionLengthForStorage(normalizeDefinitionForDisplay(raw))
 }
 
 private fun appendFlattenedText(value: Any?, builder: StringBuilder, maxLen: Int) {
@@ -928,7 +928,7 @@ private fun compactDefinitions(rawDefinitions: List<String>): List<String> {
     return rawDefinitions
         .map(::normalizeDefinitionForDisplay)
         .filter { it.isNotBlank() && isLikelyDefinition(it) }
-        .map { it.take(MAX_DEF_LENGTH) }
+        .map(::clampDefinitionLengthForStorage)
         .distinct()
         .take(MAX_DEFS_PER_ENTRY)
 }
@@ -1046,22 +1046,29 @@ private fun normalizeStructuredDataKey(rawKey: String?): String {
         .orEmpty()
     if (base.isBlank()) return ""
 
-    val canonical = when (base.lowercase(Locale.ROOT)) {
+    return when (base.lowercase(Locale.ROOT)) {
         "sc-class", "scclass", "class" -> "class"
+        // Yomitan dictionary packs commonly use dic-item while CSS targets dic_item.
+        "dic-item" -> "dic_item"
         else -> base
-            .replace(Regex("([a-z])([A-Z])"), "$1_$2")
-            .lowercase(Locale.ROOT)
     }
-    return canonical
-        .replace(STRUCTURED_DATA_KEY_SANITIZE_REGEX, "")
-        .trim('_', '-')
 }
 
 private fun buildStructuredDataScAttributes(data: Map<String, String>): String {
     if (data.isEmpty()) return ""
-    return data.entries.joinToString(separator = "") { (key, value) ->
-        val attrName = "data-sc-$key"
-        " $attrName=\"${escapeHtmlAttribute(value)}\""
+    val classAttr = data["class"]?.trim().takeIf { !it.isNullOrBlank() }
+    val dataAttrs = data.entries.joinToString(separator = "") { (key, value) ->
+        val escapedValue = escapeHtmlAttribute(value)
+        buildString {
+            append(" data-sc-$key=\"$escapedValue\"")
+            append(" data-sc$key=\"$escapedValue\"")
+        }
+    }
+    return buildString {
+        if (!classAttr.isNullOrBlank()) {
+            append(" class=\"${escapeHtmlAttribute(classAttr)}\"")
+        }
+        append(dataAttrs)
     }
 }
 
@@ -1123,6 +1130,12 @@ private fun normalizeDefinitionForDisplay(raw: String): String {
     val trimmed = raw.trim()
     if (trimmed.isBlank()) return ""
     return if (looksLikeHtml(trimmed)) trimmed else plainDefinitionToHtml(trimmed).take(MAX_DEF_LENGTH)
+}
+
+private fun clampDefinitionLengthForStorage(value: String): String {
+    val trimmed = value.trim()
+    if (trimmed.isBlank()) return ""
+    return if (looksLikeHtml(trimmed)) trimmed else trimmed.take(MAX_DEF_LENGTH)
 }
 
 private fun looksLikeHtml(text: String): Boolean {
