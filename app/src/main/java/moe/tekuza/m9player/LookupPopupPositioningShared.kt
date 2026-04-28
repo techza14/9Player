@@ -31,7 +31,7 @@ internal fun computeSharedLookupPopupSizeSpec(
     val safeDensity = density.takeIf { it > 0f } ?: 1f
     val screenWidth = screenWidthDp.toFloat().coerceAtLeast(1f)
     val screenHeight = screenHeightDp.toFloat().coerceAtLeast(1f)
-    val anchorBounds = anchor.boundingRectCoreOrNull()
+    val anchorBounds = anchor.primaryRectCoreOrNull() ?: anchor.boundingRectCoreOrNull()
     val anchorLeftDp = ((anchorBounds?.left ?: screenWidth * safeDensity * 0.4f) / safeDensity).coerceIn(0f, screenWidth)
     val anchorRightDp = ((anchorBounds?.right ?: screenWidth * safeDensity * 0.6f) / safeDensity).coerceIn(0f, screenWidth)
     val anchorTopDp = ((anchorBounds?.top ?: screenHeight * safeDensity * 0.46f) / safeDensity).coerceIn(0f, screenHeight)
@@ -126,18 +126,23 @@ internal class SharedLookupPopupPositionProvider(
                     bottom = (windowSize.height * 0.56f).toInt()
                 )
             )
+        // If caller passes preferred rect first, respect it for wrapped vertical selections.
+        val primaryRect = sourceRects.first()
         val sourceBoundsRect = IntRect(
             left = sourceRects.minOf { it.left },
             top = sourceRects.minOf { it.top },
             right = sourceRects.maxOf { it.right },
             bottom = sourceRects.maxOf { it.bottom }
         )
-        val blockedRects = listOf(sourceBoundsRect)
+        // Avoid over-blocking vertical wrapped selections: keep per-rect blocks.
+        val blockedRects = sourceRects
+        // For wrapped selections, place popup next to the dominant rect.
+        val placementAnchorRect = if (sourceRects.size > 1) primaryRect else sourceBoundsRect
         val maxX = (windowSize.width - popupContentSize.width - screenPaddingPx).coerceAtLeast(screenPaddingPx)
         val maxY = (windowSize.height - popupContentSize.height - screenPaddingPx).coerceAtLeast(screenPaddingPx)
         Log.d(
             logTag,
-            "calc sourceRects=${formatIntRectsForLogShared(sourceRects)} blockedRects=${formatIntRectsForLogShared(blockedRects)} popup=${popupContentSize.width}x${popupContentSize.height} placeBelow=$placeBelow side=$preferSidePlacement preferred=$preferredDirection"
+            "calc sourceRects=${formatIntRectsForLogShared(sourceRects)} blockedRects=${formatIntRectsForLogShared(blockedRects)} primary=${formatIntRectForLogShared(primaryRect)} popup=${popupContentSize.width}x${popupContentSize.height} placeBelow=$placeBelow side=$preferSidePlacement preferred=$preferredDirection"
         )
 
         fun fitsScreen(candidate: IntOffset): Boolean {
@@ -175,7 +180,7 @@ internal class SharedLookupPopupPositionProvider(
         }
 
         fun buildAdjacentCandidates(): List<Pair<SharedLookupPopupDirection, IntOffset>> {
-            val forbidden = sourceBoundsRect
+            val forbidden = placementAnchorRect
             val popupW = popupContentSize.width
             val popupH = popupContentSize.height
             val forbiddenW = (forbidden.right - forbidden.left).coerceAtLeast(1)
@@ -225,7 +230,7 @@ internal class SharedLookupPopupPositionProvider(
                 }.thenBy { (_, candidate) ->
                     if (fitsScreen(candidate) && isNonOverlapping(candidate)) 0 else 1
                 }.thenBy { (_, candidate) ->
-                    rectDistanceShared(sourceBoundsRect, popupRectShared(candidate, popupContentSize))
+                    rectDistanceShared(placementAnchorRect, popupRectShared(candidate, popupContentSize))
                 }
             )
         if (bestAdjacent != null) {
@@ -243,7 +248,7 @@ internal class SharedLookupPopupPositionProvider(
                 compareBy<Pair<SharedLookupPopupDirection, IntOffset>> { (direction, _) ->
                     directionPriority(direction)
                 }.thenBy { (_, candidate) ->
-                    rectDistanceShared(sourceBoundsRect, popupRectShared(candidate, popupContentSize))
+                    rectDistanceShared(placementAnchorRect, popupRectShared(candidate, popupContentSize))
                 }
             )?.second
         if (clampedAdjacent != null) return returnWithLog("adjacent_clamped_fit", clampedAdjacent)
@@ -262,7 +267,7 @@ internal class SharedLookupPopupPositionProvider(
                 while (x <= right) {
                     val candidate = IntOffset(x, y)
                     if (fitsScreen(candidate) && isNonOverlapping(candidate)) {
-                        val distance = rectDistanceShared(sourceBoundsRect, popupRectShared(candidate, popupContentSize))
+                        val distance = rectDistanceShared(placementAnchorRect, popupRectShared(candidate, popupContentSize))
                         if (distance < bestDistance) {
                             best = candidate
                             bestDistance = distance
@@ -290,6 +295,18 @@ internal class SharedLookupPopupPositionProvider(
             y = windowSize.height + screenPaddingPx
         )
     }
+}
+
+private fun ReaderLookupAnchor?.primaryRectCoreOrNull(): Rect? {
+    val rects = this?.rects?.filter { !it.isEmpty } ?: return null
+    return rects.maxWithOrNull(
+        compareBy<Rect> {
+            val w = it.width.coerceAtLeast(0f)
+            val h = it.height.coerceAtLeast(0f)
+            w * h
+        }.thenBy { it.height.coerceAtLeast(0f) }
+            .thenBy { it.right }
+    )
 }
 
 private fun popupRectShared(position: IntOffset, popupContentSize: IntSize): IntRect {

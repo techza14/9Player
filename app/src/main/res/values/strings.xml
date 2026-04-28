@@ -290,6 +290,9 @@
     <string name="audiobook_overlay_subtitle_help">悬浮字幕会显示当前播放到的字幕文本。</string>
     <string name="audiobook_overlay_subtitle_style">字幕样式</string>
     <string name="audiobook_overlay_subtitle_scroll">字幕滚动</string>
+    <string name="audiobook_overlay_subtitle_writing_mode">字幕书写方向</string>
+    <string name="audiobook_overlay_subtitle_writing_mode_horizontal">横书</string>
+    <string name="audiobook_overlay_subtitle_writing_mode_vertical_rtl">纵书</string>
     <string name="audiobook_unknown_file">未知文件</string>
     <string name="audiobook_import_stage_copy">复制文件...</string>
     <string name="audiobook_import_stage_validate">校验数据库...</string>

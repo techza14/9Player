@@ -6,7 +6,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
-import android.provider.Settings
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -24,11 +23,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -63,6 +66,7 @@ class AudiobookSettingsActivity : AppCompatActivity() {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun AudiobookSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var config by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
@@ -70,27 +74,16 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
     var inputSeconds by remember { mutableStateOf((config.seekStepMillis / 1000L).toString()) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var importGuideVisible by remember { mutableStateOf(!importState.importOnboardingCompleted) }
-    var overlaySizeDraft by remember { mutableStateOf(config.floatingOverlaySizeDp.toFloat()) }
     var lookupAudioImporting by remember { mutableStateOf(false) }
     var lookupAudioImportStage by remember { mutableStateOf(context.getString(R.string.audiobook_import_stage_preparing)) }
     var lookupAudioImportCopiedBytes by remember { mutableStateOf(0L) }
     var lookupAudioImportTotalBytes by remember { mutableStateOf<Long?>(null) }
     val scope = rememberCoroutineScope()
-    val overlayGranted = remember(
-        config.floatingOverlayEnabled,
-        config.floatingOverlaySubtitleEnabled,
-        statusText
-    ) {
-        canDrawOverlaysCompat(context)
-    }
 
     val refreshConfig = {
         config = loadAudiobookSettingsConfig(context)
         importState = loadPersistedImports(context)
         inputSeconds = (config.seekStepMillis / 1000L).toString()
-    }
-    LaunchedEffect(config.floatingOverlaySizeDp) {
-        overlaySizeDraft = config.floatingOverlaySizeDp.toFloat()
     }
     val pickLookupAudioLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -144,21 +137,6 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                 }
             }
         }
-    val previewOverlayLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            val modeName = result.data?.getStringExtra(FloatingOverlayPreviewActivity.EXTRA_RESULT_MODE)
-            val mode = modeName
-                ?.let { runCatching { FloatingOverlayMode.valueOf(it) }.getOrNull() }
-                ?: return@rememberLauncherForActivityResult
-            saveAudiobookFloatingOverlayMode(context, mode)
-            refreshConfig()
-            refreshAudiobookFloatingOverlayService(context)
-            statusText = context.getString(
-                R.string.audiobook_overlay_mode_changed,
-                overlayModeLabel(context, mode)
-            )
-        }
-
     fun updateStep(seconds: Int) {
         val millis = seconds.coerceIn(1, 300) * 1000L
         saveAudiobookSeekStepMillis(context, millis)
@@ -558,128 +536,16 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(stringResource(R.string.audiobook_overlay_title), style = MaterialTheme.typography.titleMedium)
-                val currentOverlayMode = config.floatingOverlayMode
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = stringResource(R.string.audiobook_overlay_enable),
-                        modifier = Modifier.weight(1f).padding(end = 12.dp)
-                    )
-                    Switch(
-                        checked = currentOverlayMode != FloatingOverlayMode.OFF,
-                        onCheckedChange = { checked ->
-                            val nextMode = if (checked) {
-                                currentOverlayMode.takeIf { it != FloatingOverlayMode.OFF }
-                                    ?: FloatingOverlayMode.SUBTITLE
-                            } else {
-                                FloatingOverlayMode.OFF
-                            }
-                            saveAudiobookFloatingOverlayMode(context, nextMode)
+                Text(stringResource(R.string.audiobook_overlay_subtitle_style), style = MaterialTheme.typography.titleMedium)
+                SubtitleWritingModeDropdown(
+                    selected = config.bookSubtitleWritingMode,
+                    onSelected = { mode ->
+                        if (mode != config.bookSubtitleWritingMode) {
+                            saveAudiobookBookSubtitleWritingMode(context, mode)
                             refreshConfig()
-                            refreshAudiobookFloatingOverlayService(context)
-                            statusText = if (checked) {
-                                context.getString(
-                                    R.string.audiobook_overlay_mode_changed,
-                                    overlayModeLabel(context, nextMode)
-                                )
-                            } else {
-                                context.getString(R.string.audiobook_overlay_disabled)
-                            }
                         }
-                    )
-                }
-                Text(
-                    stringResource(
-                        R.string.audiobook_overlay_mode_value,
-                        overlayModeLabel(context, currentOverlayMode)
-                    )
+                    }
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = {
-                            previewOverlayLauncher.launch(
-                                Intent(context, FloatingOverlayPreviewActivity::class.java).apply {
-                                    putExtra(
-                                        FloatingOverlayPreviewActivity.EXTRA_INITIAL_MODE,
-                                        currentOverlayMode.takeIf { it != FloatingOverlayMode.OFF }?.name
-                                            ?: FloatingOverlayMode.SUBTITLE.name
-                                    )
-                                }
-                            )
-                        }
-                    ) {
-                        Text(stringResource(R.string.audiobook_overlay_test_button))
-                    }
-                }
-                if (currentOverlayMode != FloatingOverlayMode.OFF) {
-                    Text(
-                        if (overlayGranted) {
-                            stringResource(R.string.audiobook_overlay_permission_granted)
-                        } else {
-                            stringResource(R.string.audiobook_overlay_permission_denied)
-                        }
-                    )
-                    if (!overlayGranted) {
-                        Button(
-                            onClick = {
-                                val intent = Intent(
-                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:${context.packageName}")
-                                )
-                                context.startActivity(intent)
-                            }
-                        ) {
-                            Text(stringResource(R.string.audiobook_overlay_permission_button))
-                        }
-                    }
-                }
-                if (currentOverlayMode.showsBubble) {
-                    Text(
-                        stringResource(
-                            R.string.audiobook_overlay_size_value,
-                            overlaySizeDraft.toInt()
-                        )
-                    )
-                    Slider(
-                        value = overlaySizeDraft,
-                        onValueChange = { value ->
-                            overlaySizeDraft = value.coerceIn(
-                                MIN_FLOATING_OVERLAY_SIZE_DP.toFloat(),
-                                MAX_FLOATING_OVERLAY_SIZE_DP.toFloat()
-                            )
-                        },
-                        onValueChangeFinished = {
-                            val size = overlaySizeDraft.toInt().coerceIn(
-                                MIN_FLOATING_OVERLAY_SIZE_DP,
-                                MAX_FLOATING_OVERLAY_SIZE_DP
-                            )
-                            if (size != config.floatingOverlaySizeDp) {
-                                saveAudiobookFloatingOverlaySizeDp(context, size)
-                                refreshConfig()
-                                refreshAudiobookFloatingOverlayService(context)
-                            }
-                        },
-                        valueRange = MIN_FLOATING_OVERLAY_SIZE_DP.toFloat()..MAX_FLOATING_OVERLAY_SIZE_DP.toFloat()
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            saveAudiobookFloatingOverlaySizeDp(context, DEFAULT_FLOATING_OVERLAY_SIZE_DP)
-                            refreshConfig()
-                            refreshAudiobookFloatingOverlayService(context)
-                            statusText = context.getString(R.string.audiobook_overlay_size_reset)
-                        }
-                    ) {
-                        Text(stringResource(R.string.audiobook_overlay_size_reset_button))
-                    }
-                    Text(stringResource(R.string.audiobook_overlay_help))
-                }
-                if (currentOverlayMode.showsSubtitle) {
-                    Text(stringResource(R.string.audiobook_overlay_subtitle_help))
-                }
             }
         }
 
@@ -690,17 +556,60 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
     }
 }
 
-internal fun overlayModeLabel(context: android.content.Context, mode: FloatingOverlayMode): String {
-    return when (mode) {
-        FloatingOverlayMode.OFF -> context.getString(R.string.audiobook_overlay_disabled)
-        FloatingOverlayMode.SUBTITLE -> context.getString(R.string.audiobook_overlay_mode_subtitle)
-        FloatingOverlayMode.BUBBLE -> context.getString(R.string.audiobook_overlay_mode_bubble)
-        FloatingOverlayMode.BOTH -> context.getString(R.string.audiobook_overlay_mode_both)
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun SubtitleWritingModeDropdown(
+    selected: FloatingSubtitleWritingMode,
+    onSelected: (FloatingSubtitleWritingMode) -> Unit
+) {
+    val options = FloatingSubtitleWritingMode.entries
+    var expanded by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded }
+    ) {
+        OutlinedTextField(
+            value = floatingSubtitleWritingModeLabel(context, selected),
+            onValueChange = {},
+            readOnly = true,
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true),
+            label = { Text(stringResource(R.string.audiobook_overlay_subtitle_writing_mode)) },
+            trailingIcon = {
+                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+            }
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(floatingSubtitleWritingModeLabel(context, option)) },
+                    onClick = {
+                        expanded = false
+                        onSelected(option)
+                    }
+                )
+            }
+        }
     }
 }
 
-private fun canDrawOverlaysCompat(context: android.content.Context): Boolean {
-    return Settings.canDrawOverlays(context)
+private fun floatingSubtitleWritingModeLabel(
+    context: android.content.Context,
+    mode: FloatingSubtitleWritingMode
+): String {
+    return when (mode) {
+        FloatingSubtitleWritingMode.HORIZONTAL ->
+            context.getString(R.string.audiobook_overlay_subtitle_writing_mode_horizontal)
+        FloatingSubtitleWritingMode.VERTICAL_RTL ->
+            context.getString(R.string.audiobook_overlay_subtitle_writing_mode_vertical_rtl)
+    }
 }
 
 private fun persistLookupAudioReadPermission(context: android.content.Context, uri: Uri) {

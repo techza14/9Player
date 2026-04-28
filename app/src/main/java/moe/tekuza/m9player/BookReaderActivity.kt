@@ -16,12 +16,14 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Html
+import android.text.TextPaint
 import android.util.Base64
 import android.util.Log
 import android.app.Activity
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.Toast
@@ -42,9 +44,11 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.Column
@@ -124,6 +128,8 @@ import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
+import kotlin.math.ceil
+import kotlin.math.floor
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
@@ -139,6 +145,7 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.text.vertical.VerticalTextLayout
 import moe.tekuza.m9player.ui.theme.TsetTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -159,6 +166,8 @@ private const val BOOK_READER_SLEEP_EXIT_CONTROL_KEY = "sleep_exit_control"
 private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
 private const val BOOK_LOOKUP_POS_LOG_TAG = "BookLookupPos"
 private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
+private const val BOOK_LOOKUP_SELECTION_LOG_TAG = "BookLookupSelection"
+private const val BOOK_VERTICAL_TAP_DEBUG_OVERLAY = false
 class BookReaderActivity : AppCompatActivity() {
     private var gamepadKeyHandler: ((KeyEvent) -> Boolean)? = null
     private var lastMotionHorizontalKeyCode: Int? = null
@@ -832,6 +841,12 @@ private fun BookReaderScreen(
         } else {
             null
         }
+    }
+    LaunchedEffect(visibleSelectedRange, activeCueIndex, audiobookSettings.bookSubtitleWritingMode, lyricsMode) {
+        Log.d(
+            BOOK_LOOKUP_SELECTION_LOG_TAG,
+            "visibleRange activeCue=$activeCueIndex mode=${audiobookSettings.bookSubtitleWritingMode} lyrics=$lyricsMode range=${formatRangeForLog(visibleSelectedRange)}"
+        )
     }
     LaunchedEffect(activeCueIndex, visibleSelectedRange, lyricsMode) {
         if (visibleSelectedRange == null) {
@@ -1658,10 +1673,12 @@ private fun BookReaderScreen(
                     ?: computed?.query?.length
                     ?: selectedToken?.length
                     ?: 1
+                val fallbackOffset = offset.coerceIn(0, cue.text.lastIndex.coerceAtLeast(0))
+                val fallbackRange = fallbackOffset until (fallbackOffset + 1)
                 val selectedRange = trimSelectionRangeByMatchedLength(
                     selectionRange,
                     matchedLength
-                )
+                ) ?: selectionRange ?: fallbackRange
                 val selectionText = selectedRange?.let { range ->
                     val start = range.first.coerceIn(0, cue.text.length)
                     val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
@@ -1669,6 +1686,14 @@ private fun BookReaderScreen(
                 }?.trim()?.takeIf { it.isNotBlank() }
                     ?: computed?.query?.trim()?.takeIf { it.isNotBlank() }
                     ?: selectedToken
+                val expandedAnchor = if (audiobookSettings.bookSubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
+                    anchor.expandForSelectionText(
+                        selectionText = selectionText,
+                        writingMode = audiobookSettings.bookSubtitleWritingMode
+                    )
+                } else {
+                    anchor
+                }
                 lookupSession.push(buildLookupLayer(
                     loading = false,
                     error = null,
@@ -1676,15 +1701,19 @@ private fun BookReaderScreen(
                     cue = cue,
                     cueIndex = cueIndex,
                     anchorOffset = offset,
-                    anchor = anchor,
+                    anchor = expandedAnchor,
                     placeBelow = shouldPlaceBelow,
                     preferSidePlacement = false,
                     selectedRange = selectedRange,
                     selectionText = selectionText
                 ))
                 Log.d(
+                    BOOK_LOOKUP_SELECTION_LOG_TAG,
+                    "pushSelection cueIndex=$cueIndex selectedRange=${formatRangeForLog(selectedRange)} selectionText='${selectionText.orEmpty()}'"
+                )
+                Log.d(
                     BOOK_LOOKUP_POS_LOG_TAG,
-                    "push layer=${lookupSession.lastIndex} source=subtitle term=${selectionText ?: selectedToken.orEmpty()} anchor=${formatRectForLog(anchorBounds)} placeBelow=$shouldPlaceBelow"
+                    "push layer=${lookupSession.lastIndex} source=subtitle term=${selectionText ?: selectedToken.orEmpty()} anchor=${formatRectForLog(expandedAnchor.boundingRectOrNull())} placeBelow=$shouldPlaceBelow"
                 )
             }.onFailure {
                 if (lookupPopupRequestNonce != requestNonce) return@onFailure
@@ -2460,11 +2489,32 @@ private fun BookReaderScreen(
                     tonalElevation = 1.dp,
                     shape = MaterialTheme.shapes.large
                 ) {
-                    Box(
+                    BoxWithConstraints(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(if (coverModeEnabled) 0.dp else 16.dp)
                     ) {
+                        val density = LocalDensity.current
+                        val bookVerticalWriting = audiobookSettings.bookSubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
+                        val verticalRowsPerColumn = remember(
+                            bookVerticalWriting,
+                            density,
+                            maxHeight,
+                            activeSubtitleStyle.fontSize,
+                            activeSubtitleStyle.lineHeight
+                        ) {
+                            if (!bookVerticalWriting) {
+                                BOOK_VERTICAL_ROWS_PER_COLUMN
+                            } else {
+                                val availableHeightPx = with(density) { maxHeight.toPx() }
+                                val glyphStepPx = with(density) {
+                                    activeSubtitleStyle.fontSize.toPx().coerceAtLeast(1f)
+                                }
+                                (availableHeightPx / glyphStepPx)
+                                    .toInt()
+                                    .coerceAtLeast(2)
+                            }
+                        }
                         when {
                                 srtLoading -> Text(stringResource(R.string.bookreader_parsing_srt))
                                 srtError != null -> Text(
@@ -2513,87 +2563,254 @@ private fun BookReaderScreen(
                             }
                                 cues.isEmpty() -> Text(stringResource(R.string.bookreader_no_subtitles))
                             lyricsMode -> {
-                                LazyColumn(
-                                    modifier = Modifier.fillMaxSize(),
-                                    state = lyricsListState,
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    itemsIndexed(cues) { index, cue ->
-                                        val isActive = index == activeCueIndex
-                                        val inSelectedRange = selectedCueIndexRange?.contains(index) == true
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .background(
-                                                    if (inSelectedRange) {
-                                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-                                                    } else {
-                                                        Color.Transparent
-                                                    },
-                                                    shape = RoundedCornerShape(12.dp)
-                                                )
-                                                .padding(horizontal = 8.dp, vertical = 6.dp)
-                                        ) {
-                                            ReaderLookupClickableSubtitle(
-                                                text = buildHighlightedText(
+                                if (bookVerticalWriting) {
+                                    LazyRow(
+                                        modifier = Modifier.fillMaxSize(),
+                                        state = lyricsListState,
+                                        reverseLayout = true,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.Top
+                                    ) {
+                                        itemsIndexed(cues) { index, cue ->
+                                            val isActive = index == activeCueIndex
+                                            val inSelectedRange = selectedCueIndexRange?.contains(index) == true
+                                            val cueDisplay = remember(
+                                                cue.text,
+                                                audiobookSettings.bookSubtitleWritingMode,
+                                                verticalRowsPerColumn
+                                            ) {
+                                                transformSubtitleForWritingMode(
                                                     cue.text,
-                                                    if (isActive) visibleSelectedRange else null
-                                                ),
-                                                selectedRange = if (isActive) visibleSelectedRange else null,
-                                                style = if (isActive) {
+                                                    audiobookSettings.bookSubtitleWritingMode,
+                                                    verticalRowsPerColumn
+                                                )
+                                            }
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxHeight()
+                                                    .background(
+                                                        if (inSelectedRange) {
+                                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                                                        } else {
+                                                            Color.Transparent
+                                                        },
+                                                        shape = RoundedCornerShape(12.dp)
+                                                    )
+                                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                            ) {
+                                                val cueStyle = if (isActive) {
                                                     activeSubtitleStyle
                                                 } else {
                                                     MaterialTheme.typography.titleLarge.copy(
                                                         fontFamily = subtitleFontFamily,
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
-                                                },
-                                                onSelectedRangeAnchorChanged = if (isActive) {
-                                                    { anchor -> liveSelectedRangeAnchor = anchor }
-                                                } else null,
-                                                onTextTap = { offset, anchor ->
-                                                    if (cueRangeSelectionMode) {
-                                                        handleCueRangeTap(index)
-                                                    } else if (isActive) {
-                                                        triggerPopupLookup(cue, offset, anchor)
-                                                    } else {
-                                                        jumpToCue(index)
-                                                    }
                                                 }
-                                            )
+                                                if (!cueRangeSelectionMode && bookVerticalWriting) {
+                                                    if (isActive) {
+                                                        VerticalLookupClickableSubtitle(
+                                                            sourceText = cue.text,
+                                                            style = cueStyle,
+                                                            rowsPerColumn = verticalRowsPerColumn,
+                                                            selectedSourceRange = visibleSelectedRange,
+                                                            modifier = Modifier.fillMaxHeight(),
+                                                            onSelectedRangeAnchorChanged = { anchor ->
+                                                                liveSelectedRangeAnchor = anchor
+                                                            },
+                                                            onTextTap = { sourceOffset, anchor ->
+                                                                Log.d(
+                                                                    BOOK_LOOKUP_SELECTION_LOG_TAG,
+                                                                    "verticalTap(list) cueIndex=$index sourceOffset=$sourceOffset range=${formatRangeForLog(visibleSelectedRange)} anchor=${formatRectForLog(anchor.boundingRectOrNull())}"
+                                                                )
+                                                                liveSelectedRangeAnchor = anchor
+                                                                triggerPopupLookup(cue, sourceOffset, anchor)
+                                                            }
+                                                        )
+                                                    } else {
+                                                        VerticalSubtitleText(
+                                                            text = cue.text,
+                                                            style = cueStyle,
+                                                            modifier = Modifier
+                                                                .fillMaxHeight()
+                                                                .clickable { jumpToCue(index) }
+                                                        )
+                                                    }
+                                                } else if (!isActive && !cueRangeSelectionMode) {
+                                                    VerticalSubtitleText(
+                                                        text = cue.text,
+                                                        style = cueStyle,
+                                                        modifier = Modifier
+                                                            .fillMaxHeight()
+                                                            .clickable { jumpToCue(index) }
+                                                    )
+                                                } else {
+                                                    ReaderLookupClickableSubtitle(
+                                                        text = buildHighlightedText(
+                                                            cueDisplay.text,
+                                                            if (isActive) {
+                                                                mapSourceRangeToDisplayRange(
+                                                                    visibleSelectedRange,
+                                                                    cueDisplay.sourceToDisplay
+                                                                )
+                                                            } else {
+                                                                null
+                                                            }
+                                                        ),
+                                                        selectedRange = if (isActive) {
+                                                            mapSourceRangeToDisplayRange(
+                                                                visibleSelectedRange,
+                                                                cueDisplay.sourceToDisplay
+                                                            )
+                                                        } else {
+                                                            null
+                                                        },
+                                                        style = cueStyle,
+                                                        onSelectedRangeAnchorChanged = if (isActive) {
+                                                            { anchor ->
+                                                                liveSelectedRangeAnchor = anchor
+                                                            }
+                                                        } else null,
+                                                        onTextTap = { offset, anchor ->
+                                                            if (cueRangeSelectionMode) {
+                                                                handleCueRangeTap(index)
+                                                            } else if (isActive) {
+                                                                val sourceOffset = cueDisplay.displayToSource
+                                                                    .getOrElse(offset) { 0 }
+                                                                    .coerceIn(0, cue.text.length.coerceAtLeast(1) - 1)
+                                                                triggerPopupLookup(cue, sourceOffset, anchor)
+                                                            } else {
+                                                                jumpToCue(index)
+                                                            }
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    LazyColumn(
+                                        modifier = Modifier.fillMaxSize(),
+                                        state = lyricsListState,
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        itemsIndexed(cues) { index, cue ->
+                                            val isActive = index == activeCueIndex
+                                            val inSelectedRange = selectedCueIndexRange?.contains(index) == true
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .background(
+                                                        if (inSelectedRange) {
+                                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                                                        } else {
+                                                            Color.Transparent
+                                                        },
+                                                        shape = RoundedCornerShape(12.dp)
+                                                    )
+                                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                            ) {
+                                                ReaderLookupClickableSubtitle(
+                                                    text = buildHighlightedText(
+                                                        cue.text,
+                                                        if (isActive) visibleSelectedRange else null
+                                                    ),
+                                                    selectedRange = if (isActive) {
+                                                        visibleSelectedRange
+                                                    } else {
+                                                        null
+                                                    },
+                                                    style = if (isActive) {
+                                                        activeSubtitleStyle
+                                                    } else {
+                                                        MaterialTheme.typography.titleLarge.copy(
+                                                            fontFamily = subtitleFontFamily,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    },
+                                                    onSelectedRangeAnchorChanged = if (isActive) {
+                                                        { anchor ->
+                                                            liveSelectedRangeAnchor = anchor
+                                                        }
+                                                    } else null,
+                                                    onTextTap = { offset, anchor ->
+                                                        if (cueRangeSelectionMode) {
+                                                            handleCueRangeTap(index)
+                                                        } else if (isActive) {
+                                                            triggerPopupLookup(cue, offset, anchor)
+                                                        } else {
+                                                            jumpToCue(index)
+                                                        }
+                                                    }
+                                                )
+                                            }
                                         }
                                     }
                                 }
                             }
                                 activeCue == null -> Text(stringResource(R.string.bookreader_waiting_for_subtitle))
                             else -> {
+                                val activeCueDisplay = remember(
+                                    activeCue.text,
+                                    audiobookSettings.bookSubtitleWritingMode,
+                                    verticalRowsPerColumn
+                                ) {
+                                    transformSubtitleForWritingMode(
+                                        activeCue.text,
+                                        audiobookSettings.bookSubtitleWritingMode,
+                                        verticalRowsPerColumn
+                                    )
+                                }
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .padding(
                                             top = if (audiobookSettings.activeCueDisplayAtTop) 36.dp else 0.dp
                                         ),
-                                    contentAlignment = if (audiobookSettings.activeCueDisplayAtTop) {
-                                        Alignment.TopCenter
-                                    } else {
-                                        Alignment.Center
+                                    contentAlignment = when {
+                                        bookVerticalWriting && audiobookSettings.activeCueDisplayAtTop -> Alignment.TopEnd
+                                        bookVerticalWriting -> Alignment.CenterEnd
+                                        audiobookSettings.activeCueDisplayAtTop -> Alignment.TopCenter
+                                        else -> Alignment.Center
                                     }
                                 ) {
-                                    ReaderLookupClickableSubtitle(
-                                        text = buildHighlightedText(activeCue.text, visibleSelectedRange),
-                                        selectedRange = visibleSelectedRange,
-                                        style = activeSubtitleStyle,
-                                        onSelectedRangeAnchorChanged = { anchor ->
-                                            liveSelectedRangeAnchor = anchor
-                                        },
-                                        onTextTap = { offset, anchor ->
-                                            if (cueRangeSelectionMode) {
-                                                handleCueRangeTap(activeCueIndex)
-                                            } else {
-                                                triggerPopupLookup(activeCue, offset, anchor)
+                                    if (bookVerticalWriting && !cueRangeSelectionMode) {
+                                        VerticalLookupClickableSubtitle(
+                                            sourceText = activeCue.text,
+                                            style = activeSubtitleStyle,
+                                            rowsPerColumn = verticalRowsPerColumn,
+                                            selectedSourceRange = visibleSelectedRange,
+                                            onSelectedRangeAnchorChanged = { anchor ->
+                                                liveSelectedRangeAnchor = anchor
+                                            },
+                                            onTextTap = { sourceOffset, anchor ->
+                                                Log.d(
+                                                    BOOK_LOOKUP_SELECTION_LOG_TAG,
+                                                    "verticalTap(active) cueIndex=$activeCueIndex sourceOffset=$sourceOffset range=${formatRangeForLog(visibleSelectedRange)} anchor=${formatRectForLog(anchor.boundingRectOrNull())}"
+                                                )
+                                                liveSelectedRangeAnchor = anchor
+                                                triggerPopupLookup(activeCue, sourceOffset, anchor)
                                             }
-                                        }
-                                    )
+                                        )
+                                    } else {
+                                        ReaderLookupClickableSubtitle(
+                                            text = buildHighlightedText(
+                                                activeCue.text,
+                                                visibleSelectedRange
+                                            ),
+                                            selectedRange = visibleSelectedRange,
+                                            style = activeSubtitleStyle,
+                                            onSelectedRangeAnchorChanged = { anchor ->
+                                                liveSelectedRangeAnchor = anchor
+                                            },
+                                            onTextTap = { offset, anchor ->
+                                                if (cueRangeSelectionMode) {
+                                                    handleCueRangeTap(activeCueIndex)
+                                                } else {
+                                                    triggerPopupLookup(activeCue, offset, anchor)
+                                                }
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -2853,8 +3070,10 @@ private fun BookReaderScreen(
         logTag = BOOK_LOOKUP_POS_LOG_TAG,
         temporarilyHidden = lookupPopupTemporarilyHidden,
         resolveAnchor = { index, layer ->
-            if (index == 0 && liveSelectedRangeAnchor != null) {
-                liveSelectedRangeAnchor
+            if (index == 0) {
+                // Always prefer the latest rendered selection anchor (may expand after tokenization),
+                // then fall back to tap-time anchor.
+                liveSelectedRangeAnchor ?: layer.anchor
             } else {
                 layer.anchor
             }
@@ -2944,6 +3163,148 @@ private fun buildHighlightedText(text: String, selectedRange: IntRange?): Annota
             start,
             endExclusive
         )
+    }
+}
+
+private data class SubtitleDisplayTransform(
+    val text: String,
+    val sourceToDisplay: IntArray,
+    val displayToSource: IntArray
+)
+
+private const val BOOK_VERTICAL_ROWS_PER_COLUMN = 12
+
+private fun transformSubtitleForWritingMode(
+    sourceText: String,
+    mode: FloatingSubtitleWritingMode,
+    rowsPerColumnHint: Int = BOOK_VERTICAL_ROWS_PER_COLUMN
+): SubtitleDisplayTransform {
+    if (sourceText.isEmpty()) {
+        return SubtitleDisplayTransform(
+            text = "",
+            sourceToDisplay = IntArray(0),
+            displayToSource = IntArray(0)
+        )
+    }
+    if (mode == FloatingSubtitleWritingMode.HORIZONTAL) {
+        val identity = IntArray(sourceText.length) { it }
+        return SubtitleDisplayTransform(
+            text = sourceText,
+            sourceToDisplay = identity,
+            displayToSource = identity.copyOf()
+        )
+    }
+
+    val rowsPerColumn = rowsPerColumnHint.coerceAtLeast(2)
+    val display = StringBuilder(sourceText.length * 2)
+    val sourceToDisplay = IntArray(sourceText.length) { 0 }
+    val displayToSource = ArrayList<Int>(sourceText.length * 2)
+
+    val paragraphs = ArrayList<List<Int>>()
+    val newlineSourceIndices = ArrayList<Int>()
+    var current = ArrayList<Int>()
+    for (index in sourceText.indices) {
+        val ch = sourceText[index]
+        if (ch == '\n') {
+            paragraphs.add(current)
+            newlineSourceIndices.add(index)
+            current = ArrayList()
+        } else {
+            current.add(index)
+        }
+    }
+    paragraphs.add(current)
+
+    var fallbackSource = 0
+    paragraphs.forEachIndexed { paragraphIndex, indices ->
+        if (indices.isEmpty()) {
+            if (display.isNotEmpty()) {
+                display.append('\n')
+                displayToSource.add(fallbackSource)
+            }
+            return@forEachIndexed
+        }
+
+        val columns = ArrayList<List<Int>>()
+        var start = 0
+        while (start < indices.size) {
+            val end = (start + rowsPerColumn).coerceAtMost(indices.size)
+            columns.add(indices.subList(start, end))
+            start = end
+        }
+
+        for (row in 0 until rowsPerColumn) {
+            var rowHasGlyph = false
+            val rowStart = display.length
+
+            for (columnIndex in columns.lastIndex downTo 0) {
+                val column = columns[columnIndex]
+                if (row < column.size) {
+                    val sourceIndex = column[row]
+                    val normalized = when (sourceText[sourceIndex]) {
+                        ' ', '\t' -> '\u3000'
+                        else -> sourceText[sourceIndex]
+                    }
+                    sourceToDisplay[sourceIndex] = display.length
+                    display.append(normalized)
+                    displayToSource.add(sourceIndex)
+                    fallbackSource = sourceIndex
+                    rowHasGlyph = true
+                } else {
+                    display.append('\u3000')
+                    displayToSource.add(fallbackSource)
+                }
+            }
+
+            if (rowHasGlyph) {
+                display.append('\n')
+                displayToSource.add(fallbackSource)
+            } else {
+                display.setLength(rowStart)
+                while (displayToSource.size > rowStart) {
+                    displayToSource.removeAt(displayToSource.lastIndex)
+                }
+                break
+            }
+        }
+
+        if (display.isNotEmpty() && display.last() == '\n') {
+            display.setLength(display.length - 1)
+            displayToSource.removeAt(displayToSource.lastIndex)
+        }
+
+        if (paragraphIndex < paragraphs.lastIndex) {
+            val sourceNewlineIndex = newlineSourceIndices.getOrNull(paragraphIndex)
+            if (sourceNewlineIndex != null) {
+                sourceToDisplay[sourceNewlineIndex] = display.length
+            }
+            display.append('\n')
+            displayToSource.add(fallbackSource)
+        }
+    }
+
+    return SubtitleDisplayTransform(
+        text = display.toString(),
+        sourceToDisplay = sourceToDisplay,
+        displayToSource = displayToSource.toIntArray()
+    )
+}
+
+private fun mapSourceRangeToDisplayRange(
+    sourceRange: IntRange?,
+    sourceToDisplay: IntArray
+): IntRange? {
+    val range = sourceRange ?: return null
+    if (sourceToDisplay.isEmpty()) return null
+    val maxIndex = sourceToDisplay.size - 1
+    val start = range.first.coerceIn(0, maxIndex)
+    val end = range.last.coerceIn(start, maxIndex)
+    val displayStart = sourceToDisplay[start]
+    val displayEnd = sourceToDisplay[end]
+    return if (displayStart <= displayEnd) {
+        displayStart..displayEnd
+    } else {
+        displayEnd..displayStart
     }
 }
 
@@ -3053,13 +3414,16 @@ private fun ReaderLookupClickableSubtitle(
                         }
                     }
                     val box = layout.getBoundingBox(offset)
+                    val line = layout.getLineForOffset(offset)
+                    val lineTop = layout.getLineTop(line).toFloat()
+                    val lineBottom = layout.getLineBottom(line).toFloat()
                     val anchor = ReaderLookupAnchor(
                         rects = listOf(
                             Rect(
                                 left = textWindowOrigin.x + box.left - scrollState.value,
                                 right = textWindowOrigin.x + box.right - scrollState.value,
-                                top = textWindowOrigin.y + box.top,
-                                bottom = textWindowOrigin.y + box.bottom
+                                top = textWindowOrigin.y + lineTop,
+                                bottom = textWindowOrigin.y + lineBottom
                             )
                         )
                     )
@@ -3075,6 +3439,791 @@ private fun ReaderLookupClickableSubtitle(
         overflow = TextOverflow.Clip,
         onTextLayout = { textLayoutResult = it }
     )
+}
+
+@Composable
+private fun VerticalSubtitleText(
+    text: String,
+    style: androidx.compose.ui.text.TextStyle,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val textColor = if (style.color == Color.Unspecified) Color.White else style.color
+    val fontSizePx = with(density) {
+        if (style.fontSize != androidx.compose.ui.unit.TextUnit.Unspecified) {
+            style.fontSize.toPx()
+        } else {
+            16.sp.toPx()
+        }
+    }
+
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            VerticalSubtitleView(context)
+        },
+        update = { view ->
+            val argb = android.graphics.Color.argb(
+                (textColor.alpha * 255f).roundToInt().coerceIn(0, 255),
+                (textColor.red * 255f).roundToInt().coerceIn(0, 255),
+                (textColor.green * 255f).roundToInt().coerceIn(0, 255),
+                (textColor.blue * 255f).roundToInt().coerceIn(0, 255)
+            )
+            view.bind(text, argb, fontSizePx)
+        }
+    )
+}
+
+@Composable
+private fun VerticalLookupClickableSubtitle(
+    sourceText: String,
+    style: androidx.compose.ui.text.TextStyle,
+    rowsPerColumn: Int,
+    selectedSourceRange: IntRange? = null,
+    modifier: Modifier = Modifier,
+    onSelectedRangeAnchorChanged: ((ReaderLookupAnchor?) -> Unit)? = null,
+    onTextTap: (sourceOffset: Int, anchor: ReaderLookupAnchor) -> Unit
+) {
+    val density = LocalDensity.current
+    val textColor = if (style.color == Color.Unspecified) Color.White else style.color
+    val fontSizePx = with(density) {
+        if (style.fontSize != androidx.compose.ui.unit.TextUnit.Unspecified) {
+            style.fontSize.toPx()
+        } else {
+            16.sp.toPx()
+        }
+    }
+    val lineHeightPx = with(density) {
+        if (style.lineHeight != androidx.compose.ui.unit.TextUnit.Unspecified) {
+            style.lineHeight.toPx()
+        } else {
+            fontSizePx * 1.2f
+        }
+    }
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            VerticalLookupSubtitleView(context)
+        },
+        update = { view ->
+            val argb = android.graphics.Color.argb(
+                (textColor.alpha * 255f).roundToInt().coerceIn(0, 255),
+                (textColor.red * 255f).roundToInt().coerceIn(0, 255),
+                (textColor.green * 255f).roundToInt().coerceIn(0, 255),
+                (textColor.blue * 255f).roundToInt().coerceIn(0, 255)
+            )
+            view.bind(
+                newText = sourceText,
+                color = argb,
+                sizePx = fontSizePx,
+                lineHeightPx = lineHeightPx,
+                rowsPerColumn = rowsPerColumn,
+                selectedSourceRange = selectedSourceRange
+                ,
+                onSelectionAnchorChanged = onSelectedRangeAnchorChanged
+            ) { sourceOffset, rectInWindow ->
+                val anchorRect = Rect(
+                    left = rectInWindow.left,
+                    top = rectInWindow.top,
+                    right = rectInWindow.right,
+                    bottom = rectInWindow.bottom
+                )
+                onTextTap(sourceOffset, ReaderLookupAnchor(rects = listOf(anchorRect)))
+            }
+        }
+    )
+}
+
+private class VerticalSubtitleView(context: Context) : android.view.View(context) {
+    private var content: String = ""
+    private val paint = TextPaint().apply {
+        isAntiAlias = true
+    }
+    private var cachedLayout: VerticalTextLayout? = null
+    private var cachedHeight: Int = -1
+
+    fun bind(newText: String, color: Int, sizePx: Float) {
+        val normalizedText = normalizeVerticalPunctuation(newText)
+        val changed = content != normalizedText ||
+            paint.color != color ||
+            paint.textSize != sizePx
+        if (!changed) return
+        content = normalizedText
+        paint.color = color
+        paint.textSize = sizePx
+        cachedLayout = null
+        cachedHeight = -1
+        requestLayout()
+        invalidate()
+    }
+
+    override fun onDraw(canvas: android.graphics.Canvas) {
+        super.onDraw(canvas)
+        val layout = obtainLayout(height) ?: return
+        layout.draw(canvas, width.toFloat(), 0f)
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val heightSize = MeasureSpec.getSize(heightMeasureSpec)
+        val measuredHeight = if (heightSize > 0) {
+            heightSize
+        } else {
+            (paint.textSize * 12f).roundToInt().coerceAtLeast(1)
+        }
+        val layout = obtainLayout(measuredHeight)
+        val desiredWidth = layout?.width?.let { ceil(it.toDouble()).toInt() }?.coerceAtLeast(1) ?: 1
+        val measuredWidth = resolveSize(desiredWidth, widthMeasureSpec)
+        setMeasuredDimension(measuredWidth, resolveSize(measuredHeight, heightMeasureSpec))
+    }
+
+    private fun obtainLayout(targetHeight: Int): VerticalTextLayout? {
+        if (content.isBlank() || targetHeight <= 0) return null
+        if (cachedLayout != null && cachedHeight == targetHeight) {
+            return cachedLayout
+        }
+        cachedLayout = VerticalTextLayout(
+            content,
+            0,
+            content.length,
+            paint,
+            targetHeight.toFloat()
+        )
+        cachedHeight = targetHeight
+        return cachedLayout
+    }
+}
+
+private class VerticalLookupSubtitleView(context: Context) : android.view.View(context) {
+    private var content: String = ""
+    private val paint = TextPaint().apply {
+        isAntiAlias = true
+        textAlign = android.graphics.Paint.Align.LEFT
+    }
+    private var lineHeightPx: Float = 1f
+    private var rowsPerColumn: Int = BOOK_VERTICAL_ROWS_PER_COLUMN
+    private var selectedSourceRange: IntRange? = null
+    private var onSelectionAnchorChanged: ((ReaderLookupAnchor?) -> Unit)? = null
+    private var onTap: ((sourceOffset: Int, rectInWindow: android.graphics.RectF) -> Unit)? = null
+    private var downEventTimeMs: Long = 0L
+    private var lastSelectionDebugSignature: String? = null
+    private var lastSelectionAnchorSignature: String? = null
+    private var lastLayoutMetricsSignature: String? = null
+    private var debugLastTap: VerticalTapResolved? = null
+    private var preferredAnchorRectInWindow: Rect? = null
+    private var cachedGridModel: VerticalGridModel? = null
+    private var cachedGridHeight: Int = -1
+    private var cachedGridText: String = ""
+    private var cachedGridTextSize: Float = Float.NaN
+    private var cachedVerticalLayout: VerticalTextLayout? = null
+    private var cachedVerticalLayoutHeight: Int = -1
+
+    fun bind(
+        newText: String,
+        color: Int,
+        sizePx: Float,
+        lineHeightPx: Float,
+        rowsPerColumn: Int,
+        selectedSourceRange: IntRange?,
+        onSelectionAnchorChanged: ((ReaderLookupAnchor?) -> Unit)?,
+        onTap: (sourceOffset: Int, rectInWindow: android.graphics.RectF) -> Unit
+    ) {
+        val normalizedText = normalizeVerticalPunctuation(newText)
+        val changed = content != normalizedText ||
+            paint.color != color ||
+            paint.textSize != sizePx ||
+            this.lineHeightPx != lineHeightPx ||
+            this.rowsPerColumn != rowsPerColumn ||
+            this.selectedSourceRange != selectedSourceRange
+        this.onTap = onTap
+        this.selectedSourceRange = selectedSourceRange
+        this.onSelectionAnchorChanged = onSelectionAnchorChanged
+        if (!changed) return
+        content = normalizedText
+        paint.color = color
+        paint.textSize = sizePx
+        this.lineHeightPx = lineHeightPx.coerceAtLeast(1f)
+        this.rowsPerColumn = rowsPerColumn.coerceAtLeast(2)
+        lastSelectionDebugSignature = null
+        lastSelectionAnchorSignature = null
+        lastLayoutMetricsSignature = null
+        preferredAnchorRectInWindow = null
+        clearGridCache()
+        clearVerticalLayoutCache()
+        requestLayout()
+        invalidate()
+    }
+
+    override fun onDraw(canvas: android.graphics.Canvas) {
+        super.onDraw(canvas)
+        logLayoutMetricsIfNeeded()
+        drawSelectionBackground(canvas)
+        drawVerticalLayoutText(canvas)
+        if (BOOK_VERTICAL_TAP_DEBUG_OVERLAY) {
+            drawTapDebugOverlay(canvas)
+        }
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val heightSize = MeasureSpec.getSize(heightMeasureSpec)
+        val measuredHeight = if (heightSize > 0) {
+            heightSize
+        } else {
+            (effectiveCellHeightPx() * rowsPerColumn).roundToInt().coerceAtLeast(1)
+        }
+        val model = buildGridModel(measuredHeight)
+        val desiredWidth = model?.let {
+            ceil((it.columnCount * it.cellWidth).toDouble()).toInt().coerceAtLeast(1)
+        } ?: 1
+        val measuredWidth = resolveSize(desiredWidth, widthMeasureSpec)
+        setMeasuredDimension(measuredWidth, resolveSize(measuredHeight, heightMeasureSpec))
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        val model = buildGridModel(height) ?: return true
+        if (model.cells.isEmpty()) return true
+        val resolved = resolveOffsetForEvent(event.x, event.y, model) ?: return true
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downEventTimeMs = event.eventTime
+                return true
+            }
+            MotionEvent.ACTION_MOVE,
+            MotionEvent.ACTION_CANCEL -> return true
+            MotionEvent.ACTION_UP -> {
+                val pressDuration = (event.eventTime - downEventTimeMs).coerceAtLeast(0L)
+                val tapTimeout = ViewConfiguration.getTapTimeout().toLong()
+                val longPressTimeout = ViewConfiguration.getLongPressTimeout().toLong()
+                if (pressDuration > tapTimeout && pressDuration >= longPressTimeout) {
+                    return true
+                }
+                val finalOffset = resolved.sourceOffset
+                val rectInWindow = resolved.rectInWindow
+                val tappedChar = content.getOrNull(finalOffset)?.toString().orEmpty()
+                Log.d(
+                    BOOK_LOOKUP_SELECTION_LOG_TAG,
+                    "verticalViewTap x=${event.x.roundToInt()} y=${event.y.roundToInt()} row=${resolved.row} col=${resolved.column} logical=${resolved.logical} displayOffset=$finalOffset char='$tappedChar' rect=${rectInWindow.left.roundToInt()},${rectInWindow.top.roundToInt()},${rectInWindow.right.roundToInt()},${rectInWindow.bottom.roundToInt()}"
+                )
+                if (BOOK_VERTICAL_TAP_DEBUG_OVERLAY) {
+                    debugLastTap = resolved
+                    invalidate()
+                }
+                preferredAnchorRectInWindow = Rect(
+                    left = rectInWindow.left,
+                    top = rectInWindow.top,
+                    right = rectInWindow.right,
+                    bottom = rectInWindow.bottom
+                )
+                onTap?.invoke(finalOffset, rectInWindow)
+                return true
+            }
+        }
+        return true
+    }
+
+    private data class VerticalTapResolved(
+        val sourceOffset: Int,
+        val logical: Int,
+        val row: Int,
+        val column: Int,
+        val rectInWindow: android.graphics.RectF
+    )
+
+    private data class VerticalGridCell(
+        val sourceOffset: Int,
+        val logical: Int,
+        val row: Int,
+        val column: Int
+    )
+
+    private data class VerticalGridModel(
+        val cells: List<VerticalGridCell>,
+        val columnCount: Int,
+        val maxRows: Int,
+        val cellWidth: Float,
+        val cellHeight: Float
+    )
+
+    private fun clearGridCache() {
+        cachedGridModel = null
+        cachedGridHeight = -1
+        cachedGridText = ""
+        cachedGridTextSize = Float.NaN
+    }
+
+    private fun clearVerticalLayoutCache() {
+        cachedVerticalLayout = null
+        cachedVerticalLayoutHeight = -1
+    }
+
+    private fun obtainVerticalLayout(targetHeight: Int): VerticalTextLayout? {
+        if (content.isBlank() || targetHeight <= 0) return null
+        if (cachedVerticalLayout != null &&
+            cachedVerticalLayoutHeight == targetHeight
+        ) {
+            return cachedVerticalLayout
+        }
+        cachedVerticalLayout = VerticalTextLayout(
+            content,
+            0,
+            content.length,
+            paint,
+            targetHeight.toFloat()
+        )
+        cachedVerticalLayoutHeight = targetHeight
+        return cachedVerticalLayout
+    }
+
+    private fun resolveOffsetForEvent(x: Float, y: Float, model: VerticalGridModel): VerticalTapResolved? {
+        val hit = model.cells.firstOrNull { cell ->
+            val left = (width - (cell.column + 1) * model.cellWidth).coerceAtLeast(0f)
+            val top = (cell.row * model.cellHeight).coerceAtLeast(0f)
+            val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
+            val bottom = (top + model.cellHeight).coerceAtMost(height.toFloat())
+            x >= left && x <= right && y >= top && y <= bottom
+        } ?: return null
+
+        val left = (width - (hit.column + 1) * model.cellWidth).coerceAtLeast(0f)
+        val top = (hit.row * model.cellHeight).coerceAtLeast(0f)
+        val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
+        val bottom = (top + model.cellHeight).coerceAtMost(height.toFloat())
+        val location = IntArray(2)
+        getLocationInWindow(location)
+        val rectInWindow = android.graphics.RectF(
+            location[0] + left,
+            location[1] + top,
+            location[0] + right,
+            location[1] + bottom
+        )
+        return VerticalTapResolved(
+            sourceOffset = hit.sourceOffset,
+            logical = hit.logical,
+            row = hit.row,
+            column = hit.column,
+            rectInWindow = rectInWindow
+        )
+    }
+
+    private fun buildGridModel(viewHeight: Int): VerticalGridModel? {
+        if (content.isBlank() || viewHeight <= 0) return null
+        if (cachedGridModel != null &&
+            cachedGridHeight == viewHeight &&
+            cachedGridText == content &&
+            cachedGridTextSize == paint.textSize
+        ) {
+            return cachedGridModel
+        }
+
+        val cellHeight = effectiveCellHeightPx()
+        val cellWidth = paint.textSize.coerceAtLeast(1f)
+        val fallback = buildFallbackGridModel(viewHeight, cellHeight, cellWidth)
+        val computed = runCatching {
+            val lineRanges = computeVerticalLineRangesReflective(viewHeight)
+            val lineCount = lineRanges.size.coerceAtLeast(0)
+            if (lineCount <= 0) {
+                fallback
+            } else {
+                val cells = ArrayList<VerticalGridCell>(content.length)
+                var logical = 0
+                var maxRows = 0
+                for (column in 0 until lineCount) {
+                    val range = lineRanges[column]
+                    val lineStart = range.first.coerceIn(0, content.length)
+                    val lineEnd = range.last.coerceIn(lineStart, content.length)
+                    var row = 0
+                    for (sourceOffset in lineStart until lineEnd) {
+                        val ch = content[sourceOffset]
+                        if (ch == '\n' || ch == '\r') continue
+                        cells.add(
+                            VerticalGridCell(
+                                sourceOffset = sourceOffset,
+                                logical = logical++,
+                                row = row++,
+                                column = column
+                            )
+                        )
+                    }
+                    maxRows = maxOf(maxRows, row)
+                }
+                if (cells.isEmpty()) {
+                    fallback
+                } else {
+                    VerticalGridModel(
+                        cells = cells,
+                        columnCount = lineCount.coerceAtLeast(1),
+                        maxRows = maxRows.coerceAtLeast(1),
+                        cellWidth = cellWidth,
+                        cellHeight = cellHeight
+                    )
+                }
+            }
+        }.getOrElse { fallback }
+
+        cachedGridModel = computed
+        cachedGridHeight = viewHeight
+        cachedGridText = content
+        cachedGridTextSize = paint.textSize
+        return computed
+    }
+
+    private fun computeVerticalLineRangesReflective(viewHeight: Int): List<IntRange> {
+        return try {
+            val lineBreakerClass = Class.forName("androidx.text.vertical.LineBreaker")
+            val orientationClass = Class.forName("androidx.text.vertical.TextOrientation")
+            val resultClass = Class.forName("androidx.text.vertical.LineBreaker\$Result")
+
+            val instanceField = lineBreakerClass.getDeclaredField("INSTANCE").apply { isAccessible = true }
+            val lineBreaker = instanceField.get(null)
+            val mixedField = orientationClass.getDeclaredField("Mixed").apply { isAccessible = true }
+            val mixedOrientation = mixedField.get(null)
+
+            val breakMethod = lineBreakerClass.getDeclaredMethod(
+                "breakTextIntoLines",
+                CharSequence::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                TextPaint::class.java,
+                Float::class.javaPrimitiveType,
+                orientationClass
+            ).apply { isAccessible = true }
+
+            val result = breakMethod.invoke(
+                lineBreaker,
+                content,
+                0,
+                content.length,
+                paint,
+                viewHeight.toFloat(),
+                mixedOrientation
+            ) ?: return emptyList()
+
+            val getLineCount = resultClass.getDeclaredMethod("getLineCount").apply { isAccessible = true }
+            val getLineStart = resultClass.getDeclaredMethod("getLineStart", Int::class.javaPrimitiveType).apply { isAccessible = true }
+            val getLineEnd = resultClass.getDeclaredMethod("getLineEnd", Int::class.javaPrimitiveType).apply { isAccessible = true }
+
+            val lineCount = (getLineCount.invoke(result) as? Int ?: 0).coerceAtLeast(0)
+            if (lineCount <= 0) return emptyList()
+
+            buildList(lineCount) {
+                for (line in 0 until lineCount) {
+                    val start = (getLineStart.invoke(result, line) as? Int ?: 0).coerceAtLeast(0)
+                    val end = (getLineEnd.invoke(result, line) as? Int ?: start).coerceAtLeast(start)
+                    add(start..end)
+                }
+            }
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    private fun buildFallbackGridModel(viewHeight: Int, cellHeight: Float, cellWidth: Float): VerticalGridModel {
+        val mapper = buildIndexMapping(content)
+        if (mapper.isEmpty()) {
+            return VerticalGridModel(
+                cells = emptyList(),
+                columnCount = 1,
+                maxRows = 1,
+                cellWidth = cellWidth,
+                cellHeight = cellHeight
+            )
+        }
+        val rows = resolveRowsPerColumn(mapper.size, cellHeight, viewHeight)
+        val columns = ceil(mapper.size.toFloat() / rows.toFloat()).toInt().coerceAtLeast(1)
+        val cells = ArrayList<VerticalGridCell>(mapper.size)
+        var logicalIndex = 0
+        for (logical in mapper.indices) {
+            val sourceOffset = mapper[logical]
+            if (sourceOffset < 0) continue
+            val column = logical / rows
+            val row = logical % rows
+            if (column !in 0 until columns) continue
+            cells.add(
+                VerticalGridCell(
+                    sourceOffset = sourceOffset,
+                    logical = logicalIndex++,
+                    row = row,
+                    column = column
+                )
+            )
+        }
+        val maxRows = cells.maxOfOrNull { it.row + 1 } ?: 1
+        return VerticalGridModel(
+            cells = cells,
+            columnCount = columns,
+            maxRows = maxRows,
+            cellWidth = cellWidth,
+            cellHeight = cellHeight
+        )
+    }
+
+    private fun buildIndexMapping(text: String): IntArray {
+        if (text.isEmpty()) return IntArray(0)
+        val indices = ArrayList<Int>(text.length)
+        text.forEachIndexed { index, ch ->
+            indices.add(if (ch == '\n') -1 else index)
+        }
+        return indices.toIntArray()
+    }
+
+    private fun drawSelectionBackground(canvas: android.graphics.Canvas) {
+        val range = selectedSourceRange ?: return
+        val model = buildGridModel(height) ?: return
+        if (model.cells.isEmpty()) return
+        val highlightPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.argb(0x66, 0xA0, 0xA0, 0xA0)
+            style = android.graphics.Paint.Style.FILL
+            isAntiAlias = true
+        }
+        val start = range.first.coerceAtMost(range.last)
+        val end = range.last.coerceAtLeast(range.first)
+        val selectedCellsForDebug = ArrayList<String>(8)
+        val selectedRectsInWindow = ArrayList<Rect>(8)
+        val selectedRowsByColumn = linkedMapOf<Int, MutableList<Int>>()
+        val location = IntArray(2)
+        getLocationInWindow(location)
+        for (cell in model.cells) {
+            val sourceIndex = cell.sourceOffset
+            if (sourceIndex < start || sourceIndex > end) continue
+            val column = cell.column
+            val row = cell.row
+            if (column !in 0 until model.columnCount) continue
+            selectedRowsByColumn.getOrPut(column) { ArrayList(4) }.add(row)
+            if (selectedCellsForDebug.size < 24) {
+                val ch = content.getOrNull(sourceIndex)?.toString().orEmpty()
+                selectedCellsForDebug.add(
+                    "s=$sourceIndex('$ch')->L${cell.logical}(r$row,c$column)"
+                )
+            }
+        }
+
+        selectedRowsByColumn.forEach { (column, rowsInColumn) ->
+            if (rowsInColumn.isEmpty()) return@forEach
+            val sortedRows = rowsInColumn.distinct().sorted()
+            var runStart = sortedRows.first()
+            var previous = runStart
+            fun flushRun(startRow: Int, endRow: Int) {
+                val left = (width - (column + 1) * model.cellWidth).coerceAtLeast(0f)
+                val top = (startRow * model.cellHeight).coerceAtLeast(0f)
+                val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
+                val bottom = ((endRow + 1) * model.cellHeight).coerceAtMost(height.toFloat())
+                canvas.drawRect(left, top, right, bottom, highlightPaint)
+                if (selectedRectsInWindow.size < 128) {
+                    selectedRectsInWindow.add(
+                        Rect(
+                            left = location[0] + left,
+                            top = location[1] + top,
+                            right = location[0] + right,
+                            bottom = location[1] + bottom
+                        )
+                    )
+                }
+            }
+
+            for (i in 1 until sortedRows.size) {
+                val row = sortedRows[i]
+                if (row == previous + 1) {
+                    previous = row
+                } else {
+                    flushRun(runStart, previous)
+                    runStart = row
+                    previous = row
+                }
+            }
+            flushRun(runStart, previous)
+        }
+
+        publishSelectionAnchor(selectedRectsInWindow, start..end)
+        logSelectionDebugIfNeeded(
+            range = start..end,
+            model = model,
+            selectedCells = selectedCellsForDebug
+        )
+    }
+
+    private fun drawTapDebugOverlay(canvas: android.graphics.Canvas) {
+        val model = buildGridModel(height) ?: return
+        if (model.cells.isEmpty()) return
+
+        val gridPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.argb(70, 40, 120, 220)
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 1f
+            isAntiAlias = true
+        }
+        val tapPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.argb(220, 230, 60, 60)
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 3f
+            isAntiAlias = true
+        }
+        val labelPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.argb(200, 30, 30, 30)
+            textSize = (paint.textSize * 0.24f).coerceAtLeast(10f)
+            isAntiAlias = true
+        }
+
+        for (cell in model.cells) {
+            val left = (width - (cell.column + 1) * model.cellWidth).coerceAtLeast(0f)
+            val top = (cell.row * model.cellHeight).coerceAtLeast(0f)
+            val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
+            val bottom = (top + model.cellHeight).coerceAtMost(height.toFloat())
+            canvas.drawRect(left, top, right, bottom, gridPaint)
+        }
+
+        debugLastTap?.let { tap ->
+            val left = (width - (tap.column + 1) * model.cellWidth).coerceAtLeast(0f)
+            val top = (tap.row * model.cellHeight).coerceAtLeast(0f)
+            val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
+            val bottom = (top + model.cellHeight).coerceAtMost(height.toFloat())
+            canvas.drawRect(left, top, right, bottom, tapPaint)
+            val ch = content.getOrNull(tap.sourceOffset)?.toString().orEmpty()
+            val label = "L${tap.logical} S${tap.sourceOffset} '$ch'"
+            canvas.drawText(label, 8f, (height - 8f).coerceAtLeast(labelPaint.textSize + 2f), labelPaint)
+        }
+    }
+
+    private fun drawVerticalLayoutText(canvas: android.graphics.Canvas) {
+        val layout = obtainVerticalLayout(height) ?: return
+        layout.draw(canvas, width.toFloat(), 0f)
+    }
+
+    private fun publishSelectionAnchor(rects: List<Rect>, range: IntRange) {
+        val callback = onSelectionAnchorChanged ?: return
+        val orderedRects = reorderRectsWithPreferredFirst(rects, preferredAnchorRectInWindow)
+        val signature = buildString {
+            append(range.first).append('-').append(range.last).append('|').append(orderedRects.size)
+            orderedRects.take(6).forEach {
+                append('|')
+                    .append(it.left.roundToInt()).append(',')
+                    .append(it.top.roundToInt()).append(',')
+                    .append(it.right.roundToInt()).append(',')
+                    .append(it.bottom.roundToInt())
+            }
+        }
+        if (signature == lastSelectionAnchorSignature) return
+        lastSelectionAnchorSignature = signature
+        callback(if (orderedRects.isEmpty()) null else ReaderLookupAnchor(rects = orderedRects))
+    }
+
+    private fun reorderRectsWithPreferredFirst(rects: List<Rect>, preferred: Rect?): List<Rect> {
+        if (rects.isEmpty() || preferred == null) return rects
+        val bestIndex = rects.indices.maxByOrNull { idx ->
+            val rect = rects[idx]
+            val overlap = overlapArea(rect, preferred)
+            if (overlap > 0f) {
+                overlap + 10_000_000f
+            } else {
+                -centerDistance(rect, preferred)
+            }
+        } ?: return rects
+        if (bestIndex == 0) return rects
+        return buildList(rects.size) {
+            add(rects[bestIndex])
+            rects.forEachIndexed { idx, rect ->
+                if (idx != bestIndex) add(rect)
+            }
+        }
+    }
+
+    private fun overlapArea(a: Rect, b: Rect): Float {
+        val left = maxOf(a.left, b.left)
+        val top = maxOf(a.top, b.top)
+        val right = minOf(a.right, b.right)
+        val bottom = minOf(a.bottom, b.bottom)
+        val w = (right - left).coerceAtLeast(0f)
+        val h = (bottom - top).coerceAtLeast(0f)
+        return w * h
+    }
+
+    private fun centerDistance(a: Rect, b: Rect): Float {
+        val ax = (a.left + a.right) * 0.5f
+        val ay = (a.top + a.bottom) * 0.5f
+        val bx = (b.left + b.right) * 0.5f
+        val by = (b.top + b.bottom) * 0.5f
+        val dx = ax - bx
+        val dy = ay - by
+        return kotlin.math.sqrt(dx * dx + dy * dy)
+    }
+
+    private fun effectiveCellHeightPx(): Float {
+        return paint.textSize.coerceAtLeast(1f)
+    }
+
+    private fun resolveRowsPerColumn(mapperSize: Int, cellHeight: Float, viewHeight: Int): Int {
+        val hintRows = rowsPerColumn.coerceAtLeast(2)
+        if (mapperSize <= 0) return hintRows
+        val rowsByHeight = if (viewHeight > 0 && cellHeight > 0f) {
+            floor(viewHeight / cellHeight).toInt().coerceAtLeast(2)
+        } else {
+            hintRows
+        }
+        return rowsByHeight.coerceAtMost(mapperSize.coerceAtLeast(2))
+    }
+
+    private fun logLayoutMetricsIfNeeded() {
+        val model = buildGridModel(height)
+        val dynamicRows = model?.maxRows ?: rowsPerColumn.coerceAtLeast(2)
+        val dynamicColumns = model?.columnCount ?: 0
+        val signature = "${width}x$height|${paint.textSize.roundToInt()}|$rowsPerColumn|$dynamicRows|$dynamicColumns|${content.length}"
+        if (signature == lastLayoutMetricsSignature) return
+        lastLayoutMetricsSignature = signature
+        Log.d(
+            BOOK_LOOKUP_SELECTION_LOG_TAG,
+            "verticalLayoutMetrics view=${width}x$height textSize=${paint.textSize.roundToInt()} hintRows=$rowsPerColumn dynamicRows=$dynamicRows columns=$dynamicColumns contentLen=${content.length}"
+        )
+    }
+
+    private fun logSelectionDebugIfNeeded(
+        range: IntRange,
+        model: VerticalGridModel,
+        selectedCells: List<String>
+    ) {
+        val signature = "${range.first}-${range.last}|${model.maxRows}|${model.columnCount}|${content.length}"
+        if (signature == lastSelectionDebugSignature) return
+        lastSelectionDebugSignature = signature
+        val preview = content
+            .replace("\n", "↩")
+            .let { if (it.length > 120) it.take(120) + "…" else it }
+        Log.d(
+            BOOK_LOOKUP_SELECTION_LOG_TAG,
+            "verticalSelectionDebug range=${range.first}..${range.last} rows=${model.maxRows} cols=${model.columnCount} view=${width}x$height cell=${model.cellWidth.roundToInt()}x${model.cellHeight.roundToInt()} mapperLen=${model.cells.size} contentLen=${content.length} preview='$preview' cells=${selectedCells.joinToString(" | ")}"
+        )
+    }
+}
+
+private fun normalizeVerticalPunctuation(text: String): String {
+    if (text.isEmpty()) return text
+    var changed = false
+    val out = StringBuilder(text.length)
+    text.forEach { ch ->
+        val mapped = when (ch) {
+            ',' -> '\uFE10' // ︐
+            '.' -> '\uFE12' // ︒
+            ':' -> '\uFE13' // ︓
+            ';' -> '\uFE14' // ︔
+            '!' -> '\uFE15' // ︕
+            '?' -> '\uFE16' // ︖
+            '(' -> '\uFE35' // ︵
+            ')' -> '\uFE36' // ︶
+            '[' -> '\uFE39' // ︹
+            ']' -> '\uFE3A' // ︺
+            '{' -> '\uFE37' // ︷
+            '}' -> '\uFE38' // ︸
+            '<' -> '\uFE3F' // ︿
+            '>' -> '\uFE40' // ﹀
+            '\u2025' // ‥
+            -> '\uFE30' // ︰
+            '\u2026', // …
+            '\u22EF'  // ⋯
+            -> '\uFE19' // ︙ Vertical ellipsis
+            '\u203B' // ※
+            -> '\uFE61' // ﹡
+            else -> ch
+        }
+        if (mapped != ch) changed = true
+        out.append(mapped)
+    }
+    return if (changed) out.toString() else text
 }
 
 
@@ -3102,21 +4251,26 @@ private fun ReaderLookupAnchor?.boundingRectOrNull(): Rect? {
     return mergeRects(rects)
 }
 
-private fun ReaderLookupAnchor?.expandForSelectionText(selectionText: String?): ReaderLookupAnchor? {
+private fun ReaderLookupAnchor?.expandForSelectionText(
+    selectionText: String?,
+    writingMode: FloatingSubtitleWritingMode? = null
+): ReaderLookupAnchor? {
     val anchor = this ?: return null
+    if (writingMode != FloatingSubtitleWritingMode.VERTICAL_RTL) return anchor
     val rects = anchor.rects.filter { !it.isEmpty }
     if (rects.size != 1) return anchor
     val text = selectionText?.trim().orEmpty()
     val textLength = text.length.coerceAtMost(12)
     if (textLength <= 1) return anchor
     val rect = rects.first()
-    val charWidth = (rect.right - rect.left).coerceAtLeast(1f)
-    val horizontalExtra = ((textLength - 1) * charWidth * 0.5f).coerceAtLeast(0f)
+    val charHeight = (rect.bottom - rect.top).coerceAtLeast(1f)
+    val extra = (textLength - 1).coerceAtLeast(0)
+    val verticalExtra = (extra * charHeight * 0.5f).coerceAtLeast(0f)
     val expanded = Rect(
-        left = rect.left - horizontalExtra - 4f,
-        top = rect.top - 3f,
-        right = rect.right + horizontalExtra + 4f,
-        bottom = rect.bottom + 3f
+        left = rect.left - 3f,
+        top = rect.top - verticalExtra - 4f,
+        right = rect.right + 3f,
+        bottom = rect.bottom + verticalExtra + 4f
     )
     return ReaderLookupAnchor(rects = listOf(expanded))
 }
