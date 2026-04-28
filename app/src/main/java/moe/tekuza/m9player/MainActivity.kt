@@ -1529,6 +1529,9 @@ private fun ReaderSyncScreen() {
             dictionaryLoading = false
             clearDictionaryProgress()
             persistImportState()
+            scope.launch(Dispatchers.Default) {
+                prewarmDictionaryMemoryIndexes(context, restoredDictionaryList)
+            }
         }
 
         if (ankiPermissionGranted) {
@@ -2272,6 +2275,11 @@ private fun ReaderSyncScreen() {
             dictionaryRefs = nextDictionaryRefs
             if (hadDictionaryListChange) {
                 bumpDictionaryDataVersion(context)
+            }
+            if (hadDictionaryListChange && nextLoadedDictionaries.isNotEmpty()) {
+                scope.launch(Dispatchers.Default) {
+                    prewarmDictionaryMemoryIndexes(context, nextLoadedDictionaries)
+                }
             }
             persistImportState()
             clearDictionaryProgress()
@@ -3339,10 +3347,11 @@ private fun ReaderSyncScreen() {
                     val isTopLayer = sourceLayerIndex == mainLookupSession.lastIndex
                     val isPreviousLayer = sourceLayerIndex == mainLookupSession.lastIndex - 1
                     if (isTopLayer || isPreviousLayer) {
+                        val resolvedDefinitionKey = tapData.tappedDefinitionKey ?: definitionKey
                         startMainLookup(
                             MainLookupRequest.RecursiveTap(
                                 sourceLayerIndex = sourceLayerIndex,
-                                definitionKey = definitionKey,
+                                definitionKey = resolvedDefinitionKey,
                                 tapData = tapData
                             )
                         )

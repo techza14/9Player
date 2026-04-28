@@ -1600,6 +1600,7 @@ private fun BookReaderScreen(
     }
 
     fun triggerPopupLookup(cue: ReaderSubtitleCue, offset: Int, anchor: ReaderLookupAnchor?) {
+        val lookupStartMs = System.currentTimeMillis()
         consumeCueRangeSelection()
         lookupSession.clear()
         val dictionariesSnapshot = loadedDictionaries
@@ -1610,6 +1611,10 @@ private fun BookReaderScreen(
         Log.d(
             BOOK_LOOKUP_ANCHOR_LOG_TAG,
             "trigger cueIndex=$cueIndex offset=$offset anchor=${formatRectForLog(anchorBounds)} placeBelow=$shouldPlaceBelow"
+        )
+        Log.d(
+            BOOK_LOOKUP_POS_LOG_TAG,
+            "tapLookup start cueIndex=$cueIndex offset=$offset t=$lookupStartMs"
         )
         val requestNonce = lookupPopupRequestNonce + 1L
         lookupPopupRequestNonce = requestNonce
@@ -1636,13 +1641,12 @@ private fun BookReaderScreen(
         )
         val selectionRange = selection?.range
         val selectedToken = selection?.text?.trim()?.takeIf { it.isNotBlank() }
-        val candidates = listOfNotNull(selectedToken)
         Log.d(
             BOOK_LOOKUP_ANCHOR_LOG_TAG,
-            "triggerSelection cueIndex=$cueIndex selectedRange=${formatRangeForLog(selectionRange)} candidates=${candidates.joinToString("|")}"
+            "triggerSelection cueIndex=$cueIndex selectedRange=${formatRangeForLog(selectionRange)} token=${selectedToken.orEmpty()}"
         )
 
-        if (candidates.isEmpty()) {
+        if (selectedToken.isNullOrBlank()) {
             return
         }
 
@@ -1656,35 +1660,26 @@ private fun BookReaderScreen(
         }
 
         scope.launch {
-            val result = withContext(Dispatchers.Default) {
-                runCatching {
-                    computeTapLookupResultsWithWinningCandidate(
-                        context = context,
-                        dictionaries = dictionariesSnapshot,
-                        query = selectedToken ?: candidates.first()
-                    )
-                }
-            }
-            result.onSuccess { computed ->
-                if (lookupPopupRequestNonce != requestNonce) return@onSuccess
-                val hits = computed?.hits.orEmpty()
-                if (hits.isEmpty()) return@onSuccess
+            val query = selectedToken
+
+            fun applyLookupResult(hits: List<DictionarySearchResult>, computedQuery: String?) {
+                if (hits.isEmpty()) return
                 val matchedLength = hits.firstOrNull { it.matchedLength > 0 }?.matchedLength
-                    ?: computed?.query?.length
+                    ?: computedQuery?.length
                     ?: selectedToken?.length
                     ?: 1
                 val fallbackOffset = offset.coerceIn(0, cue.text.lastIndex.coerceAtLeast(0))
                 val fallbackRange = fallbackOffset until (fallbackOffset + 1)
-                val selectedRange = trimSelectionRangeByMatchedLength(
+                val resolvedRange = trimSelectionRangeByMatchedLength(
                     selectionRange,
                     matchedLength
                 ) ?: selectionRange ?: fallbackRange
-                val selectionText = selectedRange?.let { range ->
+                val selectionText = resolvedRange.let { range ->
                     val start = range.first.coerceIn(0, cue.text.length)
                     val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
                     if (endExclusive > start) cue.text.substring(start, endExclusive) else ""
-                }?.trim()?.takeIf { it.isNotBlank() }
-                    ?: computed?.query?.trim()?.takeIf { it.isNotBlank() }
+                }.trim().takeIf { it.isNotBlank() }
+                    ?: computedQuery?.trim()?.takeIf { it.isNotBlank() }
                     ?: selectedToken
                 val expandedAnchor = if (audiobookSettings.bookSubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
                     anchor.expandForSelectionText(
@@ -1694,42 +1689,60 @@ private fun BookReaderScreen(
                 } else {
                     anchor
                 }
-                lookupSession.push(buildLookupLayer(
-                    loading = false,
-                    error = null,
-                    rawResults = hits,
-                    cue = cue,
-                    cueIndex = cueIndex,
-                    anchorOffset = offset,
-                    anchor = expandedAnchor,
-                    placeBelow = shouldPlaceBelow,
-                    preferSidePlacement = false,
-                    selectedRange = selectedRange,
-                    selectionText = selectionText
-                ))
-                Log.d(
-                    BOOK_LOOKUP_SELECTION_LOG_TAG,
-                    "pushSelection cueIndex=$cueIndex selectedRange=${formatRangeForLog(selectedRange)} selectionText='${selectionText.orEmpty()}'"
+                lookupSession.push(
+                    buildLookupLayer(
+                        loading = false,
+                        error = null,
+                        rawResults = hits,
+                        cue = cue,
+                        cueIndex = cueIndex,
+                        anchorOffset = offset,
+                        anchor = expandedAnchor,
+                        placeBelow = shouldPlaceBelow,
+                        preferSidePlacement = false,
+                        selectedRange = resolvedRange,
+                        selectionText = selectionText
+                    )
                 )
                 Log.d(
                     BOOK_LOOKUP_POS_LOG_TAG,
-                    "push layer=${lookupSession.lastIndex} source=subtitle term=${selectionText ?: selectedToken.orEmpty()} anchor=${formatRectForLog(expandedAnchor.boundingRectOrNull())} placeBelow=$shouldPlaceBelow"
+                    "tapLookup success cueIndex=$cueIndex query='${computedQuery ?: query}' hits=${hits.size} elapsedMs=${(System.currentTimeMillis() - lookupStartMs).coerceAtLeast(0L)}"
                 )
-            }.onFailure {
+            }
+
+            val finalResult = withContext(Dispatchers.Default) {
+                runCatching {
+                    computeTapLookupResultsImmediate(
+                        context = context,
+                        dictionaries = dictionariesSnapshot,
+                        query = query
+                    )
+                }
+            }
+            finalResult.onSuccess { computed ->
+                if (lookupPopupRequestNonce != requestNonce) return@onSuccess
+                applyLookupResult(computed?.hits.orEmpty(), computed?.query)
+            }.onFailure { throwable ->
                 if (lookupPopupRequestNonce != requestNonce) return@onFailure
-                lookupSession.push(buildLookupLayer(
-                    loading = false,
-                    error = it.message ?: context.getString(R.string.bookreader_lookup_failed),
-                    rawResults = emptyList(),
-                    cue = cue,
-                    cueIndex = cueIndex,
-                    anchorOffset = offset,
-                    anchor = anchor,
-                    placeBelow = shouldPlaceBelow,
-                    preferSidePlacement = false,
-                    selectedRange = null,
-                    selectionText = selectedToken
-                ))
+                lookupSession.push(
+                    buildLookupLayer(
+                        loading = false,
+                        error = throwable.message ?: context.getString(R.string.bookreader_lookup_failed),
+                        rawResults = emptyList(),
+                        cue = cue,
+                        cueIndex = cueIndex,
+                        anchorOffset = offset,
+                        anchor = anchor,
+                        placeBelow = shouldPlaceBelow,
+                        preferSidePlacement = false,
+                        selectedRange = null,
+                        selectionText = selectedToken
+                    )
+                )
+                Log.d(
+                    BOOK_LOOKUP_POS_LOG_TAG,
+                    "tapLookup fail cueIndex=$cueIndex query='$query' elapsedMs=${(System.currentTimeMillis() - lookupStartMs).coerceAtLeast(0L)} error='${throwable.message.orEmpty()}'"
+                )
                 Log.d(
                     BOOK_LOOKUP_POS_LOG_TAG,
                     "pushError layer=${lookupSession.lastIndex} source=subtitle anchor=${formatRectForLog(anchorBounds)} placeBelow=$shouldPlaceBelow"
@@ -3105,14 +3118,15 @@ private fun BookReaderScreen(
             val isTopLayer = layerIndex == lookupSession.lastIndex
             val isPreviousLayer = layerIndex == lookupSession.lastIndex - 1
             if (isTopLayer || isPreviousLayer) {
+                val resolvedDefinitionKey = tapData.tappedDefinitionKey ?: definitionKey
                 Log.d(
                     BOOK_LOOKUP_ANCHOR_LOG_TAG,
-                    "cardTap layer=$layerIndex key=$definitionKey scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
+                    "cardTap layer=$layerIndex key=$resolvedDefinitionKey scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
                 )
                 val anchorRects = tapData.resolveScreenAnchorRects()
                     .takeIf { it.isNotEmpty() }
                 val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
-                performRecursiveLookupFromDefinition(layerIndex, definitionKey, tapData, anchor)
+                performRecursiveLookupFromDefinition(layerIndex, resolvedDefinitionKey, tapData, anchor)
             }
         },
         onRangeSelection = { layerIndex ->
