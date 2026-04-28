@@ -41,6 +41,7 @@ private const val DICTIONARY_HOSHI_STYLES_FILE = "styles.css"
 private const val DICTIONARY_TERM_INDEX_MAGIC = 0x54494458 // "TIDX"
 private const val DICTIONARY_TERM_INDEX_VERSION = 1
 private const val DICTIONARY_TERM_INDEX_CACHE_LIMIT = 48
+private const val DICTIONARY_MEMORY_INDEX_CACHE_LIMIT = 12
 private const val LOOKUP_QUERY_CACHE_LIMIT = 180
 private const val LOOKUP_QUERY_CACHE_SCHEMA_VERSION = 3
 private const val LOOKUP_REWRITE_LIMIT = 40
@@ -125,6 +126,26 @@ private data class DictionaryTermIndexCacheEntry(
     val terms: List<String>
 )
 
+private data class MemoryDictionaryEntry(
+    val term: String,
+    val reading: String?,
+    val definition: String,
+    val pitch: String?,
+    val frequency: String?,
+    val dictionaryName: String,
+    val termNorm: String,
+    val readingNorm: String,
+    val aliasNorm: String
+)
+
+private data class DictionaryMemoryIndex(
+    val cacheKey: String,
+    val dbLastModified: Long,
+    val entries: List<MemoryDictionaryEntry>,
+    val exactNormMap: Map<String, IntArray>,
+    val sortedTerms: List<String>
+)
+
 private val dictionaryLookupQueryCache =
     object : LinkedHashMap<DictionaryLookupQueryCacheKey, List<DictionarySearchResult>>(LOOKUP_QUERY_CACHE_LIMIT, 0.75f, true) {
         override fun removeEldestEntry(
@@ -140,6 +161,15 @@ private val dictionaryTermIndexCache =
             eldest: MutableMap.MutableEntry<String, DictionaryTermIndexCacheEntry>?
         ): Boolean {
             return size > DICTIONARY_TERM_INDEX_CACHE_LIMIT
+        }
+    }
+
+private val dictionaryMemoryIndexCache =
+    object : LinkedHashMap<String, DictionaryMemoryIndex>(DICTIONARY_MEMORY_INDEX_CACHE_LIMIT, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, DictionaryMemoryIndex>?
+        ): Boolean {
+            return size > DICTIONARY_MEMORY_INDEX_CACHE_LIMIT
         }
     }
 
@@ -474,19 +504,61 @@ private fun clearDictionaryLookupQueryCache() {
     }
 }
 
+private fun clearDictionaryMemoryIndexCache(cacheKey: String? = null) {
+    synchronized(dictionaryMemoryIndexCache) {
+        if (cacheKey == null) {
+            dictionaryMemoryIndexCache.clear()
+        } else {
+            dictionaryMemoryIndexCache.remove(cacheKey)
+        }
+    }
+}
+
 internal fun invalidateDictionaryLookupCaches() {
     clearDictionaryLookupQueryCache()
+    clearDictionaryMemoryIndexCache()
     clearMountedMdxRuntimeCaches()
     HoshiNativeBridge.clearLookupCache()
     MdictNativeBridge.clearLookupCache()
 }
 
+internal fun prewarmDictionaryMemoryIndexes(
+    context: Context,
+    dictionaries: List<LoadedDictionary>
+) {
+    if (dictionaries.isEmpty()) return
+    val appContext = context.applicationContext
+    val targets = dictionaries
+        .asSequence()
+        .filterNot { it.format.contains("MDX", ignoreCase = true) }
+        .mapNotNull { it.cacheKey.takeIf { key -> key.isNotBlank() } }
+        .distinct()
+        .toList()
+    if (targets.isEmpty()) return
+    val started = System.currentTimeMillis()
+    var warmed = 0
+    targets.forEach { cacheKey ->
+        if (loadDictionaryMemoryIndex(appContext, cacheKey) != null) {
+            warmed += 1
+        }
+    }
+    Log.d(
+        DICTIONARY_LOOKUP_TAG,
+        "memory prewarm done total=${targets.size} warmed=$warmed elapsedMs=${(System.currentTimeMillis() - started).coerceAtLeast(0L)}"
+    )
+}
+
 private fun loadDictionaryLookupQueryCache(
     key: DictionaryLookupQueryCacheKey
 ): List<DictionarySearchResult>? {
-    return synchronized(dictionaryLookupQueryCache) {
+    val cached = synchronized(dictionaryLookupQueryCache) {
         dictionaryLookupQueryCache[key]
     }
+    Log.d(
+        DICTIONARY_LOOKUP_TAG,
+        "resultCache ${if (cached != null) "HIT" else "MISS"} query=${key.normalizedQuery} dictKey=${key.dictionariesKey.take(48)} profile=${key.profile}"
+    )
+    return cached
 }
 
 private fun saveDictionaryLookupQueryCache(
@@ -578,11 +650,11 @@ private fun searchDictionaryWithHoshi(
         }
         .toMap()
     val lookupLimit = when (profile) {
-        DictionaryQueryProfile.FAST -> maxResults.coerceIn(16, 64)
+        DictionaryQueryProfile.FAST -> maxResults.coerceIn(8, 16)
         DictionaryQueryProfile.FULL -> (maxResults * 2).coerceIn(24, 140)
     }
     val scanLength = when (profile) {
-        DictionaryQueryProfile.FAST -> 8
+        DictionaryQueryProfile.FAST -> minOf(query.length.coerceAtLeast(1), 4)
         DictionaryQueryProfile.FULL -> 16
     }
     val hits = HoshiNativeBridge.lookup(
@@ -1235,60 +1307,21 @@ private fun searchDictionaryWithSqlite(
         val cacheKey = dictionary.cacheKey.takeIf { it.isNotBlank() } ?: return@forEachIndexed
         val mdxLikeDictionary = dictionary.format.contains("MDX", ignoreCase = true)
         if (mdxLikeDictionary) return@forEachIndexed
-        val db = openDictionaryEntriesDbForRead(context, cacheKey) ?: return@forEachIndexed
-        try {
-            val candidateTerms = linkedSetOf<String>()
-            candidateTerms += normalizedQuery
-            val indexTerms = readDictionaryTermBinaryIndex(context, cacheKey)
-            if (indexTerms != null) {
-                candidateTerms += collectPrefixTermsFromBinaryIndex(
-                    sortedTerms = indexTerms,
-                    normalizedPrefix = normalizedQuery,
-                    limit = config.prefixLimit
-                )
+        val local = searchDictionaryWithMemoryIndex(
+            context = context,
+            cacheKey = cacheKey,
+            normalizedQuery = normalizedQuery,
+            rawQuery = query.trim(),
+            config = config,
+            dictionaryOrder = order,
+            maxResults = maxResults
+        )
+        local.forEach { result ->
+            val key = entryStableKey(result.entry)
+            val existing = merged[key]
+            if (existing == null || result.score > existing.score) {
+                merged[key] = result
             }
-
-            val localLimit = (config.exactLimit + config.prefixLimit).coerceAtLeast(24)
-            val local = mutableListOf<DictionarySearchResult>()
-            candidateTerms.forEach { norm ->
-                queryEntriesByExactNorm(
-                    db = db,
-                    cacheKey = cacheKey,
-                    normalized = norm,
-                    limit = localLimit,
-                    dictionaryOrder = order,
-                    out = local
-                )
-            }
-            if (local.size < config.containsTriggerSize && config.containsLimit > 0) {
-                queryEntriesByContainsNorm(
-                    db = db,
-                    cacheKey = cacheKey,
-                    normalized = normalizedQuery,
-                    limit = config.containsLimit,
-                    dictionaryOrder = order,
-                    out = local
-                )
-            }
-            if (local.isEmpty()) {
-                queryEntriesByRawContains(
-                    db = db,
-                    cacheKey = cacheKey,
-                    rawQuery = query.trim(),
-                    limit = (maxResults * 8).coerceIn(32, 240),
-                    dictionaryOrder = order,
-                    out = local
-                )
-            }
-            local.forEach { result ->
-                val key = entryStableKey(result.entry)
-                val existing = merged[key]
-                if (existing == null || result.score > existing.score) {
-                    merged[key] = result
-                }
-            }
-        } finally {
-            runCatching { db.close() }
         }
     }
 
@@ -1301,111 +1334,195 @@ private fun searchDictionaryWithSqlite(
         .take(maxResults.coerceAtLeast(1) * 2)
 }
 
-private fun queryEntriesByExactNorm(
-    db: SQLiteDatabase,
+private fun searchDictionaryWithMemoryIndex(
+    context: Context,
     cacheKey: String,
-    normalized: String,
-    limit: Int,
-    dictionaryOrder: Int,
-    out: MutableList<DictionarySearchResult>
-) {
-    if (normalized.isBlank() || limit <= 0) return
-    db.query(
-        TABLE_ENTRIES,
-        arrayOf(
-            COL_TERM,
-            COL_READING,
-            COL_DEFINITION,
-            COL_PITCH,
-            COL_FREQUENCY,
-            COL_DICTIONARY_NAME,
-            COL_TERM_NORM,
-            COL_READING_NORM,
-            COL_ALIAS_NORM
-        ),
-        "$COL_CACHE_KEY = ? AND ($COL_TERM_NORM = ? OR $COL_READING_NORM = ? OR $COL_ALIAS_NORM = ?)",
-        arrayOf(cacheKey, normalized, normalized, normalized),
-        null,
-        null,
-        null,
-        limit.toString()
-    ).use { cursor ->
-        while (cursor.moveToNext()) {
-            addCursorEntryResult(db, cacheKey, cursor, normalized, dictionaryOrder, out)
-        }
-    }
-}
-
-private fun queryEntriesByContainsNorm(
-    db: SQLiteDatabase,
-    cacheKey: String,
-    normalized: String,
-    limit: Int,
-    dictionaryOrder: Int,
-    out: MutableList<DictionarySearchResult>
-) {
-    if (normalized.isBlank() || limit <= 0) return
-    val likeArg = "%$normalized%"
-    db.query(
-        TABLE_ENTRIES,
-        arrayOf(
-            COL_TERM,
-            COL_READING,
-            COL_DEFINITION,
-            COL_PITCH,
-            COL_FREQUENCY,
-            COL_DICTIONARY_NAME,
-            COL_TERM_NORM,
-            COL_READING_NORM,
-            COL_ALIAS_NORM
-        ),
-        "$COL_CACHE_KEY = ? AND ($COL_TERM_NORM LIKE ? OR $COL_READING_NORM LIKE ? OR $COL_ALIAS_NORM LIKE ?)",
-        arrayOf(cacheKey, likeArg, likeArg, likeArg),
-        null,
-        null,
-        null,
-        limit.toString()
-    ).use { cursor ->
-        while (cursor.moveToNext()) {
-            addCursorEntryResult(db, cacheKey, cursor, normalized, dictionaryOrder, out)
-        }
-    }
-}
-
-private fun queryEntriesByRawContains(
-    db: SQLiteDatabase,
-    cacheKey: String,
+    normalizedQuery: String,
     rawQuery: String,
-    limit: Int,
+    config: DictionarySqlLookupConfig,
+    dictionaryOrder: Int,
+    maxResults: Int
+): List<DictionarySearchResult> {
+    val startedAt = System.currentTimeMillis()
+    val index = loadDictionaryMemoryIndex(context, cacheKey) ?: return emptyList()
+    val out = mutableListOf<DictionarySearchResult>()
+    val candidateTerms = linkedSetOf<String>()
+    candidateTerms += normalizedQuery
+    if (index.sortedTerms.isNotEmpty()) {
+        candidateTerms += collectPrefixTermsFromBinaryIndex(
+            sortedTerms = index.sortedTerms,
+            normalizedPrefix = normalizedQuery,
+            limit = config.prefixLimit
+        )
+    }
+
+    val localLimit = (config.exactLimit + config.prefixLimit).coerceAtLeast(24)
+    val seenByEntry = HashSet<Int>()
+    candidateTerms.forEach { norm ->
+        val ids = index.exactNormMap[norm] ?: return@forEach
+        for (entryId in ids) {
+            if (!seenByEntry.add(entryId)) continue
+            val entry = index.entries.getOrNull(entryId) ?: continue
+            addMemoryEntryResult(
+                entry = entry,
+                normalizedQuery = normalizedQuery,
+                dictionaryOrder = dictionaryOrder,
+                out = out
+            )
+            if (out.size >= localLimit) break
+        }
+    }
+
+    if (out.size < config.containsTriggerSize && config.containsLimit > 0) {
+        val containsLimit = config.containsLimit
+        for (entry in index.entries) {
+            if (!(entry.termNorm.contains(normalizedQuery) ||
+                    entry.readingNorm.contains(normalizedQuery) ||
+                    entry.aliasNorm.contains(normalizedQuery))
+            ) continue
+            addMemoryEntryResult(
+                entry = entry,
+                normalizedQuery = normalizedQuery,
+                dictionaryOrder = dictionaryOrder,
+                out = out
+            )
+            if (out.size >= containsLimit) break
+        }
+    }
+
+    if (out.isEmpty() && rawQuery.isNotBlank()) {
+        val rawLimit = (maxResults * 8).coerceIn(32, 240)
+        for (entry in index.entries) {
+            if (!(entry.term.contains(rawQuery) || (entry.reading?.contains(rawQuery) == true))) continue
+            addMemoryEntryResult(
+                entry = entry,
+                normalizedQuery = normalizedQuery,
+                dictionaryOrder = dictionaryOrder,
+                out = out
+            )
+            if (out.size >= rawLimit) break
+        }
+    }
+    Log.d(
+        DICTIONARY_LOOKUP_TAG,
+        "memorySearch cacheKey=$cacheKey query=$normalizedQuery out=${out.size} elapsedMs=${(System.currentTimeMillis() - startedAt).coerceAtLeast(0L)}"
+    )
+    return out
+}
+
+private fun loadDictionaryMemoryIndex(
+    context: Context,
+    cacheKey: String
+): DictionaryMemoryIndex? {
+    val startedAt = System.currentTimeMillis()
+    val dbFile = dictionaryEntryDbFile(context, cacheKey)
+    val dbLastModified = if (dbFile.isFile) dbFile.lastModified() else 0L
+    synchronized(dictionaryMemoryIndexCache) {
+        val cached = dictionaryMemoryIndexCache[cacheKey]
+        if (cached != null && cached.dbLastModified == dbLastModified) {
+            Log.d(
+                DICTIONARY_LOOKUP_TAG,
+                "memoryIndex HIT cacheKey=$cacheKey entries=${cached.entries.size} elapsedMs=${(System.currentTimeMillis() - startedAt).coerceAtLeast(0L)}"
+            )
+            return cached
+        }
+    }
+
+    val db = openDictionaryEntriesDbForRead(context, cacheKey) ?: return null
+    try {
+        val entries = ArrayList<MemoryDictionaryEntry>(2048)
+        val byNorm = HashMap<String, MutableList<Int>>(8192)
+        db.query(
+            TABLE_ENTRIES,
+            arrayOf(
+                COL_TERM,
+                COL_READING,
+                COL_DEFINITION,
+                COL_PITCH,
+                COL_FREQUENCY,
+                COL_DICTIONARY_NAME,
+                COL_TERM_NORM,
+                COL_READING_NORM,
+                COL_ALIAS_NORM
+            ),
+            "$COL_CACHE_KEY = ?",
+            arrayOf(cacheKey),
+            null,
+            null,
+            null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val term = cursor.getString(0).orEmpty()
+                if (term.isBlank()) continue
+                val memoryEntry = MemoryDictionaryEntry(
+                    term = term,
+                    reading = cursor.getString(1)?.trim()?.ifBlank { null },
+                    definition = normalizeDefinitionForDisplaySql(cursor.getString(2).orEmpty()),
+                    pitch = cursor.getString(3)?.trim()?.ifBlank { null },
+                    frequency = cursor.getString(4)?.trim()?.ifBlank { null },
+                    dictionaryName = cursor.getString(5).orEmpty(),
+                    termNorm = cursor.getString(6).orEmpty(),
+                    readingNorm = cursor.getString(7).orEmpty(),
+                    aliasNorm = cursor.getString(8).orEmpty()
+                )
+                val entryId = entries.size
+                entries += memoryEntry
+                sequenceOf(memoryEntry.termNorm, memoryEntry.readingNorm, memoryEntry.aliasNorm)
+                    .filter { it.isNotBlank() }
+                    .forEach { norm ->
+                        byNorm.getOrPut(norm) { ArrayList(2) }.add(entryId)
+                    }
+            }
+        }
+        val exactNormMap = byNorm.mapValues { (_, ids) -> ids.toIntArray() }
+        val sortedTerms = readDictionaryTermBinaryIndex(context, cacheKey).orEmpty()
+        val built = DictionaryMemoryIndex(
+            cacheKey = cacheKey,
+            dbLastModified = dbLastModified,
+            entries = entries,
+            exactNormMap = exactNormMap,
+            sortedTerms = sortedTerms
+        )
+        synchronized(dictionaryMemoryIndexCache) {
+            dictionaryMemoryIndexCache[cacheKey] = built
+        }
+        Log.d(
+            DICTIONARY_LOOKUP_TAG,
+            "memoryIndex BUILD cacheKey=$cacheKey entries=${entries.size} terms=${sortedTerms.size} elapsedMs=${(System.currentTimeMillis() - startedAt).coerceAtLeast(0L)}"
+        )
+        return built
+    } finally {
+        runCatching { db.close() }
+    }
+}
+
+private fun addMemoryEntryResult(
+    entry: MemoryDictionaryEntry,
+    normalizedQuery: String,
     dictionaryOrder: Int,
     out: MutableList<DictionarySearchResult>
 ) {
-    if (rawQuery.isBlank() || limit <= 0) return
-    val likeArg = "%$rawQuery%"
-    db.query(
-        TABLE_ENTRIES,
-        arrayOf(
-            COL_TERM,
-            COL_READING,
-            COL_DEFINITION,
-            COL_PITCH,
-            COL_FREQUENCY,
-            COL_DICTIONARY_NAME,
-            COL_TERM_NORM,
-            COL_READING_NORM,
-            COL_ALIAS_NORM
+    val score = scoreEntryByNormalizedSql(
+        term = entry.termNorm,
+        reading = entry.readingNorm,
+        alias = entry.aliasNorm,
+        normalizedQuery = normalizedQuery
+    ).let { base ->
+        if (base > 0) base else 42
+    } - dictionaryOrder
+    if (score <= 0) return
+    out += DictionarySearchResult(
+        entry = DictionaryEntry(
+            term = entry.term,
+            reading = entry.reading,
+            definitions = listOf(entry.definition),
+            pitch = entry.pitch,
+            frequency = entry.frequency,
+            dictionary = entry.dictionaryName
         ),
-        "$COL_CACHE_KEY = ? AND ($COL_TERM LIKE ? OR $COL_READING LIKE ?)",
-        arrayOf(cacheKey, likeArg, likeArg),
-        null,
-        null,
-        null,
-        limit.toString()
-    ).use { cursor ->
-        while (cursor.moveToNext()) {
-            addCursorEntryResult(db, cacheKey, cursor, normalizeLookupSql(rawQuery), dictionaryOrder, out)
-        }
-    }
+        score = score,
+        sourceCacheKey = ""
+    )
 }
 
 private fun parseMdxLinkTarget(raw: String): String? {
@@ -1419,92 +1536,6 @@ private fun parseMdxLinkTarget(raw: String): String? {
         .orEmpty()
         .trim()
     return target.ifBlank { null }
-}
-
-private fun resolveLinkedDefinitionFromSqlite(
-    db: SQLiteDatabase,
-    cacheKey: String,
-    initialDefinition: String,
-    maxDepth: Int = 8
-): String {
-    var current = initialDefinition
-    val visited = HashSet<String>()
-    var depth = 0
-    while (depth < maxDepth) {
-        val target = parseMdxLinkTarget(current) ?: break
-        if (!visited.add(target)) break
-        val targetNorm = normalizeLookupSql(target)
-        var nextDefinition: String? = null
-        db.query(
-            TABLE_ENTRIES,
-            arrayOf(COL_DEFINITION),
-            "$COL_CACHE_KEY = ? AND ($COL_TERM = ? OR $COL_TERM_NORM = ?)",
-            arrayOf(cacheKey, target, targetNorm),
-            null,
-            null,
-            null,
-            "1"
-        ).use { c ->
-            if (c.moveToFirst()) {
-                nextDefinition = c.getString(0).orEmpty()
-            }
-        }
-        val next = nextDefinition?.trim().orEmpty()
-        if (next.isBlank()) break
-        current = next
-        depth += 1
-    }
-    return current
-}
-
-private fun addCursorEntryResult(
-    db: SQLiteDatabase,
-    cacheKey: String,
-    cursor: android.database.Cursor,
-    normalizedQuery: String,
-    dictionaryOrder: Int,
-    out: MutableList<DictionarySearchResult>
-) {
-    val term = cursor.getString(0).orEmpty()
-    if (term.isBlank()) return
-    val reading = cursor.getString(1)?.trim()?.ifBlank { null }
-    val definitionRaw = cursor.getString(2).orEmpty()
-    val definition = normalizeDefinitionForDisplaySql(
-        resolveLinkedDefinitionFromSqlite(
-            db = db,
-            cacheKey = cacheKey,
-            initialDefinition = definitionRaw
-        )
-    )
-    val pitch = cursor.getString(3)?.trim()?.ifBlank { null }
-    val frequency = cursor.getString(4)?.trim()?.ifBlank { null }
-    val dictionaryName = cursor.getString(5).orEmpty()
-    val termNorm = cursor.getString(6).orEmpty()
-    val readingNorm = cursor.getString(7).orEmpty()
-    val aliasNorm = cursor.getString(8).orEmpty()
-
-    val score = scoreEntryByNormalizedSql(
-        term = termNorm,
-        reading = readingNorm,
-        alias = aliasNorm,
-        normalizedQuery = normalizedQuery
-    ).let { base ->
-        if (base > 0) base else 42
-    } - dictionaryOrder
-    if (score <= 0) return
-
-    out += DictionarySearchResult(
-        entry = DictionaryEntry(
-            term = term,
-            reading = reading,
-            definitions = listOf(definition),
-            pitch = pitch,
-            frequency = frequency,
-            dictionary = dictionaryName
-        ),
-        score = score,
-        sourceCacheKey = cacheKey
-    )
 }
 
 private fun importDictionaryZipWithHoshi(

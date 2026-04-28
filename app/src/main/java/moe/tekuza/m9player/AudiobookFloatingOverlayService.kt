@@ -946,6 +946,7 @@ companion object {
         val settings = loadAudiobookSettingsConfig(this)
         val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleTimeline()
         val normalized = text?.trim()?.takeIf { it.isNotEmpty() }
+        val displayText = normalized?.let { formatFloatingSubtitleDisplayText(it, settings.floatingOverlaySubtitleWritingMode) }
         if (!subtitleEnabledByData || normalized == null) {
             subtitle.animate().cancel()
             subtitle.text = ""
@@ -961,14 +962,14 @@ companion object {
             rootView?.post { alignOverlayWindow(force = true) }
             return
         }
-        if (subtitle.text?.toString() == normalized && subtitle.visibility == View.VISIBLE) return
+        if (subtitle.text?.toString() == displayText && subtitle.visibility == View.VISIBLE) return
         subtitle.animate().cancel()
         subtitle.alpha = 1f
-        subtitle.text = normalized
+        subtitle.text = displayText
         subtitle.visibility = View.VISIBLE
         subtitle.scrollTo(0, 0)
         subtitle.translationX = 0f
-        outline?.text = normalized
+        outline?.text = displayText
         outline?.visibility = View.VISIBLE
         outline?.scrollTo(0, 0)
         outline?.translationX = 0f
@@ -991,10 +992,11 @@ companion object {
         if (text.isBlank()) return
         val settings = loadAudiobookSettingsConfig(this)
         if (!settings.floatingOverlaySubtitleEnabled) return
+        val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
         val now = System.currentTimeMillis()
         val shouldLog = now - lastSubtitleScrollLogAtMs >= 300L
 
-        if (!settings.floatingOverlaySubtitleScrollEnabled) {
+        if (verticalWriting || !settings.floatingOverlaySubtitleScrollEnabled) {
             setSubtitleTextWidthMode(matchParent = true)
             subtitle.setSingleLine(false)
             subtitle.maxLines = Int.MAX_VALUE
@@ -1014,7 +1016,7 @@ companion object {
             if (shouldLog) {
                 Log.d(
                     FLOATING_SUBTITLE_SCROLL_LOG_TAG,
-                    "off pos=$positionMs textLen=${text.length} scrollX=${subtitle.scrollX}"
+                    "off pos=$positionMs textLen=${text.length} vertical=$verticalWriting scrollX=${subtitle.scrollX}"
                 )
                 lastSubtitleScrollLogAtMs = now
             }
@@ -1108,10 +1110,17 @@ companion object {
     private fun applySubtitleSelectionHighlight(selectedRange: IntRange?) {
         val subtitle = subtitleTextView ?: return
         val outline = subtitleOutlineTextView
+        val settings = loadAudiobookSettingsConfig(this)
         val baseText = BookReaderFloatingBridge.currentSubtitle()?.trim().orEmpty()
         if (baseText.isBlank()) {
             subtitle.text = ""
             outline?.text = ""
+            return
+        }
+        if (settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
+            val display = formatFloatingSubtitleDisplayText(baseText, settings.floatingOverlaySubtitleWritingMode)
+            subtitle.text = display
+            outline?.text = display
             return
         }
         if (selectedRange == null || selectedRange.first !in baseText.indices) {
@@ -1134,6 +1143,25 @@ companion object {
         )
         subtitle.text = spannable
         outline?.text = baseText
+    }
+
+    private fun formatFloatingSubtitleDisplayText(
+        text: String,
+        mode: FloatingSubtitleWritingMode
+    ): String {
+        if (mode == FloatingSubtitleWritingMode.HORIZONTAL) return text
+        val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
+        return normalized
+            .lines()
+            .joinToString("\n\n") { line ->
+                line.map { ch ->
+                    when (ch) {
+                        ' ' -> '\u3000'
+                        '\t' -> '\u3000'
+                        else -> ch
+                    }
+                }.joinToString("\n")
+            }
     }
 
     private fun updateFloatingLookupPanelPosition() {
@@ -2795,6 +2823,7 @@ companion object {
                             offset = 0,
                             nodeText = target,
                             nodePathJson = "[]",
+                            tappedDefinitionKey = null,
                             hostView = safeHost,
                             screenRect = null,
                             localRects = listOf(localRect),
@@ -2865,6 +2894,7 @@ companion object {
                                         offset = layer.highlightedDefinitionOffset,
                                         nodeText = "",
                                         nodePathJson = layer.highlightedDefinitionNodePathJson,
+                                        tappedDefinitionKey = null,
                                         hostView = this@apply,
                                         screenRect = null,
                                         localRects = emptyList(),
@@ -2925,6 +2955,7 @@ companion object {
                     offset = offset,
                     nodeText = "",
                     nodePathJson = nodePathJson,
+                    tappedDefinitionKey = null,
                     hostView = target,
                     screenRect = null,
                     localRects = emptyList(),
@@ -2943,6 +2974,7 @@ companion object {
                         offset = offset,
                         nodeText = "",
                         nodePathJson = nodePathJson,
+                        tappedDefinitionKey = null,
                         hostView = target,
                         screenRect = null,
                         localRects = emptyList(),

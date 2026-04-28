@@ -33,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
@@ -73,6 +74,7 @@ internal data class DefinitionLookupTapData(
     val offset: Int,
     val nodeText: String,
     val nodePathJson: String,
+    val tappedDefinitionKey: String?,
     val hostView: WebView?,
     val screenRect: Rect?,
     val localRects: List<Rect>,
@@ -81,12 +83,43 @@ internal data class DefinitionLookupTapData(
 )
 
 private const val BOOK_LOOKUP_TAP_LOG_TAG = "BookLookupTap"
+private const val BOOK_LOOKUP_RENDER_LOG_TAG = "BookLookupRender"
+private const val LOOKUP_WEBVIEW_POOL_MAX = 2
 
 private class DefinitionLookupViewTag(
     val bridge: DefinitionLookupBridge
 ) {
     var lastHtml: String? = null
     var lastLookupEnabled: Boolean? = null
+    var lastLoadStartMs: Long = 0L
+    var lastLoadToken: Long = 0L
+    var shellBootstrapped: Boolean = false
+}
+
+private val lookupWebViewPool = ArrayDeque<WebView>()
+
+private fun acquireLookupWebViewFromPool(context: android.content.Context): WebView? {
+    synchronized(lookupWebViewPool) {
+        val webView = lookupWebViewPool.removeFirstOrNull() ?: return null
+        return webView
+    }
+}
+
+private fun releaseLookupWebViewToPool(webView: WebView) {
+    runCatching {
+        webView.stopLoading()
+        webView.loadUrl("about:blank")
+        webView.clearHistory()
+        webView.clearCache(false)
+        webView.removeJavascriptInterface("NineLookup")
+    }
+    synchronized(lookupWebViewPool) {
+        if (lookupWebViewPool.size >= LOOKUP_WEBVIEW_POOL_MAX) {
+            runCatching { webView.destroy() }
+            return
+        }
+        lookupWebViewPool.addLast(webView)
+    }
 }
 
 
@@ -533,6 +566,13 @@ internal fun RichDefinitionView(
         val bodyTextColor = MaterialTheme.colorScheme.onSurface
         val bodyTextColorCss = remember(bodyTextColor) { colorToCssHex(bodyTextColor) }
         val lookupEnabled = onLookupTap != null
+        var pooledWebView by remember { mutableStateOf<WebView?>(null) }
+        DisposableEffect(Unit) {
+            onDispose {
+                pooledWebView?.let { releaseLookupWebViewToPool(it) }
+                pooledWebView = null
+            }
+        }
         val html = remember(trimmed, indexLabel, dictionaryName, dictionaryCss, bodyTextColorCss, lookupEnabled) {
             buildDefinitionHtml(
                 definitionHtml = trimmed,
@@ -541,6 +581,14 @@ internal fun RichDefinitionView(
                 dictionaryCss = dictionaryCss,
                 bodyTextColorCss = bodyTextColorCss,
                 enableLookupTap = lookupEnabled
+            )
+        }
+        val patchPayload = remember(trimmed, indexLabel, dictionaryName, dictionaryCss, bodyTextColorCss) {
+            buildDefinitionHtmlPayload(
+                definitionHtml = trimmed,
+                indexLabel = indexLabel,
+                dictionaryName = dictionaryName,
+                dictionaryCss = dictionaryCss
             )
         }
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -552,9 +600,18 @@ internal fun RichDefinitionView(
                         onImageTap = { src -> previewImageSrc = src }
                     )
                     val viewTag = DefinitionLookupViewTag(bridge)
-                    WebView(context).apply {
+                    val reused = acquireLookupWebViewFromPool(context)
+                    if (reused == null) {
+                        Log.d(BOOK_LOOKUP_RENDER_LOG_TAG, "webview factory create")
+                    } else {
+                        Log.d(BOOK_LOOKUP_RENDER_LOG_TAG, "webview factory reuse")
+                    }
+                    (reused ?: WebView(context)).apply {
+                        pooledWebView = this
                         tag = viewTag
+                        viewTag.shellBootstrapped = reused != null
                         bridge.hostView = this
+                        runCatching { removeJavascriptInterface("NineLookup") }
                         setBackgroundColor(0x00000000)
                         overScrollMode = WebView.OVER_SCROLL_NEVER
                         isVerticalScrollBarEnabled = false
@@ -579,6 +636,30 @@ internal fun RichDefinitionView(
                         settings.displayZoomControls = false
                         settings.setSupportZoom(false)
                         webViewClient = object : WebViewClient() {
+                            override fun onPageCommitVisible(view: WebView?, url: String?) {
+                                val tagRef = (view?.tag as? DefinitionLookupViewTag)
+                                val elapsed = if (tagRef != null && tagRef.lastLoadStartMs > 0L) {
+                                    (System.currentTimeMillis() - tagRef.lastLoadStartMs).coerceAtLeast(0L)
+                                } else -1L
+                                Log.d(
+                                    BOOK_LOOKUP_RENDER_LOG_TAG,
+                                    "webview commit token=${tagRef?.lastLoadToken ?: -1L} elapsedMs=$elapsed"
+                                )
+                                super.onPageCommitVisible(view, url)
+                            }
+
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                val tagRef = (view?.tag as? DefinitionLookupViewTag)
+                                val elapsed = if (tagRef != null && tagRef.lastLoadStartMs > 0L) {
+                                    (System.currentTimeMillis() - tagRef.lastLoadStartMs).coerceAtLeast(0L)
+                                } else -1L
+                                Log.d(
+                                    BOOK_LOOKUP_RENDER_LOG_TAG,
+                                    "webview finished token=${tagRef?.lastLoadToken ?: -1L} elapsedMs=$elapsed"
+                                )
+                                super.onPageFinished(view, url)
+                            }
+
                             fun openExternalUrl(raw: String): Boolean {
                                 val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
                                 val scheme = uri.scheme?.lowercase() ?: return false
@@ -604,17 +685,18 @@ internal fun RichDefinitionView(
                                     return true
                                 }
                                 callback.invoke(
-                                    DefinitionLookupTapData(
-                                        text = target,
-                                        scanText = target,
-                                        tapSource = "entry",
-                                        sentence = target,
-                                        offset = 0,
-                                        nodeText = target,
-                                        nodePathJson = "[]",
-                                        hostView = safeHost,
-                                        screenRect = null,
-                                        localRects = listOf(localRect),
+                DefinitionLookupTapData(
+                    text = target,
+                    scanText = target,
+                    tapSource = "entry",
+                    sentence = target,
+                    offset = 0,
+                    nodeText = target,
+                    nodePathJson = "[]",
+                    tappedDefinitionKey = null,
+                    hostView = safeHost,
+                    screenRect = null,
+                    localRects = listOf(localRect),
                                         localCharRects = listOf(localRect),
                                         screenCharRects = emptyList()
                                     )
@@ -763,13 +845,52 @@ internal fun RichDefinitionView(
                             lastLookupEnabled = lookupEnabled
                         }
                         if (lastHtml != html) {
-                            webView.loadDataWithBaseURL(
-                                null,
-                                html,
-                                "text/html",
-                                "utf-8",
-                                null
-                            )
+                            val token = System.currentTimeMillis()
+                            lastLoadStartMs = token
+                            lastLoadToken = token
+                            if (!shellBootstrapped) {
+                                Log.d(
+                                    BOOK_LOOKUP_RENDER_LOG_TAG,
+                                    "webview load token=$token bytes=${html.length}"
+                                )
+                                webView.loadDataWithBaseURL(
+                                    null,
+                                    html,
+                                    "text/html",
+                                    "utf-8",
+                                    null
+                                )
+                                shellBootstrapped = true
+                            } else {
+                                val patchScript = buildDefinitionPatchScript(
+                                    bodyHtml = patchPayload.wrappedBody,
+                                    customCss = patchPayload.customCss,
+                                    bodyTextColorCss = bodyTextColorCss
+                                )
+                                Log.d(
+                                    BOOK_LOOKUP_RENDER_LOG_TAG,
+                                    "webview patch token=$token bodyBytes=${patchPayload.wrappedBody.length} cssBytes=${patchPayload.customCss.length}"
+                                )
+                                webView.evaluateJavascript(patchScript) { result ->
+                                    val decoded = decodeEvaluateJavascriptJson(result) ?: result.orEmpty()
+                                    if (decoded != "ok") {
+                                        Log.d(
+                                            BOOK_LOOKUP_RENDER_LOG_TAG,
+                                            "webview patch fallback token=$token result=$decoded"
+                                        )
+                                        val fallbackToken = System.currentTimeMillis()
+                                        lastLoadStartMs = fallbackToken
+                                        lastLoadToken = fallbackToken
+                                        webView.loadDataWithBaseURL(
+                                            null,
+                                            html,
+                                            "text/html",
+                                            "utf-8",
+                                            null
+                                        )
+                                    }
+                                }
+                            }
                             lastHtml = html
                         }
                     }
@@ -844,26 +965,26 @@ internal fun buildDefinitionHtml(
     bodyTextColorCss: String,
     enableLookupTap: Boolean
 ): String {
-    val listStart = Regex("""\d+""").find(indexLabel)?.value?.toIntOrNull()?.coerceAtLeast(1) ?: 1
-    val normalizedDefinitionHtml = normalizeStructuredContentLikeHoshi(definitionHtml)
-    val dictionaryLabel = dictionaryName?.trim().orEmpty()
-    val resolvedDictionaryAttr = dictionaryLabel.ifBlank { "__default__" }
-    val safeDictionaryLabel = escapeHtmlText(dictionaryLabel)
-    val safeDictionaryAttr = escapeHtmlAttributeForHtml(resolvedDictionaryAttr)
-    val leadingLabel = if (dictionaryLabel.isBlank()) "" else "<i>($safeDictionaryLabel)</i> "
-    val wrappedBody = """
-        <div class="yomitan-glossary">
-            <ol start="$listStart">
-                <li data-dictionary="$safeDictionaryAttr">
-                    $leadingLabel$normalizedDefinitionHtml
-                </li>
-            </ol>
-        </div>
-    """.trimIndent()
-    val customCss = scopeDictionaryCssLikeHoshi(
-        rawCss = dictionaryCss.orEmpty(),
-        dictionaryName = resolvedDictionaryAttr
+    val cacheKey = DefinitionHtmlCacheKey(
+        definitionHash = definitionHtml.hashCode(),
+        indexLabel = indexLabel,
+        dictionaryName = dictionaryName?.trim().orEmpty(),
+        dictionaryCssHash = dictionaryCss.orEmpty().hashCode(),
+        bodyTextColorCss = bodyTextColorCss,
+        enableLookupTap = enableLookupTap
     )
+    synchronized(definitionHtmlCache) {
+        definitionHtmlCache[cacheKey]?.let { return it }
+    }
+
+    val payload = buildDefinitionHtmlPayload(
+        definitionHtml = definitionHtml,
+        indexLabel = indexLabel,
+        dictionaryName = dictionaryName,
+        dictionaryCss = dictionaryCss
+    )
+    val wrappedBody = payload.wrappedBody
+    val customCss = payload.customCss
     val commonParityCss = glossaryDisplayParityCss()
     val lookupTapScript = if (!enableLookupTap) {
         ""
@@ -1185,6 +1306,12 @@ internal fun buildDefinitionHtml(
                 const anchor = target.closest('a[href]');
                 return anchor || null;
             }
+            function findDefinitionKeyFromTarget(target) {
+                if (!target || !target.closest) return '';
+                const owner = target.closest('[data-definition-key]');
+                if (!owner || !owner.getAttribute) return '';
+                return (owner.getAttribute('data-definition-key') || '').trim();
+            }
             function findImageTarget(target) {
                 if (!target || !target.closest) return null;
                 const image = target.closest('img[src]');
@@ -1266,7 +1393,7 @@ internal fun buildDefinitionHtml(
                 return text;
             }
             function dispatchEntryTap(anchor, clientX, clientY) {
-                if (!window.NineLookup || !window.NineLookup.onTap || !anchor) return false;
+                if (!window.NineLookup || !window.NineLookup.onTapWithDefinitionKey || !anchor) return false;
                 const rect = anchor.getBoundingClientRect();
                 if (!rect) return false;
                 const left = rect.left || clientX || 0;
@@ -1275,8 +1402,9 @@ internal fun buildDefinitionHtml(
                 const bottom = rect.bottom || top;
                 const nodeText = (anchor.textContent || anchor.innerText || '').trim();
                 const scanText = normalizeEntryScanText(nodeText);
+                const definitionKey = findDefinitionKeyFromTarget(anchor);
                 const payloadRect = [{ left, top, right, bottom }];
-                window.NineLookup.onTap(
+                window.NineLookup.onTapWithDefinitionKey(
                     nodeText,
                     scanText || nodeText,
                     'entry',
@@ -1289,7 +1417,8 @@ internal fun buildDefinitionHtml(
                     left,
                     top,
                     right,
-                    bottom
+                    bottom,
+                    definitionKey
                 );
                 if (window.NineLookup && window.NineLookup.onDebug) {
                     window.NineLookup.onDebug('entry tap scan=' + (scanText || nodeText));
@@ -1297,7 +1426,7 @@ internal fun buildDefinitionHtml(
                 return true;
             }
             function handleLookupTap(clientX, clientY, fromTouch) {
-                if (!window.NineLookup || !window.NineLookup.onTap) return;
+                if (!window.NineLookup || !window.NineLookup.onTapWithDefinitionKey) return;
                 if (Date.now() < suppressClickUntil) return;
                 const directTarget = document.elementFromPoint(clientX || 0, clientY || 0);
                 const directImage = findImageTarget(directTarget);
@@ -1396,7 +1525,8 @@ internal fun buildDefinitionHtml(
                 const charRects = scanData ? scanData.charRects : [];
                 const scanText = scanData && scanData.text ? scanData.text : text.slice(safeOffset, selectionEndExclusive).trim();
                 const nodePath = JSON.stringify(getNodePath(node));
-                window.NineLookup.onTap(
+                const definitionKey = findDefinitionKeyFromTarget(directTarget) || findDefinitionKeyFromTarget(node.parentElement);
+                window.NineLookup.onTapWithDefinitionKey(
                     text,
                     scanText,
                     'text',
@@ -1409,7 +1539,8 @@ internal fun buildDefinitionHtml(
                     targetRect.left || 0,
                     targetRect.top || 0,
                     targetRect.right || 0,
-                    targetRect.bottom || 0
+                    targetRect.bottom || 0,
+                    definitionKey
                 );
                 if (fromTouch) {
                     suppressClickUntil = Date.now() + 260;
@@ -1530,7 +1661,7 @@ internal fun buildDefinitionHtml(
         </script>
         """.trimIndent()
     }
-    return """
+    val built = """
         <html>
         <head>
             <meta charset="utf-8"/>
@@ -1578,7 +1709,6 @@ internal fun buildDefinitionHtml(
                 .nine-lookup-highlight { background: rgba(161, 161, 170, 0.22); border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(161, 161, 170, 0.40); }
                 .yomitan-glossary ol { margin: 0; padding-left: 1.1em; }
                 .yomitan-glossary li { margin: 0; }
-                $customCss
                 $commonParityCss
                 .nine-brushorder-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 0.5em; }
                 .nine-brushorder-scroll > table {
@@ -1603,11 +1733,7 @@ internal fun buildDefinitionHtml(
                             });
                         });
                     }
-                    if (document.readyState === 'loading') {
-                        document.addEventListener('DOMContentLoaded', wrapBrushOrderTables, { once: true });
-                    } else {
-                        wrapBrushOrderTables();
-                    }
+                    window.__nineWrapBrushOrderTables = wrapBrushOrderTables;
                     function primeGlossImages() {
                         var images = document.querySelectorAll('.gloss-image-link .gloss-image, img.gloss-image, img[data-sc-img], img');
                         images.forEach(function(img) {
@@ -1617,19 +1743,119 @@ internal fun buildDefinitionHtml(
                             if (!img.getAttribute('fetchpriority')) img.setAttribute('fetchpriority', 'high');
                         });
                     }
+                    window.__ninePrimeGlossImages = primeGlossImages;
+                    window.__nineApplyDefinitionPayload = function(payload) {
+                        if (!payload) return false;
+                        var root = document.getElementById('__nineDefinitionRoot');
+                        if (!root) return false;
+                        if (typeof payload.bodyHtml === 'string') {
+                            root.innerHTML = payload.bodyHtml;
+                        }
+                        var dynamicCss = document.getElementById('__nineCustomCss');
+                        if (dynamicCss && typeof payload.customCss === 'string') {
+                            dynamicCss.textContent = payload.customCss;
+                        }
+                        if (typeof payload.bodyTextColorCss === 'string' && payload.bodyTextColorCss.length > 0) {
+                            document.documentElement.style.setProperty('--text-color', payload.bodyTextColorCss);
+                        }
+                        window.__nineWrapBrushOrderTables && window.__nineWrapBrushOrderTables();
+                        window.__ninePrimeGlossImages && window.__ninePrimeGlossImages();
+                        return true;
+                    };
                     if (document.readyState === 'loading') {
-                        document.addEventListener('DOMContentLoaded', primeGlossImages, { once: true });
+                        document.addEventListener('DOMContentLoaded', function() {
+                            window.__nineWrapBrushOrderTables && window.__nineWrapBrushOrderTables();
+                            window.__ninePrimeGlossImages && window.__ninePrimeGlossImages();
+                        }, { once: true });
                     } else {
-                        primeGlossImages();
+                        window.__nineWrapBrushOrderTables && window.__nineWrapBrushOrderTables();
+                        window.__ninePrimeGlossImages && window.__ninePrimeGlossImages();
                     }
                 })();
             </script>
+            <style id="__nineCustomCss">
+                $customCss
+            </style>
         </head>
         <body>
-            $wrappedBody
+            <div id="__nineDefinitionRoot">
+                $wrappedBody
+            </div>
         </body>
         </html>
     """.trimIndent()
+    synchronized(definitionHtmlCache) {
+        definitionHtmlCache[cacheKey] = built
+    }
+    return built
+}
+
+private const val DEFINITION_HTML_CACHE_MAX = 256
+
+private data class DefinitionHtmlCacheKey(
+    val definitionHash: Int,
+    val indexLabel: String,
+    val dictionaryName: String,
+    val dictionaryCssHash: Int,
+    val bodyTextColorCss: String,
+    val enableLookupTap: Boolean
+)
+
+private data class DefinitionHtmlPayload(
+    val wrappedBody: String,
+    val customCss: String
+)
+
+private val definitionHtmlCache =
+    object : LinkedHashMap<DefinitionHtmlCacheKey, String>(DEFINITION_HTML_CACHE_MAX, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<DefinitionHtmlCacheKey, String>
+        ): Boolean = size > DEFINITION_HTML_CACHE_MAX
+    }
+
+private fun buildDefinitionHtmlPayload(
+    definitionHtml: String,
+    indexLabel: String,
+    dictionaryName: String?,
+    dictionaryCss: String?
+): DefinitionHtmlPayload {
+    val listStart = Regex("""\d+""").find(indexLabel)?.value?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+    val normalizedDefinitionHtml = normalizeStructuredContentLikeHoshi(definitionHtml)
+    val dictionaryLabel = dictionaryName?.trim().orEmpty()
+    val resolvedDictionaryAttr = dictionaryLabel.ifBlank { "__default__" }
+    val safeDictionaryLabel = escapeHtmlText(dictionaryLabel)
+    val safeDictionaryAttr = escapeHtmlAttributeForHtml(resolvedDictionaryAttr)
+    val leadingLabel = if (dictionaryLabel.isBlank()) "" else "<i>($safeDictionaryLabel)</i> "
+    val wrappedBody = """
+        <div class="yomitan-glossary">
+            <ol start="$listStart">
+                <li data-dictionary="$safeDictionaryAttr">
+                    $leadingLabel$normalizedDefinitionHtml
+                </li>
+            </ol>
+        </div>
+    """.trimIndent()
+    val customCss = scopeDictionaryCssLikeHoshi(
+        rawCss = dictionaryCss.orEmpty(),
+        dictionaryName = resolvedDictionaryAttr
+    )
+    return DefinitionHtmlPayload(
+        wrappedBody = wrappedBody,
+        customCss = customCss
+    )
+}
+
+private fun buildDefinitionPatchScript(
+    bodyHtml: String,
+    customCss: String,
+    bodyTextColorCss: String
+): String {
+    val payloadJson = JSONObject()
+        .put("bodyHtml", bodyHtml)
+        .put("customCss", customCss)
+        .put("bodyTextColorCss", bodyTextColorCss)
+        .toString()
+    return "(function(){try{return window.__nineApplyDefinitionPayload && window.__nineApplyDefinitionPayload($payloadJson) ? 'ok' : 'missing';}catch(e){return 'error:' + (e && e.message ? e.message : 'unknown');}})();"
 }
 
 private fun decodePreviewImage(context: android.content.Context, rawSrc: String): ImageBitmap? {
@@ -1778,6 +2004,7 @@ internal class DefinitionLookupBridge(
                     offset = 0,
                     nodeText = target,
                     nodePathJson = "[]",
+                    tappedDefinitionKey = null,
                     hostView = hostView,
                     screenRect = null,
                     localRects = listOf(localRect),
@@ -1801,6 +2028,75 @@ internal class DefinitionLookupBridge(
 
     @JavascriptInterface
     fun onTap(text: String?, scanText: String?, tapSource: String?, sentence: String?, offset: Int, nodeText: String?, nodePathJson: String?, localRectsJson: String?, localCharRectsJson: String?, left: Float, top: Float, right: Float, bottom: Float) {
+        dispatchTap(
+            text = text,
+            scanText = scanText,
+            tapSource = tapSource,
+            sentence = sentence,
+            offset = offset,
+            nodeText = nodeText,
+            nodePathJson = nodePathJson,
+            localRectsJson = localRectsJson,
+            localCharRectsJson = localCharRectsJson,
+            left = left,
+            top = top,
+            right = right,
+            bottom = bottom,
+            tappedDefinitionKey = null
+        )
+    }
+
+    @JavascriptInterface
+    fun onTapWithDefinitionKey(
+        text: String?,
+        scanText: String?,
+        tapSource: String?,
+        sentence: String?,
+        offset: Int,
+        nodeText: String?,
+        nodePathJson: String?,
+        localRectsJson: String?,
+        localCharRectsJson: String?,
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        tappedDefinitionKey: String?
+    ) {
+        dispatchTap(
+            text = text,
+            scanText = scanText,
+            tapSource = tapSource,
+            sentence = sentence,
+            offset = offset,
+            nodeText = nodeText,
+            nodePathJson = nodePathJson,
+            localRectsJson = localRectsJson,
+            localCharRectsJson = localCharRectsJson,
+            left = left,
+            top = top,
+            right = right,
+            bottom = bottom,
+            tappedDefinitionKey = tappedDefinitionKey
+        )
+    }
+
+    private fun dispatchTap(
+        text: String?,
+        scanText: String?,
+        tapSource: String?,
+        sentence: String?,
+        offset: Int,
+        nodeText: String?,
+        nodePathJson: String?,
+        localRectsJson: String?,
+        localCharRectsJson: String?,
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        tappedDefinitionKey: String?
+    ) {
         try {
             val value = text.orEmpty()
             val scanValue = scanText?.trim().orEmpty()
@@ -1836,6 +2132,7 @@ internal class DefinitionLookupBridge(
                         offset = offset,
                         nodeText = nodeText.orEmpty(),
                         nodePathJson = nodePathJson.orEmpty(),
+                        tappedDefinitionKey = tappedDefinitionKey?.trim()?.takeIf { it.isNotEmpty() },
                         hostView = host,
                         screenRect = screenRect,
                         localRects = localRects,

@@ -92,6 +92,29 @@ internal fun computeTapLookupResultsWithWinningCandidate(
     )
 }
 
+internal fun computeTapLookupResultsImmediate(
+    context: Context,
+    dictionaries: List<LoadedDictionary>,
+    query: String
+): LookupComputationResult? {
+    val normalizedQuery = query.trim()
+    if (normalizedQuery.isBlank()) return null
+    val effectiveDictionaries = includeMountedMdxDictionary(context, dictionaries)
+    if (effectiveDictionaries.isEmpty()) return null
+    val hits = searchDictionarySql(
+        context = context,
+        dictionaries = effectiveDictionaries,
+        query = normalizedQuery,
+        maxResults = 12,
+        profile = DictionaryQueryProfile.FAST
+    )
+    if (hits.isEmpty()) return null
+    return LookupComputationResult(
+        query = normalizedQuery,
+        hits = hits
+    )
+}
+
 internal fun computeLookupResultsWithWinningCandidate(
     context: Context,
     dictionaries: List<LoadedDictionary>,
@@ -118,6 +141,10 @@ internal fun computeLookupResultsWithWinningCandidate(
         .map { it.name.trim() }
         .filter { it.isNotBlank() }
         .toSet()
+    val lookupMaxResults = when (profile) {
+        DictionaryQueryProfile.FAST -> 16
+        DictionaryQueryProfile.FULL -> MAX_LOOKUP_RESULTS
+    }
 
     var primaryQuery: String? = null
     val mergedByKey = linkedMapOf<String, DictionarySearchResult>()
@@ -128,7 +155,7 @@ internal fun computeLookupResultsWithWinningCandidate(
             context = context,
             dictionaries = effectiveDictionaries,
             query = query,
-            maxResults = MAX_LOOKUP_RESULTS,
+            maxResults = lookupMaxResults,
             profile = profile
         )
         if (hits.isEmpty()) continue
@@ -151,7 +178,7 @@ internal fun computeLookupResultsWithWinningCandidate(
 
         val allCovered = expectedDictionaryNames.isNotEmpty() &&
             coveredDictionaryNames.containsAll(expectedDictionaryNames)
-        if (allCovered || mergedByKey.size >= MAX_LOOKUP_RESULTS * 2) {
+        if (allCovered || mergedByKey.size >= lookupMaxResults * 2) {
             break
         }
     }
@@ -169,14 +196,14 @@ internal fun computeLookupResultsWithWinningCandidate(
         }
 
     val finalHits = buildList {
-        if (MAX_LOOKUP_RESULTS <= 0) return@buildList
+        if (lookupMaxResults <= 0) return@buildList
 
         val pickedKeys = linkedSetOf<String>()
 
         // Keep one top hit per dictionary first so mixed imports (e.g. JMDICT + MDICT)
         // can both appear instead of being crowded out by a single dictionary.
         for (hit in sortedHits) {
-            if (size >= MAX_LOOKUP_RESULTS) break
+            if (size >= lookupMaxResults) break
             val dictionaryName = hit.entry.dictionary.trim().lowercase()
             if (dictionaryName.isBlank()) continue
             if (pickedKeys.add(dictionaryName)) {
@@ -186,7 +213,7 @@ internal fun computeLookupResultsWithWinningCandidate(
 
         // Fill remaining slots by global score ordering.
         for (hit in sortedHits) {
-            if (size >= MAX_LOOKUP_RESULTS) break
+            if (size >= lookupMaxResults) break
             if (contains(hit)) continue
             add(hit)
         }

@@ -24,6 +24,20 @@ internal data class HoshiLookupHit(
 
 internal object HoshiNativeBridge {
     private const val NATIVE_LIBRARY_NAME = "tset_native"
+    private const val LOOKUP_CACHE_MAX = 256
+
+    private data class LookupCacheKey(
+        val dictionaryKey: String,
+        val query: String,
+        val maxResults: Int,
+        val scanLength: Int
+    )
+
+    private val lookupCache = object : LinkedHashMap<LookupCacheKey, List<HoshiLookupHit>>(LOOKUP_CACHE_MAX, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<LookupCacheKey, List<HoshiLookupHit>>): Boolean {
+            return size > LOOKUP_CACHE_MAX
+        }
+    }
 
     private val loaded: Boolean = runCatching {
         System.loadLibrary(NATIVE_LIBRARY_NAME)
@@ -64,19 +78,39 @@ internal object HoshiNativeBridge {
         scanLength: Int
     ): List<HoshiLookupHit> {
         if (!loaded || dictionaryPaths.isEmpty() || query.isBlank()) return emptyList()
+        val normalizedQuery = query.trim()
+        val normalizedMaxResults = maxResults.coerceAtLeast(1)
+        val normalizedScanLength = scanLength.coerceAtLeast(1)
+        val dictionaryKey = dictionaryPaths.joinToString(separator = "\u0001") { it.trim() }
+        val cacheKey = LookupCacheKey(
+            dictionaryKey = dictionaryKey,
+            query = normalizedQuery,
+            maxResults = normalizedMaxResults,
+            scanLength = normalizedScanLength
+        )
+        synchronized(lookupCache) {
+            lookupCache[cacheKey]?.let { return it }
+        }
         val raw = runCatching {
             nativeLookup(
                 dictionaryPaths.toTypedArray(),
-                query,
-                maxResults.coerceAtLeast(1),
-                scanLength.coerceAtLeast(1)
+                normalizedQuery,
+                normalizedMaxResults,
+                normalizedScanLength
             )
         }.getOrElse { return emptyList() }
-        return parseLookupResult(raw)
+        val parsed = parseLookupResult(raw)
+        synchronized(lookupCache) {
+            lookupCache[cacheKey] = parsed
+        }
+        return parsed
     }
 
     internal fun clearLookupCache() {
         if (!loaded) return
+        synchronized(lookupCache) {
+            lookupCache.clear()
+        }
         runCatching { nativeClearLookupCache() }
     }
 

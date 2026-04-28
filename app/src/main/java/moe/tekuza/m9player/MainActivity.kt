@@ -1529,6 +1529,9 @@ private fun ReaderSyncScreen() {
             dictionaryLoading = false
             clearDictionaryProgress()
             persistImportState()
+            scope.launch(Dispatchers.Default) {
+                prewarmDictionaryMemoryIndexes(context, restoredDictionaryList)
+            }
         }
 
         if (ankiPermissionGranted) {
@@ -2272,6 +2275,11 @@ private fun ReaderSyncScreen() {
             dictionaryRefs = nextDictionaryRefs
             if (hadDictionaryListChange) {
                 bumpDictionaryDataVersion(context)
+            }
+            if (hadDictionaryListChange && nextLoadedDictionaries.isNotEmpty()) {
+                scope.launch(Dispatchers.Default) {
+                    prewarmDictionaryMemoryIndexes(context, nextLoadedDictionaries)
+                }
             }
             persistImportState()
             clearDictionaryProgress()
@@ -3093,6 +3101,7 @@ private fun ReaderSyncScreen() {
                         onControlModeClick = { context.startActivity(Intent(context, ControlModeSettingsActivity::class.java)) },
                         onControllerClick = { context.startActivity(Intent(context, ControllerSettingsActivity::class.java)) },
                         onAnkiClick = { context.startActivity(Intent(context, AnkiSettingsActivity::class.java)) },
+                        onAdvancedOverlayClick = { context.startActivity(Intent(context, OverlaySettingsActivity::class.java)) },
                         onAdvancedOtherClick = { context.startActivity(Intent(context, OtherSettingsActivity::class.java)) },
                         onLanguageClick = { languageDialogVisible = true },
                         onGuideClick = {
@@ -3338,10 +3347,11 @@ private fun ReaderSyncScreen() {
                     val isTopLayer = sourceLayerIndex == mainLookupSession.lastIndex
                     val isPreviousLayer = sourceLayerIndex == mainLookupSession.lastIndex - 1
                     if (isTopLayer || isPreviousLayer) {
+                        val resolvedDefinitionKey = tapData.tappedDefinitionKey ?: definitionKey
                         startMainLookup(
                             MainLookupRequest.RecursiveTap(
                                 sourceLayerIndex = sourceLayerIndex,
-                                definitionKey = definitionKey,
+                                definitionKey = resolvedDefinitionKey,
                                 tapData = tapData
                             )
                         )

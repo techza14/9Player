@@ -47,6 +47,12 @@
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
+            android:name=".OverlaySettingsActivity"
+            android:exported="false"
+            android:label="悬浮窗"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Tset" />
+        <activity
             android:name=".FloatingOverlayPreviewActivity"
             android:exported="false"
             android:label="悬浮窗预览"

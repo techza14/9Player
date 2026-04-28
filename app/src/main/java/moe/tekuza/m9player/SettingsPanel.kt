@@ -37,6 +37,7 @@ internal fun SettingsPanel(
     onControlModeClick: () -> Unit,
     onControllerClick: () -> Unit,
     onAnkiClick: () -> Unit,
+    onAdvancedOverlayClick: () -> Unit,
     onAdvancedOtherClick: () -> Unit,
     onLanguageClick: () -> Unit,
     onGuideClick: () -> Unit,
@@ -94,6 +95,11 @@ internal fun SettingsPanel(
         SettingsSection(
             title = stringResource(R.string.settings_section_advanced)
         ) {
+            SettingsListItem(
+                icon = Icons.Outlined.AutoStories,
+                title = stringResource(R.string.audiobook_overlay_title),
+                onClick = onAdvancedOverlayClick
+            )
             SettingsListItem(
                 icon = Icons.Outlined.MoreHoriz,
                 title = stringResource(R.string.settings_other_title),
