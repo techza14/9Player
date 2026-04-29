@@ -3642,10 +3642,10 @@ companion object {
             })
             webViewClient = object : android.webkit.WebViewClient() {
                 fun dispatchLookupUrlTap(raw: String, host: WebView?): Boolean {
-                    val parsed = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
-                    val scheme = parsed.scheme?.lowercase(Locale.ROOT).orEmpty()
-                    if (scheme !in setOf("entry", "dictres")) return false
                     val target = resolveLookupTargetFromCustomUrl(raw) ?: return false
+                    val scheme = runCatching {
+                        Uri.parse(raw).scheme?.lowercase(Locale.ROOT).orEmpty()
+                    }.getOrDefault("")
                     val safeHost = host ?: this@apply
                     val right = safeHost.width.toFloat().takeIf { it > 0f } ?: 1f
                     val bottom = safeHost.height.toFloat().takeIf { it > 0f } ?: 1f
@@ -3696,10 +3696,10 @@ companion object {
                     request: android.webkit.WebResourceRequest?
                 ): Boolean {
                     val uri = request?.url ?: return false
-                    val scheme = uri.scheme?.lowercase(Locale.ROOT).orEmpty()
-                    if (scheme in setOf("entry", "dictres")) {
-                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$uri")
-                        dispatchLookupUrlTap(uri.toString(), view)
+                    val raw = uri.toString()
+                    if (resolveLookupTargetFromCustomUrl(raw) != null) {
+                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
+                        dispatchLookupUrlTap(raw, view)
                         return true
                     }
                     return false
@@ -3707,8 +3707,7 @@ companion object {
 
                 override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                     val raw = url?.trim().orEmpty()
-                    val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
-                    if (scheme in setOf("entry", "dictres")) {
+                    if (resolveLookupTargetFromCustomUrl(raw) != null) {
                         Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
                         dispatchLookupUrlTap(raw, view)
                         return true

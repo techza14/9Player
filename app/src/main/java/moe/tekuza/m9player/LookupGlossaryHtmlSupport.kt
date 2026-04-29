@@ -145,14 +145,50 @@ private fun normalizeDataScAttributeNames(html: String): String {
 
 internal fun scopeDictionaryCssLikeHoshi(rawCss: String, dictionaryName: String): String {
     val trimmed = rawCss.trim()
-    if (trimmed.isBlank()) return ""
     val prefix = if (dictionaryName.isBlank()) {
         ".yomitan-glossary"
     } else {
         val dictionaryAttr = escapeCssStringShared(dictionaryName)
         ".yomitan-glossary [data-dictionary=\"$dictionaryAttr\"]"
     }
-    return scopeCssRecursive(trimmed, prefix).trim()
+    val scoped = if (trimmed.isBlank()) "" else scopeCssRecursive(trimmed, prefix).trim()
+    val compatibility = dictionaryCompatibilityCss(prefix, dictionaryName)
+    return listOf(scoped, compatibility)
+        .filter { it.isNotBlank() }
+        .joinToString("\n")
+        .trim()
+}
+
+private fun dictionaryCompatibilityCss(prefix: String, @Suppress("UNUSED_PARAMETER") dictionaryName: String): String {
+    // Some dictionaries expose gaiji/symbols as image nodes. Treat these as inline icons,
+    // not full-size figures, to avoid layout blowups while keeping normal images unchanged.
+    return """
+        $prefix [data-sc-gaiji] .gloss-image-link,
+        $prefix [data-sc-gaiji] .gloss-image-container,
+        $prefix [data-sc-gaiji] img,
+        $prefix img[data-sc-gaiji],
+        $prefix [data-sc-class="gaiji"] img,
+        $prefix [data-sc-class="gaiji"] .gloss-image,
+        $prefix [data-sc-class="gaiji"] .gloss-image-container {
+            display: inline-block !important;
+            width: 1em !important;
+            height: 1em !important;
+            max-width: 1em !important;
+            max-height: 1em !important;
+            min-width: 1em !important;
+            min-height: 1em !important;
+            object-fit: contain !important;
+            vertical-align: -0.12em !important;
+            overflow: hidden !important;
+            line-height: 1 !important;
+        }
+        $prefix [data-sc-gaiji] .gloss-image-sizer,
+        $prefix [data-sc-class="gaiji"] .gloss-image-sizer {
+            width: 0 !important;
+            padding-top: 0 !important;
+            font-size: 0 !important;
+        }
+    """.trimIndent()
 }
 
 internal fun glossaryDisplayParityCss(): String {

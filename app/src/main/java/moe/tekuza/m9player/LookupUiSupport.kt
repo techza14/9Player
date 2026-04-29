@@ -671,10 +671,10 @@ internal fun RichDefinitionView(
                             }
 
                             fun dispatchLookupUrlTap(raw: String, host: WebView?): Boolean {
-                                val parsed = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
-                                val scheme = parsed.scheme?.lowercase(Locale.ROOT).orEmpty()
-                                if (scheme !in setOf("entry", "dictres")) return false
                                 val target = resolveLookupTargetFromCustomUrl(raw) ?: return false
+                                val scheme = runCatching {
+                                    Uri.parse(raw).scheme?.lowercase(Locale.ROOT).orEmpty()
+                                }.getOrDefault("")
                                 val safeHost = host ?: this@apply
                                 val right = safeHost.width.toFloat().takeIf { it > 0f } ?: 1f
                                 val bottom = safeHost.height.toFloat().takeIf { it > 0f } ?: 1f
@@ -688,7 +688,7 @@ internal fun RichDefinitionView(
                 DefinitionLookupTapData(
                     text = target,
                     scanText = target,
-                    tapSource = "entry",
+                    tapSource = "entry-link",
                     sentence = target,
                     offset = 0,
                     nodeText = target,
@@ -722,10 +722,10 @@ internal fun RichDefinitionView(
 
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                                 val uri = request?.url ?: return false
-                                val scheme = uri.scheme?.lowercase(Locale.ROOT).orEmpty()
-                                if (scheme in setOf("entry", "dictres")) {
-                                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$uri")
-                                    dispatchLookupUrlTap(uri.toString(), view)
+                                val raw = uri.toString()
+                                if (resolveLookupTargetFromCustomUrl(raw) != null) {
+                                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
+                                    dispatchLookupUrlTap(raw, view)
                                     return true
                                 }
                                 if (openExternalUrl(uri.toString())) return true
@@ -734,8 +734,7 @@ internal fun RichDefinitionView(
 
                             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                                 val raw = url?.trim().orEmpty()
-                                val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
-                                if (scheme in setOf("entry", "dictres")) {
+                                if (resolveLookupTargetFromCustomUrl(raw) != null) {
                                     Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
                                     dispatchLookupUrlTap(raw, view)
                                     return true
@@ -1315,7 +1314,10 @@ internal fun buildDefinitionHtml(
             function findImageTarget(target) {
                 if (!target || !target.closest) return null;
                 const image = target.closest('img[src]');
-                return image || null;
+                if (!image) return null;
+                const gaijiOwner = image.closest('[data-sc-gaiji], [data-sc-class="gaiji"]');
+                if (gaijiOwner) return null;
+                return image;
             }
             function dispatchImageTap(image) {
                 if (!image || !window.NineLookup || !window.NineLookup.onImageTap) return false;
@@ -1333,6 +1335,12 @@ internal fun buildDefinitionHtml(
             function isDictresHref(href) {
                 return /^dictres:/i.test(String(href || '').trim());
             }
+            function isQueryLookupHref(href) {
+                const text = String(href || '').trim();
+                if (!text) return false;
+                if (/^(?:https?|mailto|tel|javascript):/i.test(text)) return false;
+                return /(?:^\?|[?&;])(query|term|word|q|target)=/i.test(text);
+            }
             function dispatchLookupLinkTap(anchor, href, clientX, clientY) {
                 if (!window.NineLookup || !window.NineLookup.onLookupLinkTap || !anchor) return false;
                 const rect = anchor.getBoundingClientRect();
@@ -1341,7 +1349,8 @@ internal fun buildDefinitionHtml(
                 const top = rect.top || clientY || 0;
                 const right = rect.right || left;
                 const bottom = rect.bottom || top;
-                window.NineLookup.onLookupLinkTap(href, left, top, right, bottom);
+                const definitionKey = findDefinitionKeyFromTarget(anchor);
+                window.NineLookup.onLookupLinkTap(href, left, top, right, bottom, definitionKey);
                 if (window.NineLookup && window.NineLookup.onDebug) {
                     window.NineLookup.onDebug('lookup link tap href=' + href);
                 }
@@ -1351,7 +1360,7 @@ internal fun buildDefinitionHtml(
                 if (!anchor) return false;
                 const href = (anchor.getAttribute('href') || '').trim();
                 if (!href) return false;
-                if (isEntryHref(href) || isDictresHref(href)) {
+                if (isEntryHref(href) || isDictresHref(href) || isQueryLookupHref(href)) {
                     return dispatchLookupLinkTap(anchor, href, clientX, clientY) || dispatchEntryTap(anchor, clientX, clientY);
                 }
                 if (window.NineLookup && window.NineLookup.onOpenExternalUrl) {
@@ -1904,18 +1913,22 @@ internal fun resolveLookupTargetFromCustomUrl(rawUrl: String): String? {
         val match = Regex("""(?:^\?|[&;])(query|term|word|q|target)=([^&#;]+)""", RegexOption.IGNORE_CASE)
             .find(text)
             ?: return null
-        return normalizeCandidate(Uri.decode(match.groupValues[2]))
+        return normalizeCandidate(Uri.decode(match.groupValues[2]).replace("&amp;", "&"))
     }
 
     if (scheme == "entry") {
         val encoded = uri.schemeSpecificPart.orEmpty().removePrefix("//")
         return normalizeCandidate(Uri.decode(encoded))
     }
-    if (scheme != "dictres") return null
 
     arrayOf("entry", "term", "word", "q", "target")
         .firstNotNullOfOrNull { key -> normalizeCandidate(uri.getQueryParameter(key)) }
         ?.let { return it }
+
+    extractQueryCandidate(raw)?.let { return it }
+    extractQueryCandidate(Uri.decode(raw))?.let { return it }
+
+    if (scheme.isNotBlank() && scheme != "dictres") return null
 
     extractQueryCandidate(Uri.decode(uri.schemeSpecificPart.orEmpty()))?.let { return it }
 
@@ -1988,23 +2001,36 @@ internal class DefinitionLookupBridge(
     }
 
     @JavascriptInterface
-    fun onLookupLinkTap(rawUrl: String?, left: Float, top: Float, right: Float, bottom: Float) {
+    fun onLookupLinkTap(rawUrl: String?, left: Float, top: Float, right: Float, bottom: Float, tappedDefinitionKey: String?) {
         val raw = rawUrl?.trim().orEmpty()
-        if (raw.isBlank()) return
-        val target = resolveLookupTargetFromCustomUrl(raw) ?: return
-        val callback = onLookupTap ?: return
+        if (raw.isBlank()) {
+            Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge lookupLink skip reason=blank_url")
+            return
+        }
+        val target = resolveLookupTargetFromCustomUrl(raw)
+        if (target == null) {
+            Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge lookupLink skip reason=target_null raw=$raw")
+            return
+        }
+        val callback = onLookupTap
+        if (callback == null) {
+            Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge lookupLink skip reason=callback_null target=$target")
+            return
+        }
+        Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge lookupLink dispatch target=$target raw=$raw")
+        lastEntryTapAtMs = System.currentTimeMillis()
         val localRect = Rect(left, top, right, bottom)
         val dispatch = Runnable {
             callback.invoke(
                 DefinitionLookupTapData(
                     text = target,
                     scanText = target,
-                    tapSource = "entry",
+                    tapSource = "entry-link",
                     sentence = target,
                     offset = 0,
                     nodeText = target,
                     nodePathJson = "[]",
-                    tappedDefinitionKey = null,
+                    tappedDefinitionKey = tappedDefinitionKey?.trim()?.takeIf { it.isNotBlank() },
                     hostView = hostView,
                     screenRect = null,
                     localRects = listOf(localRect),
@@ -2102,7 +2128,9 @@ internal class DefinitionLookupBridge(
             val scanValue = scanText?.trim().orEmpty()
             val sourceValue = tapSource?.trim().orEmpty().ifBlank { "text" }
             val now = System.currentTimeMillis()
-            if (sourceValue.equals("entry", ignoreCase = true)) {
+            val isEntryLike = sourceValue.equals("entry", ignoreCase = true) ||
+                sourceValue.equals("entry-link", ignoreCase = true)
+            if (isEntryLike) {
                 lastEntryTapAtMs = now
             } else if (sourceValue.equals("text", ignoreCase = true)) {
                 val elapsed = now - lastEntryTapAtMs

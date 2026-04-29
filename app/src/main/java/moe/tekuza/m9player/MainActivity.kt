@@ -217,6 +217,9 @@ private sealed interface MainLookupRequest {
     ) : MainLookupRequest
     data class Candidates(
         val rawCandidates: List<String>,
+        val preferredDictionaryName: String? = null,
+        val exactTermOnly: Boolean = false,
+        val pinnedDefinitionKey: String? = null,
         val anchor: ReaderLookupAnchor? = null,
         val placeBelow: Boolean = true
     ) : MainLookupRequest
@@ -1674,12 +1677,52 @@ private fun ReaderSyncScreen() {
 
     fun queryMainLookupCandidates(
         candidates: List<String>,
+        preferredDictionaryName: String? = null,
+        exactTermOnly: Boolean = false,
+        pinnedDefinitionKey: String? = null,
         onResult: (Result<List<DictionarySearchResult>>) -> Unit
     ) {
-        val dictionariesSnapshot = effectiveLookupDictionaries
+        val primaryQuery = candidates.firstOrNull()?.trim().orEmpty()
+        val preferredName = preferredDictionaryName?.trim().orEmpty()
+        val pinnedKey = pinnedDefinitionKey?.trim().orEmpty()
+        val dictionariesSnapshot = if (preferredName.isBlank()) {
+            effectiveLookupDictionaries
+        } else {
+            val preferred = effectiveLookupDictionaries.filter { it.name == preferredName }
+            val others = effectiveLookupDictionaries.filter { it.name != preferredName }
+            preferred + others
+        }
         scope.launch {
             val result = withContext(Dispatchers.Default) {
-                runCatching { computeLookupResults(dictionariesSnapshot, candidates) }
+                runCatching {
+                    val base = computeLookupResults(dictionariesSnapshot, candidates)
+                    if (pinnedKey.isNotBlank()) {
+                        base.mapNotNull { hit ->
+                            val matched = hit.entry.definitions.mapIndexedNotNull { index, definition ->
+                                val key = lookupDefinitionKey(
+                                    term = hit.entry.term,
+                                    dictionaryName = hit.entry.dictionary,
+                                    definitionIndex = index
+                                )
+                                if (key == pinnedKey) definition else null
+                            }
+                            if (matched.isEmpty()) {
+                                null
+                            } else {
+                                hit.copy(entry = hit.entry.copy(definitions = matched))
+                            }
+                        }
+                    } else if (!exactTermOnly || primaryQuery.isBlank()) {
+                        base
+                    } else {
+                        val exact = base.filter { hit ->
+                            val term = hit.entry.term.trim()
+                            val reading = hit.entry.reading?.trim().orEmpty()
+                            term == primaryQuery || reading == primaryQuery
+                        }
+                        if (exact.isNotEmpty()) exact else base
+                    }
+                }
             }
             onResult(result)
         }
@@ -1962,13 +2005,22 @@ private fun ReaderSyncScreen() {
                         error = null
                     )
                 )
-                queryMainLookupCandidates(candidates) { result ->
+                queryMainLookupCandidates(
+                    candidates = candidates,
+                    preferredDictionaryName = request.preferredDictionaryName,
+                    exactTermOnly = request.exactTermOnly,
+                    pinnedDefinitionKey = request.pinnedDefinitionKey
+                ) { result ->
                     result.onSuccess { hits ->
+                        android.util.Log.d(
+                            MAIN_LOOKUP_DEBUG_LOG_TAG,
+                            "candidates success count=${hits.size} sourceCandidates=${candidates.joinToString("|")} preferred=${request.preferredDictionaryName.orEmpty()} exact=${request.exactTermOnly} pinned=${request.pinnedDefinitionKey.orEmpty()}"
+                        )
                         if (hits.isEmpty()) {
-                            if (activeSection == MiningSection.DICTIONARY) {
-                                closeMainLookupPopup()
-                                return@onSuccess
-                            }
+                            android.util.Log.d(
+                                MAIN_LOOKUP_DEBUG_LOG_TAG,
+                                "candidates empty section=$activeSection exactOnly=${request.exactTermOnly} preferred=${request.preferredDictionaryName.orEmpty()} pinned=${request.pinnedDefinitionKey.orEmpty()}"
+                            )
                             setOrPushMainLookupLayer(
                                 buildCandidatesLayer(
                                     rawResults = emptyList(),
@@ -3225,9 +3277,20 @@ private fun ReaderSyncScreen() {
                                                                                 val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
                                                                                 val anchorBottom = anchor?.boundingRectCoreOrNull()?.bottom
                                                                                 val shouldPlaceBelow = anchorBottom?.let { it <= view.height * 0.56f } ?: true
+                                                                                android.util.Log.d(
+                                                                                    MAIN_LOOKUP_DEBUG_LOG_TAG,
+                                                                                    "dictionary tap dispatch source=${tapData.tapSource} merged=${mergedCandidates.joinToString("|")} preferred=${dictionaryGroup.dictionary}"
+                                                                                )
                                                                                 startMainLookup(
                                                                                     MainLookupRequest.Candidates(
                                                                                         rawCandidates = mergedCandidates,
+                                                                                        preferredDictionaryName = dictionaryGroup.dictionary,
+                                                                                        exactTermOnly = tapData.tapSource.equals("entry", ignoreCase = true),
+                                                                                        pinnedDefinitionKey = if (tapData.tapSource.equals("entry", ignoreCase = true)) {
+                                                                                            tapData.tappedDefinitionKey ?: definitionKey
+                                                                                        } else {
+                                                                                            null
+                                                                                        },
                                                                                         anchor = anchor,
                                                                                         placeBelow = shouldPlaceBelow
                                                                                     )
