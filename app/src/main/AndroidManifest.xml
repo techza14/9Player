@@ -75,6 +75,12 @@
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
+            android:name=".AudiobookUiSettingsActivity"
+            android:exported="false"
+            android:label="有声书UI"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Tset" />
+        <activity
             android:name=".MdxMountSettingsActivity"
             android:exported="false"
             android:label="MDX"

@@ -41,6 +41,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
@@ -64,6 +65,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
@@ -110,6 +112,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -126,6 +129,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 import kotlin.math.ceil
@@ -162,12 +166,26 @@ import kotlin.math.abs
 private const val BOOK_READER_PERMISSION_REQUEST_CODE = 21_001
 private const val BOOK_READER_PENDING_INTENT_REQUEST_CODE = 21_002
 private const val BOOK_READER_SLEEP_OPTIONS_PREFS = "book_reader_sleep_options_prefs"
+private const val BOOK_READER_UI_TEST_PREFS = "book_reader_ui_test_prefs"
+private const val BOOK_READER_UI_TEST_LAYOUT_HORIZONTAL_KEY = "layout_horizontal"
+private const val BOOK_READER_UI_TEST_LAYOUT_VERTICAL_KEY = "layout_vertical"
+private const val BOOK_READER_UI_SWAP_PREV_NEXT_HORIZONTAL_KEY = "ui_swap_prev_next_horizontal"
+private const val BOOK_READER_UI_SWAP_PREV_NEXT_VERTICAL_KEY = "ui_swap_prev_next_vertical"
+private const val BOOK_READER_UI_CHAPTER_VISIBLE_KEY = "ui_chapter_visible"
 private const val BOOK_READER_SLEEP_EXIT_CONTROL_KEY = "sleep_exit_control"
 private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
 private const val BOOK_LOOKUP_POS_LOG_TAG = "BookLookupPos"
 private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
 private const val BOOK_LOOKUP_SELECTION_LOG_TAG = "BookLookupSelection"
+private const val BOOK_UI_MODE_LOG_TAG = "BookUiMode"
 private const val BOOK_VERTICAL_TAP_DEBUG_OVERLAY = false
+
+private enum class UiTestControlModule {
+    CHAPTER,
+    TIMELINE,
+    TRANSPORT
+}
+
 class BookReaderActivity : AppCompatActivity() {
     private var gamepadKeyHandler: ((KeyEvent) -> Boolean)? = null
     private var lastMotionHorizontalKeyCode: Int? = null
@@ -184,6 +202,7 @@ class BookReaderActivity : AppCompatActivity() {
         val audioUri = intent.getStringExtra(EXTRA_AUDIO_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
         val srtUri = intent.getStringExtra(EXTRA_SRT_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
         val coverUri = intent.getStringExtra(EXTRA_COVER_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val uiTestMode = intent.getBooleanExtra(EXTRA_UI_TEST_MODE, false)
         val title = intent.getStringExtra(EXTRA_BOOK_TITLE).orEmpty()
         currentAudioUriForBridge = audioUri?.toString()
         activeReaderRef = WeakReference(this)
@@ -196,6 +215,7 @@ class BookReaderActivity : AppCompatActivity() {
                     audioUri = audioUri,
                     srtUri = srtUri,
                     coverUri = coverUri,
+                    uiTestMode = uiTestMode,
                     contentResolver = contentResolver,
                     registerGamepadKeyHandler = { handler -> gamepadKeyHandler = handler },
                     latestControllerAddressProvider = {
@@ -423,6 +443,7 @@ class BookReaderActivity : AppCompatActivity() {
         const val EXTRA_AUDIO_URI = "extra_audio_uri"
         const val EXTRA_SRT_URI = "extra_srt_uri"
         const val EXTRA_COVER_URI = "extra_cover_uri"
+        const val EXTRA_UI_TEST_MODE = "extra_ui_test_mode"
         const val EXTRA_RETURN_AUDIO_URI = "extra_return_audio_uri"
         const val EXTRA_RETURN_SRT_URI = "extra_return_srt_uri"
         const val EXTRA_RETURN_POSITION_MS = "extra_return_position_ms"
@@ -467,6 +488,7 @@ private fun BookReaderScreen(
     audioUri: Uri?,
     srtUri: Uri?,
     coverUri: Uri?,
+    uiTestMode: Boolean,
     contentResolver: ContentResolver,
     registerGamepadKeyHandler: (((KeyEvent) -> Boolean)?) -> Unit,
     latestControllerAddressProvider: () -> String?,
@@ -475,6 +497,7 @@ private fun BookReaderScreen(
     val context = LocalContext.current
     val activity = context as? Activity
     val view = LocalView.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var cues by remember { mutableStateOf<List<ReaderSubtitleCue>>(emptyList()) }
     var audioChapters by remember { mutableStateOf<List<ReaderAudioChapter>>(emptyList()) }
     var srtLoading by remember { mutableStateOf(false) }
@@ -510,6 +533,22 @@ private fun BookReaderScreen(
     var adjacentJumpMode by remember { mutableStateOf(AdjacentJumpMode.CUE) }
     var playbackSpeed by remember { mutableStateOf(1.0f) }
     var chapterOptionsVisible by remember { mutableStateOf(false) }
+    var uiTestChapterVisible by remember { mutableStateOf(loadUiChapterVisible(context)) }
+    var readerUiWritingMode by remember { mutableStateOf(audiobookSettings.bookSubtitleWritingMode) }
+    var uiTestSwapPrevNextHorizontal by remember { mutableStateOf(loadUiSwapPrevNextHorizontal(context)) }
+    var uiTestSwapPrevNextVertical by remember { mutableStateOf(loadUiSwapPrevNextVertical(context)) }
+    val uiTestSwapPrevNext = if (readerUiWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
+        uiTestSwapPrevNextVertical
+    } else {
+        uiTestSwapPrevNextHorizontal
+    }
+    var uiTestLayoutModeHorizontal by remember { mutableStateOf(loadUiTestLayoutModeHorizontal(context)) }
+    var uiTestLayoutModeVertical by remember { mutableStateOf(loadUiTestLayoutModeVertical(context)) }
+    val uiTestLayoutMode = if (readerUiWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
+        uiTestLayoutModeVertical
+    } else {
+        uiTestLayoutModeHorizontal
+    }
     var coverModeEnabled by remember(srtUri) { mutableStateOf(srtUri == null) }
     val hasSubtitleFile = srtUri != null
     var showOverallProgress by remember { mutableStateOf(false) }
@@ -621,6 +660,58 @@ private fun BookReaderScreen(
     val collectedCueKeys = remember { hashSetOf<String>() }
     var collectedCueUiVersion by remember { mutableStateOf(0) }
 
+    DisposableEffect(lifecycleOwner) {
+        val observer = object : DefaultLifecycleObserver {
+            override fun onResume(owner: LifecycleOwner) {
+                val updated = loadAudiobookSettingsConfig(context)
+                if (updated != audiobookSettings) {
+                    Log.d(
+                        BOOK_UI_MODE_LOG_TAG,
+                        "settings refreshed: writingMode=${updated.bookSubtitleWritingMode}, activeTop=${updated.activeCueDisplayAtTop}, globalFont=${updated.subtitleGlobalFontEnabled}, customFont=${updated.subtitleCustomFontUri != null}"
+                    )
+                }
+                audiobookSettings = updated
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+    LaunchedEffect(audiobookSettings.bookSubtitleWritingMode, uiTestMode) {
+        // Real reader should follow Settings immediately; UI test page remains isolated.
+        if (!uiTestMode) {
+            readerUiWritingMode = audiobookSettings.bookSubtitleWritingMode
+        }
+    }
+    LaunchedEffect(uiTestMode) {
+        if (!uiTestMode) return@LaunchedEffect
+        val demoText = "吾輩は猫である。名前はまだ無い。どこで生れたかとんと見當がつかぬ。何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。吾輩はここで始めて人間というものを見た。しかもあとで聞くとそれは書生という人間中で一番獰悪な種族であったそうだ。この書生というのは時々我々を捕えて煮て食うという話である。しかしその當時は何という考もなかったから別段恐しいとも思わなかった。ただ彼の掌に載せられてスーと持ち上げられた時何だかフワフワした感じがあったばかりである。掌の上で少し落ちついて書生の顔を見たのがいわゆる人間というものの見始であろう。この時妙なものだと思った感じが今でも殘っている。第一毛をもって裝飾されべきはずの顔がつるつるしてまるで薬缶だ。その後猫にもだいぶ逢ったがこんな片輪には一度も出會わした事がない。のみならず顔の真中があまりに突起している。そうしてその穴の中から時々ぷうぷうと煙を吹く。どうも咽せぽくて実に弱った。これが人間の飲む煙草というものである事はようやくこの頃知った。"
+        val sentenceDurationMs = 14_000L
+        cues = demoText
+            .split("。")
+            .mapNotNull { it.trim().takeIf { text -> text.isNotEmpty() } }
+            .mapIndexed { index, sentence ->
+                val startMs = index * sentenceDurationMs
+                ReaderSubtitleCue(
+                    startMs = startMs,
+                    endMs = startMs + sentenceDurationMs,
+                    text = "$sentence。"
+                )
+            }
+        audioChapters = listOf(
+            ReaderAudioChapter(0L, "1.第一章"),
+            ReaderAudioChapter(2_200_000L, "第二章"),
+            ReaderAudioChapter(3_800_000L, "第三章")
+        )
+        positionMs = 18_000L
+        durationMs = (cues.size * sentenceDurationMs).coerceAtLeast(1L)
+        srtLoading = false
+        srtError = null
+        chapterOptionsVisible = false
+        coverModeEnabled = false
+    }
+
     DisposableEffect(player) {
         onDispose { player.release() }
     }
@@ -670,7 +761,7 @@ private fun BookReaderScreen(
         }
     }
 
-    DisposableEffect(player) {
+    if (!uiTestMode) DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
@@ -713,7 +804,7 @@ private fun BookReaderScreen(
         onDispose { player.removeListener(listener) }
     }
 
-    LaunchedEffect(player, isPlaying) {
+    if (!uiTestMode) LaunchedEffect(player, isPlaying) {
         if (!isPlaying) {
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = if (player.duration > 0L) player.duration else 0L
@@ -726,7 +817,7 @@ private fun BookReaderScreen(
         }
     }
 
-    LaunchedEffect(audioUri, playbackPositionKey) {
+    if (!uiTestMode) LaunchedEffect(audioUri, playbackPositionKey) {
         playbackRestoreCompleted = false
         playbackCompleted = false
         val selectedAudio = audioUri ?: run {
@@ -744,7 +835,7 @@ private fun BookReaderScreen(
         playbackRestoreCompleted = true
     }
 
-    LaunchedEffect(audioUri) {
+    if (!uiTestMode) LaunchedEffect(audioUri) {
         val selectedAudio = audioUri ?: run {
             audioChapters = emptyList()
             return@LaunchedEffect
@@ -767,7 +858,7 @@ private fun BookReaderScreen(
         audioChapters = loadedChapters
     }
 
-    LaunchedEffect(srtUri) {
+    if (!uiTestMode) LaunchedEffect(srtUri) {
         val uri = srtUri ?: return@LaunchedEffect
         srtLoading = true
         srtError = null
@@ -800,20 +891,8 @@ private fun BookReaderScreen(
     }
     val activeLookupLayer = lookupSession.activeLayer
     val lookupPopupVisible = activeLookupLayer != null
-    val lifecycleOwner = LocalLifecycleOwner.current
     val lyricsFollowTopPaddingPx = with(LocalDensity.current) { 72.dp.toPx() }
 
-    DisposableEffect(lifecycleOwner) {
-        val observer = object : DefaultLifecycleObserver {
-            override fun onResume(owner: LifecycleOwner) {
-                audiobookSettings = loadAudiobookSettingsConfig(context)
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
     DisposableEffect(context) {
         val listener = registerDictionaryDataVersionListener(context) { version ->
             dictionaryDataVersion = version
@@ -842,10 +921,10 @@ private fun BookReaderScreen(
             null
         }
     }
-    LaunchedEffect(visibleSelectedRange, activeCueIndex, audiobookSettings.bookSubtitleWritingMode, lyricsMode) {
+    LaunchedEffect(visibleSelectedRange, activeCueIndex, readerUiWritingMode, lyricsMode) {
         Log.d(
             BOOK_LOOKUP_SELECTION_LOG_TAG,
-            "visibleRange activeCue=$activeCueIndex mode=${audiobookSettings.bookSubtitleWritingMode} lyrics=$lyricsMode range=${formatRangeForLog(visibleSelectedRange)}"
+            "visibleRange activeCue=$activeCueIndex mode=$readerUiWritingMode lyrics=$lyricsMode range=${formatRangeForLog(visibleSelectedRange)}"
         )
     }
     LaunchedEffect(activeCueIndex, visibleSelectedRange, lyricsMode) {
@@ -1176,6 +1255,7 @@ private fun BookReaderScreen(
     }
 
     fun toggleFavoriteCue() {
+        if (uiTestMode) return
         val cue = favoriteCue ?: return
         val key = cueCollectionKey(cue.startMs, cue.endMs, cue.text)
         val cueIndexLabel = when {
@@ -1380,6 +1460,10 @@ private fun BookReaderScreen(
             }
         }
         jumpToCue(targetIndex.coerceIn(0, lastIndex), showStatus = false)
+    }
+    fun jumpToAdjacentCueByUi(step: Int) {
+        val effectiveStep = if (uiTestSwapPrevNext) -step else step
+        jumpToAdjacentCue(effectiveStep)
     }
 
     fun setSleepTimer(minutes: Int) {
@@ -1600,6 +1684,7 @@ private fun BookReaderScreen(
     }
 
     fun triggerPopupLookup(cue: ReaderSubtitleCue, offset: Int, anchor: ReaderLookupAnchor?) {
+        if (uiTestMode) return
         val lookupStartMs = System.currentTimeMillis()
         consumeCueRangeSelection()
         lookupSession.clear()
@@ -1681,10 +1766,10 @@ private fun BookReaderScreen(
                 }.trim().takeIf { it.isNotBlank() }
                     ?: computedQuery?.trim()?.takeIf { it.isNotBlank() }
                     ?: selectedToken
-                val expandedAnchor = if (audiobookSettings.bookSubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
+                val expandedAnchor = if (readerUiWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
                     anchor.expandForSelectionText(
                         selectionText = selectionText,
-                        writingMode = audiobookSettings.bookSubtitleWritingMode
+                        writingMode = readerUiWritingMode
                     )
                 } else {
                     anchor
@@ -2156,19 +2241,38 @@ private fun BookReaderScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        val useLeftVerticalLayout = uiTestLayoutMode == 2
+        val density = LocalDensity.current
+        var leftControlsWidthDp by remember { mutableStateOf(0.dp) }
+        val leftRailGap = 16.dp
+        var topBarBottomDp by remember { mutableStateOf(0.dp) }
+        var chapterRowBottomDp by remember { mutableStateOf(0.dp) }
+        val leftRailTopDp = if (chapterRowBottomDp > topBarBottomDp) {
+            chapterRowBottomDp + 2.dp
+        } else {
+            topBarBottomDp + 2.dp
+        }
+        val contentStartPadding: Dp = if (useLeftVerticalLayout && bottomControlsVisible) {
+            leftControlsWidthDp + leftRailGap
+        } else {
+            0.dp
+        }
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             bottomBar = {
-                if (bottomControlsVisible) {
+                if (bottomControlsVisible && !useLeftVerticalLayout) {
                     Surface(tonalElevation = 4.dp) {
-                        Column(
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .navigationBarsPadding()
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                .padding(12.dp)
                         ) {
-                            if (audioChapters.isNotEmpty()) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                            if (audioChapters.isNotEmpty() && (!uiTestMode || uiTestChapterVisible)) {
                                 val activeChapterTitle = audioChapters
                                     .getOrNull(activeChapterIndex)
                                     ?.title
@@ -2202,7 +2306,7 @@ private fun BookReaderScreen(
                                     }
                                 }
                             }
-                            if (audioChapters.isNotEmpty() && chapterOptionsVisible) {
+                            if (audioChapters.isNotEmpty() && (!uiTestMode || uiTestChapterVisible) && chapterOptionsVisible) {
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -2284,32 +2388,6 @@ private fun BookReaderScreen(
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceEvenly,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                IconButton(onClick = { jumpToAdjacentCue(-1) }) {
-                                    Icon(
-                                        painter = painterResource(id = R.drawable.ic_overlay_previous),
-                                        contentDescription = "Previous"
-                                    )
-                                }
-                                IconButton(onClick = { if (player.isPlaying) player.pause() else player.play() }) {
-                                    Icon(
-                                        painter = painterResource(
-                                            id = if (isPlaying) R.drawable.ic_overlay_pause else R.drawable.ic_overlay_play
-                                        ),
-                                        contentDescription = if (isPlaying) "Pause" else "Play"
-                                    )
-                                }
-                                IconButton(onClick = { jumpToAdjacentCue(1) }) {
-                                    Icon(
-                                        painter = painterResource(id = R.drawable.ic_overlay_next),
-                                        contentDescription = "Next"
-                                    )
-                                }
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -2347,17 +2425,62 @@ private fun BookReaderScreen(
                         }
                     }
                 }
+                } else if (bottomControlsVisible && useLeftVerticalLayout) {
+                    Surface(tonalElevation = 4.dp) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val progressLabel = when {
+                                useChapterTimeline && showOverallProgress -> stringResource(R.string.bookreader_progress_total, totalProgressPercent)
+                                useChapterTimeline -> stringResource(R.string.bookreader_progress_chapter, progressPercent)
+                                else -> stringResource(R.string.bookreader_progress_plain, progressPercent)
+                            }
+                            Text(
+                                text = progressLabel,
+                                modifier = if (useChapterTimeline) {
+                                    Modifier.clickable { showOverallProgress = !showOverallProgress }
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            OutlinedButton(onClick = { lyricsMode = !lyricsMode }) {
+                                Text(
+                                    if (lyricsMode) {
+                                        stringResource(R.string.bookreader_subtitle_list)
+                                    } else {
+                                        stringResource(R.string.bookreader_subtitle_single)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
             }
         ) { innerPadding ->
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coordinates ->
+                            topBarBottomDp = with(density) {
+                                (coordinates.positionInRoot().y + coordinates.size.height).toDp()
+                            }
+                        },
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -2367,7 +2490,7 @@ private fun BookReaderScreen(
                     Spacer(modifier = Modifier.weight(1f))
                     TextButton(
                         onClick = { if (favoriteCue != null) toggleFavoriteCue() },
-                        enabled = favoriteCue != null
+                        enabled = favoriteCue != null && !uiTestMode
                     ) {
                         Text(if (favoriteCueCollected) "★" else "☆")
                     }
@@ -2439,53 +2562,161 @@ private fun BookReaderScreen(
                                     }
                                 )
                             }
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        if (lyricsMode) {
-                                            stringResource(R.string.bookreader_subtitle_list)
+                            if (uiTestMode) {
+                                DropdownMenuItem(
+                                    text = { Text(if (uiTestChapterVisible) "章节关" else "章节开") },
+                                    onClick = {
+                                        uiTestChapterVisible = !uiTestChapterVisible
+                                        saveUiChapterVisible(context, uiTestChapterVisible)
+                                        chapterOptionsVisible = false
+                                        topActionsExpanded = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("布局模式: ${uiTestLayoutMode}/2") },
+                                    onClick = {
+                                        val next = if (uiTestLayoutMode == 1) 2 else 1
+                                        if (readerUiWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
+                                            uiTestLayoutModeVertical = next
+                                            saveUiTestLayoutModeVertical(context, next)
+                                            Log.d(BOOK_UI_MODE_LOG_TAG, "vertical layout mode -> $next")
                                         } else {
-                                            stringResource(R.string.bookreader_subtitle_single)
+                                            uiTestLayoutModeHorizontal = next
+                                            saveUiTestLayoutModeHorizontal(context, next)
+                                            Log.d(BOOK_UI_MODE_LOG_TAG, "horizontal layout mode -> $next")
                                         }
-                                    )
-                                },
-                                onClick = {
-                                    lyricsMode = !lyricsMode
-                                    topActionsExpanded = false
-                                    controlModeStatus = if (lyricsMode) {
-                                        context.getString(R.string.bookreader_subtitle_list_enabled)
-                                    } else {
-                                        context.getString(R.string.bookreader_subtitle_single_enabled)
+                                        topActionsExpanded = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (uiTestSwapPrevNext) "前进/后退: 已交换" else "前进/后退: 正常") },
+                                    onClick = {
+                                        val next = !uiTestSwapPrevNext
+                                        if (readerUiWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
+                                            uiTestSwapPrevNextVertical = next
+                                            saveUiSwapPrevNextVertical(context, next)
+                                        } else {
+                                            uiTestSwapPrevNextHorizontal = next
+                                            saveUiSwapPrevNextHorizontal(context, next)
+                                        }
+                                        topActionsExpanded = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.audiobook_overlay_subtitle_writing_mode_horizontal)) },
+                                    onClick = {
+                                        readerUiWritingMode = FloatingSubtitleWritingMode.HORIZONTAL
+                                        Log.d(BOOK_UI_MODE_LOG_TAG, "writing mode -> HORIZONTAL")
+                                        topActionsExpanded = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.audiobook_overlay_subtitle_writing_mode_vertical_rtl)) },
+                                    onClick = {
+                                        readerUiWritingMode = FloatingSubtitleWritingMode.VERTICAL_RTL
+                                        Log.d(BOOK_UI_MODE_LOG_TAG, "writing mode -> VERTICAL_RTL")
+                                        topActionsExpanded = false
+                                    }
+                                )
+                            } else {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (lyricsMode) {
+                                                stringResource(R.string.bookreader_subtitle_list)
+                                            } else {
+                                                stringResource(R.string.bookreader_subtitle_single)
+                                            }
+                                        )
+                                    },
+                                    onClick = {
+                                        lyricsMode = !lyricsMode
+                                        topActionsExpanded = false
+                                        controlModeStatus = if (lyricsMode) {
+                                            context.getString(R.string.bookreader_subtitle_list_enabled)
+                                        } else {
+                                            context.getString(R.string.bookreader_subtitle_single_enabled)
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (coverModeEnabled) {
+                                                stringResource(R.string.bookreader_switch_to_subtitle)
+                                            } else {
+                                                stringResource(R.string.bookreader_switch_to_cover)
+                                            }
+                                        )
+                                    },
+                                    onClick = {
+                                        coverModeEnabled = !coverModeEnabled
+                                        topActionsExpanded = false
+                                        controlModeStatus = if (coverModeEnabled) {
+                                            context.getString(R.string.bookreader_switched_to_cover)
+                                        } else {
+                                            context.getString(R.string.bookreader_switched_to_subtitle)
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.bookreader_replace_srt)) },
+                                    onClick = {
+                                        topActionsExpanded = false
+                                        if (player.isPlaying) player.pause()
+                                        replaceSrtLauncher.launch(arrayOf("application/x-subrip"))
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                if (useLeftVerticalLayout && bottomControlsVisible && audioChapters.isNotEmpty() && uiTestChapterVisible) {
+                    val activeChapterTitle = audioChapters
+                        .getOrNull(activeChapterIndex)
+                        ?.title
+                        ?.takeIf { it.isNotBlank() }
+                    Surface(
+                        tonalElevation = 1.dp,
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f),
+                        modifier = Modifier.onGloballyPositioned { coordinates ->
+                            chapterRowBottomDp = with(density) {
+                                (coordinates.positionInRoot().y + coordinates.size.height).toDp()
+                            }
+                        }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box {
+                                OutlinedButton(onClick = { chapterOptionsVisible = !chapterOptionsVisible }) {
+                                    Text(stringResource(R.string.bookreader_chapters_collapsed))
+                                }
+                                DropdownMenu(
+                                    expanded = chapterOptionsVisible,
+                                    onDismissRequest = { chapterOptionsVisible = false }
+                                ) {
+                                    audioChapters.forEachIndexed { index, chapter ->
+                                        DropdownMenuItem(
+                                            text = { Text("${index + 1}. ${chapter.title}") },
+                                            onClick = {
+                                                jumpToChapter(chapter)
+                                                chapterOptionsVisible = false
+                                            }
+                                        )
                                     }
                                 }
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        if (coverModeEnabled) {
-                                            stringResource(R.string.bookreader_switch_to_subtitle)
-                                        } else {
-                                            stringResource(R.string.bookreader_switch_to_cover)
-                                        }
-                                    )
-                                },
-                                onClick = {
-                                    coverModeEnabled = !coverModeEnabled
-                                    topActionsExpanded = false
-                                    controlModeStatus = if (coverModeEnabled) {
-                                        context.getString(R.string.bookreader_switched_to_cover)
-                                    } else {
-                                        context.getString(R.string.bookreader_switched_to_subtitle)
-                                    }
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.bookreader_replace_srt)) },
-                                onClick = {
-                                    topActionsExpanded = false
-                                    if (player.isPlaying) player.pause()
-                                    replaceSrtLauncher.launch(arrayOf("application/x-subrip"))
-                                }
+                            }
+                            Text(
+                                text = "Now: ${activeChapterTitle ?: "--"}",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
                             )
                         }
                     }
@@ -2495,6 +2726,7 @@ private fun BookReaderScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
+                        .padding(start = contentStartPadding)
                         .padding(
                             top = if (coverModeEnabled) 18.dp else 0.dp,
                             bottom = if (coverModeEnabled) 20.dp else 0.dp
@@ -2508,7 +2740,7 @@ private fun BookReaderScreen(
                             .padding(if (coverModeEnabled) 0.dp else 16.dp)
                     ) {
                         val density = LocalDensity.current
-                        val bookVerticalWriting = audiobookSettings.bookSubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
+                        val bookVerticalWriting = readerUiWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
                         val verticalRowsPerColumn = remember(
                             bookVerticalWriting,
                             density,
@@ -2589,12 +2821,12 @@ private fun BookReaderScreen(
                                             val inSelectedRange = selectedCueIndexRange?.contains(index) == true
                                             val cueDisplay = remember(
                                                 cue.text,
-                                                audiobookSettings.bookSubtitleWritingMode,
+                                                readerUiWritingMode,
                                                 verticalRowsPerColumn
                                             ) {
                                                 transformSubtitleForWritingMode(
                                                     cue.text,
-                                                    audiobookSettings.bookSubtitleWritingMode,
+                                                    readerUiWritingMode,
                                                     verticalRowsPerColumn
                                                 )
                                             }
@@ -2764,12 +2996,12 @@ private fun BookReaderScreen(
                             else -> {
                                 val activeCueDisplay = remember(
                                     activeCue.text,
-                                    audiobookSettings.bookSubtitleWritingMode,
+                                    readerUiWritingMode,
                                     verticalRowsPerColumn
                                 ) {
                                     transformSubtitleForWritingMode(
                                         activeCue.text,
-                                        audiobookSettings.bookSubtitleWritingMode,
+                                        readerUiWritingMode,
                                         verticalRowsPerColumn
                                     )
                                 }
@@ -2828,6 +3060,37 @@ private fun BookReaderScreen(
                             }
                         }
                     }
+                }
+                }
+                if (useLeftVerticalLayout && bottomControlsVisible) {
+                    LeftVerticalControlRail(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(start = leftRailGap, top = leftRailTopDp),
+                        displayedRightDurationTimeMs = displayedRightDurationTimeMs,
+                        displayedLeftTimeMs = displayedLeftTimeMs,
+                        sliderMax = sliderMax,
+                        sliderValue = sliderValue,
+                        displayedDurationTimeMs = displayedDurationTimeMs,
+                        useChapterTimeline = useChapterTimeline,
+                        activeChapterStartMs = activeChapterStartMs,
+                        timelineRangeMs = timelineRangeMs,
+                        durationMs = durationMs,
+                        isPlaying = isPlaying,
+                        onLeftRailMeasured = { coordinates ->
+                            leftControlsWidthDp = with(density) { coordinates.size.width.toDp() }
+                        },
+                        onPreviewPositionChanged = { dragPreviewPositionMs = it },
+                        onSeekManual = { seekToManual(it) },
+                        onRequestTimeEdit = {
+                            timeEditInput = formatBookTime(displayedLeftTimeMs)
+                            timeEditError = null
+                            timeEditDialogVisible = true
+                        },
+                        onPrevious = { jumpToAdjacentCueByUi(-1) },
+                        onPlayPause = { if (player.isPlaying) player.pause() else player.play() },
+                        onNext = { jumpToAdjacentCueByUi(1) }
+                    )
                 }
             }
         }
@@ -3106,7 +3369,7 @@ private fun BookReaderScreen(
                 sessionSize = lookupSession.size,
                 showRangeSelection = isTopLayer && layerIndex == 0 && hasSubtitleFile && audiobookSettings.lookupRangeSelectionEnabled,
                 showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
-                showAddToAnki = true
+                showAddToAnki = !uiTestMode
             )
         },
         onToggleSection = { layerIndex, key, expanded ->
@@ -3163,6 +3426,155 @@ private fun BookReaderScreen(
     )
 }
 
+@Composable
+private fun LeftVerticalControlRail(
+    modifier: Modifier = Modifier,
+    displayedRightDurationTimeMs: Long,
+    displayedLeftTimeMs: Long,
+    sliderMax: Float,
+    sliderValue: Float,
+    displayedDurationTimeMs: Long,
+    useChapterTimeline: Boolean,
+    activeChapterStartMs: Long,
+    timelineRangeMs: Long,
+    durationMs: Long,
+    isPlaying: Boolean,
+    onLeftRailMeasured: (androidx.compose.ui.layout.LayoutCoordinates) -> Unit,
+    onPreviewPositionChanged: (Long?) -> Unit,
+    onSeekManual: (Long) -> Unit,
+    onRequestTimeEdit: () -> Unit,
+    onPrevious: () -> Unit,
+    onPlayPause: () -> Unit,
+    onNext: () -> Unit
+) {
+    var verticalTimelineHeightPx by remember { mutableStateOf(220f) }
+    Surface(
+        tonalElevation = 4.dp,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.42f),
+        modifier = modifier
+            .fillMaxHeight()
+            .wrapContentWidth()
+            .onGloballyPositioned(onLeftRailMeasured)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .padding(vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f),
+                modifier = Modifier.wrapContentWidth(Alignment.CenterHorizontally)
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = formatBookTime(displayedRightDurationTimeMs),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                    Box(
+                        modifier = Modifier
+                            .width(18.dp)
+                            .height(220.dp)
+                            .background(Color(0xFFD4E0F2), RoundedCornerShape(10.dp))
+                            .onGloballyPositioned { coordinates ->
+                                verticalTimelineHeightPx = coordinates.size.height.toFloat().coerceAtLeast(1f)
+                            }
+                            .pointerInput(
+                                sliderMax,
+                                displayedDurationTimeMs,
+                                useChapterTimeline,
+                                activeChapterStartMs,
+                                timelineRangeMs,
+                                durationMs,
+                                verticalTimelineHeightPx
+                            ) {
+                                detectVerticalDragGestures(
+                                    onVerticalDrag = { change, _ ->
+                                        if (displayedDurationTimeMs <= 0L) return@detectVerticalDragGestures
+                                        val y = change.position.y.coerceIn(0f, verticalTimelineHeightPx)
+                                        val ratio = 1f - (y / verticalTimelineHeightPx)
+                                        val clamped = (ratio * timelineRangeMs.toFloat()).toLong()
+                                            .coerceIn(0L, timelineRangeMs)
+                                        val preview = if (useChapterTimeline) {
+                                            activeChapterStartMs + clamped
+                                        } else {
+                                            clamped.coerceIn(0L, durationMs.coerceAtLeast(0L))
+                                        }
+                                        onPreviewPositionChanged(preview)
+                                    },
+                                    onDragEnd = {
+                                        // Seek on release.
+                                        val preview = if (displayedDurationTimeMs <= 0L) null else {
+                                            val ratio = if (sliderMax > 0f) (sliderValue / sliderMax).coerceIn(0f, 1f) else 0f
+                                            val clamped = (ratio * timelineRangeMs.toFloat()).toLong().coerceIn(0L, timelineRangeMs)
+                                            if (useChapterTimeline) activeChapterStartMs + clamped else clamped.coerceIn(0L, durationMs.coerceAtLeast(0L))
+                                        }
+                                        preview?.let(onSeekManual)
+                                        onPreviewPositionChanged(null)
+                                    },
+                                    onDragCancel = { onPreviewPositionChanged(null) }
+                                )
+                            }
+                    ) {
+                        val ratio = if (sliderMax > 0f) (sliderValue / sliderMax).coerceIn(0f, 1f) else 0f
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .fillMaxHeight(ratio)
+                                .background(Color(0xFF3E6E9C), RoundedCornerShape(10.dp))
+                        )
+                    }
+                    Text(
+                        text = formatBookTime(displayedLeftTimeMs),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.clickable(onClick = onRequestTimeEdit)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f),
+                modifier = Modifier.wrapContentWidth(Alignment.CenterHorizontally)
+            ) {
+                Column(
+                    modifier = Modifier.padding(vertical = 0.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(18.dp)
+                ) {
+                    IconButton(onClick = onPrevious, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_overlay_previous),
+                            contentDescription = "Previous"
+                        )
+                    }
+                    IconButton(onClick = onPlayPause, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            painter = painterResource(
+                                id = if (isPlaying) R.drawable.ic_overlay_pause else R.drawable.ic_overlay_play
+                            ),
+                            contentDescription = if (isPlaying) "Pause" else "Play"
+                        )
+                    }
+                    IconButton(onClick = onNext, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_overlay_next),
+                            contentDescription = "Next"
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
 private fun buildHighlightedText(text: String, selectedRange: IntRange?): AnnotatedString {
     return buildAnnotatedString {
         append(text)
@@ -5194,4 +5606,76 @@ private tailrec fun Context.findHostActivity(): Activity? {
         is ContextWrapper -> baseContext.findHostActivity()
         else -> null
     }
+}
+
+private fun loadUiTestLayoutModeHorizontal(context: Context): Int {
+    return context
+        .getSharedPreferences(BOOK_READER_UI_TEST_PREFS, Context.MODE_PRIVATE)
+        .getInt(BOOK_READER_UI_TEST_LAYOUT_HORIZONTAL_KEY, 1)
+        .coerceIn(1, 2)
+}
+
+private fun loadUiTestLayoutModeVertical(context: Context): Int {
+    return context
+        .getSharedPreferences(BOOK_READER_UI_TEST_PREFS, Context.MODE_PRIVATE)
+        .getInt(BOOK_READER_UI_TEST_LAYOUT_VERTICAL_KEY, 2)
+        .coerceIn(1, 2)
+}
+
+private fun saveUiTestLayoutModeHorizontal(context: Context, mode: Int) {
+    context
+        .getSharedPreferences(BOOK_READER_UI_TEST_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putInt(BOOK_READER_UI_TEST_LAYOUT_HORIZONTAL_KEY, mode.coerceIn(1, 2))
+        .apply()
+}
+
+private fun saveUiTestLayoutModeVertical(context: Context, mode: Int) {
+    context
+        .getSharedPreferences(BOOK_READER_UI_TEST_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putInt(BOOK_READER_UI_TEST_LAYOUT_VERTICAL_KEY, mode.coerceIn(1, 2))
+        .apply()
+}
+
+private fun loadUiSwapPrevNextHorizontal(context: Context): Boolean {
+    return context
+        .getSharedPreferences(BOOK_READER_UI_TEST_PREFS, Context.MODE_PRIVATE)
+        .getBoolean(BOOK_READER_UI_SWAP_PREV_NEXT_HORIZONTAL_KEY, false)
+}
+
+private fun saveUiSwapPrevNextHorizontal(context: Context, enabled: Boolean) {
+    context
+        .getSharedPreferences(BOOK_READER_UI_TEST_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(BOOK_READER_UI_SWAP_PREV_NEXT_HORIZONTAL_KEY, enabled)
+        .apply()
+}
+
+private fun loadUiSwapPrevNextVertical(context: Context): Boolean {
+    return context
+        .getSharedPreferences(BOOK_READER_UI_TEST_PREFS, Context.MODE_PRIVATE)
+        .getBoolean(BOOK_READER_UI_SWAP_PREV_NEXT_VERTICAL_KEY, false)
+}
+
+private fun saveUiSwapPrevNextVertical(context: Context, enabled: Boolean) {
+    context
+        .getSharedPreferences(BOOK_READER_UI_TEST_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(BOOK_READER_UI_SWAP_PREV_NEXT_VERTICAL_KEY, enabled)
+        .apply()
+}
+
+private fun loadUiChapterVisible(context: Context): Boolean {
+    return context
+        .getSharedPreferences(BOOK_READER_UI_TEST_PREFS, Context.MODE_PRIVATE)
+        .getBoolean(BOOK_READER_UI_CHAPTER_VISIBLE_KEY, true)
+}
+
+private fun saveUiChapterVisible(context: Context, visible: Boolean) {
+    context
+        .getSharedPreferences(BOOK_READER_UI_TEST_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(BOOK_READER_UI_CHAPTER_VISIBLE_KEY, visible)
+        .apply()
 }

@@ -375,15 +375,13 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
                     }
                 )
 
-                OutlinedTextField(
+                AnkiTagInput(
                     value = ankiTagsInput,
+                    options = listOf("⑨"),
                     onValueChange = {
                         ankiTagsInput = it
                         persistAnkiConfig()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.anki_tags_label)) },
-                    singleLine = true
+                    }
                 )
 
                 if (ankiModelFields.isNotEmpty()) {
@@ -477,6 +475,59 @@ private fun resolveImportedDictionaryNamesForAnki(context: Context): List<String
             .removeSuffix(".mdd")
             .takeIf { it.isNotBlank() }
         fromMeta ?: fallback
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AnkiTagInput(
+    value: String,
+    options: List<String>,
+    onValueChange: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val distinctOptions = remember(options) {
+        options.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+    }
+    ExposedDropdownMenuBox(
+        expanded = expanded && distinctOptions.isNotEmpty(),
+        onExpandedChange = { expanded = !expanded }
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {
+                onValueChange(it)
+                expanded = true
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(type = MenuAnchorType.PrimaryEditable),
+            label = { Text(stringResource(R.string.anki_tags_label)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            singleLine = true
+        )
+        ExposedDropdownMenu(
+            expanded = expanded && distinctOptions.isNotEmpty(),
+            onDismissRequest = { expanded = false }
+        ) {
+            distinctOptions.forEach { choice ->
+                DropdownMenuItem(
+                    text = { Text(choice) },
+                    onClick = {
+                        expanded = false
+                        val tokens = value
+                            .split(',', ' ', '\n', '\t')
+                            .map { it.trim() }
+                            .filter { it.isNotBlank() }
+                            .toMutableList()
+                        if (tokens.none { it == choice }) {
+                            tokens.add(choice)
+                        }
+                        onValueChange(tokens.joinToString(" "))
+                    }
+                )
+            }
+        }
     }
 }
 

@@ -38,6 +38,8 @@
     <string name="settings_section_about">About</string>
     <string name="settings_audiobook_title">Audiobooks</string>
     <string name="settings_control_mode_title">Control mode</string>
+    <string name="settings_audiobook_ui_title">Audiobook UI</string>
+    <string name="settings_audiobook_ui_subtitle">Adjust playback layout and subtitle direction</string>
     <string name="settings_controller_title">Controller</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX</string>
@@ -286,6 +288,10 @@
     <string name="audiobook_overlay_subtitle_writing_mode">Subtitle writing mode</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">Horizontal</string>
     <string name="audiobook_overlay_subtitle_writing_mode_vertical_rtl">Vertical</string>
+    <string name="audiobook_ui_preview_title">Preview</string>
+    <string name="audiobook_ui_preview_subtitle">Step 1: show a normal audiobook player UI. Drag and persistence will come next.</string>
+    <string name="audiobook_ui_play_button_side">Play button position</string>
+    <string name="audiobook_ui_preview_text">Audiobook subtitle preview</string>
     <string name="audiobook_unknown_file">Unknown file</string>
     <string name="audiobook_import_stage_copy">Copying file...</string>
     <string name="audiobook_import_stage_validate">Validating database...</string>

@@ -134,8 +134,16 @@ internal class SharedLookupPopupPositionProvider(
             right = sourceRects.maxOf { it.right },
             bottom = sourceRects.maxOf { it.bottom }
         )
-        // Avoid over-blocking vertical wrapped selections: keep per-rect blocks.
-        val blockedRects = sourceRects
+        // Avoid over-blocking when async updates mix in far-away wrapped rects.
+        // Keep only near-primary rects for overlap blocking, while preserving primary placement.
+        val blockedRects = sourceRects.filter { rect ->
+            val distance = rectDistanceShared(primaryRect, rect)
+            val maxGap = (
+                maxOf(primaryRect.right - primaryRect.left, primaryRect.bottom - primaryRect.top)
+                    .coerceAtLeast(1) * 2
+                )
+            distance <= maxGap
+        }.ifEmpty { listOf(primaryRect) }
         // For wrapped selections, place popup next to the dominant rect.
         val placementAnchorRect = if (sourceRects.size > 1) primaryRect else sourceBoundsRect
         val maxX = (windowSize.width - popupContentSize.width - screenPaddingPx).coerceAtLeast(screenPaddingPx)
@@ -286,6 +294,16 @@ internal class SharedLookupPopupPositionProvider(
         val fitCount = clampedCandidates.count { fitsScreen(it) }
         val nonOverlapCount = clampedCandidates.count { isNonOverlapping(it) }
         val fitAndNonOverlapCount = clampedCandidates.count { fitsScreen(it) && isNonOverlapping(it) }
+
+        val fallbackVisible = clampedCandidates
+            .filter(::fitsScreen)
+            .minByOrNull { candidate ->
+                rectDistanceShared(placementAnchorRect, popupRectShared(candidate, popupContentSize))
+            }
+        if (fallbackVisible != null) {
+            return returnWithLog("fallback_visible_overlap", fallbackVisible)
+        }
+
         Log.d(
             logTag,
             "reject reason=no_adjacent_candidate raw=${rawCandidates.size} clamped=${clampedCandidates.size} fit=$fitCount nonOverlap=$nonOverlapCount fitAndNonOverlap=$fitAndNonOverlapCount sourceBounds=${formatIntRectForLogShared(sourceBoundsRect)}"
