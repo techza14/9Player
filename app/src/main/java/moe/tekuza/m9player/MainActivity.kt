@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -51,6 +52,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -84,6 +86,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -109,6 +112,9 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Audiotrack
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.ClosedCaption
+import androidx.compose.material.icons.outlined.Settings
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -345,6 +351,7 @@ private fun ReaderSyncScreen() {
     var importOnboardingCompleted by remember { mutableStateOf(false) }
     var importGuideVisible by remember { mutableStateOf(false) }
     val selectedBookIds = remember { mutableStateListOf<String>() }
+    var isBookSelectionMode by remember { mutableStateOf(false) }
 
     var loadedDictionaries by remember { mutableStateOf<List<LoadedDictionary>>(emptyList()) }
     var dictionaryRefs by remember { mutableStateOf<List<PersistedDictionaryRef>>(emptyList()) }
@@ -390,6 +397,9 @@ private fun ReaderSyncScreen() {
     var deleteBooksDontAskAgain by remember { mutableStateOf(false) }
     var pendingDeleteBookIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var skipDeleteBookConfirm by remember { mutableStateOf(loadSkipDeleteBookConfirm(context)) }
+    var renameBookDialogVisible by remember { mutableStateOf(false) }
+    var renameTargetBookId by remember { mutableStateOf<String?>(null) }
+    var renameBookInput by remember { mutableStateOf("") }
     var mainLookupPopupVisible by remember { mutableStateOf(false) }
     var mainLookupPopupTitle by remember { mutableStateOf("") }
     var mainLookupPopupLoading by remember { mutableStateOf(false) }
@@ -1004,6 +1014,28 @@ private fun ReaderSyncScreen() {
         context.startActivity(intent)
     }
 
+    fun requestRenameBook(book: ReaderBook) {
+        renameTargetBookId = book.id
+        renameBookInput = book.title
+        renameBookDialogVisible = true
+    }
+
+    fun applyRenameBook() {
+        val targetId = renameTargetBookId ?: return
+        val nextTitle = renameBookInput.trim()
+        if (nextTitle.isBlank()) {
+            renameBookDialogVisible = false
+            renameTargetBookId = null
+            return
+        }
+        readerBooks = readerBooks.map { book ->
+            if (book.id == targetId) book.copy(title = nextTitle) else book
+        }
+        persistImportState()
+        renameBookDialogVisible = false
+        renameTargetBookId = null
+    }
+
     fun upsertReaderBook(book: ReaderBook, activate: Boolean) {
         readerBooks = listOf(book) + readerBooks.filterNot { it.id == book.id }
         if (activate) {
@@ -1021,6 +1053,11 @@ private fun ReaderSyncScreen() {
 
     fun clearBookSelection() {
         selectedBookIds.clear()
+        isBookSelectionMode = false
+    }
+
+    fun enterBookSelectionMode() {
+        isBookSelectionMode = true
     }
 
     fun deleteSelectedBooks(removeIds: Set<String>) {
@@ -2457,7 +2494,7 @@ private fun ReaderSyncScreen() {
                 ) {
                     Text(stringResource(R.string.home_bookshelf_title), style = MaterialTheme.typography.titleMedium)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (selectedBookIds.isNotEmpty()) {
+                        if (isBookSelectionMode) {
                             OutlinedButton(onClick = { requestDeleteSelectedBooks() }) {
                                 Text(stringResource(R.string.home_delete_selected, selectedBookIds.size))
                             }
@@ -2465,11 +2502,14 @@ private fun ReaderSyncScreen() {
                                 Text(stringResource(R.string.home_cancel_selection))
                             }
                         }
-                        if (selectedBookIds.isEmpty()) {
+                        if (!isBookSelectionMode) {
                             OutlinedButton(
-                                onClick = { activeSection = MiningSection.SETTINGS }
+                                onClick = { enterBookSelectionMode() }
                             ) {
-                                Text(stringResource(R.string.nav_settings))
+                                Icon(
+                                    imageVector = Icons.Outlined.Checklist,
+                                    contentDescription = stringResource(R.string.home_selected)
+                                )
                             }
                             OutlinedButton(
                                 onClick = {
@@ -2507,7 +2547,7 @@ private fun ReaderSyncScreen() {
                     readerBooks.chunked(2).forEach { rowBooks ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             rowBooks.forEach { book ->
                                 val selected = selectedBookId == book.id
@@ -2519,38 +2559,113 @@ private fun ReaderSyncScreen() {
                                         .weight(1f)
                                         .combinedClickable(
                                             onClick = {
-                                                if (selectedBookIds.isNotEmpty()) {
+                                                if (isBookSelectionMode) {
                                                     toggleBookSelection(book.id)
                                                 } else {
                                                     openReaderBook(book, persist = true)
                                                 }
                                             },
                                             onLongClick = {
-                                                toggleBookSelection(book.id)
+                                                requestRenameBook(book)
                                             }
-                                        )
+                                        ),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = Color.Transparent
+                                    )
                                 ) {
-                                    Column(
-                                        modifier = Modifier.padding(12.dp),
-                                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        if (book.coverUri != null) {
-                                            BookCoverThumbnail(
-                                                coverUri = book.coverUri,
+                                    Box(modifier = Modifier.fillMaxWidth()) {
+                                        Column(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Box(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .height(132.dp)
-                                            )
-                                        }
-                                        Text(book.title, style = MaterialTheme.typography.titleSmall)
-                                        Text(book.audioName, maxLines = 1)
-                                        Text(if (book.srtUri != null) stringResource(R.string.home_has_subtitle) else stringResource(R.string.home_no_subtitle))
-                                        Text("$playbackPercent%")
-                                        if (multiSelected) {
-                                            Text(stringResource(R.string.home_selected), color = MaterialTheme.colorScheme.primary)
-                                        }
-                                        if (selected) {
-                                            Text(stringResource(R.string.home_opened), color = MaterialTheme.colorScheme.primary)
+                                                    .aspectRatio(1f)
+                                                    .clip(RoundedCornerShape(12.dp))
+                                            ) {
+                                                if (book.coverUri != null) {
+                                                    BookCoverThumbnail(
+                                                        coverUri = book.coverUri,
+                                                        modifier = Modifier.fillMaxSize()
+                                                    )
+                                                } else {
+                                                    Surface(
+                                                        modifier = Modifier.fillMaxSize(),
+                                                        shape = RoundedCornerShape(10.dp),
+                                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                                    ) {}
+                                                }
+                                                if (selected) {
+                                                    Surface(
+                                                        modifier = Modifier
+                                                            .align(Alignment.BottomEnd)
+                                                            .padding(6.dp),
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f)
+                                                    ) {
+                                                        Text(
+                                                            text = stringResource(R.string.home_opened),
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                }
+                                                if (book.srtUri != null) {
+                                                    Surface(
+                                                        modifier = Modifier
+                                                            .align(Alignment.BottomStart)
+                                                            .padding(6.dp),
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Outlined.ClosedCaption,
+                                                            contentDescription = stringResource(R.string.home_subtitle_attached),
+                                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            modifier = Modifier.padding(4.dp).size(16.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            Surface(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                color = Color.Transparent,
+                                                shape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(start = 4.dp, end = 4.dp, top = 0.dp, bottom = 6.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        LinearProgressIndicator(
+                                                            progress = { (playbackPercent / 100f).coerceIn(0f, 1f) },
+                                                            modifier = Modifier.weight(1f).height(4.dp),
+                                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
+                                                            trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                                                        )
+                                                        Text(
+                                                            text = "$playbackPercent%",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                    Text(
+                                                        book.title,
+                                                        style = MaterialTheme.typography.titleMedium,
+                                                        maxLines = 2
+                                                    )
+                                                    if (multiSelected) {
+                                                        Text(stringResource(R.string.home_selected), color = MaterialTheme.colorScheme.primary)
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -2571,48 +2686,68 @@ private fun ReaderSyncScreen() {
                                 .fillMaxWidth()
                                 .combinedClickable(
                                     onClick = {
-                                        if (selectedBookIds.isNotEmpty()) {
+                                        if (isBookSelectionMode) {
                                             toggleBookSelection(book.id)
                                         } else {
                                             openReaderBook(book, persist = true)
                                         }
                                     },
                                     onLongClick = {
-                                        toggleBookSelection(book.id)
+                                        requestRenameBook(book)
                                     }
                                 )
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (book.coverUri != null) {
-                                    BookCoverThumbnail(
-                                        coverUri = book.coverUri,
-                                        modifier = Modifier
-                                            .width(72.dp)
-                                            .height(96.dp)
-                                    )
-                                }
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(book.title, style = MaterialTheme.typography.titleSmall)
-                                    Text(if (book.srtUri != null) stringResource(R.string.home_has_subtitle) else stringResource(R.string.home_no_subtitle))
-                                    Text("$playbackPercent%")
-                                    if (multiSelected) {
-                                        Text(stringResource(R.string.home_selected), color = MaterialTheme.colorScheme.primary)
+                                    if (book.coverUri != null) {
+                                        BookCoverThumbnail(
+                                            coverUri = book.coverUri,
+                                            modifier = Modifier
+                                                .width(72.dp)
+                                                .height(96.dp)
+                                        )
+                                    }
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            book.title,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            maxLines = 2,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("$playbackPercent%")
+                                            if (book.srtUri != null) {
+                                                Text(
+                                                    text = stringResource(R.string.home_subtitle_attached),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                        if (multiSelected) {
+                                            Text(stringResource(R.string.home_selected), color = MaterialTheme.colorScheme.primary)
+                                        }
+                                    }
+                                    if (!isBookSelectionMode) {
+                                        OutlinedButton(onClick = { openReaderBook(book, persist = true) }) {
+                                            Text(if (selected) stringResource(R.string.home_opened) else stringResource(R.string.common_open))
+                                        }
                                     }
                                 }
-                                if (selectedBookIds.isEmpty()) {
-                                    OutlinedButton(onClick = { openReaderBook(book, persist = true) }) {
-                                        Text(if (selected) stringResource(R.string.home_opened) else stringResource(R.string.common_open))
-                                    }
-                                }
+
                             }
                         }
                     }
@@ -3133,6 +3268,39 @@ private fun ReaderSyncScreen() {
             }
         }
 
+        if (renameBookDialogVisible) {
+            AlertDialog(
+                onDismissRequest = {
+                    renameBookDialogVisible = false
+                    renameTargetBookId = null
+                },
+                title = { Text(stringResource(R.string.home_rename_book)) },
+                text = {
+                    OutlinedTextField(
+                        value = renameBookInput,
+                        onValueChange = { renameBookInput = it.take(80) },
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.home_book_name)) }
+                    )
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            renameBookDialogVisible = false
+                            renameTargetBookId = null
+                        }
+                    ) {
+                        Text(stringResource(R.string.common_cancel))
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { applyRenameBook() }) {
+                        Text(stringResource(R.string.common_confirm))
+                    }
+                }
+            )
+        }
+
         if (languageDialogVisible) {
             AppLanguageDialog(
                 selectedAppLanguage = selectedAppLanguage,
@@ -3635,7 +3803,6 @@ private fun BookCoverThumbnail(
         factory = { context ->
             ImageView(context).apply {
                 scaleType = ImageView.ScaleType.CENTER_CROP
-                adjustViewBounds = true
             }
         },
         update = { view ->

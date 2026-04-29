@@ -142,6 +142,7 @@ companion object {
     private var bubbleButton: ImageButton? = null
     private var bubbleControlsRow: LinearLayout? = null
     private var bubbleFavoriteButton: ImageButton? = null
+    private var bubbleRepeatButton: ImageButton? = null
     private var bubbleLockButton: ImageButton? = null
     private var subtitleFrameView: FrameLayout? = null
     private var subtitleTextView: TextView? = null
@@ -713,6 +714,12 @@ companion object {
             updateBubbleFavoriteIcon(isFavorite)
         }
     }
+    private val cueLoopListener = object : BookReaderFloatingBridge.CueLoopStateListener {
+        override fun onCueLoopStateChanged(enabled: Boolean) {
+            Log.d(FLOATING_BUBBLE_LOG_TAG, "cue-loop state callback enabled=$enabled")
+            updateBubbleRepeatIcon(enabled)
+        }
+    }
 
     private val subtitleListener = object : BookReaderFloatingBridge.SubtitleStateListener {
         override fun onSubtitleChanged(text: String?) {
@@ -725,6 +732,7 @@ companion object {
         windowManager = getSystemService(WINDOW_SERVICE) as? WindowManager
         BookReaderFloatingBridge.addPlaybackStateListener(playbackListener)
         BookReaderFloatingBridge.addFavoriteStateListener(favoriteListener)
+        BookReaderFloatingBridge.addCueLoopStateListener(cueLoopListener)
         BookReaderFloatingBridge.addSubtitleStateListener(subtitleListener)
         BookReaderFloatingBridge.addPlaybackPositionListener(playbackPositionListener)
         BookReaderFloatingBridge.addPlaybackSpeedListener(playbackSpeedListener)
@@ -754,6 +762,7 @@ companion object {
     override fun onDestroy() {
         BookReaderFloatingBridge.removePlaybackStateListener(playbackListener)
         BookReaderFloatingBridge.removeFavoriteStateListener(favoriteListener)
+        BookReaderFloatingBridge.removeCueLoopStateListener(cueLoopListener)
         BookReaderFloatingBridge.removeSubtitleStateListener(subtitleListener)
         BookReaderFloatingBridge.removePlaybackPositionListener(playbackPositionListener)
         BookReaderFloatingBridge.removePlaybackSpeedListener(playbackSpeedListener)
@@ -1356,6 +1365,17 @@ companion object {
             addView(createControlButton(R.drawable.ic_overlay_favorite, bubbleScale) {
                 BookReaderFloatingBridge.toggleFavorite()
             }.also { bubbleFavoriteButton = it })
+            addView(createControlButton(R.drawable.ic_overlay_repeat, bubbleScale) {
+                Log.d(
+                    FLOATING_BUBBLE_LOG_TAG,
+                    "repeat button clicked before=${BookReaderFloatingBridge.isCueLoopEnabled()}"
+                )
+                BookReaderFloatingBridge.toggleCueLoop()
+                Log.d(
+                    FLOATING_BUBBLE_LOG_TAG,
+                    "repeat button clicked after=${BookReaderFloatingBridge.isCueLoopEnabled()}"
+                )
+            }.also { bubbleRepeatButton = it })
         }
         val bubbleParams = LinearLayout.LayoutParams(bubbleSizePx, bubbleSizePx).apply {
             marginEnd = (8 * density * bubbleScale).toInt()
@@ -1368,6 +1388,7 @@ companion object {
         }
         bubbleControlsRow = controls
         updateBubbleLockIcon()
+        updateBubbleRepeatIcon(BookReaderFloatingBridge.isCueLoopEnabled())
         row.addView(bubble)
         row.addView(controls)
         host.addView(row)
@@ -3857,6 +3878,15 @@ companion object {
         )
     }
 
+    private fun updateBubbleRepeatIcon(enabled: Boolean) {
+        bubbleRepeatButton?.setImageResource(
+            if (enabled) R.drawable.ic_overlay_repeat_one else R.drawable.ic_overlay_repeat
+        )
+        bubbleRepeatButton?.setColorFilter(
+            if (enabled) 0xFF90CAF9.toInt() else 0xFFFFFFFF.toInt()
+        )
+    }
+
     private fun updatePlayPauseIcon(isPlaying: Boolean) {
         val controls = subtitleControlsRow ?: return
         val playPause = controls.findViewWithTag<ImageButton>("playPause") ?: return
@@ -4081,6 +4111,7 @@ companion object {
         bubbleButton = null
         bubbleControlsRow = null
         bubbleFavoriteButton = null
+        bubbleRepeatButton = null
         bubbleLockButton = null
         bubbleControlsVisible = false
     }

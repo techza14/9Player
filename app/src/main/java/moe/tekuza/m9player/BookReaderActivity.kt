@@ -179,6 +179,7 @@ private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
 private const val BOOK_LOOKUP_SELECTION_LOG_TAG = "BookLookupSelection"
 private const val BOOK_UI_MODE_LOG_TAG = "BookUiMode"
 private const val BOOK_VERTICAL_TAP_DEBUG_OVERLAY = false
+private const val BOOK_CUE_LOOP_LOG_TAG = "BookCueLoop"
 
 private enum class UiTestControlModule {
     CHAPTER,
@@ -193,6 +194,7 @@ class BookReaderActivity : AppCompatActivity() {
     private var lastControllerBluetoothAddress: String? = null
     private var floatingOverlayStartJob: Job? = null
     private var currentAudioUriForBridge: String? = null
+    private var isUiTestMode: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -203,10 +205,13 @@ class BookReaderActivity : AppCompatActivity() {
         val srtUri = intent.getStringExtra(EXTRA_SRT_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
         val coverUri = intent.getStringExtra(EXTRA_COVER_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
         val uiTestMode = intent.getBooleanExtra(EXTRA_UI_TEST_MODE, false)
+        isUiTestMode = uiTestMode
         val title = intent.getStringExtra(EXTRA_BOOK_TITLE).orEmpty()
         currentAudioUriForBridge = audioUri?.toString()
-        activeReaderRef = WeakReference(this)
-        BookReaderFloatingBridge.setCurrentAudioUri(currentAudioUriForBridge)
+        if (!uiTestMode) {
+            activeReaderRef = WeakReference(this)
+            BookReaderFloatingBridge.setCurrentAudioUri(currentAudioUriForBridge)
+        }
 
         setContent {
             TsetTheme {
@@ -284,11 +289,13 @@ class BookReaderActivity : AppCompatActivity() {
     override fun onDestroy() {
         floatingOverlayStartJob?.cancel()
         floatingOverlayStartJob = null
-        if (activeReaderRef?.get() === this) {
-            activeReaderRef = null
-        }
-        if (BookReaderFloatingBridge.currentAudioUri() == currentAudioUriForBridge) {
-            BookReaderFloatingBridge.setCurrentAudioUri(null)
+        if (!isUiTestMode) {
+            if (activeReaderRef?.get() === this) {
+                activeReaderRef = null
+            }
+            if (BookReaderFloatingBridge.currentAudioUri() == currentAudioUriForBridge) {
+                BookReaderFloatingBridge.setCurrentAudioUri(null)
+            }
         }
         super.onDestroy()
     }
@@ -566,6 +573,8 @@ private fun BookReaderScreen(
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
+    var cueLoopEnabled by remember { mutableStateOf(false) }
+    var cueLoopWindow by remember { mutableStateOf<Pair<Long, Long>?>(null) }
     var dragPreviewPositionMs by remember { mutableStateOf<Long?>(null) }
     val replaceSrtLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val pickedUri = uri ?: return@rememberLauncherForActivityResult
@@ -735,8 +744,10 @@ private fun BookReaderScreen(
         }
     }
 
-    LaunchedEffect(hasSubtitleFile) {
-        BookReaderFloatingBridge.setSubtitleTrackAvailable(hasSubtitleFile)
+    LaunchedEffect(hasSubtitleFile, uiTestMode) {
+        if (!uiTestMode) {
+            BookReaderFloatingBridge.setSubtitleTrackAvailable(hasSubtitleFile)
+        }
         if (!hasSubtitleFile && controlModeEnabled) {
             controlModeEnabled = false
             controlModeStatus = null
@@ -804,7 +815,7 @@ private fun BookReaderScreen(
         onDispose { player.removeListener(listener) }
     }
 
-    if (!uiTestMode) LaunchedEffect(player, isPlaying) {
+    if (!uiTestMode) LaunchedEffect(player, isPlaying, cueLoopEnabled, cueLoopWindow) {
         if (!isPlaying) {
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = if (player.duration > 0L) player.duration else 0L
@@ -813,6 +824,17 @@ private fun BookReaderScreen(
         while (true) {
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = if (player.duration > 0L) player.duration else 0L
+            if (cueLoopEnabled) {
+                val window = cueLoopWindow
+                if (window != null) {
+                    val startMs = window.first.coerceAtLeast(0L)
+                    val endMs = window.second.coerceAtLeast(startMs + 1L)
+                    val loopAt = (endMs - 40L).coerceAtLeast(startMs)
+                    if (positionMs >= loopAt || positionMs < startMs) {
+                        player.seekTo(startMs)
+                    }
+                }
+            }
             delay(250L)
         }
     }
@@ -987,19 +1009,27 @@ private fun BookReaderScreen(
         )
     }
 
-    LaunchedEffect(playbackSpeed) {
+    LaunchedEffect(playbackSpeed, uiTestMode) {
         player.playbackParameters = PlaybackParameters(playbackSpeed)
-        BookReaderFloatingBridge.notifyPlaybackSpeed(playbackSpeed)
+        if (!uiTestMode) {
+            BookReaderFloatingBridge.notifyPlaybackSpeed(playbackSpeed)
+        }
     }
 
-    LaunchedEffect(isPlaying) {
-        BookReaderFloatingBridge.notifyPlaybackState(isPlaying)
+    LaunchedEffect(isPlaying, uiTestMode) {
+        if (!uiTestMode) {
+            BookReaderFloatingBridge.notifyPlaybackState(isPlaying)
+        }
     }
-    LaunchedEffect(activeCue?.text) {
-        BookReaderFloatingBridge.notifySubtitle(activeCue?.text)
+    LaunchedEffect(activeCue?.text, uiTestMode) {
+        if (!uiTestMode) {
+            BookReaderFloatingBridge.notifySubtitle(activeCue?.text)
+        }
     }
-    LaunchedEffect(positionMs) {
-        BookReaderFloatingBridge.notifyPlaybackPosition(positionMs)
+    LaunchedEffect(positionMs, uiTestMode) {
+        if (!uiTestMode) {
+            BookReaderFloatingBridge.notifyPlaybackPosition(positionMs)
+        }
     }
 
     val activeChapterIndex = remember(previewPositionMs, audioChapters) {
@@ -2108,10 +2138,52 @@ private fun BookReaderScreen(
         if (player.isPlaying) player.pause() else player.play()
     })
     val latestSeekPrevious by rememberUpdatedState<() -> Unit>({
+        if (cueLoopEnabled) {
+            val targetIndex = when {
+                activeCueIndex > 0 -> activeCueIndex - 1
+                cues.isNotEmpty() -> 0
+                else -> -1
+            }
+            val targetCue = cues.getOrNull(targetIndex)
+            if (targetCue != null && targetCue.endMs > targetCue.startMs) {
+                cueLoopWindow = targetCue.startMs to targetCue.endMs
+                BookReaderFloatingBridge.notifyCueLoopState(true)
+                Log.d(
+                    BOOK_CUE_LOOP_LOG_TAG,
+                    "seekPrevious update loop window=${targetCue.startMs}-${targetCue.endMs}"
+                )
+            }
+        }
         jumpToAdjacentCue(-1)
     })
     val latestSeekNext by rememberUpdatedState<() -> Unit>({
+        if (cueLoopEnabled) {
+            val lastIndex = cues.lastIndex
+            val targetIndex = when {
+                activeCueIndex in 0 until lastIndex -> activeCueIndex + 1
+                activeCueIndex == -1 && cues.isNotEmpty() -> 0
+                else -> lastIndex
+            }
+            val targetCue = cues.getOrNull(targetIndex)
+            if (targetCue != null && targetCue.endMs > targetCue.startMs) {
+                cueLoopWindow = targetCue.startMs to targetCue.endMs
+                BookReaderFloatingBridge.notifyCueLoopState(true)
+                Log.d(
+                    BOOK_CUE_LOOP_LOG_TAG,
+                    "seekNext update loop window=${targetCue.startMs}-${targetCue.endMs}"
+                )
+            }
+        }
         jumpToAdjacentCue(1)
+    })
+    val latestReplayCurrentCue by rememberUpdatedState<() -> Unit>({
+        val cue = activeCue
+        if (cue != null) {
+            player.seekTo(cue.startMs.coerceAtLeast(0L))
+            if (!player.isPlaying) {
+                player.play()
+            }
+        }
     })
     val latestToggleFavorite by rememberUpdatedState<() -> Unit>({
         toggleFavoriteCue()
@@ -2135,10 +2207,11 @@ private fun BookReaderScreen(
         }
     }
 
-    DisposableEffect(Unit) {
+    if (!uiTestMode) DisposableEffect(Unit) {
         val controller = object : BookReaderFloatingBridge.Controller {
             override fun isPlaying(): Boolean = latestIsPlaying
             override fun isFavorite(): Boolean = favoriteCueCollected
+            override fun isCueLoopEnabled(): Boolean = cueLoopEnabled
 
             override fun togglePlayPause() {
                 latestTogglePlayPause()
@@ -2154,6 +2227,39 @@ private fun BookReaderScreen(
 
             override fun seekNext() {
                 latestSeekNext()
+            }
+
+            override fun replayCurrentCue() {
+                latestReplayCurrentCue()
+            }
+
+            override fun toggleCueLoop() {
+                Log.d(BOOK_CUE_LOOP_LOG_TAG, "toggle requested enabled=$cueLoopEnabled cue=${activeCue?.startMs}-${activeCue?.endMs}")
+                if (cueLoopEnabled) {
+                    cueLoopEnabled = false
+                    cueLoopWindow = null
+                    BookReaderFloatingBridge.notifyCueLoopState(false)
+                    Log.d(BOOK_CUE_LOOP_LOG_TAG, "toggle applied enabled=false window=null")
+                } else {
+                    val cue = activeCue ?: run {
+                        val fallbackIndex = findBookCueIndexAtTime(cues, player.currentPosition.coerceAtLeast(0L))
+                        cues.getOrNull(fallbackIndex)
+                    }
+                    if (cue == null || cue.endMs <= cue.startMs) {
+                        Log.d(
+                            BOOK_CUE_LOOP_LOG_TAG,
+                            "toggle ignored no-valid-cue active=${activeCue != null} pos=${player.currentPosition} cues=${cues.size}"
+                        )
+                        return
+                    }
+                    cueLoopWindow = cue.startMs to cue.endMs
+                    cueLoopEnabled = true
+                    BookReaderFloatingBridge.notifyCueLoopState(true)
+                    Log.d(BOOK_CUE_LOOP_LOG_TAG, "toggle applied enabled=true window=${cue.startMs}-${cue.endMs}")
+                    if (!player.isPlaying) {
+                        player.play()
+                    }
+                }
             }
 
             override fun toggleFavorite() {
@@ -2189,7 +2295,7 @@ private fun BookReaderScreen(
         }
     }
 
-    LaunchedEffect(activeCue, activeCueIndex, cues, title, audioUri) {
+    if (!uiTestMode) LaunchedEffect(activeCue, activeCueIndex, cues, title, audioUri) {
         val fullSentenceSelection = if (activeCueIndex in cues.indices) {
             extractFullSentenceLikeHoshiFromCues(
                 cues = cues,

@@ -15,10 +15,13 @@ object BookReaderFloatingBridge {
     interface Controller {
         fun isPlaying(): Boolean
         fun isFavorite(): Boolean
+        fun isCueLoopEnabled(): Boolean
         fun togglePlayPause()
         fun setPlaying(play: Boolean)
         fun seekPrevious()
         fun seekNext()
+        fun replayCurrentCue()
+        fun toggleCueLoop()
         fun toggleFavorite()
         fun showReader()
         fun lookupCurrentSubtitleAt(offset: Int)
@@ -44,6 +47,10 @@ object BookReaderFloatingBridge {
         fun onPlaybackSpeedChanged(speed: Float)
     }
 
+    interface CueLoopStateListener {
+        fun onCueLoopStateChanged(enabled: Boolean)
+    }
+
     @Volatile
     private var controller: Controller? = null
     private val listeners = linkedSetOf<PlaybackStateListener>()
@@ -51,6 +58,7 @@ object BookReaderFloatingBridge {
     private val subtitleListeners = linkedSetOf<SubtitleStateListener>()
     private val playbackPositionListeners = linkedSetOf<PlaybackPositionListener>()
     private val playbackSpeedListeners = linkedSetOf<PlaybackSpeedListener>()
+    private val cueLoopStateListeners = linkedSetOf<CueLoopStateListener>()
     @Volatile
     private var playingSnapshot: Boolean = false
     @Volatile
@@ -67,12 +75,15 @@ object BookReaderFloatingBridge {
     private var playbackPositionSnapshot: Long = 0L
     @Volatile
     private var playbackSpeedSnapshot: Float = 1f
+    @Volatile
+    private var cueLoopEnabledSnapshot: Boolean = false
 
     fun attach(controller: Controller) {
         synchronized(this) {
             this.controller = controller
             playingSnapshot = controller.isPlaying()
             favoriteSnapshot = controller.isFavorite()
+            cueLoopEnabledSnapshot = controller.isCueLoopEnabled()
         }
         notifyPlaybackState(playingSnapshot)
         notifyFavoriteState(favoriteSnapshot)
@@ -90,6 +101,7 @@ object BookReaderFloatingBridge {
                 subtitleSnapshot = null
                 cueSnapshot = null
                 subtitleTrackAvailableSnapshot = false
+                cueLoopEnabledSnapshot = false
             }
         }
         notifyPlaybackState(playingSnapshot)
@@ -164,6 +176,19 @@ object BookReaderFloatingBridge {
         }
     }
 
+    fun addCueLoopStateListener(listener: CueLoopStateListener) {
+        synchronized(this) {
+            cueLoopStateListeners += listener
+        }
+        listener.onCueLoopStateChanged(cueLoopEnabledSnapshot)
+    }
+
+    fun removeCueLoopStateListener(listener: CueLoopStateListener) {
+        synchronized(this) {
+            cueLoopStateListeners -= listener
+        }
+    }
+
     fun notifyPlaybackState(isPlaying: Boolean) {
         val snapshot: List<PlaybackStateListener>
         synchronized(this) {
@@ -181,6 +206,7 @@ object BookReaderFloatingBridge {
     fun hasSubtitleTrack(): Boolean = subtitleTrackAvailableSnapshot
     fun currentPlaybackPositionMs(): Long = playbackPositionSnapshot
     fun currentPlaybackSpeed(): Float = playbackSpeedSnapshot
+    fun isCueLoopEnabled(): Boolean = cueLoopEnabledSnapshot
 
     fun setCurrentAudioUri(audioUri: String?) {
         synchronized(this) {
@@ -259,6 +285,15 @@ object BookReaderFloatingBridge {
         snapshot.forEach { it.onFavoriteStateChanged(isFavorite) }
     }
 
+    fun notifyCueLoopState(enabled: Boolean) {
+        val snapshot: List<CueLoopStateListener>
+        synchronized(this) {
+            cueLoopEnabledSnapshot = enabled
+            snapshot = cueLoopStateListeners.toList()
+        }
+        snapshot.forEach { it.onCueLoopStateChanged(enabled) }
+    }
+
     fun togglePlayPause() {
         controller?.togglePlayPause()
     }
@@ -273,6 +308,17 @@ object BookReaderFloatingBridge {
 
     fun seekNext() {
         controller?.seekNext()
+    }
+
+    fun replayCurrentCue() {
+        controller?.replayCurrentCue()
+    }
+
+    fun toggleCueLoop() {
+        val before = cueLoopEnabledSnapshot
+        controller?.toggleCueLoop()
+        val after = controller?.isCueLoopEnabled() ?: !before
+        notifyCueLoopState(after)
     }
 
     fun toggleFavorite() {
