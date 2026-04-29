@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
@@ -23,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -139,6 +141,11 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
     var ankiLoading by remember { mutableStateOf(false) }
     var ankiError by remember { mutableStateOf<String?>(null) }
     var awaitingExternalAnkiPermission by remember { mutableStateOf(false) }
+    var duplicateCheckEnabled by remember { mutableStateOf(true) }
+    var duplicateScope by remember { mutableStateOf("deck") }
+    var duplicateAction by remember { mutableStateOf("prevent") }
+    var lookupExportFullSentence by remember { mutableStateOf(false) }
+    var lookupRangeSelectionEnabled by remember { mutableStateOf(false) }
 
     val requestAnkiPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -168,6 +175,14 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
             )
         )
         saveAnkiModelTemplateSnapshots(context, ankiModelTemplateSnapshots.toMap())
+        saveAnkiDuplicateConfig(
+            context = context,
+            config = AnkiDuplicateConfig(
+                enabled = duplicateCheckEnabled,
+                scope = duplicateScope,
+                action = duplicateAction
+            )
+        )
     }
 
     fun syncTemplatesWithModelFields(
@@ -246,9 +261,16 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) {
         val persistedAnki = loadPersistedAnkiConfig(context)
+        val duplicateConfig = loadAnkiDuplicateConfig(context)
+        val audiobookConfig = loadAudiobookSettingsConfig(context)
         ankiDeckName = persistedAnki.deckName
         ankiModelName = persistedAnki.modelName
         ankiTagsInput = persistedAnki.tags
+        duplicateCheckEnabled = duplicateConfig.enabled
+        duplicateScope = duplicateConfig.scope
+        duplicateAction = duplicateConfig.action
+        lookupExportFullSentence = audiobookConfig.lookupExportFullSentence
+        lookupRangeSelectionEnabled = audiobookConfig.lookupRangeSelectionEnabled
         ankiModelTemplateSnapshots.clear()
         loadAnkiModelTemplateSnapshots(context).forEach { (modelName, templates) ->
             ankiModelTemplateSnapshots[modelName] = templates
@@ -383,6 +405,114 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
                         persistAnkiConfig()
                     }
                 )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.audiobook_lookup_full_sentence),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
+                    Switch(
+                        checked = lookupExportFullSentence,
+                        onCheckedChange = { checked ->
+                            saveLookupExportFullSentence(context, checked)
+                            lookupExportFullSentence = checked
+                        }
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.audiobook_lookup_range_selection_enable),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    )
+                    Switch(
+                        checked = lookupRangeSelectionEnabled,
+                        onCheckedChange = { checked ->
+                            saveLookupRangeSelectionEnabled(context, checked)
+                            lookupRangeSelectionEnabled = checked
+                        }
+                    )
+                }
+
+                val scopeDeckLabel = stringResource(R.string.anki_duplicate_scope_deck)
+                val scopeAllLabel = stringResource(R.string.anki_duplicate_scope_all)
+                val actionPreventLabel = stringResource(R.string.anki_duplicate_action_prevent)
+                val actionAddLabel = stringResource(R.string.anki_duplicate_action_add)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = stringResource(R.string.anki_duplicate_check_label),
+                            modifier = Modifier.weight(1f).padding(end = 12.dp)
+                        )
+                        Switch(
+                            checked = duplicateCheckEnabled,
+                            onCheckedChange = {
+                                duplicateCheckEnabled = it
+                                persistAnkiConfig()
+                            }
+                        )
+                    }
+                    if (duplicateCheckEnabled) {
+                        AnkiListSelector(
+                            label = stringResource(R.string.anki_duplicate_scope_label),
+                            value = duplicateScope,
+                            options = listOf("deck", "all"),
+                            placeholder = "deck",
+                            onValueChange = {
+                                duplicateScope = it
+                                persistAnkiConfig()
+                            },
+                            optionLabel = { key ->
+                                when (key) {
+                                    "all" -> scopeAllLabel
+                                    else -> scopeDeckLabel
+                                }
+                            },
+                            valueLabel = { key ->
+                                when (key) {
+                                    "all" -> scopeAllLabel
+                                    else -> scopeDeckLabel
+                                }
+                            }
+                        )
+                        AnkiListSelector(
+                            label = stringResource(R.string.anki_duplicate_action_label),
+                            value = duplicateAction,
+                            options = listOf("prevent", "add"),
+                            placeholder = "prevent",
+                            onValueChange = {
+                                duplicateAction = it
+                                persistAnkiConfig()
+                            },
+                            optionLabel = { key ->
+                                when (key) {
+                                    "add" -> actionAddLabel
+                                    else -> actionPreventLabel
+                                }
+                            },
+                            valueLabel = { key ->
+                                when (key) {
+                                    "add" -> actionAddLabel
+                                    else -> actionPreventLabel
+                                }
+                            }
+                        )
+                    }
+                }
 
                 if (ankiModelFields.isNotEmpty()) {
                     Text(stringResource(R.string.anki_field_variables), style = MaterialTheme.typography.titleSmall)
@@ -538,7 +668,9 @@ private fun AnkiListSelector(
     value: String,
     options: List<String>,
     placeholder: String,
-    onValueChange: (String) -> Unit
+    onValueChange: (String) -> Unit,
+    optionLabel: (String) -> String = { it },
+    valueLabel: (String) -> String = { it }
 ) {
     val distinctOptions = remember(options) {
         options
@@ -564,7 +696,7 @@ private fun AnkiListSelector(
         onExpandedChange = { expanded = !expanded }
     ) {
         OutlinedTextField(
-            value = value,
+            value = valueLabel(value),
             onValueChange = {},
             readOnly = true,
             modifier = Modifier
@@ -581,7 +713,7 @@ private fun AnkiListSelector(
         ) {
             distinctOptions.forEach { choice ->
                 DropdownMenuItem(
-                    text = { Text(choice) },
+                    text = { Text(optionLabel(choice)) },
                     onClick = {
                         expanded = false
                         onValueChange(choice)
@@ -600,9 +732,9 @@ private fun AnkiFieldVariableInput(
     options: List<String>,
     onValueChange: (String) -> Unit
 ) {
+    val distinctOptions = remember(options) { options.distinct() }
     var expanded by remember(fieldName) { mutableStateOf(false) }
-    val filteredOptions = remember(options, value) {
-        val distinctOptions = options.distinct()
+    val filteredOptions = remember(distinctOptions, value) {
         val query = value.trim()
         if (query.isBlank()) {
             distinctOptions

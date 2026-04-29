@@ -104,6 +104,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
@@ -370,6 +371,10 @@ private fun ReaderSyncScreen() {
     val dictionaryLookupCollapsedSections = remember { mutableStateMapOf<String, Boolean>() }
     var dictionaryPageHighlightedDefinitionKey by remember { mutableStateOf<String?>(null) }
     var dictionaryPageHighlightedRects by remember { mutableStateOf<List<Rect>>(emptyList()) }
+    val dictionaryAnkiDuplicateByKey = remember { mutableStateMapOf<String, Boolean>() }
+    val dictionaryAnkiCheckingByKey = remember { mutableStateMapOf<String, Boolean>() }
+    val duplicateConfig = remember { loadAnkiDuplicateConfig(context) }
+    val allowAddWhenDuplicate = duplicateConfig.action.equals("add", ignoreCase = true)
 
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var pendingAnkiCard by remember { mutableStateOf<MinedCard?>(null) }
@@ -993,7 +998,9 @@ private fun ReaderSyncScreen() {
 
     fun openReaderBook(book: ReaderBook, persist: Boolean = true) {
         val targetAudioUri = book.audioUri.toString()
-        val isSameReaderBook = BookReaderFloatingBridge.currentAudioUri() == targetAudioUri
+        val isSameReaderBook =
+            !BookReaderFloatingBridge.isUiTestModeActive() &&
+                BookReaderFloatingBridge.currentAudioUri() == targetAudioUri
         if (isSameReaderBook) {
             activateReaderBook(book, persist = persist)
             val intent = Intent(context, BookReaderActivity::class.java).apply {
@@ -1306,7 +1313,12 @@ private fun ReaderSyncScreen() {
             exportStatus = context.getString(R.string.status_anki_fields_empty)
             return
         }
-        exportStatus = ankiExportResultMessage(context, exportToAnkiDroidApiResult(context, card, config))
+        scope.launch {
+            val exportResult = withContext(Dispatchers.IO) {
+                exportToAnkiDroidApiResult(context, card, config)
+            }
+            exportStatus = ankiExportResultMessage(context, exportResult)
+        }
     }
 
     LaunchedEffect(ankiPermissionGranted) {
@@ -1404,7 +1416,12 @@ private fun ReaderSyncScreen() {
                                 srt = srt,
                                 srtDisplayName = savedBook.srtName
                             )
-                            rebuilt
+                            val persistedTitle = savedBook.title.trim()
+                            if (persistedTitle.isNotBlank()) {
+                                rebuilt.copy(title = persistedTitle)
+                            } else {
+                                rebuilt
+                            }
                         }.onSuccess { restoredBooks += it }
                             .onFailure {
                                 failedBooks += savedBook.title.ifBlank { savedBook.audioName }
@@ -2088,7 +2105,8 @@ private fun ReaderSyncScreen() {
                             definition = exportDefinitionHtml,
                             dictionaryCss = dictionaryGroup.css,
                             groupedDictionaries = groupedResult.dictionaries,
-                            popupSelectionText = popupSelectionText
+                            popupSelectionText = popupSelectionText,
+                            lookupTermOverride = groupedResult.term
                         )
                     } finally {
                         preparedLookupAudio?.cleanup?.invoke()
@@ -2096,12 +2114,17 @@ private fun ReaderSyncScreen() {
                 }
             }
             val status = result.fold(
-                onSuccess = {
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.anki_toast_added),
-                        Toast.LENGTH_SHORT
-                    ).show()
+                onSuccess = { exportResult ->
+                    val message = ankiExportResultMessage(context, exportResult)
+                    if (exportResult !is AnkiExportResult.DuplicateSkipped &&
+                        message.isNotBlank()
+                    ) {
+                        Toast.makeText(
+                            context,
+                            message.take(220),
+                            if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                        ).show()
+                    }
                     ""
                 },
                 onFailure = {
@@ -2446,24 +2469,28 @@ private fun ReaderSyncScreen() {
                 NavigationBarItem(
                     selected = activeSection == MiningSection.MAIN,
                     onClick = { activeSection = MiningSection.MAIN },
+                    // Visual glyph (intentional): keep as a symbol and do not localize.
                     icon = { Text("本") },
                     label = { Text(stringResource(R.string.nav_home)) }
                 )
                 NavigationBarItem(
                     selected = activeSection == MiningSection.DICTIONARY,
                     onClick = { activeSection = MiningSection.DICTIONARY },
+                    // Visual glyph (intentional): keep as a symbol and do not localize.
                     icon = { Text("辞") },
                     label = { Text(stringResource(R.string.nav_dictionary)) }
                 )
                 NavigationBarItem(
                     selected = activeSection == MiningSection.COLLECTIONS,
                     onClick = { activeSection = MiningSection.COLLECTIONS },
+                    // Visual glyph (intentional): keep as a symbol and do not localize.
                     icon = { Text("蔵") },
                     label = { Text(stringResource(R.string.collections_title)) }
                 )
                 NavigationBarItem(
                     selected = activeSection == MiningSection.SETTINGS,
                     onClick = { activeSection = MiningSection.SETTINGS },
+                    // Visual glyph (intentional): keep as a symbol and do not localize.
                     icon = { Text("設") },
                     label = { Text(stringResource(R.string.nav_settings)) }
                 )
@@ -2659,7 +2686,9 @@ private fun ReaderSyncScreen() {
                                                     Text(
                                                         book.title,
                                                         style = MaterialTheme.typography.titleMedium,
-                                                        maxLines = 2
+                                                        minLines = 2,
+                                                        maxLines = 2,
+                                                        overflow = TextOverflow.Ellipsis
                                                     )
                                                     if (multiSelected) {
                                                         Text(stringResource(R.string.home_selected), color = MaterialTheme.colorScheme.primary)
@@ -2703,25 +2732,56 @@ private fun ReaderSyncScreen() {
                                         .fillMaxWidth()
                                         .padding(12.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalAlignment = Alignment.Top
                                 ) {
                                     if (book.coverUri != null) {
-                                        BookCoverThumbnail(
-                                            coverUri = book.coverUri,
+                                        Box(
                                             modifier = Modifier
-                                                .width(72.dp)
-                                                .height(96.dp)
-                                        )
+                                                .size(92.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                        ) {
+                                            BookCoverThumbnail(
+                                                coverUri = book.coverUri,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                            if (!isBookSelectionMode && selected) {
+                                                Surface(
+                                                    modifier = Modifier
+                                                        .align(Alignment.BottomEnd)
+                                                        .padding(4.dp),
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f)
+                                                ) {
+                                                    Text(
+                                                        text = stringResource(R.string.home_opened),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                     Column(
-                                        modifier = Modifier.weight(1f),
-                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .heightIn(min = 92.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         Text(
                                             book.title,
                                             style = MaterialTheme.typography.titleSmall,
+                                            minLines = 2,
                                             maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.fillMaxWidth()
+                                        )
+                                        LinearProgressIndicator(
+                                            progress = { (playbackPercent / 100f).coerceIn(0f, 1f) },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(4.dp),
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
+                                            trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
                                         )
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
@@ -2741,13 +2801,7 @@ private fun ReaderSyncScreen() {
                                             Text(stringResource(R.string.home_selected), color = MaterialTheme.colorScheme.primary)
                                         }
                                     }
-                                    if (!isBookSelectionMode) {
-                                        OutlinedButton(onClick = { openReaderBook(book, persist = true) }) {
-                                            Text(if (selected) stringResource(R.string.home_opened) else stringResource(R.string.common_open))
-                                        }
-                                    }
                                 }
-
                             }
                         }
                     }
@@ -2760,7 +2814,12 @@ private fun ReaderSyncScreen() {
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             if (srtLoading) Text(stringResource(R.string.bookreader_parsing_srt))
-                            if (srtError != null) Text("SRT error: $srtError", color = MaterialTheme.colorScheme.error)
+                            if (srtError != null) {
+                                Text(
+                                    stringResource(R.string.bookreader_srt_error, srtError.orEmpty()),
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
                             if (exportStatus != null) Text(exportStatus!!)
                         }
                     }
@@ -2957,6 +3016,23 @@ private fun ReaderSyncScreen() {
                                     modifier = Modifier.padding(10.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
+                                    val ankiKey = remember(groupedResult.term, groupedResult.reading) {
+                                        "${groupedResult.term}|${groupedResult.reading.orEmpty()}"
+                                    }
+                                    val hasDuplicateState = dictionaryAnkiDuplicateByKey.containsKey(ankiKey)
+                                    val duplicateInAnki = dictionaryAnkiDuplicateByKey[ankiKey] == true
+                                    val checkingDuplicate = (dictionaryAnkiCheckingByKey[ankiKey] == true) || !hasDuplicateState
+                                    LaunchedEffect(ankiKey, groupedResult.term) {
+                                        dictionaryAnkiCheckingByKey[ankiKey] = true
+                                        val duplicated = withContext(Dispatchers.IO) {
+                                            hasAnkiDuplicateByFirstFieldAsync(
+                                                context,
+                                                groupedResult.term
+                                            )
+                                        }
+                                        dictionaryAnkiDuplicateByKey[ankiKey] = duplicated
+                                        dictionaryAnkiCheckingByKey[ankiKey] = false
+                                    }
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -2990,9 +3066,16 @@ private fun ReaderSyncScreen() {
                                                         sourceCue = null,
                                                         lookupTitle = lookupQuery
                                                     )
-                                                }
+                                                },
+                                                enabled = (!duplicateInAnki || allowAddWhenDuplicate) && !checkingDuplicate
                                             ) {
-                                                Text("+")
+                                                Text(
+                                                    when {
+                                                        checkingDuplicate -> "…"
+                                                        duplicateInAnki -> "-"
+                                                        else -> "+"
+                                                    }
+                                                )
                                             }
                                         }
                                     }
@@ -4456,8 +4539,9 @@ private fun addLookupDefinitionToAnkiMain(
     definition: String,
     dictionaryCss: String?,
     groupedDictionaries: List<GroupedLookupDictionary> = emptyList(),
-    popupSelectionText: String? = null
-) {
+    popupSelectionText: String? = null,
+    lookupTermOverride: String? = null
+): AnkiExportResult {
     android.util.Log.d(
         "AnkiExportDebug",
         "mainExport start term=${entry.term} dict=${entry.dictionary} groupedCount=${groupedDictionaries.size} grouped=${groupedDictionaries.joinToString("|") { it.dictionary }}"
@@ -4470,8 +4554,11 @@ private fun addLookupDefinitionToAnkiMain(
         lookupAudioUri = lookupAudioUri
     )
 
+    val exportWord = popupSelectionText?.trim()?.takeIf { it.isNotBlank() }
+        ?: lookupTermOverride?.trim()?.takeIf { it.isNotBlank() }
+        ?: entry.term
     val card = MinedCard(
-        word = entry.term,
+        word = exportWord,
         popupSelectionText = popupSelectionText,
         sentence = cue.text,
         bookTitle = bookTitle,
@@ -4502,7 +4589,7 @@ private fun addLookupDefinitionToAnkiMain(
         "mainExport card word=${card.word} primaryDict=${card.dictionaryName.orEmpty()} glossaryByDict=${card.glossaryByDictionary.joinToString("|") { "${it.dictionaryName}:${it.definitions.size}" }}"
     )
 
-    exportToAnkiDroidApi(context, card, preparedExport.config)
+    return exportToAnkiDroidApiResult(context, card, preparedExport.config)
 }
 
 private fun buildMinedCard(

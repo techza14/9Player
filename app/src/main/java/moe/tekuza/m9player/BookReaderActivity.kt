@@ -206,6 +206,7 @@ class BookReaderActivity : AppCompatActivity() {
         val coverUri = intent.getStringExtra(EXTRA_COVER_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
         val uiTestMode = intent.getBooleanExtra(EXTRA_UI_TEST_MODE, false)
         isUiTestMode = uiTestMode
+        BookReaderFloatingBridge.setUiTestModeActive(uiTestMode)
         val title = intent.getStringExtra(EXTRA_BOOK_TITLE).orEmpty()
         currentAudioUriForBridge = audioUri?.toString()
         if (!uiTestMode) {
@@ -229,28 +230,32 @@ class BookReaderActivity : AppCompatActivity() {
                             ?: detectConnectedControllerInfo(this)?.address
                     },
                     onBack = { currentPositionMs, currentDurationMs ->
-                        val playbackKey = buildBookReaderPlaybackKey(title, audioUri, srtUri)
-                        val normalized = normalizeBookReaderPlaybackPosition(
-                            currentPositionMs,
-                            currentDurationMs
-                        )
-                        saveBookReaderPlaybackPosition(
-                            context = this,
-                            bookKey = playbackKey,
-                            positionMs = normalized,
-                            durationMs = currentDurationMs.coerceAtLeast(0L)
-                        )
-                        val intent = Intent(this, MainActivity::class.java).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                            putExtra(EXTRA_RETURN_AUDIO_URI, audioUri?.toString())
-                            putExtra(EXTRA_RETURN_SRT_URI, srtUri?.toString())
-                            putExtra(EXTRA_RETURN_POSITION_MS, normalized)
-                            putExtra(EXTRA_RETURN_DURATION_MS, currentDurationMs.coerceAtLeast(0L))
+                        if (uiTestMode) {
+                            finish()
+                        } else {
+                            val playbackKey = buildBookReaderPlaybackKey(title, audioUri, srtUri)
+                            val normalized = normalizeBookReaderPlaybackPosition(
+                                currentPositionMs,
+                                currentDurationMs
+                            )
+                            saveBookReaderPlaybackPosition(
+                                context = this,
+                                bookKey = playbackKey,
+                                positionMs = normalized,
+                                durationMs = currentDurationMs.coerceAtLeast(0L)
+                            )
+                            val intent = Intent(this, MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                                putExtra(EXTRA_RETURN_AUDIO_URI, audioUri?.toString())
+                                putExtra(EXTRA_RETURN_SRT_URI, srtUri?.toString())
+                                putExtra(EXTRA_RETURN_POSITION_MS, normalized)
+                                putExtra(EXTRA_RETURN_DURATION_MS, currentDurationMs.coerceAtLeast(0L))
+                            }
+                            // Exiting reader should immediately surface overlay controls.
+                            startAudiobookFloatingOverlayService(this)
+                            startActivity(intent)
                         }
-                        // Exiting reader should immediately surface overlay controls.
-                        startAudiobookFloatingOverlayService(this)
-                        startActivity(intent)
                     }
                 )
             }
@@ -266,6 +271,7 @@ class BookReaderActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
+        if (isUiTestMode) return
         val settings = loadAudiobookSettingsConfig(this)
         floatingOverlayStartJob?.cancel()
         val overlayEnabled = settings.floatingOverlayEnabled || settings.floatingOverlaySubtitleEnabled
@@ -289,6 +295,9 @@ class BookReaderActivity : AppCompatActivity() {
     override fun onDestroy() {
         floatingOverlayStartJob?.cancel()
         floatingOverlayStartJob = null
+        if (isUiTestMode) {
+            BookReaderFloatingBridge.setUiTestModeActive(false)
+        }
         if (!isUiTestMode) {
             if (activeReaderRef?.get() === this) {
                 activeReaderRef = null
@@ -1132,7 +1141,9 @@ private fun BookReaderScreen(
         favoriteCueKey?.let { collectedCueKeys.contains(it) } == true
     }
     LaunchedEffect(favoriteCueCollected) {
-        BookReaderFloatingBridge.notifyFavoriteState(favoriteCueCollected)
+        if (!uiTestMode) {
+            BookReaderFloatingBridge.notifyFavoriteState(favoriteCueCollected)
+        }
     }
 
     LaunchedEffect(audioChapters.size) {
@@ -1142,6 +1153,7 @@ private fun BookReaderScreen(
     }
 
     LaunchedEffect(playbackPositionKey, player, isPlaying, playbackRestoreCompleted) {
+        if (uiTestMode) return@LaunchedEffect
         if (playbackPositionKey.isBlank()) return@LaunchedEffect
         if (!playbackRestoreCompleted) return@LaunchedEffect
         var lastSavedPosition = Long.MIN_VALUE
@@ -1172,6 +1184,7 @@ private fun BookReaderScreen(
 
     DisposableEffect(playbackPositionKey, player, playbackRestoreCompleted) {
         onDispose {
+            if (uiTestMode) return@onDispose
             if (!playbackRestoreCompleted) return@onDispose
             val current = player.currentPosition.coerceAtLeast(0L)
             val total = if (player.duration > 0L) player.duration else 0L
@@ -2147,7 +2160,9 @@ private fun BookReaderScreen(
             val targetCue = cues.getOrNull(targetIndex)
             if (targetCue != null && targetCue.endMs > targetCue.startMs) {
                 cueLoopWindow = targetCue.startMs to targetCue.endMs
-                BookReaderFloatingBridge.notifyCueLoopState(true)
+                if (!uiTestMode) {
+                    BookReaderFloatingBridge.notifyCueLoopState(true)
+                }
                 Log.d(
                     BOOK_CUE_LOOP_LOG_TAG,
                     "seekPrevious update loop window=${targetCue.startMs}-${targetCue.endMs}"
@@ -2167,7 +2182,9 @@ private fun BookReaderScreen(
             val targetCue = cues.getOrNull(targetIndex)
             if (targetCue != null && targetCue.endMs > targetCue.startMs) {
                 cueLoopWindow = targetCue.startMs to targetCue.endMs
-                BookReaderFloatingBridge.notifyCueLoopState(true)
+                if (!uiTestMode) {
+                    BookReaderFloatingBridge.notifyCueLoopState(true)
+                }
                 Log.d(
                     BOOK_CUE_LOOP_LOG_TAG,
                     "seekNext update loop window=${targetCue.startMs}-${targetCue.endMs}"
@@ -2670,7 +2687,15 @@ private fun BookReaderScreen(
                             }
                             if (uiTestMode) {
                                 DropdownMenuItem(
-                                    text = { Text(if (uiTestChapterVisible) "章节关" else "章节开") },
+                                    text = {
+                                        Text(
+                                            if (uiTestChapterVisible) {
+                                                stringResource(R.string.bookreader_ui_test_chapter_off)
+                                            } else {
+                                                stringResource(R.string.bookreader_ui_test_chapter_on)
+                                            }
+                                        )
+                                    },
                                     onClick = {
                                         uiTestChapterVisible = !uiTestChapterVisible
                                         saveUiChapterVisible(context, uiTestChapterVisible)
@@ -2679,7 +2704,7 @@ private fun BookReaderScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("布局模式: ${uiTestLayoutMode}/2") },
+                                    text = { Text(stringResource(R.string.bookreader_ui_test_layout_mode, uiTestLayoutMode)) },
                                     onClick = {
                                         val next = if (uiTestLayoutMode == 1) 2 else 1
                                         if (readerUiWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
@@ -2695,7 +2720,15 @@ private fun BookReaderScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text(if (uiTestSwapPrevNext) "前进/后退: 已交换" else "前进/后退: 正常") },
+                                    text = {
+                                        Text(
+                                            if (uiTestSwapPrevNext) {
+                                                stringResource(R.string.bookreader_ui_test_swap_swapped)
+                                            } else {
+                                                stringResource(R.string.bookreader_ui_test_swap_normal)
+                                            }
+                                        )
+                                    },
                                     onClick = {
                                         val next = !uiTestSwapPrevNext
                                         if (readerUiWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
@@ -3659,7 +3692,7 @@ private fun LeftVerticalControlRail(
                     IconButton(onClick = onPrevious, modifier = Modifier.size(40.dp)) {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_overlay_previous),
-                            contentDescription = "Previous"
+                            contentDescription = stringResource(R.string.controller_previous)
                         )
                     }
                     IconButton(onClick = onPlayPause, modifier = Modifier.size(40.dp)) {
@@ -3667,13 +3700,17 @@ private fun LeftVerticalControlRail(
                             painter = painterResource(
                                 id = if (isPlaying) R.drawable.ic_overlay_pause else R.drawable.ic_overlay_play
                             ),
-                            contentDescription = if (isPlaying) "Pause" else "Play"
+                            contentDescription = if (isPlaying) {
+                                stringResource(R.string.common_pause)
+                            } else {
+                                stringResource(R.string.common_play)
+                            }
                         )
                     }
                     IconButton(onClick = onNext, modifier = Modifier.size(40.dp)) {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_overlay_next),
-                            contentDescription = "Next"
+                            contentDescription = stringResource(R.string.controller_next)
                         )
                     }
                 }

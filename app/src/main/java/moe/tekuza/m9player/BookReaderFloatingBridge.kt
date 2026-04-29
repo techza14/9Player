@@ -66,6 +66,8 @@ object BookReaderFloatingBridge {
     @Volatile
     private var currentAudioUriSnapshot: String? = null
     @Volatile
+    private var uiTestModeSnapshot: Boolean = false
+    @Volatile
     private var subtitleSnapshot: String? = null
     @Volatile
     private var cueSnapshot: CueSnapshot? = null
@@ -201,6 +203,7 @@ object BookReaderFloatingBridge {
     fun isPlaying(): Boolean = playingSnapshot
     fun isFavorite(): Boolean = favoriteSnapshot
     fun currentAudioUri(): String? = currentAudioUriSnapshot
+    fun isUiTestModeActive(): Boolean = uiTestModeSnapshot
     fun currentSubtitle(): String? = subtitleSnapshot
     fun currentCue(): CueSnapshot? = cueSnapshot
     fun hasSubtitleTrack(): Boolean = subtitleTrackAvailableSnapshot
@@ -211,6 +214,15 @@ object BookReaderFloatingBridge {
     fun setCurrentAudioUri(audioUri: String?) {
         synchronized(this) {
             currentAudioUriSnapshot = audioUri?.takeIf { it.isNotBlank() }
+        }
+    }
+
+    fun setUiTestModeActive(active: Boolean) {
+        synchronized(this) {
+            uiTestModeSnapshot = active
+            if (active) {
+                currentAudioUriSnapshot = null
+            }
         }
     }
 

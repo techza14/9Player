@@ -189,6 +189,7 @@ private fun explainAnkiCatalogLoadFailure(context: Context, error: Throwable): S
             val message = error.message?.trim().orEmpty()
             if (message.isBlank()) context.getString(R.string.anki_load_failed) else message
         }
+        is AnkiExportResult.DuplicateSkipped -> result.message
         AnkiExportResult.Added -> context.getString(R.string.anki_load_failed)
     }
 }

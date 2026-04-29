@@ -38,10 +38,13 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.nio.ByteBuffer
+import java.text.Normalizer
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 internal data class AnkiModelTemplate(
     val id: Long,
@@ -68,6 +71,9 @@ internal data class PreparedAnkiExport(
 
 internal sealed interface AnkiExportResult {
     data object Added : AnkiExportResult
+    data class DuplicateSkipped(
+        val message: String
+    ) : AnkiExportResult
     data class NotAvailable(
         val state: AnkiAvailabilityState,
         val message: String
@@ -87,6 +93,11 @@ private data class StagedAnkiAudio(
     val cleanup: () -> Unit
 )
 
+internal enum class ExportAnkiOutcome {
+    ADDED,
+    DUPLICATE_SKIPPED
+}
+
 private val TEMPLATE_VARIABLE_REGEX = Regex("\\{([^{}]+)\\}")
 private val SINGLE_GLOSSARY_DICT_MARKER_REGEX = Regex("\\{single-glossary-([^{}]+)\\}", RegexOption.IGNORE_CASE)
 private val SINGLE_FREQUENCY_NUMBER_DICT_MARKER_REGEX =
@@ -103,6 +114,36 @@ private val ANKI_URI_SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
 private val ANKI_IMG_SRC_IN_TAG_REGEX = Regex("(?is)\\bsrc\\s*=\\s*(['\"])(.*?)\\1")
 private const val ANKI_AUDIO_LOG_TAG = "AnkiAudio"
 private const val ANKI_EXPORT_DEBUG_TAG = "AnkiExportDebug"
+private val CORE_GLOSSARY_VARIABLES = setOf(
+    "definitions",
+    "definition",
+    "glossary",
+    "glossary-no-dictionary",
+    "glossary-first",
+    "glossary-first-brief",
+    "glossary-first-no-dictionary",
+    "glossary-brief",
+    "glossary-plain",
+    "glossary-plain-no-dictionary"
+)
+private val SINGLE_GLOSSARY_VARIABLES = setOf(
+    "single-glossary",
+    "single-glossary-brief",
+    "single-glossary-no-dictionary"
+)
+private val CLOZE_VARIABLES = setOf("cloze-prefix", "cloze-body", "cloze-body-kana", "cloze-suffix")
+private val FURIGANA_VARIABLES = setOf("furigana", "furigana-plain", "expression-furigana")
+private val PITCH_VARIABLES = setOf("pitch", "pitch-accents", "pitch-accent-positions", "pitch-accent-categories")
+private val FREQUENCY_VARIABLES = setOf(
+    "frequency",
+    "frequencies",
+    "single-frequency",
+    "single-frequency-number",
+    "frequency-harmonic-rank",
+    "frequency-harmonic-occurrence",
+    "frequency-average-rank",
+    "frequency-average-occurrence"
+)
 
 internal fun loadAnkiCatalog(context: Context): AnkiCatalog {
     ankiAvailabilityErrorMessage(context, requirePermission = true)?.let(::error)
@@ -209,7 +250,7 @@ internal fun exportToAnkiDroidApi(
     context: Context,
     card: MinedCard,
     config: AnkiExportConfig
-) {
+): ExportAnkiOutcome {
     Log.d(
         ANKI_EXPORT_DEBUG_TAG,
         "export start word=${card.word} primaryDict=${card.dictionaryName.orEmpty()} glossaryByDictCount=${card.glossaryByDictionary.size} model=${config.modelName} deck=${config.deckName}"
@@ -237,6 +278,11 @@ internal fun exportToAnkiDroidApi(
     val requiresLookupAudio = templatesByField.values.any {
         templateUsesVariable(it, "audio")
     }
+    val requiredMarkers = extractRequiredTemplateMarkers(
+        templatesByField.values,
+        includeCutAudio = requiresCutAudio,
+        includeLookupAudio = requiresLookupAudio
+    )
 
     val variables = runCatching {
         buildAnkiVariables(
@@ -244,7 +290,8 @@ internal fun exportToAnkiDroidApi(
             api = api,
             card = card,
             includeCutAudio = requiresCutAudio,
-            includeLookupAudio = requiresLookupAudio
+            includeLookupAudio = requiresLookupAudio,
+            requiredMarkers = requiredMarkers
         )
     }.getOrElse { throwable ->
         error("Anki variable build failed. ${throwableDetail(throwable)}")
@@ -255,10 +302,17 @@ internal fun exportToAnkiDroidApi(
     )
 
     val fieldValues = runCatching {
+        val mediaSrcCache = mutableMapOf<String, String>()
         model.fields.map { fieldName ->
             val template = templatesByField[fieldName].orEmpty()
-            val value = resolveTemplate(template, variables).trim()
-            value
+            val rendered = resolveTemplate(template, variables).trim()
+            rewriteHtmlForAnkiExport(
+                context = context,
+                api = api,
+                html = rendered,
+                sourceLabel = "field:$fieldName",
+                mediaSrcCache = mediaSrcCache
+            )
         }.toTypedArray()
     }.getOrElse { throwable ->
         error("Anki field rendering failed for model '${model.name}'. ${throwableDetail(throwable)}")
@@ -272,6 +326,26 @@ internal fun exportToAnkiDroidApi(
     )
 
     val tags = config.tags
+    val duplicateConfig = loadAnkiDuplicateConfig(context)
+    val duplicateKey = normalizeAnkiDuplicateKey(card.word)
+    if (duplicateConfig.enabled && duplicateKey.isNotBlank()) {
+        val hasDuplicate = runCatching {
+            val duplicateNotes = api.findDuplicateNotes(model.id, listOf(duplicateKey))
+            duplicateNotes != null && duplicateNotes.size() > 0
+        }.getOrDefault(false)
+        if (hasDuplicate) {
+            Log.d(
+                ANKI_EXPORT_DEBUG_TAG,
+                "export duplicate hit action=${duplicateConfig.action} scope=${duplicateConfig.scope} model=${model.name} key=${duplicateKey.take(80)}"
+            )
+            when (duplicateConfig.action.lowercase(Locale.ROOT)) {
+                "add" -> Unit
+                "prevent" -> return ExportAnkiOutcome.DUPLICATE_SKIPPED
+                else -> return ExportAnkiOutcome.DUPLICATE_SKIPPED
+            }
+        }
+    }
+
     val noteId = runCatching {
         api.addNote(model.id, deckId, fieldValues, tags)
     }.getOrElse { throwable ->
@@ -292,6 +366,15 @@ internal fun exportToAnkiDroidApi(
         }
         error("AnkiDroid rejected the note. Check model fields and templates.$detail")
     }
+    return ExportAnkiOutcome.ADDED
+}
+
+internal fun normalizeAnkiDuplicateKey(raw: String?): String {
+    val normalized = Normalizer.normalize(raw.orEmpty(), Normalizer.Form.NFKC)
+    return normalized
+        .replace(Regex("[\\u200B-\\u200D\\uFEFF]"), "")
+        .replace(Regex("\\s+"), " ")
+        .trim()
 }
 
 internal fun exportToAnkiDroidApiResult(
@@ -300,11 +383,42 @@ internal fun exportToAnkiDroidApiResult(
     config: AnkiExportConfig
 ): AnkiExportResult {
     return try {
-        exportToAnkiDroidApi(context, card, config)
-        AnkiExportResult.Added
+        when (exportToAnkiDroidApi(context, card, config)) {
+            ExportAnkiOutcome.ADDED -> AnkiExportResult.Added
+            ExportAnkiOutcome.DUPLICATE_SKIPPED -> {
+                AnkiExportResult.DuplicateSkipped(context.getString(R.string.anki_toast_duplicate_skipped))
+            }
+        }
     } catch (error: Throwable) {
         classifyAnkiExportFailure(context, error)
     }
+}
+
+internal suspend fun exportToAnkiDroidApiResultAsync(
+    context: Context,
+    card: MinedCard,
+    config: AnkiExportConfig
+): AnkiExportResult = withContext(Dispatchers.IO) {
+    exportToAnkiDroidApiResult(context, card, config)
+}
+
+internal suspend fun hasAnkiDuplicateByFirstFieldAsync(
+    context: Context,
+    firstFieldValue: String
+): Boolean = withContext(Dispatchers.IO) {
+    val key = normalizeAnkiDuplicateKey(firstFieldValue)
+    if (key.isBlank()) return@withContext false
+    if (detectAnkiAvailability(context, requirePermission = true) != AnkiAvailabilityState.READY) {
+        return@withContext false
+    }
+    runCatching {
+        val persisted = loadPersistedAnkiConfig(context)
+        if (persisted.modelName.isBlank()) return@runCatching false
+        val api = AddContentApi(context)
+        val model = findModel(api, persisted.modelName) ?: return@runCatching false
+        val duplicateNotes = api.findDuplicateNotes(model.id, listOf(key))
+        duplicateNotes != null && duplicateNotes.size() > 0
+    }.getOrDefault(false)
 }
 
 internal fun prepareAnkiExportResult(
@@ -321,6 +435,15 @@ internal fun prepareAnkiExportResult(
             lookupAudioUri = lookupAudioUri
         )
     }
+}
+
+internal suspend fun prepareAnkiExportResultAsync(
+    context: Context,
+    persistedConfig: PersistedAnkiConfig,
+    audioUri: Uri?,
+    lookupAudioUri: Uri?
+): Result<PreparedAnkiExport> = withContext(Dispatchers.IO) {
+    prepareAnkiExportResult(context, persistedConfig, audioUri, lookupAudioUri)
 }
 
 private fun findOrCreateDeckId(api: AddContentApi, deckNameRaw: String): Long {
@@ -382,48 +505,107 @@ private fun buildAnkiVariables(
     api: AddContentApi,
     card: MinedCard,
     includeCutAudio: Boolean,
-    includeLookupAudio: Boolean
+    includeLookupAudio: Boolean,
+    requiredMarkers: RequiredTemplateMarkers
 ): Map<String, String> {
-    val glossarySources = buildMinedCardGlossarySources(card)
+    val glossarySources = if (requiredMarkers.needsAny(CORE_GLOSSARY_VARIABLES) ||
+        requiredMarkers.needsAny(SINGLE_GLOSSARY_VARIABLES) ||
+        requiredMarkers.singleGlossaryTokens.isNotEmpty()
+    ) {
+        buildMinedCardGlossarySources(card)
+    } else {
+        emptyList()
+    }
     Log.d(
         ANKI_EXPORT_DEBUG_TAG,
         "variables sources count=${glossarySources.size} names=${glossarySources.joinToString(separator = "|") { "${it.dictionaryName}:${it.definitions.size}" }}"
     )
     val primaryGlossarySource = selectPrimaryGlossarySource(card, glossarySources)
-    val dictionaryName = primaryGlossarySource?.dictionaryName.orEmpty()
-    val glossaryHtml = buildStyledGlossaryFromSources(glossarySources)
-    val allDefinitions = glossarySources.flatMap { it.definitions }
-    val glossaryFirst = allDefinitions.firstOrNull().orEmpty()
-    val glossaryNoDictionary = allDefinitions.joinToString("<br>")
-    val glossaryPlain = allDefinitions.joinToString("\n")
-    val singleGlossaryHtml = primaryGlossarySource?.let { source ->
-        buildStyledGlossary(
-            definitions = source.definitions,
-            dictionaryName = source.dictionaryName,
-            dictionaryCss = source.dictionaryCss
-        )
-    }.orEmpty()
-    val singleGlossaryFirst = primaryGlossarySource?.definitions?.firstOrNull().orEmpty()
-    val singleGlossaryNoDictionary = primaryGlossarySource?.definitions?.joinToString("<br>").orEmpty()
+    val dictionaryName = if (requiredMarkers.needs("dictionary-name", "dictionary", "dictionary-alias")) {
+        primaryGlossarySource?.dictionaryName.orEmpty()
+    } else {
+        ""
+    }
+    val glossaryHtml = if (requiredMarkers.needsAny(CORE_GLOSSARY_VARIABLES)) {
+        buildStyledGlossaryFromSources(glossarySources)
+    } else {
+        ""
+    }
+    val allDefinitions = if (requiredMarkers.needsAny(CORE_GLOSSARY_VARIABLES)) {
+        glossarySources.flatMap { it.definitions }
+    } else {
+        emptyList()
+    }
+    val glossaryFirst = if (requiredMarkers.needs("glossary-first-brief", "glossary-brief")) {
+        allDefinitions.firstOrNull().orEmpty()
+    } else {
+        ""
+    }
+    val glossaryNoDictionary = if (requiredMarkers.needs("glossary-no-dictionary")) {
+        allDefinitions.joinToString("<br>")
+    } else {
+        ""
+    }
+    val glossaryPlain = if (requiredMarkers.needs("glossary-plain", "glossary-plain-no-dictionary")) {
+        allDefinitions.joinToString("\n")
+    } else {
+        ""
+    }
+    val singleGlossaryHtml = if (requiredMarkers.needsAny(SINGLE_GLOSSARY_VARIABLES) ||
+        requiredMarkers.needs("glossary-first")
+    ) {
+        primaryGlossarySource?.let { source ->
+            buildStyledGlossary(
+                definitions = source.definitions,
+                dictionaryName = source.dictionaryName,
+                dictionaryCss = source.dictionaryCss
+            )
+        }.orEmpty()
+    } else {
+        ""
+    }
+    val singleGlossaryFirst = if (requiredMarkers.needs("single-glossary-brief")) {
+        primaryGlossarySource?.definitions?.firstOrNull().orEmpty()
+    } else {
+        ""
+    }
+    val singleGlossaryNoDictionary = if (requiredMarkers.needs("single-glossary-no-dictionary", "glossary-first-no-dictionary")) {
+        primaryGlossarySource?.definitions?.joinToString("<br>").orEmpty()
+    } else {
+        ""
+    }
     // Hoshi parity: glossary-first is the first dictionary's full glossary HTML.
     val styledGlossaryFirst = singleGlossaryHtml
-    val cutAudio = if (includeCutAudio) {
+    val cutAudio = if (includeCutAudio && requiredMarkers.needs("cut-audio")) {
         attachAudio(api, context, card).orEmpty()
     } else {
         ""
     }
-    val lookupAudio = if (includeLookupAudio) {
+    val lookupAudio = if (includeLookupAudio && requiredMarkers.needs("audio")) {
         attachLookupAudio(api, context, card.lookupAudioUri).orEmpty()
     } else {
         ""
     }
-    val popupSelectionText = card.popupSelectionText?.trim().orEmpty()
-    val clozeTarget = popupSelectionText.ifBlank { card.word }
-    val (clozePrefix, clozeBody, clozeSuffix) = splitCloze(card.sentence, clozeTarget)
-    val frequencyNumber = extractFirstNumber(card.frequency)
-    val expressionFurigana = buildExpressionFurigana(card.word, card.reading)
-    val singleFrequency = card.frequency.orEmpty()
-    val resolvedBookTitle = resolveBookTitle(context, card)
+    val popupSelectionText = if (requiredMarkers.needs("popup-selection-text")) {
+        card.popupSelectionText?.trim().orEmpty().ifBlank { card.word }
+    } else {
+        ""
+    }
+    val (clozePrefix, clozeBody, clozeSuffix) = if (requiredMarkers.needsAny(CLOZE_VARIABLES)) {
+        val clozeTarget = (card.popupSelectionText?.trim().orEmpty()).ifBlank { card.word }
+        splitCloze(card.sentence, clozeTarget)
+    } else {
+        Triple("", "", "")
+    }
+    val needsFrequency = requiredMarkers.needsAny(FREQUENCY_VARIABLES)
+    val frequencyNumber = if (needsFrequency) extractFirstNumber(card.frequency) else ""
+    val expressionFurigana = if (requiredMarkers.needsAny(FURIGANA_VARIABLES)) {
+        buildExpressionFurigana(card.word, card.reading)
+    } else {
+        ""
+    }
+    val singleFrequency = if (needsFrequency) card.frequency.orEmpty() else ""
+    val resolvedBookTitle = if (requiredMarkers.needs("book-title")) resolveBookTitle(context, card) else ""
 
     val variables = mutableMapOf(
         "expression" to card.word,
@@ -471,34 +653,66 @@ private fun buildAnkiVariables(
         "cut-audio" to cutAudio,
         "book-title" to resolvedBookTitle
     )
-    glossarySources.forEach { source ->
+    if (requiredMarkers.needsAny(SINGLE_GLOSSARY_VARIABLES) || requiredMarkers.singleGlossaryTokens.isNotEmpty()) {
+        glossarySources.forEach { source ->
         val normalizedName = normalizeDictionaryToken(source.dictionaryName)
         if (normalizedName.isBlank()) return@forEach
-        variables[templateSingleGlossaryKey("single-glossary", normalizedName)] = buildStyledGlossary(
-            definitions = source.definitions,
-            dictionaryName = source.dictionaryName,
-            dictionaryCss = source.dictionaryCss
-        )
-        variables[templateSingleGlossaryKey("single-glossary-brief", normalizedName)] =
-            source.definitions.firstOrNull().orEmpty()
-        variables[templateSingleGlossaryKey("single-glossary-no-dictionary", normalizedName)] =
-            source.definitions.joinToString("<br>")
+        if (requiredMarkers.needs("single-glossary") || requiredMarkers.singleGlossaryTokens.contains(normalizedName)) {
+            variables[templateSingleGlossaryKey("single-glossary", normalizedName)] = buildStyledGlossary(
+                definitions = source.definitions,
+                dictionaryName = source.dictionaryName,
+                dictionaryCss = source.dictionaryCss
+            )
+        }
+        if (requiredMarkers.needs("single-glossary-brief") || requiredMarkers.singleGlossaryTokens.contains(normalizedName)) {
+            variables[templateSingleGlossaryKey("single-glossary-brief", normalizedName)] =
+                source.definitions.firstOrNull().orEmpty()
+        }
+        if (requiredMarkers.needs("single-glossary-no-dictionary") || requiredMarkers.singleGlossaryTokens.contains(normalizedName)) {
+            variables[templateSingleGlossaryKey("single-glossary-no-dictionary", normalizedName)] =
+                source.definitions.joinToString("<br>")
+        }
     }
-    val mediaSrcCache = mutableMapOf<String, String>()
-    variables.replaceAll { key, value ->
-        rewriteHtmlForAnkiExport(
-            context = context,
-            api = api,
-            html = value,
-            sourceLabel = key,
-            mediaSrcCache = mediaSrcCache
-        )
     }
     Log.d(
         ANKI_EXPORT_DEBUG_TAG,
         "variables done primary=${primaryGlossarySource?.dictionaryName.orEmpty()} dynamicSingleKeys=${variables.keys.count { it.startsWith("__single-glossary::") }}"
     )
     return variables
+}
+
+private data class RequiredTemplateMarkers(
+    val keys: Set<String>,
+    val singleGlossaryTokens: Set<String>
+) {
+    fun needsAny(names: Set<String>): Boolean = names.any { keys.contains(it) }
+    fun needs(vararg names: String): Boolean = names.any { keys.contains(it) }
+}
+
+private fun extractRequiredTemplateMarkers(
+    templates: Collection<String>,
+    includeCutAudio: Boolean,
+    includeLookupAudio: Boolean
+): RequiredTemplateMarkers {
+    val normalizedKeys = linkedSetOf<String>()
+    val singleGlossaryTokens = linkedSetOf<String>()
+    templates.forEach { template ->
+        TEMPLATE_VARIABLE_REGEX.findAll(template).forEach { match ->
+            val raw = match.groupValues.getOrNull(1)?.trim().orEmpty()
+            if (raw.isBlank()) return@forEach
+            normalizedKeys += raw.lowercase(Locale.ROOT)
+        }
+        SINGLE_GLOSSARY_DICT_MARKER_REGEX.findAll(template).forEach { match ->
+            val token = normalizeDictionaryToken(match.groupValues.getOrNull(1).orEmpty())
+            if (token.isNotBlank()) singleGlossaryTokens += token
+        }
+    }
+    if (includeCutAudio) normalizedKeys += "cut-audio"
+    if (includeLookupAudio) normalizedKeys += "audio"
+    return RequiredTemplateMarkers(
+        keys = normalizedKeys,
+        singleGlossaryTokens = singleGlossaryTokens
+    )
 }
 
 private fun rewriteHtmlForAnkiExport(
@@ -912,6 +1126,7 @@ internal fun ankiExportResultMessage(
 ): String {
     return when (result) {
         AnkiExportResult.Added -> context.getString(R.string.anki_toast_added)
+        is AnkiExportResult.DuplicateSkipped -> result.message
         is AnkiExportResult.NotAvailable -> result.message
         is AnkiExportResult.InvalidConfig -> result.message
         is AnkiExportResult.Failed -> result.message

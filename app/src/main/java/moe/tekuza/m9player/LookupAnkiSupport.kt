@@ -16,7 +16,8 @@ internal fun addLookupDefinitionToAnkiShared(
     dictionaryCss: String?,
     groupedDictionaries: List<GroupedLookupDictionary> = emptyList(),
     popupSelectionText: String? = null,
-    sentenceOverride: String? = null
+    sentenceOverride: String? = null,
+    lookupTermOverride: String? = null
 ): AnkiExportResult {
     android.util.Log.d(
         "AnkiExportDebug",
@@ -36,8 +37,11 @@ internal fun addLookupDefinitionToAnkiShared(
         return classifyAnkiExportFailure(context, error)
     }
 
+    val exportWord = popupSelectionText?.trim()?.takeIf { it.isNotBlank() }
+        ?: lookupTermOverride?.trim()?.takeIf { it.isNotBlank() }
+        ?: entry.term
     val card = MinedCard(
-        word = entry.term,
+        word = exportWord,
         popupSelectionText = popupSelectionText,
         sentence = sentenceOverride ?: cueText,
         bookTitle = bookTitle,
