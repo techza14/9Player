@@ -35,6 +35,7 @@ internal fun SettingsPanel(
     versionName: String,
     onAudiobookClick: () -> Unit,
     onControlModeClick: () -> Unit,
+    onAudiobookUiClick: () -> Unit,
     onControllerClick: () -> Unit,
     onAnkiClick: () -> Unit,
     onAdvancedOverlayClick: () -> Unit,
@@ -60,6 +61,12 @@ internal fun SettingsPanel(
                 icon = Icons.Outlined.MenuBook,
                 title = stringResource(R.string.settings_control_mode_title),
                 onClick = onControlModeClick
+            )
+            SettingsListItem(
+                icon = Icons.Outlined.AutoStories,
+                title = stringResource(R.string.settings_audiobook_ui_title),
+                subtitle = stringResource(R.string.settings_audiobook_ui_subtitle),
+                onClick = onAudiobookUiClick
             )
             SettingsListItem(
                 icon = Icons.Outlined.SportsEsports,

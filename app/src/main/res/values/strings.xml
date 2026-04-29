@@ -41,6 +41,8 @@
     <string name="settings_section_about">关于</string>
     <string name="settings_audiobook_title">有声书</string>
     <string name="settings_control_mode_title">控制模式</string>
+    <string name="settings_audiobook_ui_title">有声书界面</string>
+    <string name="settings_audiobook_ui_subtitle">调整播放界面布局与字幕方向</string>
     <string name="settings_controller_title">手柄</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX</string>
@@ -293,6 +295,16 @@
     <string name="audiobook_overlay_subtitle_writing_mode">字幕书写方向</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">横书</string>
     <string name="audiobook_overlay_subtitle_writing_mode_vertical_rtl">纵书</string>
+    <string name="audiobook_ui_preview_title">界面预览</string>
+    <string name="audiobook_ui_preview_subtitle">第一步：先显示标准有声书播放界面，后续再接入拖动与保存。</string>
+    <string name="audiobook_ui_play_button_side">播放键位置</string>
+    <string name="audiobook_ui_play_button_side_hint">先保留选项，下一步会把它接入真实阅读器播放条。</string>
+    <string name="audiobook_ui_preview_text">这是有声书字幕预览</string>
+    <string name="audiobook_ui_open_preview">打开当前有声书界面预览</string>
+    <string name="audiobook_ui_open_preview_hint">这里将直接复用现有阅读器界面，不再单独重画一套 UI。</string>
+    <string name="audiobook_ui_open_preview_need_active_book">请先打开一本有声书，再返回这里预览。</string>
+    <string name="audiobook_ui_not_applied_yet">播放键左右位置配置已记录，下一步接入真实播放条。</string>
+    <string name="audiobook_ui_writing_mode_saved">已保存字幕方向设置。</string>
     <string name="audiobook_unknown_file">未知文件</string>
     <string name="audiobook_import_stage_copy">复制文件...</string>
     <string name="audiobook_import_stage_validate">校验数据库...</string>

@@ -38,6 +38,8 @@
     <string name="settings_section_about">關於</string>
     <string name="settings_audiobook_title">有聲書</string>
     <string name="settings_control_mode_title">控制模式</string>
+    <string name="settings_audiobook_ui_title">有聲書介面</string>
+    <string name="settings_audiobook_ui_subtitle">調整播放介面佈局與字幕方向</string>
     <string name="settings_controller_title">手柄</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX</string>
@@ -286,6 +288,10 @@
     <string name="audiobook_overlay_subtitle_writing_mode">字幕書寫方向</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">橫書</string>
     <string name="audiobook_overlay_subtitle_writing_mode_vertical_rtl">縱書</string>
+    <string name="audiobook_ui_preview_title">介面預覽</string>
+    <string name="audiobook_ui_preview_subtitle">第一步：先顯示標準有聲書播放介面，之後再接拖動與保存。</string>
+    <string name="audiobook_ui_play_button_side">播放鍵位置</string>
+    <string name="audiobook_ui_preview_text">這是有聲書字幕預覽</string>
     <string name="audiobook_unknown_file">未知檔案</string>
     <string name="audiobook_import_stage_copy">複製檔案中...</string>
     <string name="audiobook_import_stage_validate">驗證資料庫中...</string>

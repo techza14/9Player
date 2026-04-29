@@ -38,6 +38,8 @@
     <string name="settings_section_about">情報</string>
     <string name="settings_audiobook_title">オーディオブック</string>
     <string name="settings_control_mode_title">コントロールモード</string>
+    <string name="settings_audiobook_ui_title">オーディオブックUI</string>
+    <string name="settings_audiobook_ui_subtitle">再生レイアウトと字幕方向を調整</string>
     <string name="settings_controller_title">コントローラー</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX</string>
@@ -286,6 +288,10 @@
     <string name="audiobook_overlay_subtitle_writing_mode">字幕表示方向</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">横書き</string>
     <string name="audiobook_overlay_subtitle_writing_mode_vertical_rtl">縦書き</string>
+    <string name="audiobook_ui_preview_title">プレビュー</string>
+    <string name="audiobook_ui_preview_subtitle">第一段階：通常のオーディオブック再生UIを表示。ドラッグと保存は次段階で対応。</string>
+    <string name="audiobook_ui_play_button_side">再生ボタン位置</string>
+    <string name="audiobook_ui_preview_text">オーディオブック字幕プレビュー</string>
     <string name="audiobook_unknown_file">不明なファイル</string>
     <string name="audiobook_import_stage_copy">ファイルをコピー中...</string>
     <string name="audiobook_import_stage_validate">データベースを検証中...</string>

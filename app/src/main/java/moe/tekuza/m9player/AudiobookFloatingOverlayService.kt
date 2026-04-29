@@ -17,6 +17,7 @@ import android.provider.Settings
 import android.util.Log
 import android.text.SpannableString
 import android.text.Spanned
+import android.text.TextPaint
 import android.text.TextUtils
 import android.text.style.BackgroundColorSpan
 import android.view.View.MeasureSpec
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.core.text.HtmlCompat
+import androidx.text.vertical.VerticalTextLayout
 import java.util.Locale
 import android.webkit.WebView
 import android.webkit.WebResourceResponse
@@ -52,6 +54,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.roundToInt
 
 private fun hasOverlayPermission(context: Context): Boolean {
     return Settings.canDrawOverlays(context)
@@ -82,6 +87,37 @@ internal fun stopAudiobookFloatingOverlayService(context: Context) {
     context.startService(intent)
 }
 
+private fun normalizeFloatingVerticalPunctuationText(text: String): String {
+    if (text.isEmpty()) return text
+    var changed = false
+    val out = StringBuilder(text.length)
+    text.forEach { ch ->
+        val mapped = when (ch) {
+            ',' -> '\uFE10'
+            '.' -> '\uFE12'
+            ':' -> '\uFE13'
+            ';' -> '\uFE14'
+            '!' -> '\uFE15'
+            '?' -> '\uFE16'
+            '(' -> '\uFE35'
+            ')' -> '\uFE36'
+            '[' -> '\uFE39'
+            ']' -> '\uFE3A'
+            '{' -> '\uFE37'
+            '}' -> '\uFE38'
+            '<' -> '\uFE3F'
+            '>' -> '\uFE40'
+            '\u2025' -> '\uFE30'
+            '\u2026', '\u22EF' -> '\uFE19'
+            '\u203B' -> '\uFE61'
+            else -> ch
+        }
+        if (mapped != ch) changed = true
+        out.append(mapped)
+    }
+    return if (changed) out.toString() else text
+}
+
 class AudiobookFloatingOverlayService : Service() {
 companion object {
         const val ACTION_SHOW = "moe.tekuza.m9player.action.SHOW_FLOATING_OVERLAY"
@@ -92,6 +128,8 @@ companion object {
         private const val FLOATING_LOOKUP_TAP_LOG_TAG = "FloatingLookupTap"
         private const val FLOATING_BUBBLE_LOG_TAG = "FloatingBubblePos"
         private const val FLOATING_SUBTITLE_SCROLL_LOG_TAG = "FloatingSubtitleScroll"
+        private const val FLOATING_SUBTITLE_RENDER_LOG_TAG = "FloatingSubtitleRender"
+        private const val FLOATING_SUBTITLE_HIT_LOG_TAG = "FloatingSubtitleHit"
         private const val SINGLE_FLOATING_HOST_KEY = -1
 }
 
@@ -105,11 +143,15 @@ companion object {
     private var bubbleControlsRow: LinearLayout? = null
     private var bubbleFavoriteButton: ImageButton? = null
     private var bubbleLockButton: ImageButton? = null
+    private var subtitleFrameView: FrameLayout? = null
     private var subtitleTextView: TextView? = null
     private var subtitleOutlineTextView: TextView? = null
     private var subtitleControlsRow: LinearLayout? = null
     private var subtitleSettingsPanel: LinearLayout? = null
     private var subtitleLockButton: ImageButton? = null
+    private var subtitleSettingsButton: ImageButton? = null
+    private var subtitleSettingsFloatingView: FrameLayout? = null
+    private var subtitleSettingsWindowLayoutParams: WindowManager.LayoutParams? = null
     private var windowLayoutParams: WindowManager.LayoutParams? = null
     private var bubbleWindowLayoutParams: WindowManager.LayoutParams? = null
     private var subtitleControlsVisible: Boolean = true
@@ -143,6 +185,489 @@ companion object {
         override fun onInterceptTouchEvent(ev: MotionEvent?): Boolean {
             return interceptAllTouches || super.onInterceptTouchEvent(ev)
         }
+    }
+
+    // Measure only the toolbar child (index 0). Overlay children can extend visually
+    // without changing parent layout size, so subtitle won't be pushed when settings shows.
+    private class OverlayAnchorLayout(context: Context) : FrameLayout(context) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val anchor = getChildAt(0)
+            if (anchor == null) {
+                super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+                return
+            }
+            // 1) Measure anchor with parent specs (defines host size).
+            measureChild(anchor, widthMeasureSpec, heightMeasureSpec)
+            // 2) Measure overlay children unconstrained so popup panel keeps full size.
+            val unconstrainedW = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            val unconstrainedH = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            for (i in 1 until childCount) {
+                measureChild(getChildAt(i), unconstrainedW, unconstrainedH)
+            }
+            setMeasuredDimension(
+                anchor.measuredWidth.coerceAtLeast(suggestedMinimumWidth),
+                anchor.measuredHeight.coerceAtLeast(suggestedMinimumHeight)
+            )
+        }
+    }
+
+    private class VerticalLayoutTextView(context: Context) : TextView(context) {
+        private var verticalEnabled: Boolean = false
+        private var cachedLayout: VerticalTextLayout? = null
+        private var cachedHeight: Int = -1
+        private var cachedText: String = ""
+        private var cachedTextSize: Float = Float.NaN
+        private var cachedTextColor: Int = Color.TRANSPARENT
+        private var cachedTypeface: Typeface? = null
+        private var selectedSourceRange: IntRange? = null
+        private var cachedGridModel: VerticalGridModel? = null
+        private var cachedGridHeight: Int = -1
+        private var cachedGridText: String = ""
+        private var cachedGridTextSize: Float = Float.NaN
+
+        data class VerticalTapResolved(
+            val sourceOffset: Int,
+            val row: Int,
+            val column: Int,
+            val rectInWindow: android.graphics.RectF
+        )
+
+        private data class VerticalGridCell(
+            val sourceOffset: Int,
+            val row: Int,
+            val column: Int
+        )
+
+        private data class VerticalGridModel(
+            val cells: List<VerticalGridCell>,
+            val columnCount: Int,
+            val maxRows: Int,
+            val cellWidth: Float,
+            val cellHeight: Float
+        )
+
+        fun setVerticalLayoutEnabled(enabled: Boolean) {
+            if (verticalEnabled == enabled) return
+            verticalEnabled = enabled
+            clearVerticalCache()
+            clearGridCache()
+            requestLayout()
+            invalidate()
+        }
+
+
+        fun setSelectedSourceRange(range: IntRange?) {
+            if (selectedSourceRange == range) return
+            selectedSourceRange = range
+            invalidate()
+        }
+
+        fun resolveVerticalTap(x: Float, y: Float): VerticalTapResolved? {
+            if (!verticalEnabled) return null
+            val model = buildGridModel(height) ?: return null
+            if (model.cells.isEmpty()) return null
+            val contentX = x + scrollX
+            val contentY = y + scrollY
+            val hit = model.cells.firstOrNull { cell ->
+                val left = (width - (cell.column + 1) * model.cellWidth).coerceAtLeast(0f)
+                val top = (cell.row * model.cellHeight).coerceAtLeast(0f)
+                val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
+                val bottom = (top + model.cellHeight).coerceAtMost(height.toFloat())
+                contentX >= left && contentX <= right && contentY >= top && contentY <= bottom
+            } ?: return null
+            val left = (width - (hit.column + 1) * model.cellWidth).coerceAtLeast(0f)
+            val top = (hit.row * model.cellHeight).coerceAtLeast(0f)
+            val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
+            val bottom = (top + model.cellHeight).coerceAtMost(height.toFloat())
+            val location = IntArray(2)
+            getLocationOnScreen(location)
+            return VerticalTapResolved(
+                sourceOffset = hit.sourceOffset,
+                row = hit.row,
+                column = hit.column,
+                rectInWindow = android.graphics.RectF(
+                    location[0] + left - scrollX,
+                    location[1] + top - scrollY,
+                    location[0] + right - scrollX,
+                    location[1] + bottom - scrollY
+                )
+            )
+        }
+
+        fun logVerticalTapDebug(tag: String, x: Float, y: Float, resolved: VerticalTapResolved) {
+            if (!verticalEnabled) return
+            val ch = text?.getOrNull(resolved.sourceOffset)?.toString().orEmpty()
+            Log.d(
+                tag,
+                "verticalTap scrollX=$scrollX scrollY=$scrollY x=${x.roundToInt()} y=${y.roundToInt()} contentX=${(x + scrollX).roundToInt()} contentY=${(y + scrollY).roundToInt()} row=${resolved.row} col=${resolved.column} sourceOffset=${resolved.sourceOffset} char='$ch' textSize=${textSize.roundToInt()} fontSpacing=${paint.fontSpacing.roundToInt()}"
+            )
+        }
+
+        fun computeSelectionRects(range: IntRange): List<Rect> {
+            if (!verticalEnabled) return emptyList()
+            val model = buildGridModel(height) ?: return emptyList()
+            if (model.cells.isEmpty()) return emptyList()
+            val start = minOf(range.first, range.last)
+            val end = maxOf(range.first, range.last)
+            val selectedRowsByColumn = linkedMapOf<Int, MutableList<Int>>()
+            for (cell in model.cells) {
+                if (cell.sourceOffset !in start..end) continue
+                selectedRowsByColumn.getOrPut(cell.column) { ArrayList(4) }.add(cell.row)
+            }
+            if (selectedRowsByColumn.isEmpty()) return emptyList()
+            val location = IntArray(2)
+            getLocationOnScreen(location)
+            val rects = ArrayList<Rect>(selectedRowsByColumn.size)
+            selectedRowsByColumn.forEach { (column, rowsInColumn) ->
+                val sortedRows = rowsInColumn.distinct().sorted()
+                if (sortedRows.isEmpty()) return@forEach
+                var runStart = sortedRows.first()
+                var previous = runStart
+                fun flushRun(startRow: Int, endRow: Int) {
+                    val left = (width - (column + 1) * model.cellWidth).coerceAtLeast(0f)
+                    val top = (startRow * model.cellHeight).coerceAtLeast(0f)
+                    val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
+                    val bottom = ((endRow + 1) * model.cellHeight).coerceAtMost(height.toFloat())
+                    rects.add(
+                        Rect(
+                            left = location[0] + left - scrollX,
+                            top = location[1] + top - scrollY,
+                            right = location[0] + right - scrollX,
+                            bottom = location[1] + bottom - scrollY
+                        )
+                    )
+                }
+                for (i in 1 until sortedRows.size) {
+                    val row = sortedRows[i]
+                    if (row == previous + 1) {
+                        previous = row
+                    } else {
+                        flushRun(runStart, previous)
+                        runStart = row
+                        previous = row
+                    }
+                }
+                flushRun(runStart, previous)
+            }
+            return rects
+        }
+
+        fun getVerticalContentWidthPx(): Int {
+            if (!verticalEnabled) return width.coerceAtLeast(1)
+            val model = buildGridModel(height) ?: return width.coerceAtLeast(1)
+            return ceil((model.columnCount * model.cellWidth).toDouble()).toInt().coerceAtLeast(1)
+        }
+
+        fun getVerticalContentHeightPx(): Int {
+            if (!verticalEnabled) return height.coerceAtLeast(1)
+            val current = normalizeFloatingVerticalPunctuationText(text?.toString().orEmpty())
+            if (current.isBlank()) return height.coerceAtLeast(1)
+            val visibleChars = current.count { it != '\n' && it != '\r' }.coerceAtLeast(1)
+            val step = textSize.coerceAtLeast(1f)
+            return ceil(visibleChars * step.toDouble()).toInt().coerceAtLeast(height.coerceAtLeast(1))
+        }
+
+        override fun setText(text: CharSequence?, type: BufferType?) {
+            super.setText(text, type)
+            clearVerticalCache()
+            clearGridCache()
+        }
+
+        override fun setTextColor(color: Int) {
+            super.setTextColor(color)
+            clearVerticalCache()
+            invalidate()
+        }
+
+        override fun setTypeface(tf: Typeface?) {
+            super.setTypeface(tf)
+            clearVerticalCache()
+            clearGridCache()
+            requestLayout()
+            invalidate()
+        }
+
+        override fun setTextSize(size: Float) {
+            super.setTextSize(size)
+            clearVerticalCache()
+            clearGridCache()
+            requestLayout()
+            invalidate()
+        }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            if (!verticalEnabled) {
+                super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+                return
+            }
+            val heightSize = MeasureSpec.getSize(heightMeasureSpec)
+            val measuredHeight = if (heightSize > 0) {
+                heightSize
+            } else {
+                (textSize * 12f).roundToInt().coerceAtLeast(1)
+            }
+            val desiredWidth = buildGridModel(measuredHeight)?.let {
+                ceil((it.columnCount * it.cellWidth).toDouble()).toInt().coerceAtLeast(1)
+            } ?: 1
+            val measuredWidth = resolveSize(desiredWidth, widthMeasureSpec)
+            setMeasuredDimension(measuredWidth, resolveSize(measuredHeight, heightMeasureSpec))
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            if (!verticalEnabled) {
+                super.onDraw(canvas)
+                return
+            }
+            drawSelectionBackground(canvas)
+            val layout = obtainVerticalLayout(height) ?: return
+            canvas.save()
+            canvas.translate(-scrollX.toFloat(), -scrollY.toFloat())
+            layout.draw(canvas, width.toFloat(), 0f)
+            canvas.restore()
+        }
+
+        private fun obtainVerticalLayout(targetHeight: Int): VerticalTextLayout? {
+            val current = normalizeFloatingVerticalPunctuationText(text?.toString().orEmpty())
+            if (current.isBlank() || targetHeight <= 0) return null
+            val effectiveTargetHeight = targetHeight
+            if (cachedLayout != null &&
+                cachedHeight == effectiveTargetHeight &&
+                cachedText == current &&
+                cachedTextSize == textSize &&
+                cachedTextColor == currentTextColor &&
+                cachedTypeface == typeface
+            ) {
+                return cachedLayout
+            }
+            val paint = TextPaint(this.paint).apply {
+                color = currentTextColor
+                typeface = this@VerticalLayoutTextView.typeface
+                textSize = this@VerticalLayoutTextView.textSize
+                isAntiAlias = true
+            }
+            cachedLayout = VerticalTextLayout(
+                current,
+                0,
+                current.length,
+                paint,
+                effectiveTargetHeight.toFloat()
+            )
+            cachedHeight = effectiveTargetHeight
+            cachedText = current
+            cachedTextSize = textSize
+            cachedTextColor = currentTextColor
+            cachedTypeface = typeface
+            return cachedLayout
+        }
+
+        private fun buildGridModel(viewHeight: Int): VerticalGridModel? {
+            val current = normalizeFloatingVerticalPunctuationText(text?.toString().orEmpty())
+            if (current.isBlank() || viewHeight <= 0) return null
+            if (cachedGridModel != null &&
+                cachedGridHeight == viewHeight &&
+                cachedGridText == current &&
+                cachedGridTextSize == textSize
+            ) {
+                return cachedGridModel
+            }
+            val cellHeight = textSize.coerceAtLeast(1f)
+            val cellWidth = textSize.coerceAtLeast(1f)
+            val fallback = buildFallbackGridModel(current, viewHeight, cellHeight, cellWidth)
+            val computed = runCatching {
+                val lineRanges = computeVerticalLineRangesReflective(current, viewHeight)
+                val lineCount = lineRanges.size.coerceAtLeast(0)
+                if (lineCount <= 0) {
+                    fallback
+                } else {
+                    val cells = ArrayList<VerticalGridCell>(current.length)
+                    var maxRows = 0
+                    for (column in 0 until lineCount) {
+                        val range = lineRanges[column]
+                        val lineStart = range.first.coerceIn(0, current.length)
+                        val lineEnd = range.last.coerceIn(lineStart, current.length)
+                        var row = 0
+                        for (sourceOffset in lineStart until lineEnd) {
+                            val ch = current[sourceOffset]
+                            if (ch == '\n' || ch == '\r') continue
+                            cells.add(
+                                VerticalGridCell(
+                                    sourceOffset = sourceOffset,
+                                    row = row++,
+                                    column = column
+                                )
+                            )
+                        }
+                        maxRows = maxOf(maxRows, row)
+                    }
+                    if (cells.isEmpty()) {
+                        fallback
+                    } else {
+                        VerticalGridModel(
+                            cells = cells,
+                            columnCount = lineCount.coerceAtLeast(1),
+                            maxRows = maxRows.coerceAtLeast(1),
+                            cellWidth = cellWidth,
+                            cellHeight = cellHeight
+                        )
+                    }
+                }
+            }.getOrElse { fallback }
+            cachedGridModel = computed
+            cachedGridHeight = viewHeight
+            cachedGridText = current
+            cachedGridTextSize = textSize
+            return computed
+        }
+
+        private fun computeVerticalLineRangesReflective(current: String, viewHeight: Int): List<IntRange> {
+            return try {
+                val lineBreakerClass = Class.forName("androidx.text.vertical.LineBreaker")
+                val orientationClass = Class.forName("androidx.text.vertical.TextOrientation")
+                val resultClass = Class.forName("androidx.text.vertical.LineBreaker\$Result")
+                val instanceField = lineBreakerClass.getDeclaredField("INSTANCE").apply { isAccessible = true }
+                val lineBreaker = instanceField.get(null)
+                val mixedField = orientationClass.getDeclaredField("Mixed").apply { isAccessible = true }
+                val mixedOrientation = mixedField.get(null)
+                val breakMethod = lineBreakerClass.getDeclaredMethod(
+                    "breakTextIntoLines",
+                    CharSequence::class.java,
+                    Int::class.javaPrimitiveType,
+                    Int::class.javaPrimitiveType,
+                    TextPaint::class.java,
+                    Float::class.javaPrimitiveType,
+                    orientationClass
+                ).apply { isAccessible = true }
+                val result = breakMethod.invoke(
+                    lineBreaker,
+                    current,
+                    0,
+                    current.length,
+                    TextPaint(paint).apply {
+                        color = currentTextColor
+                        typeface = this@VerticalLayoutTextView.typeface
+                        textSize = this@VerticalLayoutTextView.textSize
+                    },
+                    viewHeight.toFloat(),
+                    mixedOrientation
+                ) ?: return emptyList()
+                val getLineCount = resultClass.getDeclaredMethod("getLineCount").apply { isAccessible = true }
+                val getLineStart = resultClass.getDeclaredMethod("getLineStart", Int::class.javaPrimitiveType).apply { isAccessible = true }
+                val getLineEnd = resultClass.getDeclaredMethod("getLineEnd", Int::class.javaPrimitiveType).apply { isAccessible = true }
+                val lineCount = (getLineCount.invoke(result) as? Int ?: 0).coerceAtLeast(0)
+                if (lineCount <= 0) return emptyList()
+                buildList(lineCount) {
+                    for (line in 0 until lineCount) {
+                        val start = (getLineStart.invoke(result, line) as? Int ?: 0).coerceAtLeast(0)
+                        val end = (getLineEnd.invoke(result, line) as? Int ?: start).coerceAtLeast(start)
+                        add(start..end)
+                    }
+                }
+            } catch (_: Throwable) {
+                emptyList()
+            }
+        }
+
+        private fun buildFallbackGridModel(
+            current: String,
+            viewHeight: Int,
+            cellHeight: Float,
+            cellWidth: Float
+        ): VerticalGridModel {
+            val mapper = buildIndexMapping(current)
+            if (mapper.isEmpty()) {
+                return VerticalGridModel(emptyList(), 1, 1, cellWidth, cellHeight)
+            }
+            val rows = maxOf(1, floor(viewHeight / cellHeight).toInt())
+            val columns = ceil(mapper.size.toFloat() / rows.toFloat()).toInt().coerceAtLeast(1)
+            val cells = ArrayList<VerticalGridCell>(mapper.size)
+            for (logical in mapper.indices) {
+                val sourceOffset = mapper[logical]
+                if (sourceOffset < 0) continue
+                cells.add(
+                    VerticalGridCell(
+                        sourceOffset = sourceOffset,
+                        row = logical % rows,
+                        column = logical / rows
+                    )
+                )
+            }
+            val maxRows = cells.maxOfOrNull { it.row + 1 } ?: 1
+            return VerticalGridModel(
+                cells = cells,
+                columnCount = columns,
+                maxRows = maxRows,
+                cellWidth = cellWidth,
+                cellHeight = cellHeight
+            )
+        }
+
+        private fun buildIndexMapping(current: String): IntArray {
+            if (current.isEmpty()) return IntArray(0)
+            val indices = ArrayList<Int>(current.length)
+            current.forEachIndexed { index, ch ->
+                indices.add(if (ch == '\n') -1 else index)
+            }
+            return indices.toIntArray()
+        }
+
+        private fun drawSelectionBackground(canvas: Canvas) {
+            val range = selectedSourceRange ?: return
+            val model = buildGridModel(height) ?: return
+            if (model.cells.isEmpty()) return
+            val highlightPaint = Paint().apply {
+                color = android.graphics.Color.argb(0x66, 0xA0, 0xA0, 0xA0)
+                style = Paint.Style.FILL
+                isAntiAlias = true
+            }
+            val start = minOf(range.first, range.last)
+            val end = maxOf(range.first, range.last)
+            val selectedRowsByColumn = linkedMapOf<Int, MutableList<Int>>()
+            for (cell in model.cells) {
+                if (cell.sourceOffset !in start..end) continue
+                selectedRowsByColumn.getOrPut(cell.column) { ArrayList(4) }.add(cell.row)
+            }
+            selectedRowsByColumn.forEach { (column, rowsInColumn) ->
+                val sortedRows = rowsInColumn.distinct().sorted()
+                if (sortedRows.isEmpty()) return@forEach
+                var runStart = sortedRows.first()
+                var previous = runStart
+                fun flushRun(startRow: Int, endRow: Int) {
+                    val left = (width - (column + 1) * model.cellWidth).coerceAtLeast(0f) - scrollX
+                    val top = (startRow * model.cellHeight).coerceAtLeast(0f) - scrollY
+                    val right = left + model.cellWidth
+                    val bottom = top + ((endRow - startRow + 1) * model.cellHeight)
+                    canvas.drawRect(left, top, right, bottom, highlightPaint)
+                }
+                for (i in 1 until sortedRows.size) {
+                    val row = sortedRows[i]
+                    if (row == previous + 1) {
+                        previous = row
+                    } else {
+                        flushRun(runStart, previous)
+                        runStart = row
+                        previous = row
+                    }
+                }
+                flushRun(runStart, previous)
+            }
+        }
+
+        private fun clearVerticalCache() {
+            cachedLayout = null
+            cachedHeight = -1
+            cachedText = ""
+            cachedTextSize = Float.NaN
+            cachedTextColor = Color.TRANSPARENT
+            cachedTypeface = null
+        }
+
+        private fun clearGridCache() {
+            cachedGridModel = null
+            cachedGridHeight = -1
+            cachedGridText = ""
+            cachedGridTextSize = Float.NaN
+        }
+
     }
 
     private val playbackListener = object : BookReaderFloatingBridge.PlaybackStateListener {
@@ -328,9 +853,17 @@ companion object {
 
     private fun buildSubtitlePanel(settings: AudiobookSettingsConfig): LinearLayout {
         val density = resources.displayMetrics.density
+        val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
+        val subtitleWidth = if (verticalWriting) {
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        } else {
+            (320 * density).toInt()
+        }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
+            gravity = if (verticalWriting) Gravity.START else Gravity.CENTER_HORIZONTAL
+            clipChildren = false
+            clipToPadding = false
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -357,7 +890,7 @@ companion object {
             }
         )
 
-        val subtitleOutlineText = TextView(this).apply {
+        val subtitleOutlineText = VerticalLayoutTextView(this).apply {
             setLineSpacing(0f, 1.08f)
             maxLines = 3
             ellipsize = null
@@ -365,15 +898,16 @@ companion object {
             textAlignment = View.TEXT_ALIGNMENT_CENTER
             setPadding((10 * density).toInt(), (8 * density).toInt(), (10 * density).toInt(), (8 * density).toInt())
             layoutParams = LinearLayout.LayoutParams(
-                (320 * density).toInt(),
+                subtitleWidth,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
             isClickable = false
             isFocusable = false
+            setVerticalLayoutEnabled(verticalWriting)
         }
         subtitleOutlineTextView = subtitleOutlineText
 
-        val subtitleText = TextView(this).apply {
+        val subtitleText = VerticalLayoutTextView(this).apply {
             setLineSpacing(0f, 1.08f)
             maxLines = 3
             ellipsize = null
@@ -381,14 +915,15 @@ companion object {
             textAlignment = View.TEXT_ALIGNMENT_CENTER
             setPadding((10 * density).toInt(), (8 * density).toInt(), (10 * density).toInt(), (8 * density).toInt())
             layoutParams = LinearLayout.LayoutParams(
-                (320 * density).toInt(),
+                subtitleWidth,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
             setOnTouchListener(
                 OverlayDragTouchListener(
                     gestureDetector = subtitleGestureDetector,
                     dragAllowed = { !subtitleOverlayLocked },
-                    verticalOnly = true,
+                    verticalOnly = !verticalWriting,
+                    horizontalOnly = verticalWriting,
                     layoutParamsProvider = { windowLayoutParams },
                     hostViewProvider = { rootView },
                     onPersistPosition = { _, y ->
@@ -396,14 +931,16 @@ companion object {
                     }
                 )
             )
+            setVerticalLayoutEnabled(verticalWriting)
         }
         subtitleTextView = subtitleText
         applySubtitleTypography(settings)
-        panel.addView(FrameLayout(this).apply {
+        val subtitleFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
-                (320 * density).toInt(),
+                subtitleWidth,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
+            elevation = 0f
             addView(
                 subtitleOutlineText,
                 FrameLayout.LayoutParams(
@@ -418,16 +955,20 @@ companion object {
                     FrameLayout.LayoutParams.WRAP_CONTENT
                 )
             )
-        })
-
+        }
+        subtitleFrameView = subtitleFrame
         val controls = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+            orientation = if (verticalWriting) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = (6 * density).toInt()
+                if (verticalWriting) {
+                    topMargin = 0
+                } else {
+                    topMargin = (6 * density).toInt()
+                }
             }
             background = createRoundedBackground(0x33151515, cornerDp = 18f, strokeColor = 0x22FFFFFF)
             setPadding((6 * density).toInt(), (4 * density).toInt(), (6 * density).toInt(), (4 * density).toInt())
@@ -435,7 +976,8 @@ companion object {
                 OverlayDragTouchListener(
                     gestureDetector = null,
                     dragAllowed = { !subtitleOverlayLocked },
-                    verticalOnly = true,
+                    verticalOnly = !verticalWriting,
+                    horizontalOnly = verticalWriting,
                     layoutParamsProvider = { windowLayoutParams },
                     hostViewProvider = { rootView },
                     onPersistPosition = { _, y ->
@@ -470,14 +1012,39 @@ companion object {
         })
         controls.addView(createControlButton(R.drawable.ic_overlay_settings) {
             subtitleSettingsExpanded = !subtitleSettingsExpanded
-            subtitleSettingsPanel?.visibility = if (subtitleSettingsExpanded) View.VISIBLE else View.GONE
-        })
-        updateSubtitleLockIcon()
-        panel.addView(controls)
-
+            updateSubtitleControlsVisibility(loadAudiobookSettingsConfig(this@AudiobookFloatingOverlayService))
+        }.also { subtitleSettingsButton = it })
         val settingsPanel = buildSubtitleSettingsPanel(settings)
         subtitleSettingsPanel = settingsPanel
-        panel.addView(settingsPanel)
+        updateSubtitleLockIcon()
+        val controlsOverlayHost = OverlayAnchorLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            clipChildren = false
+            clipToPadding = false
+            elevation = 48f * resources.displayMetrics.density
+            addView(controls)
+        }
+        if (verticalWriting) {
+            val verticalRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                clipChildren = false
+                clipToPadding = false
+                addView(controlsOverlayHost)
+                addView(subtitleFrame)
+            }
+            panel.addView(FrameLayout(this).apply {
+                clipChildren = false
+                clipToPadding = false
+                addView(verticalRow)
+            })
+        } else {
+            panel.addView(subtitleFrame)
+            panel.addView(controlsOverlayHost)
+        }
 
         return panel
     }
@@ -497,12 +1064,10 @@ companion object {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
-            layoutParams = LinearLayout.LayoutParams(
+            layoutParams = FrameLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = (6 * density).toInt()
-            }
+            )
             background = createRoundedBackground(0xCC151515.toInt(), cornerDp = 18f, strokeColor = 0x33FFFFFF)
             setPadding((10 * density).toInt(), (8 * density).toInt(), (10 * density).toInt(), (8 * density).toInt())
             addView(TextView(this@AudiobookFloatingOverlayService).apply {
@@ -847,15 +1412,104 @@ companion object {
         val panel = subtitleSettingsPanel ?: return
         if (!settings.floatingOverlaySubtitleEnabled) {
             controls.visibility = View.GONE
-            panel.visibility = View.GONE
+            hideSubtitleSettingsOverlay()
             return
         }
-        controls.visibility = if (subtitleControlsVisible) View.VISIBLE else View.GONE
-        panel.visibility = if (subtitleControlsVisible && subtitleSettingsExpanded) View.VISIBLE else View.GONE
+        val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
+        controls.visibility = when {
+            subtitleControlsVisible -> View.VISIBLE
+            verticalWriting -> View.INVISIBLE
+            else -> View.GONE
+        }
+        // Keep panel in layout for vertical mode to avoid relayout jump while toggling.
+        if (subtitleControlsVisible && subtitleSettingsExpanded) {
+            showOrUpdateSubtitleSettingsOverlay(settings)
+        } else {
+            hideSubtitleSettingsOverlay()
+        }
+    }
+
+    private fun showOrUpdateSubtitleSettingsOverlay(settings: AudiobookSettingsConfig) {
+        val panel = subtitleSettingsPanel ?: return
+        val settingsButton = subtitleSettingsButton
+        val wm = windowManager ?: return
+        val margin = (8f * resources.displayMetrics.density)
+        val overlay = subtitleSettingsFloatingView ?: FrameLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
+            if (panel.parent != null) {
+                (panel.parent as? android.view.ViewGroup)?.removeView(panel)
+            }
+            addView(
+                panel,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }.also { subtitleSettingsFloatingView = it }
+
+        panel.visibility = View.VISIBLE
+        panel.translationX = 0f
+        panel.translationY = 0f
+        panel.measure(
+            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
+            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+        )
+        val panelW = panel.measuredWidth.coerceAtLeast(1)
+        val panelH = panel.measuredHeight.coerceAtLeast(1)
+        val screenW = resources.displayMetrics.widthPixels
+        val screenH = resources.displayMetrics.heightPixels
+        val loc = IntArray(2)
+        settingsButton?.getLocationOnScreen(loc)
+        val anchorX = if (settingsButton != null) loc[0] + (settingsButton.width / 2) else (screenW / 2)
+        val anchorY = if (settingsButton != null) loc[1] else (screenH / 2)
+        val targetX = (anchorX - (panelW / 2)).coerceIn(0, (screenW - panelW).coerceAtLeast(0))
+        val targetY = (anchorY - panelH - margin.toInt()).coerceIn(0, (screenH - panelH).coerceAtLeast(0))
+
+        val lp = subtitleSettingsWindowLayoutParams
+        if (lp == null) {
+            val params = createOverlayLayoutParams(targetX, targetY).apply {
+                flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                width = WindowManager.LayoutParams.WRAP_CONTENT
+                height = WindowManager.LayoutParams.WRAP_CONTENT
+            }
+            subtitleSettingsWindowLayoutParams = params
+            runCatching { wm.addView(overlay, params) }
+        } else {
+            lp.x = targetX
+            lp.y = targetY
+            runCatching { wm.updateViewLayout(overlay, lp) }
+        }
+    }
+
+    private fun hideSubtitleSettingsOverlay() {
+        val wm = windowManager ?: return
+        val overlay = subtitleSettingsFloatingView ?: return
+        runCatching { wm.removeView(overlay) }
+        subtitleSettingsFloatingView = null
+        subtitleSettingsWindowLayoutParams = null
     }
 
     private fun handleSubtitleSingleTap(event: MotionEvent) {
         val subtitle = subtitleTextView ?: return
+        if (subtitle is VerticalLayoutTextView) {
+            val resolved = subtitle.resolveVerticalTap(event.x, event.y) ?: return
+            subtitle.logVerticalTapDebug(FLOATING_SUBTITLE_HIT_LOG_TAG, event.x, event.y, resolved)
+            val rect = resolved.rectInWindow
+            performFloatingLookup(
+                resolved.sourceOffset,
+                Rect(
+                    left = rect.left,
+                    top = rect.top,
+                    right = rect.right,
+                    bottom = rect.bottom
+                )
+            )
+            return
+        }
         val layout = subtitle.layout ?: return
         val x = (event.x - subtitle.totalPaddingLeft).coerceAtLeast(0f)
         val y = (event.y - subtitle.totalPaddingTop + subtitle.scrollY).coerceAtLeast(0f)
@@ -891,6 +1545,21 @@ companion object {
     private fun setSubtitleTranslationX(dx: Float) {
         subtitleTextView?.translationX = dx
         subtitleOutlineTextView?.translationX = dx
+    }
+
+    private fun setSubtitleTranslationY(dy: Float) {
+        subtitleTextView?.translationY = dy
+        subtitleOutlineTextView?.translationY = dy
+    }
+
+    private fun setSubtitleFrameHeight(heightPx: Int?) {
+        val frame = subtitleFrameView ?: return
+        val lp = (frame.layoutParams as? LinearLayout.LayoutParams) ?: return
+        val targetHeight = heightPx ?: LinearLayout.LayoutParams.WRAP_CONTENT
+        if (lp.height != targetHeight) {
+            lp.height = targetHeight
+            frame.layoutParams = lp
+        }
     }
 
     private fun applyPunctuationPause(linear: Float, text: String): Float {
@@ -944,35 +1613,60 @@ companion object {
         val subtitle = subtitleTextView ?: return
         val outline = subtitleOutlineTextView
         val settings = loadAudiobookSettingsConfig(this)
+        val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
         val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleTimeline()
         val normalized = text?.trim()?.takeIf { it.isNotEmpty() }
-        val displayText = normalized?.let { formatFloatingSubtitleDisplayText(it, settings.floatingOverlaySubtitleWritingMode) }
+        val displayText = normalized?.let {
+            if (verticalWriting) {
+                normalizeFloatingVerticalPunctuationText(it)
+            } else {
+                formatFloatingSubtitleDisplayText(it, settings.floatingOverlaySubtitleWritingMode)
+            }
+        }
         if (!subtitleEnabledByData || normalized == null) {
             subtitle.animate().cancel()
             subtitle.text = ""
             subtitle.visibility = View.GONE
             subtitle.scrollTo(0, 0)
             subtitle.translationX = 0f
+            subtitle.translationY = 0f
             outline?.text = ""
             outline?.visibility = View.GONE
             outline?.scrollTo(0, 0)
             outline?.translationX = 0f
+            outline?.translationY = 0f
             stopSubtitleTicker()
             hideFloatingLookup()
             rootView?.post { alignOverlayWindow(force = true) }
             return
         }
-        if (subtitle.text?.toString() == displayText && subtitle.visibility == View.VISIBLE) return
+        if (subtitle.text?.toString() == displayText && subtitle.visibility == View.VISIBLE) {
+            // Same cue text can still require a different scroll offset (playhead moved, pause/resume,
+            // or overlay refresh). Recompute instead of keeping stale translated position.
+            subtitle.post {
+                alignOverlayWindow(force = true)
+                updateSubtitleAutoScroll()
+                if (BookReaderFloatingBridge.isPlaying()) {
+                    startSubtitleTicker()
+                } else {
+                    stopSubtitleTicker()
+                }
+            }
+            return
+        }
         subtitle.animate().cancel()
         subtitle.alpha = 1f
         subtitle.text = displayText
         subtitle.visibility = View.VISIBLE
         subtitle.scrollTo(0, 0)
         subtitle.translationX = 0f
+        subtitle.translationY = 0f
         outline?.text = displayText
-        outline?.visibility = View.VISIBLE
+        outline?.visibility = if (verticalWriting) View.GONE else View.VISIBLE
+        outline?.alpha = if (verticalWriting) 0f else 1f
         outline?.scrollTo(0, 0)
         outline?.translationX = 0f
+        outline?.translationY = 0f
         subtitleTickerBasePositionMs = BookReaderFloatingBridge.currentPlaybackPositionMs()
         subtitleTickerBaseRealtimeMs = SystemClock.uptimeMillis()
         subtitle.post {
@@ -996,7 +1690,39 @@ companion object {
         val now = System.currentTimeMillis()
         val shouldLog = now - lastSubtitleScrollLogAtMs >= 300L
 
-        if (verticalWriting || !settings.floatingOverlaySubtitleScrollEnabled) {
+        if (verticalWriting) {
+            setSubtitleTranslationX(0f)
+            subtitle.setSingleLine(false)
+            subtitle.maxLines = Int.MAX_VALUE
+            subtitle.ellipsize = null
+            subtitle.setHorizontallyScrolling(false)
+            subtitle.gravity = Gravity.CENTER_HORIZONTAL
+            subtitle.textAlignment = View.TEXT_ALIGNMENT_CENTER
+            outline?.setSingleLine(false)
+            outline?.maxLines = Int.MAX_VALUE
+            outline?.ellipsize = null
+            outline?.setHorizontallyScrolling(false)
+            outline?.gravity = Gravity.CENTER_HORIZONTAL
+            outline?.textAlignment = View.TEXT_ALIGNMENT_CENTER
+            // Vertical subtitle scrolling has been removed: always keep normal wrapped vertical layout.
+            setSubtitleFrameHeight(null)
+            setSubtitleTextWidthMode(matchParent = false)
+            if (subtitle.scrollX != 0 || subtitle.scrollY != 0) subtitle.scrollTo(0, 0)
+            if (outline != null && (outline.scrollX != 0 || outline.scrollY != 0)) outline.scrollTo(0, 0)
+            setSubtitleTranslationY(0f)
+            subtitle.requestLayout()
+            outline?.requestLayout()
+            if (shouldLog) {
+                Log.d(
+                    FLOATING_SUBTITLE_SCROLL_LOG_TAG,
+                    "vertical-static pos=$positionMs textLen=${text.length}"
+                )
+                lastSubtitleScrollLogAtMs = now
+            }
+            return
+        }
+
+        if (!settings.floatingOverlaySubtitleScrollEnabled) {
             setSubtitleTextWidthMode(matchParent = true)
             subtitle.setSingleLine(false)
             subtitle.maxLines = Int.MAX_VALUE
@@ -1013,10 +1739,11 @@ companion object {
             if (subtitle.scrollX != 0) subtitle.scrollTo(0, 0)
             if (outline != null && outline.scrollX != 0) outline.scrollTo(0, 0)
             setSubtitleTranslationX(0f)
+            setSubtitleTranslationY(0f)
             if (shouldLog) {
                 Log.d(
                     FLOATING_SUBTITLE_SCROLL_LOG_TAG,
-                    "off pos=$positionMs textLen=${text.length} vertical=$verticalWriting scrollX=${subtitle.scrollX}"
+                    "horizontal-off pos=$positionMs textLen=${text.length} scrollX=${subtitle.scrollX}"
                 )
                 lastSubtitleScrollLogAtMs = now
             }
@@ -1118,11 +1845,15 @@ companion object {
             return
         }
         if (settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
-            val display = formatFloatingSubtitleDisplayText(baseText, settings.floatingOverlaySubtitleWritingMode)
+            val display = normalizeFloatingVerticalPunctuationText(baseText)
+            (subtitle as? VerticalLayoutTextView)?.setSelectedSourceRange(selectedRange)
+            (outline as? VerticalLayoutTextView)?.setSelectedSourceRange(selectedRange)
             subtitle.text = display
             outline?.text = display
             return
         }
+        (subtitle as? VerticalLayoutTextView)?.setSelectedSourceRange(null)
+        (outline as? VerticalLayoutTextView)?.setSelectedSourceRange(null)
         if (selectedRange == null || selectedRange.first !in baseText.indices) {
             subtitle.text = baseText
             outline?.text = baseText
@@ -1151,7 +1882,7 @@ companion object {
     ): String {
         if (mode == FloatingSubtitleWritingMode.HORIZONTAL) return text
         val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
-        return normalized
+            return normalized
             .lines()
             .joinToString("\n\n") { line ->
                 line.map { ch ->
@@ -1164,8 +1895,13 @@ companion object {
             }
     }
 
+
     private fun updateFloatingLookupPanelPosition() {
         rootView?.post { alignOverlayWindow(force = false) }
+        val settings = loadAudiobookSettingsConfig(this)
+        if (subtitleControlsVisible && subtitleSettingsExpanded && settings.floatingOverlaySubtitleEnabled) {
+            showOrUpdateSubtitleSettingsOverlay(settings)
+        }
     }
 
     private fun alignOverlayWindow(force: Boolean) {
@@ -1181,14 +1917,19 @@ companion object {
             )
         }
         val centeredX = ((resources.displayMetrics.widthPixels - root.measuredWidth) / 2).coerceAtLeast(0)
-        if (force || params.x != centeredX) {
-            params.x = centeredX
+        val shouldKeepX = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
+        val targetX = if (shouldKeepX) params.x else centeredX
+        if (force || params.x != targetX) {
+            params.x = targetX
             runCatching { wm.updateViewLayout(root, params) }
             saveAudiobookFloatingOverlaySubtitlePosition(this, params.y.coerceAtLeast(0))
         }
     }
 
     private fun computeSubtitleAnchorRects(subtitle: TextView, range: IntRange): List<Rect> {
+        if (subtitle is VerticalLayoutTextView) {
+            return subtitle.computeSelectionRects(range)
+        }
         val layout = subtitle.layout ?: return emptyList()
         val text = subtitle.text ?: return emptyList()
         if (text.isEmpty()) return emptyList()
@@ -2175,14 +2916,17 @@ companion object {
         val density = resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
         val screenWidthDp = (windowSize.width / density).coerceAtLeast(1f)
         val screenHeightDp = (windowSize.height / density).coerceAtLeast(1f)
-        val anchorBounds = anchor?.rects?.filter { !it.isEmpty }?.let {
-            Rect(
-                left = it.minOf { rect -> rect.left },
-                top = it.minOf { rect -> rect.top },
-                right = it.maxOf { rect -> rect.right },
-                bottom = it.maxOf { rect -> rect.bottom }
-            )
-        }
+        val anchorBounds = anchor?.rects
+            ?.filter { !it.isEmpty }
+            ?.takeIf { it.isNotEmpty() }
+            ?.let {
+                Rect(
+                    left = it.minOf { rect -> rect.left },
+                    top = it.minOf { rect -> rect.top },
+                    right = it.maxOf { rect -> rect.right },
+                    bottom = it.maxOf { rect -> rect.bottom }
+                )
+            }
         val anchorLeftDp = ((anchorBounds?.left ?: windowSize.width * 0.4f) / density).coerceIn(0f, screenWidthDp)
         val anchorRightDp = ((anchorBounds?.right ?: windowSize.width * 0.6f) / density).coerceIn(0f, screenWidthDp)
         val anchorTopDp = ((anchorBounds?.top ?: windowSize.height * 0.46f) / density).coerceIn(0f, screenHeightDp)
@@ -3068,19 +3812,36 @@ companion object {
 
     private fun applySubtitleTypography(settings: AudiobookSettingsConfig) {
         val customTypeface = resolveSubtitleTypeface(this, settings.subtitleCustomFontUri)
+        val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
+        val density = resources.displayMetrics.density
+        val radius = (2.8f * density).coerceAtLeast(2f)
+        Log.d(
+            FLOATING_SUBTITLE_RENDER_LOG_TAG,
+            "applyTypography vertical=$verticalWriting color=${settings.floatingOverlaySubtitleColor.toUInt().toString(16)} size=${settings.floatingOverlaySubtitleSizeSp}"
+        )
         subtitleTextView?.apply {
             textSize = settings.floatingOverlaySubtitleSizeSp.toFloat()
             setTextColor(settings.floatingOverlaySubtitleColor)
             typeface = customTypeface ?: Typeface.DEFAULT
-            setShadowLayer(0f, 0f, 0f, 0)
+            if (verticalWriting) {
+                setShadowLayer(0f, 0f, 0f, 0)
+            } else {
+                setShadowLayer(0f, 0f, 0f, 0)
+            }
         }
         subtitleOutlineTextView?.apply {
             textSize = settings.floatingOverlaySubtitleSizeSp.toFloat()
             setTextColor(settings.floatingOverlaySubtitleColor)
             typeface = customTypeface ?: Typeface.DEFAULT
-            val density = resources.displayMetrics.density
-            val radius = (2.8f * density).coerceAtLeast(2f)
-            setShadowLayer(radius, 0f, 0f, 0xCC000000.toInt())
+            if (verticalWriting) {
+                visibility = View.GONE
+                alpha = 0f
+                setShadowLayer(0f, 0f, 0f, 0)
+            } else {
+                visibility = View.VISIBLE
+                alpha = 1f
+                setShadowLayer(radius, 0f, 0f, 0xCC000000.toInt())
+            }
         }
     }
 
@@ -3298,11 +4059,14 @@ companion object {
         rootView = null
         windowLayoutParams = null
         subtitlePanelView = null
+        subtitleFrameView = null
         subtitleTextView = null
         subtitleOutlineTextView = null
         subtitleControlsRow = null
         subtitleSettingsPanel = null
         subtitleLockButton = null
+        subtitleSettingsButton = null
+        hideSubtitleSettingsOverlay()
     }
 
     private fun removeBubbleOverlay() {
@@ -3625,6 +4389,7 @@ companion object {
         private val gestureDetector: GestureDetector?,
         private val dragAllowed: () -> Boolean,
         private val verticalOnly: Boolean = false,
+        private val horizontalOnly: Boolean = false,
         private val layoutParamsProvider: () -> WindowManager.LayoutParams?,
         private val hostViewProvider: () -> View?,
         private val horizontalBoundsProvider: (() -> IntRange)? = null,
@@ -3666,7 +4431,11 @@ companion object {
                         } else {
                             params.x = ((resources.displayMetrics.widthPixels - (hostViewProvider()?.width ?: 0)) / 2).coerceAtLeast(0)
                         }
-                        params.y = (startY + deltaY).coerceAtLeast(0)
+                        params.y = if (horizontalOnly) {
+                            startY
+                        } else {
+                            (startY + deltaY).coerceAtLeast(0)
+                        }
                         hostViewProvider()?.let { runCatching { wm.updateViewLayout(it, params) } }
                     } else {
                         gestureDetector?.onTouchEvent(event)

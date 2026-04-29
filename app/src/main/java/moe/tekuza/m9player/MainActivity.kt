@@ -3099,6 +3099,7 @@ private fun ReaderSyncScreen() {
                         versionName = resolveAppVersionName(context),
                         onAudiobookClick = { context.startActivity(Intent(context, AudiobookSettingsActivity::class.java)) },
                         onControlModeClick = { context.startActivity(Intent(context, ControlModeSettingsActivity::class.java)) },
+                        onAudiobookUiClick = { context.startActivity(Intent(context, AudiobookUiSettingsActivity::class.java)) },
                         onControllerClick = { context.startActivity(Intent(context, ControllerSettingsActivity::class.java)) },
                         onAnkiClick = { context.startActivity(Intent(context, AnkiSettingsActivity::class.java)) },
                         onAdvancedOverlayClick = { context.startActivity(Intent(context, OverlaySettingsActivity::class.java)) },
