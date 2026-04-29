@@ -437,5 +437,20 @@
     <string name="anki_clear_field_variables">清空欄位變數</string>
     <string name="anki_field_variable_help">{audio} 用於匯出查詞發音，{cut-audio} 用於匯出剪切音訊。</string>
     <string name="anki_field_placeholder">可輸入佔位符或從清單選擇</string>
+    <string name="common_pause">暫停</string>
+    <string name="home_subtitle_attached">附字幕</string>
+    <string name="bookreader_ui_test_chapter_on">章節開</string>
+    <string name="bookreader_ui_test_chapter_off">章節關</string>
+    <string name="bookreader_ui_test_layout_mode">佈局模式: %1$d/2</string>
+    <string name="bookreader_ui_test_swap_normal">前進/後退: 正常</string>
+    <string name="bookreader_ui_test_swap_swapped">前進/後退: 已交換</string>
+    <string name="anki_duplicate_title">重複檢查</string>
+    <string name="anki_duplicate_check_label">檢查重複卡片</string>
+    <string name="anki_duplicate_scope_label">重複範圍</string>
+    <string name="anki_duplicate_scope_deck">目前牌組</string>
+    <string name="anki_duplicate_scope_all">全部牌組</string>
+    <string name="anki_duplicate_action_label">重複時動作</string>
+    <string name="anki_duplicate_action_prevent">阻止添加</string>
+    <string name="anki_duplicate_action_add">仍然添加</string>
 </resources>
 

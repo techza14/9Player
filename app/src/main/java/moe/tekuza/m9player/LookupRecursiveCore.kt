@@ -49,6 +49,16 @@ internal suspend fun executeRecursiveLookupQuery(
     sourceDictionaryName: String?
 ): RecursiveLookupQueryResult {
     val isEntryTap = tapSource.equals("entry", ignoreCase = true)
+    val exactQuery = term.trim()
+    fun filterExactOrKeep(base: List<DictionarySearchResult>): List<DictionarySearchResult> {
+        if (exactQuery.isBlank()) return base
+        val exact = base.filter { hit ->
+            val entryTerm = hit.entry.term.trim()
+            val entryReading = hit.entry.reading?.trim().orEmpty()
+            entryTerm == exactQuery || entryReading == exactQuery
+        }
+        return if (exact.isNotEmpty()) exact else base
+    }
     if (isEntryTap) {
         val sourceDictName = sourceDictionaryName?.trim().orEmpty()
         val sourceDictionaries = if (sourceDictName.isBlank()) {
@@ -62,17 +72,11 @@ internal suspend fun executeRecursiveLookupQuery(
                 dictionaries = sourceDictionaries,
                 query = term
             )
-            val sourceHits = sourceComputed?.hits.orEmpty()
+            val sourceHits = filterExactOrKeep(sourceComputed?.hits.orEmpty())
             if (sourceHits.isNotEmpty()) {
-                val boosted = sourceHits
-                    .sortedWith(
-                        compareByDescending<DictionarySearchResult> {
-                            entryExactPrefixBoost(it.entry, term)
-                        }.thenByDescending { it.score }
-                    )
                 return RecursiveLookupQueryResult(
-                    term = sourceComputed?.query ?: term,
-                    hits = boosted
+                    term = exactQuery.ifBlank { sourceComputed?.query ?: term },
+                    hits = sourceHits
                 )
             }
         }
@@ -82,24 +86,11 @@ internal suspend fun executeRecursiveLookupQuery(
         dictionaries = dictionaries,
         query = term
     )
+    val finalHits = if (isEntryTap) filterExactOrKeep(computed?.hits.orEmpty()) else computed?.hits.orEmpty()
     return RecursiveLookupQueryResult(
-        term = computed?.query ?: term,
-        hits = computed?.hits.orEmpty()
+        term = exactQuery.ifBlank { computed?.query ?: term },
+        hits = finalHits
     )
-}
-
-private fun entryExactPrefixBoost(entry: DictionaryEntry, query: String): Int {
-    val q = query.trim()
-    if (q.isBlank()) return 0
-    val term = entry.term.trim()
-    val reading = entry.reading?.trim().orEmpty()
-    return when {
-        term.equals(q, ignoreCase = true) -> 4
-        reading.equals(q, ignoreCase = true) -> 3
-        term.startsWith(q, ignoreCase = true) -> 2
-        reading.startsWith(q, ignoreCase = true) -> 1
-        else -> 0
-    }
 }
 
 internal fun rebuildDefinitionRectsByMatchedLengthCore(

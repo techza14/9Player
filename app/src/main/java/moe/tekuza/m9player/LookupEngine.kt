@@ -171,7 +171,7 @@ internal fun computeLookupResultsWithWinningCandidate(
             }
             val key = entryStableKey(hit.entry)
             val existing = mergedByKey[key]
-            if (existing == null || hit.score > existing.score) {
+            if (existing == null || hit.isHigherPriorityThan(existing)) {
                 mergedByKey[key] = hit
             }
         }
@@ -186,11 +186,7 @@ internal fun computeLookupResultsWithWinningCandidate(
     val finalQuery = primaryQuery ?: return null
     val fallbackMatchedLength = finalQuery.length.coerceAtLeast(1)
     val sortedHits = mergedByKey.values
-        .sortedWith(
-            compareByDescending<DictionarySearchResult> { it.score }
-                .thenBy { it.entry.term.length }
-                .thenBy { it.entry.term }
-        )
+        .sortedWith { left, right -> compareDictionarySearchPriority(right, left) }
         .map { hit ->
             if (hit.matchedLength > 0) hit else hit.copy(matchedLength = fallbackMatchedLength)
         }

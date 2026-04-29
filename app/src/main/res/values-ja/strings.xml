@@ -17,6 +17,7 @@
     <string name="common_change">変更</string>
     <string name="common_delete">削除</string>
     <string name="common_play">再生</string>
+    <string name="common_pause">一時停止</string>
     <string name="common_open">開く</string>
     <string name="common_lookup">辞書</string>
     <string name="common_loading">読み込み中...</string>
@@ -76,6 +77,7 @@
     <string name="home_no_books">まだ書籍がありません。</string>
     <string name="home_no_books_hint">+書籍 を押して、先にオーディオブックフォルダを選び、その後 audio/m4b を選択してください（SRT は任意）。</string>
     <string name="home_has_subtitle">字幕あり</string>
+    <string name="home_subtitle_attached">字幕付き</string>
     <string name="home_no_subtitle">字幕なし</string>
     <string name="home_selected">選択済み</string>
     <string name="home_opened">開いている</string>
@@ -349,6 +351,11 @@
     <string name="bookreader_sleep_exit_control">タイマー終了時にコントロールモードを終了</string>
     <string name="bookreader_sleep_disconnect_bluetooth">タイマー終了時にコントローラー Bluetooth を切断 (Shizuku)</string>
     <string name="bookreader_open_bluetooth">スマホの Bluetooth 設定を開く</string>
+    <string name="bookreader_ui_test_chapter_on">章表示: オン</string>
+    <string name="bookreader_ui_test_chapter_off">章表示: オフ</string>
+    <string name="bookreader_ui_test_layout_mode">レイアウトモード: %1$d/2</string>
+    <string name="bookreader_ui_test_swap_normal">進む/戻る: 通常</string>
+    <string name="bookreader_ui_test_swap_swapped">進む/戻る: 入れ替え</string>
     <string name="bookreader_lookup_no_dict">辞書が読み込まれていません。ホームで先に辞書をインポートしてください。</string>
     <string name="bookreader_lookup_failed">検索失敗</string>
     <string name="bookreader_anki_export_failed">Anki への追加に失敗しました。</string>
@@ -437,5 +444,13 @@
     <string name="anki_clear_field_variables">フィールド変数をクリア</string>
     <string name="anki_field_variable_help">{audio} は辞書音声、{cut-audio} は切り出し音声を書き出します。</string>
     <string name="anki_field_placeholder">プレースホルダーを入力するか、一覧から選択</string>
+    <string name="anki_duplicate_title">重複チェック</string>
+    <string name="anki_duplicate_check_label">重複カードを確認</string>
+    <string name="anki_duplicate_scope_label">重複範囲</string>
+    <string name="anki_duplicate_scope_deck">現在のデッキ</string>
+    <string name="anki_duplicate_scope_all">すべてのデッキ</string>
+    <string name="anki_duplicate_action_label">重複時の動作</string>
+    <string name="anki_duplicate_action_prevent">追加しない</string>
+    <string name="anki_duplicate_action_add">そのまま追加</string>
 </resources>
 

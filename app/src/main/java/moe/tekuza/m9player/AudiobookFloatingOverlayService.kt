@@ -149,6 +149,7 @@ companion object {
     private var subtitleOutlineTextView: TextView? = null
     private var subtitleControlsRow: LinearLayout? = null
     private var subtitleSettingsPanel: LinearLayout? = null
+    private var subtitleSettingsInlineHost: LinearLayout? = null
     private var subtitleLockButton: ImageButton? = null
     private var subtitleSettingsButton: ImageButton? = null
     private var subtitleSettingsFloatingView: FrameLayout? = null
@@ -174,6 +175,8 @@ companion object {
     private val floatingLookupHostSignatures = mutableMapOf<Int, Int>()
     private val floatingLookupRepositionJobs = mutableMapOf<Int, Job>()
     private val floatingLookupHostSizeListeners = mutableMapOf<Int, View.OnLayoutChangeListener>()
+    private val floatingAnkiDuplicateByKey = mutableMapOf<String, Boolean>()
+    private val floatingAnkiCheckingByKey = mutableSetOf<String>()
 
     private data class FloatingDefinitionWebViewTag(
         val bridge: DefinitionLookupBridge,
@@ -1037,6 +1040,7 @@ companion object {
             addView(controls)
         }
         if (verticalWriting) {
+            subtitleSettingsInlineHost = null
             val verticalRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1051,8 +1055,18 @@ companion object {
                 addView(verticalRow)
             })
         } else {
+            subtitleSettingsInlineHost = panel
             panel.addView(subtitleFrame)
             panel.addView(controlsOverlayHost)
+            panel.addView(
+                settingsPanel,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = (8 * resources.displayMetrics.density).toInt()
+                }
+            )
         }
 
         return panel
@@ -1433,6 +1447,7 @@ companion object {
         val panel = subtitleSettingsPanel ?: return
         if (!settings.floatingOverlaySubtitleEnabled) {
             controls.visibility = View.GONE
+            panel.visibility = View.GONE
             hideSubtitleSettingsOverlay()
             return
         }
@@ -1442,15 +1457,29 @@ companion object {
             verticalWriting -> View.INVISIBLE
             else -> View.GONE
         }
-        // Keep panel in layout for vertical mode to avoid relayout jump while toggling.
-        if (subtitleControlsVisible && subtitleSettingsExpanded) {
-            showOrUpdateSubtitleSettingsOverlay(settings)
+        if (verticalWriting) {
+            // Vertical mode uses floating settings panel anchored above settings button.
+            panel.visibility = View.VISIBLE
+            if (subtitleControlsVisible && subtitleSettingsExpanded) {
+                showOrUpdateSubtitleSettingsOverlay(settings)
+            } else {
+                hideSubtitleSettingsOverlay()
+            }
         } else {
+            // Horizontal mode keeps settings inline under toolbar.
             hideSubtitleSettingsOverlay()
+            if (panel.parent == null) {
+                subtitleSettingsInlineHost?.addView(panel)
+            }
+            panel.visibility = if (subtitleControlsVisible && subtitleSettingsExpanded) View.VISIBLE else View.GONE
         }
     }
 
     private fun showOrUpdateSubtitleSettingsOverlay(settings: AudiobookSettingsConfig) {
+        if (settings.floatingOverlaySubtitleWritingMode != FloatingSubtitleWritingMode.VERTICAL_RTL) {
+            hideSubtitleSettingsOverlay()
+            return
+        }
         val panel = subtitleSettingsPanel ?: return
         val settingsButton = subtitleSettingsButton
         val wm = windowManager ?: return
@@ -1516,7 +1545,9 @@ companion object {
 
     private fun handleSubtitleSingleTap(event: MotionEvent) {
         val subtitle = subtitleTextView ?: return
-        if (subtitle is VerticalLayoutTextView) {
+        val settings = loadAudiobookSettingsConfig(this)
+        val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
+        if (verticalWriting && subtitle is VerticalLayoutTextView) {
             val resolved = subtitle.resolveVerticalTap(event.x, event.y) ?: return
             subtitle.logVerticalTapDebug(FLOATING_SUBTITLE_HIT_LOG_TAG, event.x, event.y, resolved)
             val rect = resolved.rectInWindow
@@ -2217,7 +2248,7 @@ companion object {
     }
 
     private fun floatingHostSignature(layer: ReaderLookupLayer): Int {
-        return layer.copy(
+        val base = layer.copy(
             anchor = null,
             selectedRange = null,
             highlightedDefinitionKey = null,
@@ -2228,6 +2259,18 @@ companion object {
             autoPlayNonce = 0L,
             autoPlayedKey = null
         ).hashCode()
+        val duplicateStateSignature = layer.groupedResults.joinToString("|") { grouped ->
+            val duplicateCheckText = layer.selectionText?.trim()?.takeIf { it.isNotBlank() } ?: grouped.term
+            val key = normalizeAnkiDuplicateKey(duplicateCheckText)
+            val state = when {
+                floatingAnkiCheckingByKey.contains(key) -> "checking"
+                floatingAnkiDuplicateByKey[key] == true -> "dup"
+                floatingAnkiDuplicateByKey.containsKey(key) -> "ok"
+                else -> "unknown"
+            }
+            "${grouped.term}:${grouped.reading.orEmpty()}:$state"
+        }.hashCode()
+        return 31 * base + duplicateStateSignature
     }
 
     private fun updateFloatingLookupHostInteraction(host: View, layerIndex: Int, allowDefinitionLookup: Boolean) {
@@ -3003,6 +3046,8 @@ companion object {
         lookupRequestNonce += 1L
         floatingLookupSession.clear()
         floatingLookupCardPositions.clear()
+        floatingAnkiDuplicateByKey.clear()
+        floatingAnkiCheckingByKey.clear()
         applySubtitleSelectionHighlight(null)
         clearFloatingLookupHosts()
         updateFloatingLookupPanelPosition()
@@ -3415,6 +3460,14 @@ companion object {
         inline: Boolean = false
     ): LinearLayout {
         val density = resources.displayMetrics.density
+        val duplicateConfig = loadAnkiDuplicateConfig(this)
+        val allowAddWhenDuplicate = duplicateConfig.action.equals("add", ignoreCase = true)
+        val duplicateCheckText = layer.selectionText?.trim()?.takeIf { it.isNotBlank() } ?: grouped.term
+        val duplicateKey = normalizeAnkiDuplicateKey(duplicateCheckText)
+        ensureFloatingLookupDuplicateState(layerIndex, duplicateKey)
+        val hasDuplicateState = floatingAnkiDuplicateByKey.containsKey(duplicateKey)
+        val duplicateInAnki = floatingAnkiDuplicateByKey[duplicateKey] == true
+        val checkingDuplicate = floatingAnkiCheckingByKey.contains(duplicateKey) || !hasDuplicateState
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END or if (inline) Gravity.TOP else Gravity.CENTER_VERTICAL
@@ -3437,12 +3490,35 @@ companion object {
                 })
             }
             if (actionState.showAddToAnki) {
-                addView(createTextButton("+") {
+                addView(createTextButton(
+                    when {
+                        checkingDuplicate -> "…"
+                        duplicateInAnki -> "-"
+                        else -> "+"
+                    }
+                ) {
                     exportFloatingLookupToAnki(grouped, layerIndex, layer)
                 }.apply {
                     (layoutParams as? LinearLayout.LayoutParams)?.marginEnd = 0
+                    isEnabled = (!duplicateInAnki || allowAddWhenDuplicate) && !checkingDuplicate
+                    alpha = if (isEnabled) 1f else 0.55f
                 })
             }
+        }
+    }
+
+    private fun ensureFloatingLookupDuplicateState(layerIndex: Int, duplicateKey: String) {
+        if (duplicateKey.isBlank()) return
+        if (floatingAnkiDuplicateByKey.containsKey(duplicateKey)) return
+        if (floatingAnkiCheckingByKey.contains(duplicateKey)) return
+        floatingAnkiCheckingByKey.add(duplicateKey)
+        serviceScope.launch {
+            val duplicated = withContext(Dispatchers.IO) {
+                hasAnkiDuplicateByFirstFieldAsync(this@AudiobookFloatingOverlayService, duplicateKey)
+            }
+            floatingAnkiDuplicateByKey[duplicateKey] = duplicated
+            floatingAnkiCheckingByKey.remove(duplicateKey)
+            floatingLookupSession.getOrNull(layerIndex)?.let(::renderFloatingLookupResults)
         }
     }
 
@@ -3566,10 +3642,10 @@ companion object {
             })
             webViewClient = object : android.webkit.WebViewClient() {
                 fun dispatchLookupUrlTap(raw: String, host: WebView?): Boolean {
-                    val parsed = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
-                    val scheme = parsed.scheme?.lowercase(Locale.ROOT).orEmpty()
-                    if (scheme !in setOf("entry", "dictres")) return false
                     val target = resolveLookupTargetFromCustomUrl(raw) ?: return false
+                    val scheme = runCatching {
+                        Uri.parse(raw).scheme?.lowercase(Locale.ROOT).orEmpty()
+                    }.getOrDefault("")
                     val safeHost = host ?: this@apply
                     val right = safeHost.width.toFloat().takeIf { it > 0f } ?: 1f
                     val bottom = safeHost.height.toFloat().takeIf { it > 0f } ?: 1f
@@ -3620,10 +3696,10 @@ companion object {
                     request: android.webkit.WebResourceRequest?
                 ): Boolean {
                     val uri = request?.url ?: return false
-                    val scheme = uri.scheme?.lowercase(Locale.ROOT).orEmpty()
-                    if (scheme in setOf("entry", "dictres")) {
-                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$uri")
-                        dispatchLookupUrlTap(uri.toString(), view)
+                    val raw = uri.toString()
+                    if (resolveLookupTargetFromCustomUrl(raw) != null) {
+                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
+                        dispatchLookupUrlTap(raw, view)
                         return true
                     }
                     return false
@@ -3631,8 +3707,7 @@ companion object {
 
                 override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                     val raw = url?.trim().orEmpty()
-                    val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
-                    if (scheme in setOf("entry", "dictres")) {
+                    if (resolveLookupTargetFromCustomUrl(raw) != null) {
                         Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
                         dispatchLookupUrlTap(raw, view)
                         return true
@@ -4094,6 +4169,7 @@ companion object {
         subtitleOutlineTextView = null
         subtitleControlsRow = null
         subtitleSettingsPanel = null
+        subtitleSettingsInlineHost = null
         subtitleLockButton = null
         subtitleSettingsButton = null
         hideSubtitleSettingsOverlay()
@@ -4355,7 +4431,8 @@ companion object {
                             dictionaryCss = dictionaryGroup.css,
                             groupedDictionaries = grouped.dictionaries,
                             popupSelectionText = popupSelectionText,
-                            sentenceOverride = sentence
+                            sentenceOverride = sentence,
+                            lookupTermOverride = grouped.term
                         )
                     } finally {
                         preparedLookupAudio?.cleanup?.invoke()
@@ -4365,11 +4442,15 @@ companion object {
             result.fold(
                 onSuccess = { exportResult ->
                     val message = ankiExportResultMessage(this@AudiobookFloatingOverlayService, exportResult)
-                    Toast.makeText(
-                        this@AudiobookFloatingOverlayService,
-                        message.take(220),
-                        if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
-                    ).show()
+                    if (exportResult !is AnkiExportResult.DuplicateSkipped &&
+                        message.isNotBlank()
+                    ) {
+                        Toast.makeText(
+                            this@AudiobookFloatingOverlayService,
+                            message.take(220),
+                            if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                        ).show()
+                    }
                 },
                 onFailure = {
                     Toast.makeText(

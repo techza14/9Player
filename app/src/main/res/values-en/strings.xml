@@ -437,5 +437,20 @@
     <string name="anki_clear_field_variables">Clear field variables</string>
     <string name="anki_field_variable_help">{audio} exports lookup audio, {cut-audio} exports clipped audio.</string>
     <string name="anki_field_placeholder">Type a placeholder or choose from the list</string>
+    <string name="common_pause">Pause</string>
+    <string name="home_subtitle_attached">Subtitles attached</string>
+    <string name="bookreader_ui_test_chapter_on">Chapters: on</string>
+    <string name="bookreader_ui_test_chapter_off">Chapters: off</string>
+    <string name="bookreader_ui_test_layout_mode">Layout mode: %1$d/2</string>
+    <string name="bookreader_ui_test_swap_normal">Next/Previous: normal</string>
+    <string name="bookreader_ui_test_swap_swapped">Next/Previous: swapped</string>
+    <string name="anki_duplicate_title">Duplicate check</string>
+    <string name="anki_duplicate_check_label">Check duplicate cards</string>
+    <string name="anki_duplicate_scope_label">Duplicate scope</string>
+    <string name="anki_duplicate_scope_deck">Current deck</string>
+    <string name="anki_duplicate_scope_all">All decks</string>
+    <string name="anki_duplicate_action_label">On duplicate</string>
+    <string name="anki_duplicate_action_prevent">Prevent add</string>
+    <string name="anki_duplicate_action_add">Add anyway</string>
 </resources>
 

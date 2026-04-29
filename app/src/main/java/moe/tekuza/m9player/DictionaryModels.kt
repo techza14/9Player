@@ -27,6 +27,23 @@ internal data class DictionarySearchResult(
     val sourceCacheKey: String = ""
 )
 
+internal fun compareDictionarySearchPriority(
+    a: DictionarySearchResult,
+    b: DictionarySearchResult
+): Int {
+    val byMatchedLength = a.matchedLength.compareTo(b.matchedLength)
+    if (byMatchedLength != 0) return byMatchedLength
+    val byScore = a.score.compareTo(b.score)
+    if (byScore != 0) return byScore
+    val byTermLength = a.entry.term.length.compareTo(b.entry.term.length)
+    if (byTermLength != 0) return byTermLength
+    return b.entry.term.compareTo(a.entry.term)
+}
+
+internal fun DictionarySearchResult.isHigherPriorityThan(other: DictionarySearchResult): Boolean {
+    return compareDictionarySearchPriority(this, other) > 0
+}
+
 internal data class MinedCard(
     val word: String,
     val popupSelectionText: String? = null,

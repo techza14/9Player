@@ -694,17 +694,13 @@ private fun searchDictionaryWithHoshi(
             sourceCacheKey = sourceCacheKey.orEmpty()
         )
         val existing = merged[key]
-        if (existing == null || next.score > existing.score) {
+        if (existing == null || next.isHigherPriorityThan(existing)) {
             merged[key] = next
         }
     }
 
     return merged.values
-        .sortedWith(
-            compareByDescending<DictionarySearchResult> { it.score }
-                .thenBy { it.entry.term.length }
-                .thenBy { it.entry.term }
-        )
+        .sortedWith { left, right -> compareDictionarySearchPriority(right, left) }
         .take(maxResults)
 }
 
@@ -843,16 +839,12 @@ internal fun searchDictionarySql(
     (hoshiResults + mdictNativeResults + sqliteResults).forEach { result ->
         val key = entryStableKey(result.entry)
         val existing = merged[key]
-        if (existing == null || result.score > existing.score) {
+        if (existing == null || result.isHigherPriorityThan(existing)) {
             merged[key] = result
         }
     }
     val topResults = merged.values
-        .sortedWith(
-            compareByDescending<DictionarySearchResult> { it.score }
-                .thenBy { it.entry.term.length }
-                .thenBy { it.entry.term }
-        )
+        .sortedWith { left, right -> compareDictionarySearchPriority(right, left) }
         .take(maxResults)
     val results = finalizeLookupResultsForDisplay(
         context = context,
@@ -1150,18 +1142,14 @@ private fun searchDictionaryWithMdictNative(
             )
             val key = entryStableKey(result.entry)
             val existing = merged[key]
-            if (existing == null || result.score > existing.score) {
+            if (existing == null || result.isHigherPriorityThan(existing)) {
                 merged[key] = result
             }
         }
     }
 
     return merged.values
-        .sortedWith(
-            compareByDescending<DictionarySearchResult> { it.score }
-                .thenBy { it.entry.term.length }
-                .thenBy { it.entry.term }
-        )
+        .sortedWith { left, right -> compareDictionarySearchPriority(right, left) }
         .take(maxResults.coerceAtLeast(1))
 }
 
@@ -1319,18 +1307,14 @@ private fun searchDictionaryWithSqlite(
         local.forEach { result ->
             val key = entryStableKey(result.entry)
             val existing = merged[key]
-            if (existing == null || result.score > existing.score) {
+            if (existing == null || result.isHigherPriorityThan(existing)) {
                 merged[key] = result
             }
         }
     }
 
     return merged.values
-        .sortedWith(
-            compareByDescending<DictionarySearchResult> { it.score }
-                .thenBy { it.entry.term.length }
-                .thenBy { it.entry.term }
-        )
+        .sortedWith { left, right -> compareDictionarySearchPriority(right, left) }
         .take(maxResults.coerceAtLeast(1) * 2)
 }
 

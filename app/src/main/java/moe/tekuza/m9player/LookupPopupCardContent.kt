@@ -21,13 +21,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 
@@ -49,6 +55,12 @@ internal fun LookupPopupCardContent(
     onCloseAll: (() -> Unit)?,
     onClose: (() -> Unit)?
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val duplicateConfig = remember { loadAnkiDuplicateConfig(context) }
+    val allowAddWhenDuplicate = duplicateConfig.action.equals("add", ignoreCase = true)
+    val ankiDuplicateByKey = remember { mutableStateMapOf<String, Boolean>() }
+    val ankiCheckingByKey = remember { mutableStateMapOf<String, Boolean>() }
     val presentation = remember(groupedResults, highlightedDefinitionKey, highlightedDefinitionRects, collapsedSections) {
         buildLookupPresentation(
             ReaderLookupLayer(
@@ -134,6 +146,23 @@ internal fun LookupPopupCardContent(
             }
             presentation.forEach { groupedPresentation ->
                 val groupedResult = groupedPresentation.groupedResult
+                val duplicateCheckText = groupedResult.term
+                val ankiKey = remember(groupedResult.term, groupedResult.reading) {
+                    "${groupedResult.term}|${groupedResult.reading.orEmpty()}"
+                }
+                val hasDuplicateState = ankiDuplicateByKey.containsKey(ankiKey)
+                val duplicateInAnki = ankiDuplicateByKey[ankiKey] == true
+                val checkingDuplicate = (ankiCheckingByKey[ankiKey] == true) || !hasDuplicateState
+                LaunchedEffect(ankiKey, actionState.showAddToAnki) {
+                    if (!actionState.showAddToAnki) return@LaunchedEffect
+                    ankiCheckingByKey[ankiKey] = true
+                    val duplicated = hasAnkiDuplicateByFirstFieldAsync(
+                        context,
+                        duplicateCheckText
+                    )
+                    ankiDuplicateByKey[ankiKey] = duplicated
+                    ankiCheckingByKey[ankiKey] = false
+                }
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(10.dp),
@@ -167,8 +196,31 @@ internal fun LookupPopupCardContent(
                                     }
                                 }
                                 if (actionState.showAddToAnki && onAddToAnki != null) {
-                                    OutlinedButton(onClick = { onAddToAnki(groupedResult) }) {
-                                        Text("+")
+                                    OutlinedButton(
+                                        onClick = {
+                                            onAddToAnki(groupedResult)
+                                            scope.launch {
+                                                ankiCheckingByKey[ankiKey] = true
+                                                delay(450)
+                                                val duplicated = withContext(Dispatchers.IO) {
+                                                    hasAnkiDuplicateByFirstFieldAsync(
+                                                        context,
+                                                        duplicateCheckText
+                                                    )
+                                                }
+                                                ankiDuplicateByKey[ankiKey] = duplicated
+                                                ankiCheckingByKey[ankiKey] = false
+                                            }
+                                        },
+                                        enabled = (!duplicateInAnki || allowAddWhenDuplicate) && !checkingDuplicate
+                                    ) {
+                                        Text(
+                                            when {
+                                                checkingDuplicate -> "…"
+                                                duplicateInAnki -> "-"
+                                                else -> "+"
+                                            }
+                                        )
                                     }
                                 }
                             }
