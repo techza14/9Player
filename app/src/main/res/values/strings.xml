@@ -79,9 +79,12 @@
     <string name="home_no_books">还没有书籍。</string>
     <string name="home_no_books_hint">点击 +书籍，先选择有声书文件夹，再选择音频/m4b（SRT可选）。</string>
     <string name="home_has_subtitle">有字幕</string>
+    <string name="home_subtitle_attached">附字幕</string>
     <string name="home_no_subtitle">无字幕</string>
     <string name="home_selected">已选中</string>
     <string name="home_opened">已打开</string>
+    <string name="home_rename_book">修改名称</string>
+    <string name="home_book_name">名称</string>
     <string name="dictionary_title">辞典与查询</string>
     <string name="dictionary_summary">辞典：%1$d（共 %2$d 条）</string>
     <string name="dictionary_importing">正在导入辞典...</string>
