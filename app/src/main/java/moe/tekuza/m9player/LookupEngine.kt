@@ -37,7 +37,11 @@ internal fun loadAvailableDictionaries(
     // Prewarm mounted MDX runtime/cache at startup to reduce first-query latency.
     prebuildMountedMdxIndexesAsync(context.applicationContext)
     val persisted = loadPersistedImports(context)
-    val refs = persisted.dictionaries.distinctBy { it.uri }
+    val refs = persisted.dictionaries
+        .asSequence()
+        .filter { it.enabled }
+        .distinctBy { it.uri }
+        .toList()
     val imported = refs.mapNotNull { ref ->
         val restoredUri = runCatching { Uri.parse(ref.uri) }.getOrNull()
         val displayName = ref.name.ifBlank {

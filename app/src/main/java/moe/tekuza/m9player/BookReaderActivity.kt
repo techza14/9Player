@@ -178,6 +178,7 @@ private const val BOOK_LOOKUP_POS_LOG_TAG = "BookLookupPos"
 private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
 private const val BOOK_LOOKUP_SELECTION_LOG_TAG = "BookLookupSelection"
 private const val BOOK_LOOKUP_TAP_LOG_TAG = "BookLookupTap"
+private const val BOOK_READER_BACK_LOG_TAG = "BookReaderBack"
 private const val BOOK_UI_MODE_LOG_TAG = "BookUiMode"
 private const val BOOK_VERTICAL_TAP_DEBUG_OVERLAY = false
 private const val BOOK_CUE_LOOP_LOG_TAG = "BookCueLoop"
@@ -528,6 +529,7 @@ private fun BookReaderScreen(
     var lookupPopupTemporarilyHidden by remember { mutableStateOf(false) }
     var reopenLookupPopupAfterCueRangeSelection by remember { mutableStateOf(false) }
     var lookupPopupRequestNonce by remember { mutableStateOf(0L) }
+    var lookupPopupPending by remember { mutableStateOf(false) }
     var resumePlaybackAfterLookupDismiss by remember { mutableStateOf(false) }
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
 
@@ -982,9 +984,13 @@ private fun BookReaderScreen(
         minOf(start, end)..maxOf(start, end)
     }
     val backToMain = remember(onBack, player, durationMs) {
-        {
+        { source: String ->
             val current = player.currentPosition.coerceAtLeast(0L)
             val total = if (player.duration > 0L) player.duration else durationMs.coerceAtLeast(0L)
+            Log.d(
+                BOOK_READER_BACK_LOG_TAG,
+                "backToMain source=$source lookupVisible=${lookupSession.size > 0} lookupLayers=${lookupSession.size} pending=$lookupPopupPending playing=${player.isPlaying} positionMs=$current durationMs=$total"
+            )
             onBack(current, total)
         }
     }
@@ -1734,7 +1740,6 @@ private fun BookReaderScreen(
         if (uiTestMode) return
         val lookupStartMs = System.currentTimeMillis()
         consumeCueRangeSelection()
-        lookupSession.clear()
         val dictionariesSnapshot = loadedDictionaries
         val cueIndex = cues.indexOf(cue).takeIf { it >= 0 }
         val anchorBounds = anchor.boundingRectOrNull()
@@ -1752,25 +1757,6 @@ private fun BookReaderScreen(
             BOOK_LOOKUP_TAP_LOG_TAG,
             "tapLookup start cueIndex=$cueIndex offset=$offset t=$lookupStartMs"
         )
-        val requestNonce = lookupPopupRequestNonce + 1L
-        lookupPopupRequestNonce = requestNonce
-        if (dictionariesSnapshot.isEmpty()) {
-            lookupSession.push(buildLookupLayer(
-                loading = false,
-                error = context.getString(R.string.bookreader_lookup_no_dict),
-                rawResults = emptyList(),
-                cue = cue,
-                    cueIndex = cueIndex,
-                    anchorOffset = offset,
-                    anchor = anchor,
-                    placeBelow = shouldPlaceBelow,
-                    preferSidePlacement = false,
-                    selectedRange = null,
-                    selectionText = null
-                ))
-            return
-        }
-
         val selection = selectLookupScanText(
             text = cue.text,
             charOffset = offset
@@ -1787,12 +1773,34 @@ private fun BookReaderScreen(
         }
 
         lookupPopupTemporarilyHidden = false
+        lookupPopupRequestNonce += 1L
+        val requestNonce = lookupPopupRequestNonce
+        lookupPopupPending = true
 
         if (audiobookSettings.pausePlaybackOnLookup && player.isPlaying) {
             setLookupPlaybackState(play = false)
             resumePlaybackAfterLookupDismiss = true
         } else {
             resumePlaybackAfterLookupDismiss = false
+        }
+
+        lookupSession.clear()
+
+        fun finishPendingLookupWithoutPopup(resumePlayback: Boolean = true) {
+            lookupPopupPending = false
+            lookupPopupTemporarilyHidden = false
+            lookupSession.clear()
+            consumeCueRangeSelection()
+            if (resumePlayback && resumePlaybackAfterLookupDismiss) {
+                setLookupPlaybackState(play = true)
+            }
+            resumePlaybackAfterLookupDismiss = false
+        }
+
+        if (dictionariesSnapshot.isEmpty()) {
+            finishPendingLookupWithoutPopup()
+            Toast.makeText(context, context.getString(R.string.bookreader_lookup_no_dict), Toast.LENGTH_SHORT).show()
+            return
         }
 
         scope.launch {
@@ -1831,21 +1839,24 @@ private fun BookReaderScreen(
                 } else {
                     anchor
                 }
-                lookupSession.push(
-                    buildLookupLayer(
-                        loading = false,
-                        error = null,
-                        rawResults = hits,
-                        cue = cue,
-                        cueIndex = cueIndex,
-                        anchorOffset = offset,
-                        anchor = expandedAnchor,
-                        placeBelow = shouldPlaceBelow,
-                        preferSidePlacement = false,
-                        selectedRange = resolvedRange,
-                        selectionText = selectionText
-                    )
+                val layer = buildLookupLayer(
+                    loading = false,
+                    error = null,
+                    rawResults = hits,
+                    cue = cue,
+                    cueIndex = cueIndex,
+                    anchorOffset = offset,
+                    anchor = expandedAnchor,
+                    placeBelow = shouldPlaceBelow,
+                    preferSidePlacement = false,
+                    selectedRange = resolvedRange,
+                    selectionText = selectionText
                 )
+                if (lookupSession.size > 0) {
+                    lookupSession.replaceTop { layer }
+                } else {
+                    lookupSession.push(layer)
+                }
                 Log.d(
                     BOOK_LOOKUP_POS_LOG_TAG,
                     "tapLookup success cueIndex=$cueIndex query='${computedQuery ?: query}' hits=${hits.size} elapsedMs=${(System.currentTimeMillis() - lookupStartMs).coerceAtLeast(0L)}"
@@ -1867,37 +1878,48 @@ private fun BookReaderScreen(
             }
             finalResult.onSuccess { computed ->
                 if (lookupPopupRequestNonce != requestNonce) return@onSuccess
-                applyLookupResult(computed?.hits.orEmpty(), computed?.query)
+                val hits = computed?.hits.orEmpty()
+                if (hits.isEmpty()) {
+                    finishPendingLookupWithoutPopup()
+                    Log.d(
+                        BOOK_LOOKUP_POS_LOG_TAG,
+                        "tapLookup empty cueIndex=$cueIndex query='${computed?.query ?: query}' elapsedMs=${(System.currentTimeMillis() - lookupStartMs).coerceAtLeast(0L)}"
+                    )
+                } else {
+                    lookupPopupPending = false
+                    applyLookupResult(hits, computed?.query)
+                }
             }.onFailure { throwable ->
                 if (lookupPopupRequestNonce != requestNonce) return@onFailure
-                lookupSession.push(
-                    buildLookupLayer(
-                        loading = false,
-                        error = throwable.message ?: context.getString(R.string.bookreader_lookup_failed),
-                        rawResults = emptyList(),
-                        cue = cue,
-                        cueIndex = cueIndex,
-                        anchorOffset = offset,
-                        anchor = anchor,
-                        placeBelow = shouldPlaceBelow,
-                        preferSidePlacement = false,
-                        selectedRange = null,
-                        selectionText = selectedToken
-                    )
-                )
+                finishPendingLookupWithoutPopup()
+                Toast.makeText(
+                    context,
+                    (throwable.message ?: context.getString(R.string.bookreader_lookup_failed)).take(160),
+                    Toast.LENGTH_SHORT
+                ).show()
                 Log.d(
                     BOOK_LOOKUP_POS_LOG_TAG,
                     "tapLookup fail cueIndex=$cueIndex query='$query' elapsedMs=${(System.currentTimeMillis() - lookupStartMs).coerceAtLeast(0L)} error='${throwable.message.orEmpty()}'"
-                )
-                Log.d(
-                    BOOK_LOOKUP_POS_LOG_TAG,
-                    "pushError layer=${lookupSession.lastIndex} source=subtitle anchor=${formatRectForLog(anchorBounds)} placeBelow=$shouldPlaceBelow"
                 )
             }
         }
     }
 
+    fun cancelPendingLookup(resumePlayback: Boolean = true) {
+        if (!lookupPopupPending) return
+        lookupPopupRequestNonce += 1L
+        lookupPopupPending = false
+        lookupPopupTemporarilyHidden = false
+        lookupSession.clear()
+        consumeCueRangeSelection()
+        if (resumePlayback && resumePlaybackAfterLookupDismiss) {
+            setLookupPlaybackState(play = true)
+        }
+        resumePlaybackAfterLookupDismiss = false
+    }
+
     fun popLookupSnapshotOrClose(resumePlayback: Boolean = true) {
+        lookupPopupRequestNonce += 1L
         lookupSession.pop()
         if (lookupSession.size > 0) {
             lookupPopupTemporarilyHidden = false
@@ -1913,6 +1935,7 @@ private fun BookReaderScreen(
     }
 
     fun closeLookupPopup(resumePlayback: Boolean = true) {
+        lookupPopupRequestNonce += 1L
         lookupSession.clear()
         lookupPopupTemporarilyHidden = false
         consumeCueRangeSelection()
@@ -2383,16 +2406,17 @@ private fun BookReaderScreen(
         onDispose { registerGamepadKeyHandler(null) }
     }
 
-    BackHandler {
-        when {
-            lookupPopupVisible -> popLookupSnapshotOrClose()
-            sleepTimerOptionsVisible -> sleepTimerOptionsVisible = false
-            topActionsExpanded -> topActionsExpanded = false
-            speedMenuExpanded -> speedMenuExpanded = false
-            chapterOptionsVisible -> chapterOptionsVisible = false
-            else -> backToMain()
+        BackHandler {
+            when {
+                lookupPopupPending -> cancelPendingLookup()
+                lookupPopupVisible -> popLookupSnapshotOrClose()
+                sleepTimerOptionsVisible -> sleepTimerOptionsVisible = false
+                topActionsExpanded -> topActionsExpanded = false
+                speedMenuExpanded -> speedMenuExpanded = false
+                chapterOptionsVisible -> chapterOptionsVisible = false
+                else -> backToMain("system_back")
+            }
         }
-    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         val useLeftVerticalLayout = uiTestLayoutMode == 2
@@ -2673,7 +2697,7 @@ private fun BookReaderScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = backToMain) {
+                    TextButton(onClick = { backToMain("top_bar_button") }) {
                         Text(stringResource(R.string.bookreader_back))
                     }
                     Spacer(modifier = Modifier.weight(1f))

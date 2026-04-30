@@ -86,6 +86,7 @@ internal data class DefinitionLookupTapData(
 private const val BOOK_LOOKUP_TAP_LOG_TAG = "BookLookupTap"
 private const val BOOK_LOOKUP_RENDER_LOG_TAG = "BookLookupRender"
 private const val LOOKUP_WEBVIEW_POOL_MAX = 2
+private const val LOOKUP_WEBVIEW_BASE_URL = "https://nine.local/lookup/"
 
 private class DefinitionLookupViewTag(
     val bridge: DefinitionLookupBridge
@@ -94,8 +95,6 @@ private class DefinitionLookupViewTag(
     var lastLookupEnabled: Boolean? = null
     var lastLoadStartMs: Long = 0L
     var lastLoadToken: Long = 0L
-    var shellBootstrapped: Boolean = false
-    var patchRetryToken: Long = 0L
 }
 
 private val lookupWebViewPool = ArrayDeque<WebView>()
@@ -554,6 +553,7 @@ private fun isDropAfterMora(moraIndex: Int, moraCount: Int, accent: Int): Boolea
 internal fun RichDefinitionView(
     definition: String,
     indexLabel: String = "",
+    definitionCount: Int = 1,
     dictionaryName: String? = null,
     dictionaryCss: String? = null,
     onLookupTap: ((DefinitionLookupTapData) -> Unit)? = null,
@@ -575,22 +575,15 @@ internal fun RichDefinitionView(
                 pooledWebView = null
             }
         }
-        val html = remember(trimmed, indexLabel, dictionaryName, dictionaryCss, bodyTextColorCss, lookupEnabled) {
+        val html = remember(trimmed, indexLabel, definitionCount, dictionaryName, dictionaryCss, bodyTextColorCss, lookupEnabled) {
             buildDefinitionHtml(
                 definitionHtml = trimmed,
                 indexLabel = indexLabel,
+                definitionCount = definitionCount,
                 dictionaryName = dictionaryName,
                 dictionaryCss = dictionaryCss,
                 bodyTextColorCss = bodyTextColorCss,
                 enableLookupTap = lookupEnabled
-            )
-        }
-        val patchPayload = remember(trimmed, indexLabel, dictionaryName, dictionaryCss, bodyTextColorCss) {
-            buildDefinitionHtmlPayload(
-                definitionHtml = trimmed,
-                indexLabel = indexLabel,
-                dictionaryName = dictionaryName,
-                dictionaryCss = dictionaryCss
             )
         }
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -611,7 +604,6 @@ internal fun RichDefinitionView(
                     (reused ?: WebView(context)).apply {
                         pooledWebView = this
                         tag = viewTag
-                        viewTag.shellBootstrapped = reused != null
                         bridge.hostView = this
                         runCatching { removeJavascriptInterface("NineLookup") }
                         setBackgroundColor(0x00000000)
@@ -834,66 +826,17 @@ internal fun RichDefinitionView(
                             val token = System.currentTimeMillis()
                             lastLoadStartMs = token
                             lastLoadToken = token
-                            patchRetryToken = 0L
-                            fun fallbackToFullLoad(fallbackToken: Long) {
-                                lastLoadStartMs = fallbackToken
-                                lastLoadToken = fallbackToken
-                                webView.loadDataWithBaseURL(
-                                    null,
-                                    html,
-                                    "text/html",
-                                    "utf-8",
-                                    null
-                                )
-                            }
-                            if (!shellBootstrapped) {
-                                Log.d(
-                                    BOOK_LOOKUP_RENDER_LOG_TAG,
-                                    "webview load token=$token bytes=${html.length}"
-                                )
-                                fallbackToFullLoad(token)
-                                shellBootstrapped = true
-                            } else {
-                                val patchScript = buildDefinitionPatchScript(
-                                    bodyHtml = patchPayload.wrappedBody,
-                                    customCss = patchPayload.customCss,
-                                    bodyTextColorCss = bodyTextColorCss
-                                )
-                                Log.d(
-                                    BOOK_LOOKUP_RENDER_LOG_TAG,
-                                    "webview patch token=$token bodyBytes=${patchPayload.wrappedBody.length} cssBytes=${patchPayload.customCss.length}"
-                                )
-                                webView.evaluateJavascript(patchScript) { result ->
-                                    val decoded = decodeEvaluateJavascriptJson(result) ?: result.orEmpty()
-                                    if (decoded != "ok") {
-                                        if (decoded == "missing" && patchRetryToken != token) {
-                                            patchRetryToken = token
-                                            webView.post {
-                                                val currentTag = webView.tag as? DefinitionLookupViewTag
-                                                if (currentTag?.lastLoadToken != token) return@post
-                                                webView.evaluateJavascript(patchScript) { retryResult ->
-                                                    val retryDecoded = decodeEvaluateJavascriptJson(retryResult) ?: retryResult.orEmpty()
-                                                    if (retryDecoded == "ok") return@evaluateJavascript
-                                                    Log.d(
-                                                        BOOK_LOOKUP_RENDER_LOG_TAG,
-                                                        "webview patch fallback token=$token retryResult=$retryDecoded"
-                                                    )
-                                                    val fallbackToken = System.currentTimeMillis()
-                                                    currentTag.patchRetryToken = 0L
-                                                    fallbackToFullLoad(fallbackToken)
-                                                }
-                                            }
-                                            return@evaluateJavascript
-                                        }
-                                        Log.d(
-                                            BOOK_LOOKUP_RENDER_LOG_TAG,
-                                            "webview patch fallback token=$token result=$decoded"
-                                        )
-                                        val fallbackToken = System.currentTimeMillis()
-                                        fallbackToFullLoad(fallbackToken)
-                                    }
-                                }
-                            }
+                            Log.d(
+                                BOOK_LOOKUP_RENDER_LOG_TAG,
+                                "webview load token=$token bytes=${html.length}"
+                            )
+                            webView.loadDataWithBaseURL(
+                                LOOKUP_WEBVIEW_BASE_URL,
+                                html,
+                                "text/html",
+                                "utf-8",
+                                null
+                            )
                             lastHtml = html
                         }
                     }
@@ -956,13 +899,15 @@ internal fun RichDefinitionView(
             }
         }
     } else {
-        Text("$indexLabel${trimmed}")
+        val shouldShowIndex = indexLabel.isNotBlank() && definitionCount > 1
+        Text(if (shouldShowIndex) "$indexLabel${trimmed}" else trimmed)
     }
 }
 
 internal fun buildDefinitionHtml(
     definitionHtml: String,
     indexLabel: String,
+    definitionCount: Int,
     dictionaryName: String?,
     dictionaryCss: String?,
     bodyTextColorCss: String,
@@ -971,6 +916,7 @@ internal fun buildDefinitionHtml(
     val cacheKey = DefinitionHtmlCacheKey(
         definitionHash = definitionHtml.hashCode(),
         indexLabel = indexLabel,
+        definitionCount = definitionCount,
         dictionaryName = dictionaryName?.trim().orEmpty(),
         dictionaryCssHash = dictionaryCss.orEmpty().hashCode(),
         bodyTextColorCss = bodyTextColorCss,
@@ -983,6 +929,7 @@ internal fun buildDefinitionHtml(
     val payload = buildDefinitionHtmlPayload(
         definitionHtml = definitionHtml,
         indexLabel = indexLabel,
+        definitionCount = definitionCount,
         dictionaryName = dictionaryName,
         dictionaryCss = dictionaryCss
     )
@@ -2001,6 +1948,7 @@ private const val DEFINITION_HTML_CACHE_MAX = 256
 private data class DefinitionHtmlCacheKey(
     val definitionHash: Int,
     val indexLabel: String,
+    val definitionCount: Int,
     val dictionaryName: String,
     val dictionaryCssHash: Int,
     val bodyTextColorCss: String,
@@ -2022,25 +1970,36 @@ private val definitionHtmlCache =
 private fun buildDefinitionHtmlPayload(
     definitionHtml: String,
     indexLabel: String,
+    definitionCount: Int,
     dictionaryName: String?,
     dictionaryCss: String?
 ): DefinitionHtmlPayload {
-    val listStart = Regex("""\d+""").find(indexLabel)?.value?.toIntOrNull()?.coerceAtLeast(1) ?: 1
     val normalizedDefinitionHtml = normalizeStructuredContentLikeHoshi(definitionHtml)
+    val hasMultipleItems = definitionCount > 1
     val dictionaryLabel = dictionaryName?.trim().orEmpty()
     val resolvedDictionaryAttr = dictionaryLabel.ifBlank { "__default__" }
     val safeDictionaryLabel = escapeHtmlText(dictionaryLabel)
     val safeDictionaryAttr = escapeHtmlAttributeForHtml(resolvedDictionaryAttr)
     val leadingLabel = if (dictionaryLabel.isBlank()) "" else "<i>($safeDictionaryLabel)</i> "
-    val wrappedBody = """
-        <div class="yomitan-glossary">
-            <ol start="$listStart">
-                <li data-dictionary="$safeDictionaryAttr">
+    val wrappedBody = if (hasMultipleItems) {
+        """
+            <div class="yomitan-glossary">
+                <ol>
+                    <li data-dictionary="$safeDictionaryAttr">
+                        $leadingLabel$normalizedDefinitionHtml
+                    </li>
+                </ol>
+            </div>
+        """.trimIndent()
+    } else {
+        """
+            <div class="yomitan-glossary">
+                <div class="glossary-single" data-dictionary="$safeDictionaryAttr">
                     $leadingLabel$normalizedDefinitionHtml
-                </li>
-            </ol>
-        </div>
-    """.trimIndent()
+                </div>
+            </div>
+        """.trimIndent()
+    }
     val customCss = scopeDictionaryCssLikeHoshi(
         rawCss = dictionaryCss.orEmpty(),
         dictionaryName = resolvedDictionaryAttr
@@ -2049,19 +2008,6 @@ private fun buildDefinitionHtmlPayload(
         wrappedBody = wrappedBody,
         customCss = customCss
     )
-}
-
-private fun buildDefinitionPatchScript(
-    bodyHtml: String,
-    customCss: String,
-    bodyTextColorCss: String
-): String {
-    val payloadJson = JSONObject()
-        .put("bodyHtml", bodyHtml)
-        .put("customCss", customCss)
-        .put("bodyTextColorCss", bodyTextColorCss)
-        .toString()
-    return "(function(){try{return window.__nineApplyDefinitionPayload && window.__nineApplyDefinitionPayload($payloadJson) ? 'ok' : 'missing';}catch(e){return 'error:' + (e && e.message ? e.message : 'unknown');}})();"
 }
 
 private fun decodePreviewImage(context: android.content.Context, rawSrc: String): ImageBitmap? {

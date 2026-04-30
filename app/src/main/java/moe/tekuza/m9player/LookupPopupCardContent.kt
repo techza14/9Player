@@ -91,13 +91,6 @@ internal fun LookupPopupCardContent(
         modifier = Modifier.padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        if (!actionState.sourceTerm.isNullOrBlank()) {
-            Text(
-                text = stringResource(R.string.floating_lookup_from, actionState.sourceTerm),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -228,18 +221,6 @@ internal fun LookupPopupCardContent(
                         }
 
                         groupedPresentation.dictionaries.forEach { dictionaryPresentation ->
-                            val dictionarySegments = remember(groupedPresentation, dictionaryPresentation) {
-                                dictionaryPresentation.definitions.map { definition ->
-                                    MergedDefinitionSegment(
-                                        term = groupedPresentation.groupedResult.term,
-                                        dictionaryName = dictionaryPresentation.dictionaryName,
-                                        definitionKey = definition.definitionKey,
-                                        definitionHtml = definition.definitionHtml,
-                                        dictionaryCss = definition.dictionaryCss,
-                                        highlightedRects = definition.highlightedRects
-                                    )
-                                }
-                            }
                             Card(modifier = Modifier.fillMaxWidth()) {
                                 Column(
                                     modifier = Modifier.padding(8.dp),
@@ -249,36 +230,28 @@ internal fun LookupPopupCardContent(
                                         dictionaryName = dictionaryPresentation.dictionaryName,
                                         expanded = dictionaryPresentation.expanded,
                                         onToggleExpanded = {
-                                            onToggleSection?.invoke(
-                                                dictionaryPresentation.sectionKey,
-                                                dictionaryPresentation.expanded
-                                            )
-                                        }
-                                    )
-                                    if (dictionaryPresentation.expanded && dictionarySegments.isNotEmpty()) {
-                                        val mergedHtml = remember(dictionarySegments) {
-                                            buildMergedDefinitionHtmlByDictionary(dictionarySegments)
-                                        }
-                                        val mergedCss = remember(dictionarySegments) {
-                                            buildMergedDictionaryCss(dictionarySegments)
-                                        }
-                                        val mergedHighlightedRects = remember(dictionarySegments) {
-                                            dictionarySegments.firstOrNull { it.highlightedRects.isNotEmpty() }?.highlightedRects.orEmpty()
-                                        }
-                                        val firstDefinitionKey = dictionarySegments.first().definitionKey
+                                        onToggleSection?.invoke(
+                                            dictionaryPresentation.sectionKey,
+                                            dictionaryPresentation.expanded
+                                        )
+                                    }
+                                )
+                                    val mergedContent = dictionaryPresentation.mergedContent
+                                    if (dictionaryPresentation.expanded && mergedContent != null) {
                                         RichDefinitionView(
-                                            definition = mergedHtml,
+                                            definition = mergedContent.definitionHtml,
                                             indexLabel = "",
+                                            definitionCount = 1,
                                             dictionaryName = null,
-                                            dictionaryCss = mergedCss,
-                                            highlightedRects = mergedHighlightedRects,
+                                            dictionaryCss = mergedContent.dictionaryCss,
+                                            highlightedRects = mergedContent.highlightedRects,
                                             onLookupTap = if (onDefinitionLookup != null) {
                                                 { tapData ->
                                                     val fallbackDefinitionKey = when {
                                                         !tapData.tappedDefinitionKey.isNullOrBlank() -> tapData.tappedDefinitionKey
                                                         tapData.tapSource.equals("entry-link", ignoreCase = true) ->
                                                             ""
-                                                        else -> firstDefinitionKey
+                                                        else -> mergedContent.firstDefinitionKey
                                                     }.orEmpty()
                                                     onDefinitionLookup(fallbackDefinitionKey, tapData)
                                                 }
@@ -306,74 +279,4 @@ internal fun LookupPopupCardContent(
             }
         }
     }
-}
-
-private data class MergedDefinitionSegment(
-    val term: String,
-    val dictionaryName: String,
-    val definitionKey: String,
-    val definitionHtml: String,
-    val dictionaryCss: String?,
-    val highlightedRects: List<Rect>
-)
-
-private fun buildMergedDefinitionHtmlByDictionary(
-    segments: List<MergedDefinitionSegment>
-): String {
-    if (segments.isEmpty()) return ""
-    return buildString {
-        segments.forEachIndexed { index, definition ->
-            if (index > 0) {
-                append("<hr/>")
-            }
-            append("<section data-definition-key=\"")
-            append(definition.definitionKey)
-            append("\">")
-            append("<div class=\"nine-lookup-term-label\">")
-            append(escapeHtmlText(definition.term))
-            append("</div>")
-            append("<div class=\"nine-lookup-dict-label\">")
-            append(escapeHtmlText(definition.dictionaryName))
-            append("</div>")
-            append(definition.definitionHtml)
-            append("</section>")
-        }
-    }
-}
-
-private fun buildMergedDictionaryCss(segments: List<MergedDefinitionSegment>): String? {
-    val cssParts = segments.mapNotNull { it.dictionaryCss?.trim() }.filter { it.isNotBlank() }.distinct()
-    if (cssParts.isEmpty()) return null
-    return buildString {
-        append(
-            """
-            .nine-lookup-dict-label {
-                margin: 0.15em 0 0.45em 0;
-                font-size: 0.86em;
-                font-weight: 600;
-                opacity: 0.85;
-            }
-            .nine-lookup-term-label {
-                margin: 0.35em 0 0.2em 0;
-                font-size: 0.94em;
-                font-weight: 700;
-                opacity: 0.95;
-            }
-            """.trimIndent()
-        )
-        append('\n')
-        cssParts.forEachIndexed { index, css ->
-            if (index > 0) append('\n')
-            append(css)
-        }
-    }
-}
-
-private fun escapeHtmlText(text: String): String {
-    return text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-        .replace("'", "&#39;")
 }
