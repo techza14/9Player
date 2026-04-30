@@ -1,6 +1,7 @@
 package moe.tekuza.m9player
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import org.json.JSONObject
 
@@ -29,6 +30,7 @@ internal sealed interface AnkiCatalogLoadResult {
 
 private const val ANKI_PREFS_NAME = "anki_export_config"
 private const val ANKI_KEY_STATE = "anki_state_json"
+private const val ANKI_CONFIG_LOG_TAG = "AnkiConfig"
 
 internal fun loadPersistedAnkiConfig(context: Context): PersistedAnkiConfig {
     val prefs = context.getSharedPreferences(ANKI_PREFS_NAME, Context.MODE_PRIVATE)
@@ -55,15 +57,24 @@ internal fun loadPersistedAnkiConfig(context: Context): PersistedAnkiConfig {
         if (key.isNotBlank()) templates[key] = value
     }
 
-    return PersistedAnkiConfig(
+    val config = PersistedAnkiConfig(
         deckName = obj.optString("deckName").trim().ifBlank { "Default" },
         modelName = obj.optString("modelName").trim(),
         tags = obj.optString("tags").trim(),
         fieldTemplates = templates
     )
+    Log.d(
+        ANKI_CONFIG_LOG_TAG,
+        "load persisted deck='${config.deckName}' model='${config.modelName}' tagsLen=${config.tags.length} fieldCount=${config.fieldTemplates.size}"
+    )
+    return config
 }
 
 internal fun savePersistedAnkiConfig(context: Context, config: PersistedAnkiConfig) {
+    Log.d(
+        ANKI_CONFIG_LOG_TAG,
+        "save persisted deck='${config.deckName}' model='${config.modelName}' tagsLen=${config.tags.length} fieldCount=${config.fieldTemplates.size}"
+    )
     val obj = JSONObject().apply {
         put("deckName", config.deckName)
         put("modelName", config.modelName)
@@ -130,6 +141,7 @@ internal fun resolveAnkiCatalogSelection(
     }
     val resolvedModelName = when {
         currentModelName.isNotBlank() && catalog.models.any { it.name == currentModelName } -> currentModelName
+        currentModelName.isNotBlank() -> currentModelName
         catalog.models.isNotEmpty() -> catalog.models.first().name
         else -> ""
     }
@@ -179,6 +191,12 @@ internal fun loadResolvedAnkiCatalogResult(
             cause = error
         )
     }
+}
+
+internal fun isAnkiModelInCatalog(catalog: AnkiCatalog, modelName: String): Boolean {
+    val normalized = modelName.trim()
+    if (normalized.isBlank()) return false
+    return catalog.models.any { it.name == normalized }
 }
 
 private fun explainAnkiCatalogLoadFailure(context: Context, error: Throwable): String {

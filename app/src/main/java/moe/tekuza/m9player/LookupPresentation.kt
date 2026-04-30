@@ -2,19 +2,11 @@ package moe.tekuza.m9player
 
 import androidx.compose.ui.geometry.Rect
 
-internal data class LookupDefinitionPresentation(
-    val definitionKey: String,
-    val definitionHtml: String,
-    val dictionaryCss: String?,
-    val highlightedRects: List<Rect>
-)
-
 internal data class LookupDictionaryPresentation(
     val sectionKey: String,
     val dictionaryName: String,
-    val dictionaryType: LookupDictionaryType,
     val expanded: Boolean,
-    val definitions: List<LookupDefinitionPresentation>
+    val mergedContent: LookupMergedDictionaryContent?
 )
 
 internal data class LookupGroupedPresentation(
@@ -22,6 +14,13 @@ internal data class LookupGroupedPresentation(
     val reading: String?,
     val groupedResult: GroupedLookupResult,
     val dictionaries: List<LookupDictionaryPresentation>
+)
+
+internal data class LookupMergedDictionaryContent(
+    val definitionHtml: String,
+    val dictionaryCss: String?,
+    val highlightedRects: List<Rect>,
+    val firstDefinitionKey: String
 )
 
 internal fun lookupDictionarySectionKey(term: String, dictionaryName: String): String {
@@ -50,31 +49,64 @@ internal fun buildLookupPresentation(layer: ReaderLookupLayer): List<LookupGroup
                 LookupDictionaryPresentation(
                     sectionKey = sectionKey,
                     dictionaryName = dictionaryGroup.dictionary,
-                    dictionaryType = dictionaryGroup.dictionaryType,
                     expanded = expanded,
-                    definitions = if (expanded) {
-                        dictionaryGroup.definitions.mapIndexed { definitionIndex, definition ->
-                            val definitionKey = lookupDefinitionKey(
-                                term = grouped.term,
-                                dictionaryName = dictionaryGroup.dictionary,
-                                definitionIndex = definitionIndex
-                            )
-                            LookupDefinitionPresentation(
-                                definitionKey = definitionKey,
-                                definitionHtml = definition,
-                                dictionaryCss = dictionaryGroup.css,
-                                highlightedRects = if (layer.highlightedDefinitionKey == definitionKey) {
-                                    layer.highlightedDefinitionRects
-                                } else {
-                                    emptyList()
-                                }
-                            )
-                        }
+                    mergedContent = if (expanded) {
+                        buildLookupMergedDictionaryContent(
+                            term = grouped.term,
+                            dictionaryName = dictionaryGroup.dictionary,
+                            definitions = dictionaryGroup.definitions,
+                            dictionaryCss = dictionaryGroup.css,
+                            highlightedDefinitionKey = layer.highlightedDefinitionKey,
+                            highlightedDefinitionRects = layer.highlightedDefinitionRects
+                        )
                     } else {
-                        emptyList()
+                        null
                     }
                 )
             }
         )
     }
+}
+
+internal fun buildLookupMergedDictionaryContent(
+    term: String,
+    dictionaryName: String,
+    definitions: List<String>,
+    dictionaryCss: String?,
+    highlightedDefinitionKey: String?,
+    highlightedDefinitionRects: List<Rect>
+): LookupMergedDictionaryContent? {
+    val nonBlankDefinitions = definitions.filter { it.isNotBlank() }
+    if (nonBlankDefinitions.isEmpty()) return null
+    val resolvedDictionaryCss = dictionaryCss?.trim()?.takeIf { it.isNotBlank() }
+    var resolvedHighlightedRects: List<Rect> = emptyList()
+    val firstDefinitionKey = lookupDefinitionKey(
+        term = term,
+        dictionaryName = dictionaryName,
+        definitionIndex = 0
+    )
+    val definitionHtml = buildString {
+        nonBlankDefinitions.forEachIndexed { definitionIndex, definition ->
+            if (definitionIndex > 0) append("<hr/>")
+            val definitionKey = lookupDefinitionKey(
+                term = term,
+                dictionaryName = dictionaryName,
+                definitionIndex = definitionIndex
+            )
+            if (resolvedHighlightedRects.isEmpty() && highlightedDefinitionKey == definitionKey) {
+                resolvedHighlightedRects = highlightedDefinitionRects
+            }
+            append("<section data-definition-key=\"")
+            append(definitionKey)
+            append("\">")
+            append(definition)
+            append("</section>")
+        }
+    }
+    return LookupMergedDictionaryContent(
+        definitionHtml = definitionHtml,
+        dictionaryCss = resolvedDictionaryCss,
+        highlightedRects = resolvedHighlightedRects,
+        firstDefinitionKey = firstDefinitionKey
+    )
 }

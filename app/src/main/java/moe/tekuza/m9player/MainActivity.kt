@@ -270,6 +270,7 @@ private val FIELD_VARIABLE_CHOICES = listOf(
     "{search-query}"
 )
 private const val MAIN_LOOKUP_DEBUG_LOG_TAG = "MainLookupDebug"
+private const val ANKI_CONFIG_LOG_TAG = "AnkiConfig"
 private const val DICTIONARY_ORDER_PREFS = "dictionary_order_prefs"
 private const val KEY_DICTIONARY_ORDER_IDS = "dictionary_order_ids"
 
@@ -849,6 +850,10 @@ private fun ReaderSyncScreen() {
     }
 
     fun persistAnkiConfig() {
+        Log.d(
+            ANKI_CONFIG_LOG_TAG,
+            "MainActivity persist request deck='$ankiDeckName' model='$ankiModelName' tagsLen=${ankiTagsInput.length} fieldCount=${ankiFieldTemplates.size}"
+        )
         savePersistedAnkiConfig(
             context = context,
             config = buildPersistedAnkiConfig(
@@ -873,6 +878,10 @@ private fun ReaderSyncScreen() {
         val modelChanged = ankiModelName != modelName
         ankiModelName = modelName
         val model = ankiModels.firstOrNull { it.name == modelName }
+        Log.d(
+            ANKI_CONFIG_LOG_TAG,
+            "MainActivity select model='$modelName' modelChanged=$modelChanged found=${model != null} fieldCount=${model?.fields?.size ?: 0}"
+        )
         syncTemplatesWithModelFields(
             fields = model?.fields ?: emptyList(),
             clearExisting = modelChanged
@@ -905,14 +914,36 @@ private fun ReaderSyncScreen() {
             when (result) {
                 is AnkiCatalogLoadResult.Success -> {
                     val resolvedCatalog = result.data
+                    val resolvedModelName = resolvedCatalog.selection.modelName
+                    val modelInCatalog = isAnkiModelInCatalog(
+                        catalog = AnkiCatalog(
+                            decks = resolvedCatalog.decks,
+                            models = resolvedCatalog.models
+                        ),
+                        modelName = resolvedModelName
+                    )
+                    Log.d(
+                        ANKI_CONFIG_LOG_TAG,
+                        "MainActivity refresh success currentDeck='$ankiDeckName' currentModel='$ankiModelName' resolvedDeck='${resolvedCatalog.selection.deckName}' resolvedModel='$resolvedModelName' modelInCatalog=$modelInCatalog modelCount=${resolvedCatalog.models.size}"
+                    )
                     ankiDecks = resolvedCatalog.decks
                     ankiModels = resolvedCatalog.models
                     ankiDeckName = resolvedCatalog.selection.deckName
-                    selectAnkiModel(resolvedCatalog.selection.modelName)
-                    persistAnkiConfig()
+                    if (modelInCatalog) {
+                        selectAnkiModel(resolvedModelName)
+                    } else {
+                        Log.d(
+                            ANKI_CONFIG_LOG_TAG,
+                            "MainActivity refresh kept existing model='$ankiModelName' because it is not in catalog; templates were not cleared"
+                        )
+                    }
                 }
                 is AnkiCatalogLoadResult.Failure -> {
                     ankiError = result.message
+                    Log.d(
+                        ANKI_CONFIG_LOG_TAG,
+                        "MainActivity refresh failed message='${result.message}'"
+                    )
                 }
             }
         }
@@ -1233,6 +1264,13 @@ private fun ReaderSyncScreen() {
             exportStatus = context.getString(R.string.status_pick_audiobook_folder_first)
             return
         }
+        val persistedState = loadPersistedImports(context)
+        val persistedTitleById = persistedState.books
+            .associate { it.id to it.title.trim() }
+            .filterValues { it.isNotBlank() }
+        val persistedTitleByAudioUri = persistedState.books
+            .associate { it.audioUri to it.title.trim() }
+            .filterValues { it.isNotBlank() }
         val previousSelectedId = selectedBookId
         scope.launch {
             srtLoading = true
@@ -1247,12 +1285,19 @@ private fun ReaderSyncScreen() {
                     val refreshedBooks = mutableListOf<ReaderBook>()
                     scanResult.books.forEach { candidate ->
                         runCatching {
-                            buildReaderBook(
+                            val rebuilt = buildReaderBook(
                                 audio = candidate.audioUri,
                                 audioDisplayName = candidate.audioName,
                                 srt = candidate.srtUri,
                                 srtDisplayName = candidate.srtName
                             )
+                            val persistedTitle = persistedTitleById[rebuilt.id]
+                                ?: persistedTitleByAudioUri[rebuilt.audioUri.toString()]
+                            if (!persistedTitle.isNullOrBlank()) {
+                                rebuilt.copy(title = persistedTitle)
+                            } else {
+                                rebuilt
+                            }
                         }.onSuccess { refreshedBooks += it }
                     }
                     refreshedBooks to scanResult.skippedFolders
@@ -1554,7 +1599,8 @@ private fun ReaderSyncScreen() {
                     restoredRefs += PersistedDictionaryRef(
                         uri = ref.uri,
                         name = displayName,
-                        cacheKey = cacheKey
+                        cacheKey = cacheKey,
+                        enabled = ref.enabled
                     )
                     return@forEachIndexed
                 }
@@ -1581,7 +1627,8 @@ private fun ReaderSyncScreen() {
                     restoredRefs += PersistedDictionaryRef(
                         uri = ref.uri,
                         name = displayName,
-                        cacheKey = cacheKey
+                        cacheKey = cacheKey,
+                        enabled = ref.enabled
                     )
                 } else {
                     val error = parseResult.exceptionOrNull()
@@ -2311,26 +2358,30 @@ private fun ReaderSyncScreen() {
         }
     }
 
-    fun setCombinedDictionaryEnabled(item: CombinedDictionaryItem, enabled: Boolean) {
-        when (item.type) {
-            CombinedDictionaryType.IMPORTED -> {
-                val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == item.id }
-                if (targetIndex < 0) return
-                dictionaryRefs = dictionaryRefs.toMutableList().also { refs ->
-                    refs[targetIndex] = refs[targetIndex].copy(enabled = enabled)
-                }
-                persistImportState()
-            }
-            CombinedDictionaryType.MOUNTED -> {
-                val cacheKey = item.id.removePrefix("mnt:")
-                mdxMountState = mdxMountState.copy(
-                    entries = mdxMountState.entries.map { current ->
-                        if (current.cacheKey == cacheKey) current.copy(enabled = enabled) else current
-                    }
-                )
-                saveMdxMountState(context, mdxMountState)
-            }
+    fun setImportedDictionaryEnabled(dictionaryId: String, enabled: Boolean) {
+        val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == dictionaryId }
+        if (targetIndex < 0) return
+        val current = dictionaryRefs[targetIndex]
+        if (current.enabled == enabled) return
+        dictionaryRefs = dictionaryRefs.toMutableList().also { refs ->
+            refs[targetIndex] = current.copy(enabled = enabled)
         }
+        persistImportState()
+        refreshLookupIfNeeded()
+    }
+
+    fun setMountedDictionaryEnabled(cacheKey: String, enabled: Boolean) {
+        val currentEntries = mdxMountState.entries
+        val targetIndex = currentEntries.indexOfFirst { it.cacheKey == cacheKey }
+        if (targetIndex < 0) return
+        val current = currentEntries[targetIndex]
+        if (current.enabled == enabled) return
+        mdxMountState = mdxMountState.copy(
+            entries = currentEntries.toMutableList().also { entries ->
+                entries[targetIndex] = current.copy(enabled = enabled)
+            }
+        )
+        saveMdxMountState(context, mdxMountState)
         refreshLookupIfNeeded()
     }
 
@@ -3116,7 +3167,12 @@ private fun ReaderSyncScreen() {
                                                 Spacer(modifier = Modifier.weight(1f))
                                                 Switch(
                                                     checked = item.enabled,
-                                                    onCheckedChange = { checked -> setCombinedDictionaryEnabled(item, checked) },
+                                                    onCheckedChange = { checked ->
+                                                        when (item.type) {
+                                                            CombinedDictionaryType.IMPORTED -> setImportedDictionaryEnabled(item.id, checked)
+                                                            CombinedDictionaryType.MOUNTED -> setMountedDictionaryEnabled(item.id.removePrefix("mnt:"), checked)
+                                                        }
+                                                    },
                                                     enabled = !dictionaryLoading
                                                 )
                                             }
@@ -3283,150 +3339,143 @@ private fun ReaderSyncScreen() {
                                                         dictionaryLookupCollapsedSections[sectionKey] = expanded
                                                     }
                                                 )
-                                                if (expanded) {
-                                                    dictionaryGroup.definitions.forEachIndexed { definitionIndex, definition ->
-                                                        val definitionKey = lookupDefinitionKey(
-                                                            term = groupedResult.term,
-                                                            dictionaryName = dictionaryGroup.dictionary,
-                                                            definitionIndex = definitionIndex
-                                                        )
-                                                        Card(modifier = Modifier.fillMaxWidth()) {
-                                                            Column(
-                                                                modifier = Modifier.padding(8.dp),
-                                                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                                                            ) {
-                                                                RichDefinitionView(
-                                                                    definition = definition,
-                                                                    indexLabel = (definitionIndex + 1).toString(),
-                                                                    dictionaryName = null,
-                                                                    dictionaryCss = dictionaryGroup.css,
-                                                                     highlightedRects = if (dictionaryPageHighlightedDefinitionKey == definitionKey) {
-                                                                         dictionaryPageHighlightedRects
-                                                                     } else {
-                                                                         emptyList()
-                                                                     },
-                                                                     onLookupTap = { tapData ->
-                                                                         scope.launch {
-                                                                            val mergedCandidates = buildMinimalLookupCandidatesFromTap(tapData)
-                                                                            if (mergedCandidates.isEmpty()) {
-                                                                                android.util.Log.d(
-                                                                                    "BookLookupTap",
-                                                                                    "dictionary tap skip emptyCandidates source=${tapData.tapSource} scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
-                                                                                )
-                                                                                return@launch
-                                                                            }
-                                                                            val preferredDictionaries = tapData.lookupDictionaryCacheKey
-                                                                                ?.takeIf { it.isNotBlank() }
-                                                                                ?.let { cacheKey -> effectiveLookupDictionaries.filter { it.cacheKey == cacheKey } }
-                                                                                .orEmpty()
-                                                                                .ifEmpty { effectiveLookupDictionaries.filter { it.name == dictionaryGroup.dictionary } }
-                                                                            val lookupHits = withContext(Dispatchers.Default) {
-                                                                                val precheckHits = computeLookupResultsWithWinningCandidate(
-                                                                                    context = context,
-                                                                                    dictionaries = preferredDictionaries.ifEmpty { effectiveLookupDictionaries },
-                                                                                    candidates = mergedCandidates,
-                                                                                    profile = if (tapData.tapSource.equals("entry-link", ignoreCase = true)) {
-                                                                                        DictionaryQueryProfile.FULL
-                                                                                    } else {
-                                                                                        DictionaryQueryProfile.FAST
-                                                                                    },
-                                                                                    expandCandidates = false
-                                                                                )?.hits.orEmpty()
-                                                                                if (tapData.tapSource.equals("entry-link", ignoreCase = true)) {
-                                                                                    val exactQuery = mergedCandidates.firstOrNull()?.trim().orEmpty()
-                                                                                    precheckHits.filter { hit ->
-                                                                                        val term = hit.entry.term.trim()
-                                                                                        val reading = hit.entry.reading?.trim().orEmpty()
-                                                                                        term == exactQuery || reading == exactQuery
-                                                                                    }
-                                                                                } else {
-                                                                                    precheckHits
-                                                                                }
-                                                                            }
-                                                                            if (lookupHits.isEmpty()) {
-                                                                                dictionaryPageHighlightedDefinitionKey = null
-                                                                                dictionaryPageHighlightedRects = emptyList()
-                                                                                android.util.Log.d(
-                                                                                    "BookLookupTap",
-                                                                                    "dictionary tap skip noHits source=${tapData.tapSource} scanLen=${tapData.scanText.length} candidates=${mergedCandidates.joinToString("|")}"
-                                                                                )
-                                                                                return@launch
-                                                                            }
-                                                                            val matchedLength = lookupHits.firstOrNull()?.matchedLength?.coerceAtLeast(1) ?: 1
-                                                                            android.util.Log.d(
-                                                                                "BookLookupTap",
-                                                                                "dictionary tap matched source=${tapData.tapSource} scanLen=${tapData.scanText.length} firstTerm='${lookupHits.firstOrNull()?.entry?.term.orEmpty()}' firstMatchedLen=${lookupHits.firstOrNull()?.matchedLength ?: -1} usedMatchedLen=$matchedLength candidates=${mergedCandidates.joinToString("|")}"
-                                                                            )
-                                                                             val resolvedRects = resolveDefinitionMatchedRects(
-                                                                                 tapData = tapData,
-                                                                                 matchedLength = matchedLength
-                                                                             )
-                                                                            val highlightRects = if (resolvedRects != null) {
-                                                                                val rebuilt = rebuildRectsFromCharacterRectsShared(
-                                                                                    charRects = resolvedRects.localCharRects,
-                                                                                    matchedLength = matchedLength
-                                                                                )
-                                                                                sanitizeResolvedHighlightRectsShared(
-                                                                                    rebuilt,
-                                                                                    tapData.localRects
-                                                                                )
-                                                                            } else {
-                                                                                rebuildDefinitionRectsByMatchedLengthCore(
-                                                                                    rects = tapData.localRects,
-                                                                                    charRects = tapData.localCharRects,
-                                                                                    nodeText = tapData.nodeText,
-                                                                                    startOffset = tapData.offset,
-                                                                                    matchedLength = matchedLength
-                                                                                )
-                                                                             }
-                                                                             dictionaryPageHighlightedDefinitionKey = definitionKey
-                                                                             dictionaryPageHighlightedRects = highlightRects
-                                                                            val anchorRects = tapData.resolveScreenAnchorRects().takeIf { it.isNotEmpty() }
-                                                                            val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
-                                                                            val anchorBottom = anchor?.boundingRectCoreOrNull()?.bottom
-                                                                            val shouldPlaceBelow = anchorBottom?.let { it <= view.height * 0.56f } ?: true
-                                                                            android.util.Log.d(
-                                                                                MAIN_LOOKUP_DEBUG_LOG_TAG,
-                                                                                "dictionary tap dispatch source=${tapData.tapSource} merged=${mergedCandidates.joinToString("|")} preferred=${dictionaryGroup.dictionary}"
-                                                                            )
-                                                                            val isEntryTap = tapData.tapSource.equals("entry", ignoreCase = true)
-                                                                            val isEntryLinkTap =
-                                                                                tapData.tapSource.equals("entry-link", ignoreCase = true)
-                                                                            val isStrictLinkTap = isEntryTap || isEntryLinkTap
-                                                                            val pinnedDefinitionKeyForTap = when {
-                                                                                isEntryTap ->
-                                                                                    tapData.tappedDefinitionKey ?: definitionKey
-                                                                                else -> null
-                                                                            }
-                                                                            startMainLookup(
-                                                                                MainLookupRequest.Candidates(
-                                                                                    rawCandidates = mergedCandidates,
-                                                                                    preferredDictionaryName = dictionaryGroup.dictionary,
-                                                                                    preferredDictionaryCacheKey = tapData.lookupDictionaryCacheKey,
-                                                                                    restrictToPreferredDictionary = isStrictLinkTap,
-                                                                                    expandCandidates = false,
-                                                                                    exactTermOnly = isStrictLinkTap,
-                                                                                    pinnedDefinitionKey = pinnedDefinitionKeyForTap,
-                                                                                    anchor = anchor,
-                                                                                    placeBelow = shouldPlaceBelow
-                                                                                )
-                                                                            )
-                                                                         }
-                                                                     }
-                                                                 )
+                                                val mergedContent = buildLookupMergedDictionaryContent(
+                                                    term = groupedResult.term,
+                                                    dictionaryName = dictionaryGroup.dictionary,
+                                                    definitions = dictionaryGroup.definitions,
+                                                    dictionaryCss = dictionaryGroup.css,
+                                                    highlightedDefinitionKey = dictionaryPageHighlightedDefinitionKey,
+                                                    highlightedDefinitionRects = dictionaryPageHighlightedRects
+                                                )
+                                                if (expanded && mergedContent != null) {
+                                                    RichDefinitionView(
+                                                        definition = mergedContent.definitionHtml,
+                                                        indexLabel = "",
+                                                        definitionCount = 1,
+                                                        dictionaryName = null,
+                                                        dictionaryCss = mergedContent.dictionaryCss,
+                                                        highlightedRects = mergedContent.highlightedRects,
+                                                        onLookupTap = { tapData ->
+                                                            scope.launch {
+                                                                val mergedCandidates = buildMinimalLookupCandidatesFromTap(tapData)
+                                                                if (mergedCandidates.isEmpty()) {
+                                                                    android.util.Log.d(
+                                                                        "BookLookupTap",
+                                                                        "dictionary tap skip emptyCandidates source=${tapData.tapSource} scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
+                                                                    )
+                                                                    return@launch
+                                                                }
+                                                                val preferredDictionaries = tapData.lookupDictionaryCacheKey
+                                                                    ?.takeIf { it.isNotBlank() }
+                                                                    ?.let { cacheKey -> effectiveLookupDictionaries.filter { it.cacheKey == cacheKey } }
+                                                                    .orEmpty()
+                                                                    .ifEmpty { effectiveLookupDictionaries.filter { it.name == dictionaryGroup.dictionary } }
+                                                                val lookupHits = withContext(Dispatchers.Default) {
+                                                                    val precheckHits = computeLookupResultsWithWinningCandidate(
+                                                                        context = context,
+                                                                        dictionaries = preferredDictionaries.ifEmpty { effectiveLookupDictionaries },
+                                                                        candidates = mergedCandidates,
+                                                                        profile = if (tapData.tapSource.equals("entry-link", ignoreCase = true)) {
+                                                                            DictionaryQueryProfile.FULL
+                                                                        } else {
+                                                                            DictionaryQueryProfile.FAST
+                                                                        },
+                                                                        expandCandidates = false
+                                                                    )?.hits.orEmpty()
+                                                                    if (tapData.tapSource.equals("entry-link", ignoreCase = true)) {
+                                                                        val exactQuery = mergedCandidates.firstOrNull()?.trim().orEmpty()
+                                                                        precheckHits.filter { hit ->
+                                                                            val term = hit.entry.term.trim()
+                                                                            val reading = hit.entry.reading?.trim().orEmpty()
+                                                                            term == exactQuery || reading == exactQuery
+                                                                        }
+                                                                    } else {
+                                                                        precheckHits
+                                                                    }
+                                                                }
+                                                                if (lookupHits.isEmpty()) {
+                                                                    dictionaryPageHighlightedDefinitionKey = null
+                                                                    dictionaryPageHighlightedRects = emptyList()
+                                                                    android.util.Log.d(
+                                                                        "BookLookupTap",
+                                                                        "dictionary tap skip noHits source=${tapData.tapSource} scanLen=${tapData.scanText.length} candidates=${mergedCandidates.joinToString("|")}"
+                                                                    )
+                                                                    return@launch
+                                                                }
+                                                                val matchedLength = lookupHits.firstOrNull()?.matchedLength?.coerceAtLeast(1) ?: 1
+                                                                android.util.Log.d(
+                                                                    "BookLookupTap",
+                                                                    "dictionary tap matched source=${tapData.tapSource} scanLen=${tapData.scanText.length} firstTerm='${lookupHits.firstOrNull()?.entry?.term.orEmpty()}' firstMatchedLen=${lookupHits.firstOrNull()?.matchedLength ?: -1} usedMatchedLen=$matchedLength candidates=${mergedCandidates.joinToString("|")}"
+                                                                )
+                                                                val resolvedRects = resolveDefinitionMatchedRects(
+                                                                    tapData = tapData,
+                                                                    matchedLength = matchedLength
+                                                                )
+                                                                val highlightRects = if (resolvedRects != null) {
+                                                                    val rebuilt = rebuildRectsFromCharacterRectsShared(
+                                                                        charRects = resolvedRects.localCharRects,
+                                                                        matchedLength = matchedLength
+                                                                    )
+                                                                    sanitizeResolvedHighlightRectsShared(
+                                                                        rebuilt,
+                                                                        tapData.localRects
+                                                                    )
+                                                                } else {
+                                                                    rebuildDefinitionRectsByMatchedLengthCore(
+                                                                        rects = tapData.localRects,
+                                                                        charRects = tapData.localCharRects,
+                                                                        nodeText = tapData.nodeText,
+                                                                        startOffset = tapData.offset,
+                                                                        matchedLength = matchedLength
+                                                                    )
+                                                                }
+                                                                dictionaryPageHighlightedDefinitionKey = tapData.tappedDefinitionKey
+                                                                    ?.takeIf { it.isNotBlank() }
+                                                                    ?: mergedContent.firstDefinitionKey
+                                                                dictionaryPageHighlightedRects = highlightRects
+                                                                val anchorRects = tapData.resolveScreenAnchorRects().takeIf { it.isNotEmpty() }
+                                                                val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
+                                                                val anchorBottom = anchor?.boundingRectCoreOrNull()?.bottom
+                                                                val shouldPlaceBelow = anchorBottom?.let { it <= view.height * 0.56f } ?: true
+                                                                android.util.Log.d(
+                                                                    MAIN_LOOKUP_DEBUG_LOG_TAG,
+                                                                    "dictionary tap dispatch source=${tapData.tapSource} merged=${mergedCandidates.joinToString("|")} preferred=${dictionaryGroup.dictionary}"
+                                                                )
+                                                                val isEntryTap = tapData.tapSource.equals("entry", ignoreCase = true)
+                                                                val isEntryLinkTap =
+                                                                    tapData.tapSource.equals("entry-link", ignoreCase = true)
+                                                                val isStrictLinkTap = isEntryTap || isEntryLinkTap
+                                                                val pinnedDefinitionKeyForTap = when {
+                                                                    isEntryTap ->
+                                                                        tapData.tappedDefinitionKey ?: mergedContent.firstDefinitionKey
+                                                                    else -> null
+                                                                }
+                                                                startMainLookup(
+                                                                    MainLookupRequest.Candidates(
+                                                                        rawCandidates = mergedCandidates,
+                                                                        preferredDictionaryName = dictionaryGroup.dictionary,
+                                                                        preferredDictionaryCacheKey = tapData.lookupDictionaryCacheKey,
+                                                                        restrictToPreferredDictionary = isStrictLinkTap,
+                                                                        expandCandidates = false,
+                                                                        exactTermOnly = isStrictLinkTap,
+                                                                        pinnedDefinitionKey = pinnedDefinitionKeyForTap,
+                                                                        anchor = anchor,
+                                                                        placeBelow = shouldPlaceBelow
+                                                                    )
+                                                                )
                                                             }
                                                         }
-                                                    }
+                                                    )
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }
-                        }
-                    }
                 }
             }
+        }
+    }
+}
 
             if (activeSection == MiningSection.COLLECTIONS) {
                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -3984,6 +4033,9 @@ private fun buildDiagnosticsReport(context: Context): String {
         appendLine("Tags=${persistedAnki.tags.ifBlank { "(blank)" }}")
         appendLine("FieldTemplateCount=${persistedAnki.fieldTemplates.size}")
         appendLine()
+        appendLine("[Recent Reader Logs]")
+        appendLine(extractRecentReaderLogs(recentLogs))
+        appendLine()
         appendLine("[Recent Logs]")
         appendLine(recentLogs.ifBlank { "(no recent logs captured)" })
     }
@@ -4003,6 +4055,15 @@ private fun loadRecentProcessLogs(maxLines: Int = 200): String {
         process.waitFor()
         output
     }.getOrDefault("")
+}
+
+private fun extractRecentReaderLogs(recentLogs: String): String {
+    val interestingTags = listOf("BookReaderBack", "BookLookupTap")
+    return recentLogs
+        .lineSequence()
+        .filter { line -> interestingTags.any { tag -> line.contains(tag) } }
+        .joinToString(separator = "\n")
+        .ifBlank { "(no recent BookReaderBack/BookLookupTap logs captured)" }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -4893,13 +4954,3 @@ private fun formatCollectedCueMeta(context: Context, item: BookReaderCollectedCu
         append(endLabel)
     }
 }
-
-
-
-
-
-
-
-
-
-

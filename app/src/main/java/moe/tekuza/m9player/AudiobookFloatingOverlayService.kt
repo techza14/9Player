@@ -3220,21 +3220,20 @@ companion object {
                                 }
                             )
                         )
-                        if (dictionaryPresentation.expanded) {
-                            dictionaryPresentation.definitions.forEach { definitionPresentation ->
-                                content.addView(
-                                    createLookupDefinitionWebView(
-                                        definition = definitionPresentation.definitionHtml,
-                                        dictionaryCss = definitionPresentation.dictionaryCss,
-                                        topMarginDp = 6f,
-                                        palette = palette,
-                                        layerIndex = layerIndex,
-                                        layer = layer,
-                                        definitionKey = definitionPresentation.definitionKey,
-                                        enableLookupTap = allowDefinitionLookup
-                                    )
+                        val mergedContent = dictionaryPresentation.mergedContent
+                        if (dictionaryPresentation.expanded && mergedContent != null) {
+                            content.addView(
+                                createLookupDefinitionWebView(
+                                    definition = mergedContent.definitionHtml,
+                                    dictionaryCss = mergedContent.dictionaryCss,
+                                    topMarginDp = 6f,
+                                    palette = palette,
+                                    layerIndex = layerIndex,
+                                    layer = layer,
+                                    definitionKey = mergedContent.firstDefinitionKey,
+                                    enableLookupTap = allowDefinitionLookup
                                 )
-                            }
+                            )
                         }
                     }
                 }
@@ -3551,6 +3550,7 @@ companion object {
         val html = buildDefinitionHtml(
             definitionHtml = definition.trim(),
             indexLabel = "",
+            definitionCount = 1,
             dictionaryName = null,
             dictionaryCss = dictionaryCss,
             bodyTextColorCss = palette.bodyCss,
