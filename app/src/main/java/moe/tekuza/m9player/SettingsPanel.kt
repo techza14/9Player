@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.FontDownload
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Language
@@ -36,6 +37,7 @@ internal fun SettingsPanel(
     onAudiobookClick: () -> Unit,
     onControlModeClick: () -> Unit,
     onAudiobookUiClick: () -> Unit,
+    onFontClick: () -> Unit,
     onControllerClick: () -> Unit,
     onAnkiClick: () -> Unit,
     onAdvancedOverlayClick: () -> Unit,
@@ -67,6 +69,11 @@ internal fun SettingsPanel(
                 title = stringResource(R.string.settings_audiobook_ui_title),
                 subtitle = stringResource(R.string.settings_audiobook_ui_subtitle),
                 onClick = onAudiobookUiClick
+            )
+            SettingsListItem(
+                icon = Icons.Outlined.FontDownload,
+                title = stringResource(R.string.settings_font_title),
+                onClick = onFontClick
             )
             SettingsListItem(
                 icon = Icons.Outlined.SportsEsports,

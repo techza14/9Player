@@ -2,7 +2,6 @@ package moe.tekuza.m9player
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,10 +9,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.pointer.pointerInput
@@ -51,7 +54,6 @@ internal fun LookupPopupHost(
     val density = LocalDensity.current
     val gapPx = with(density) { 14.dp.roundToPx() }
     val screenPaddingPx = with(density) { 12.dp.roundToPx() }
-    val swipeCloseThresholdPx = with(density) { 56.dp.toPx() }
 
     session.layers.forEachIndexed { index, layer ->
         val isTopLayer = index == session.lastIndex
@@ -158,20 +160,22 @@ internal fun LookupPopupHost(
                                 Modifier
                             }
                         )
-                        .pointerInput(isTopLayer, isPreviousLayer, index, temporarilyHidden, swipeCloseThresholdPx) {
-                            if (temporarilyHidden) return@pointerInput
-                            var totalDrag = 0f
+                        .pointerInput(index, isTopLayer, isPreviousLayer, onTruncateToLayer) {
+                            val dismissThresholdPx = 56.dp.toPx()
+                            var totalDragX by mutableFloatStateOf(0f)
                             detectHorizontalDragGestures(
-                                onHorizontalDrag = { change, dragAmount ->
-                                    totalDrag += dragAmount
+                                onHorizontalDrag = { _, dragAmount ->
+                                    totalDragX += dragAmount
                                 },
                                 onDragEnd = {
-                                    if (kotlin.math.abs(totalDrag) >= swipeCloseThresholdPx) {
+                                    if (kotlin.math.abs(totalDragX) >= dismissThresholdPx) {
                                         closeCurrentLayer()
                                     }
-                                    totalDrag = 0f
+                                    totalDragX = 0f
                                 },
-                                onDragCancel = { totalDrag = 0f }
+                                onDragCancel = {
+                                    totalDragX = 0f
+                                }
                             )
                         },
                     shape = MaterialTheme.shapes.large,

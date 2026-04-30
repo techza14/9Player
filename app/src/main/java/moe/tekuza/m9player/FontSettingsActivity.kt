@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FontDownload
 import androidx.compose.material3.HorizontalDivider
@@ -116,6 +117,13 @@ private fun FontSettingsScreen(onBack: () -> Unit) {
                     SubtitleFontUiRefreshTicker.bump()
                     settings = loadAudiobookSettingsConfig(context)
                 },
+                showDivider = false
+            )
+            SettingsLikeItem(
+                icon = Icons.Outlined.AutoStories,
+                title = stringResource(R.string.settings_audiobook_ui_title),
+                subtitle = stringResource(R.string.settings_audiobook_ui_subtitle),
+                onClick = { context.startActivity(Intent(context, AudiobookUiSettingsActivity::class.java)) },
                 showDivider = false
             )
         }

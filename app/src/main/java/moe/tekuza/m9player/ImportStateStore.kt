@@ -8,7 +8,8 @@ import org.json.JSONObject
 internal data class PersistedDictionaryRef(
     val uri: String,
     val name: String,
-    val cacheKey: String? = null
+    val cacheKey: String? = null,
+    val enabled: Boolean = true
 )
 
 internal data class PersistedReaderBook(
@@ -79,7 +80,8 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         if (uri.isBlank()) continue
         val name = item.optString("name").trim()
         val cacheKey = item.optString("cacheKey").trim().ifBlank { null }
-        dictionaries += PersistedDictionaryRef(uri = uri, name = name, cacheKey = cacheKey)
+        val enabled = item.optBoolean("enabled", true)
+        dictionaries += PersistedDictionaryRef(uri = uri, name = name, cacheKey = cacheKey, enabled = enabled)
     }
 
     val books = mutableListOf<PersistedReaderBook>()
@@ -154,6 +156,7 @@ internal fun savePersistedImports(context: Context, state: PersistedImports) {
                         put("uri", ref.uri)
                         put("name", ref.name)
                         put("cacheKey", ref.cacheKey ?: "")
+                        put("enabled", ref.enabled)
                     })
                 }
             }

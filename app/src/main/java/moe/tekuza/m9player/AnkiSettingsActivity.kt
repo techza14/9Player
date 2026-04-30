@@ -595,7 +595,7 @@ private fun resolveImportedDictionaryNamesForAnki(context: Context): List<String
     return imports.dictionaries.mapNotNull { ref ->
         val fromMeta = ref.cacheKey
             ?.takeIf { it.isNotBlank() }
-            ?.let { cacheKey -> loadDictionaryFromSqlite(context, cacheKey)?.name }
+            ?.let { cacheKey -> loadDictionaryFromStorage(context, cacheKey)?.name }
             ?.trim()
             ?.takeIf { it.isNotBlank() }
         val fallback = ref.name

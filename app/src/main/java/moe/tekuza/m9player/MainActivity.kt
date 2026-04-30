@@ -50,6 +50,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -72,6 +73,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -115,6 +117,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ClosedCaption
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Settings
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.FileProvider
@@ -218,6 +221,9 @@ private sealed interface MainLookupRequest {
     data class Candidates(
         val rawCandidates: List<String>,
         val preferredDictionaryName: String? = null,
+        val preferredDictionaryCacheKey: String? = null,
+        val restrictToPreferredDictionary: Boolean = false,
+        val expandCandidates: Boolean = true,
         val exactTermOnly: Boolean = false,
         val pinnedDefinitionKey: String? = null,
         val anchor: ReaderLookupAnchor? = null,
@@ -277,7 +283,7 @@ private data class CombinedDictionaryItem(
     val type: CombinedDictionaryType,
     val title: String,
     val countText: String,
-    val mountedEnabled: Boolean? = null
+    val enabled: Boolean = true
 )
 
 private fun loadDictionaryOrderIds(context: Context): List<String> {
@@ -394,6 +400,7 @@ private fun ReaderSyncScreen() {
     var ankiError by remember { mutableStateOf<String?>(null) }
 
     var showDictionaryManager by remember { mutableStateOf(false) }
+    var showDictionaryDeleteActions by remember { mutableStateOf(false) }
     var activeSection by rememberSaveable(stateSaver = miningSectionSaver) {
         mutableStateOf(MiningSection.MAIN)
     }
@@ -438,6 +445,7 @@ private fun ReaderSyncScreen() {
 
     val importedLookupById = remember(dictionaryRefs, loadedDictionaries) {
         dictionaryRefs.mapIndexedNotNull { index, ref ->
+            if (!ref.enabled) return@mapIndexedNotNull null
             val loaded = loadedDictionaries.getOrNull(index) ?: return@mapIndexedNotNull null
             importedDictionaryId(ref) to loaded
         }.toMap(LinkedHashMap())
@@ -1539,7 +1547,7 @@ private fun ReaderSyncScreen() {
                 )
 
                 val storedDictionary = withContext(Dispatchers.IO) {
-                    loadDictionaryFromSqlite(context, cacheKey)
+                    loadDictionaryFromStorage(context, cacheKey)
                 }
                 if (storedDictionary != null) {
                     restoredDictionaryList += storedDictionary
@@ -1553,7 +1561,7 @@ private fun ReaderSyncScreen() {
 
                 val parseResult = withContext(Dispatchers.IO) {
                     runCatching {
-                        importDictionaryToSqlite(
+                        importDictionaryFromZip(
                             context = context,
                             contentResolver = contentResolver,
                             uri = uri,
@@ -1586,9 +1594,6 @@ private fun ReaderSyncScreen() {
             dictionaryLoading = false
             clearDictionaryProgress()
             persistImportState()
-            scope.launch(Dispatchers.Default) {
-                prewarmDictionaryMemoryIndexes(context, restoredDictionaryList)
-            }
         }
 
         if (ankiPermissionGranted) {
@@ -1604,16 +1609,12 @@ private fun ReaderSyncScreen() {
             .take(24)
     }
 
-    fun buildRawLookupCandidatesFromTap(tapData: DefinitionLookupTapData): List<String> {
-        return normalizeLookupCandidates(
-            listOf(
-                tapData.scanText,
-                tapData.text,
-                extractLookupToken(tapData.scanText),
-                extractLookupToken(tapData.text),
-                extractLookupToken(tapData.nodeText)
-            )
-        )
+    fun buildMinimalLookupCandidatesFromTap(tapData: DefinitionLookupTapData): List<String> {
+        val primary = tapData.scanText.trim()
+            .ifBlank { tapData.text.trim() }
+            .ifBlank { extractLookupToken(tapData.nodeText) }
+        if (primary.isBlank()) return emptyList()
+        return listOf(primary.take(256))
     }
 
     fun computeLookupResults(
@@ -1678,15 +1679,28 @@ private fun ReaderSyncScreen() {
     fun queryMainLookupCandidates(
         candidates: List<String>,
         preferredDictionaryName: String? = null,
+        preferredDictionaryCacheKey: String? = null,
+        restrictToPreferredDictionary: Boolean = false,
+        expandCandidates: Boolean = true,
         exactTermOnly: Boolean = false,
         pinnedDefinitionKey: String? = null,
         onResult: (Result<List<DictionarySearchResult>>) -> Unit
     ) {
         val primaryQuery = candidates.firstOrNull()?.trim().orEmpty()
         val preferredName = preferredDictionaryName?.trim().orEmpty()
+        val preferredCacheKey = preferredDictionaryCacheKey?.trim().orEmpty()
         val pinnedKey = pinnedDefinitionKey?.trim().orEmpty()
-        val dictionariesSnapshot = if (preferredName.isBlank()) {
+        val dictionariesSnapshot = if (preferredCacheKey.isNotBlank()) {
+            val preferred = effectiveLookupDictionaries.filter { it.cacheKey == preferredCacheKey }
+            if (restrictToPreferredDictionary) {
+                preferred
+            } else {
+                preferred + effectiveLookupDictionaries.filter { it.cacheKey != preferredCacheKey }
+            }
+        } else if (preferredName.isBlank()) {
             effectiveLookupDictionaries
+        } else if (restrictToPreferredDictionary) {
+            effectiveLookupDictionaries.filter { it.name == preferredName }
         } else {
             val preferred = effectiveLookupDictionaries.filter { it.name == preferredName }
             val others = effectiveLookupDictionaries.filter { it.name != preferredName }
@@ -1695,7 +1709,17 @@ private fun ReaderSyncScreen() {
         scope.launch {
             val result = withContext(Dispatchers.Default) {
                 runCatching {
-                    val base = computeLookupResults(dictionariesSnapshot, candidates)
+                    val base = if (expandCandidates) {
+                        computeLookupResults(dictionariesSnapshot, candidates)
+                    } else {
+                        computeLookupResultsWithWinningCandidate(
+                            context = context,
+                            dictionaries = dictionariesSnapshot,
+                            candidates = candidates,
+                            profile = if (exactTermOnly) DictionaryQueryProfile.FULL else DictionaryQueryProfile.FAST,
+                            expandCandidates = false
+                        )?.hits.orEmpty()
+                    }
                     if (pinnedKey.isNotBlank()) {
                         base.mapNotNull { hit ->
                             val matched = hit.entry.definitions.mapIndexedNotNull { index, definition ->
@@ -1720,7 +1744,7 @@ private fun ReaderSyncScreen() {
                             val reading = hit.entry.reading?.trim().orEmpty()
                             term == primaryQuery || reading == primaryQuery
                         }
-                        if (exact.isNotEmpty()) exact else base
+                        exact
                     }
                 }
             }
@@ -1841,23 +1865,15 @@ private fun ReaderSyncScreen() {
                 } else {
                     readerBooks.firstOrNull { it.title == request.sourceBookTitle }?.audioUri ?: audioUri
                 }
-                val selectedToken = selection?.text?.trim()?.takeIf { it.isNotBlank() }
-                val candidates = listOfNotNull(selectedToken).ifEmpty {
-                    normalizeLookupCandidates(
-                        listOf(
-                            cue.text,
-                            extractLookupToken(cue.text)
-                        )
-                    )
-                }
-                if (candidates.isEmpty()) {
+                val selectedToken = selection?.text?.trim().orEmpty()
+                if (selectedToken.isBlank()) {
                     mainLookupPopupError = context.getString(R.string.bookreader_lookup_failed)
                     return
                 }
                 mainLookupPopupVisible = true
                 mainLookupAutoPlayNonce += 1L
                 mainLookupAutoPlayedKey = null
-                mainLookupPopupTitle = candidates.firstOrNull() ?: selectedToken.orEmpty()
+                mainLookupPopupTitle = selectedToken
                 mainLookupPopupError = null
                 mainLookupPopupLoading = true
                 fun buildCueLayer(
@@ -1884,7 +1900,7 @@ private fun ReaderSyncScreen() {
                             placeBelow = request.placeBelow,
                             preferSidePlacement = true,
                             selectedRange = null,
-                            selectionText = candidates.firstOrNull(),
+                            selectionText = selectedToken,
                             popupSentence = null
                         )
                     } else {
@@ -1893,7 +1909,7 @@ private fun ReaderSyncScreen() {
                             loading = loading,
                             error = error,
                             selectedRange = null,
-                            selectionText = candidates.firstOrNull()
+                            selectionText = selectedToken
                         )
                     }
                 }
@@ -1904,7 +1920,10 @@ private fun ReaderSyncScreen() {
                         error = null
                     )
                 )
-                queryMainLookupCandidates(candidates) { result ->
+                queryMainLookupCandidates(
+                    candidates = listOf(selectedToken),
+                    expandCandidates = false
+                ) { result ->
                     result.onSuccess { hits ->
                         if (hits.isEmpty()) {
                             setOrPushMainLookupLayer(
@@ -1953,6 +1972,8 @@ private fun ReaderSyncScreen() {
                 val rootToken = candidates.first()
                 val inferredRange = rootToken.indices.firstOrNull()?.let { 0..rootToken.lastIndex }
                 val useAnchoredRootLayer = activeSection == MiningSection.DICTIONARY && request.anchor != null
+                val pushAnchoredLayer = useAnchoredRootLayer && mainLookupSession.size > 0
+                var targetLayerIndex = mainLookupSession.lastIndex
                 fun buildCandidatesLayer(
                     rawResults: List<DictionarySearchResult>,
                     loading: Boolean,
@@ -1987,6 +2008,14 @@ private fun ReaderSyncScreen() {
                         )
                     }
                 }
+                fun applyCandidatesLayer(layer: ReaderLookupLayer) {
+                    if (pushAnchoredLayer && targetLayerIndex in mainLookupSession.layers.indices) {
+                        mainLookupSession.replaceAt(targetLayerIndex) { layer }
+                    } else {
+                        setOrPushMainLookupLayer(layer)
+                        targetLayerIndex = mainLookupSession.lastIndex
+                    }
+                }
                 mainLookupPopupVisible = true
                 mainLookupAutoPlayNonce += 1L
                 mainLookupAutoPlayedKey = null
@@ -1998,30 +2027,37 @@ private fun ReaderSyncScreen() {
                 }
                 mainLookupPopupSelectedRange = inferredRange
                 mainLookupPopupAudioUri = null
-                setOrPushMainLookupLayer(
-                    buildCandidatesLayer(
-                        rawResults = emptyList(),
-                        loading = true,
-                        error = null
-                    )
+                val loadingLayer = buildCandidatesLayer(
+                    rawResults = emptyList(),
+                    loading = true,
+                    error = null
                 )
+                if (pushAnchoredLayer) {
+                    mainLookupSession.push(loadingLayer)
+                    targetLayerIndex = mainLookupSession.lastIndex
+                } else {
+                    applyCandidatesLayer(loadingLayer)
+                }
                 queryMainLookupCandidates(
                     candidates = candidates,
                     preferredDictionaryName = request.preferredDictionaryName,
+                    preferredDictionaryCacheKey = request.preferredDictionaryCacheKey,
+                    restrictToPreferredDictionary = request.restrictToPreferredDictionary,
+                    expandCandidates = request.expandCandidates,
                     exactTermOnly = request.exactTermOnly,
                     pinnedDefinitionKey = request.pinnedDefinitionKey
                 ) { result ->
                     result.onSuccess { hits ->
                         android.util.Log.d(
                             MAIN_LOOKUP_DEBUG_LOG_TAG,
-                            "candidates success count=${hits.size} sourceCandidates=${candidates.joinToString("|")} preferred=${request.preferredDictionaryName.orEmpty()} exact=${request.exactTermOnly} pinned=${request.pinnedDefinitionKey.orEmpty()}"
+                            "candidates success count=${hits.size} sourceCandidates=${candidates.joinToString("|")} preferred=${request.preferredDictionaryName.orEmpty()} cacheKey=${request.preferredDictionaryCacheKey.orEmpty()} exact=${request.exactTermOnly} pinned=${request.pinnedDefinitionKey.orEmpty()}"
                         )
                         if (hits.isEmpty()) {
                             android.util.Log.d(
                                 MAIN_LOOKUP_DEBUG_LOG_TAG,
-                                "candidates empty section=$activeSection exactOnly=${request.exactTermOnly} preferred=${request.preferredDictionaryName.orEmpty()} pinned=${request.pinnedDefinitionKey.orEmpty()}"
+                                "candidates empty section=$activeSection exactOnly=${request.exactTermOnly} preferred=${request.preferredDictionaryName.orEmpty()} cacheKey=${request.preferredDictionaryCacheKey.orEmpty()} pinned=${request.pinnedDefinitionKey.orEmpty()}"
                             )
-                            setOrPushMainLookupLayer(
+                            applyCandidatesLayer(
                                 buildCandidatesLayer(
                                     rawResults = emptyList(),
                                     loading = false,
@@ -2031,7 +2067,7 @@ private fun ReaderSyncScreen() {
                             mainLookupPopupLoading = false
                             return@onSuccess
                         }
-                        setOrPushMainLookupLayer(
+                        applyCandidatesLayer(
                             buildCandidatesLayer(
                                 rawResults = hits,
                                 loading = false,
@@ -2040,7 +2076,7 @@ private fun ReaderSyncScreen() {
                         )
                         mainLookupPopupLoading = false
                     }.onFailure { error ->
-                        setOrPushMainLookupLayer(
+                        applyCandidatesLayer(
                             buildCandidatesLayer(
                                 rawResults = emptyList(),
                                 loading = false,
@@ -2054,6 +2090,9 @@ private fun ReaderSyncScreen() {
             }
             is MainLookupRequest.RecursiveTap -> {
                 val tapData = request.tapData
+                val recursivePriorityByName = effectiveLookupDictionaries
+                    .mapIndexed { index, dictionary -> dictionary.name to index }
+                    .toMap()
                 launchRecursiveLookupIntoSession(
                     context = context,
                     scope = scope,
@@ -2078,10 +2117,10 @@ private fun ReaderSyncScreen() {
                         data.sentence.trim().ifBlank { data.nodeText }
                     },
                     buildLayer = { resolved ->
-                        buildLookupLayerFromRawResults(
+                        val layer = buildLookupLayerFromRawResults(
                             rawResults = resolved.hits,
                             dictionaryCssByName = dictionaryCssByName,
-                            dictionaryPriorityByName = dictionaryPriorityByName,
+                            dictionaryPriorityByName = recursivePriorityByName,
                             dictionaryTypeByName = dictionaryTypeByName,
                             loading = false,
                             error = null,
@@ -2096,6 +2135,15 @@ private fun ReaderSyncScreen() {
                             selectionText = resolved.term,
                             popupSentence = resolved.popupSentence
                         )
+                        android.util.Log.d(
+                            MAIN_LOOKUP_DEBUG_LOG_TAG,
+                            "recursiveDebug render term=${resolved.term} grouped=${
+                                layer.groupedResults.joinToString(" || ") { grouped ->
+                                    "${grouped.term}:${grouped.dictionaries.joinToString(",") { it.dictionary }}"
+                                }
+                            }"
+                        )
+                        layer
                     },
                     onNoSelection = { },
                     onNoDictionary = { },
@@ -2209,7 +2257,7 @@ private fun ReaderSyncScreen() {
         bumpDictionaryDataVersion(context)
         ref.cacheKey?.let { cacheKey ->
             scope.launch(Dispatchers.IO) {
-                deleteDictionaryFromSqlite(context, cacheKey)
+                deleteDictionaryStorage(context, cacheKey)
             }
         }
         persistImportState()
@@ -2254,6 +2302,36 @@ private fun ReaderSyncScreen() {
         if (lookupQuery.isNotBlank()) {
             triggerLookupCandidates(listOf(lookupQuery))
         }
+    }
+
+    fun refreshLookupIfNeeded() {
+        invalidateDictionaryLookupCaches()
+        if (lookupQuery.isNotBlank()) {
+            triggerLookupCandidates(listOf(lookupQuery))
+        }
+    }
+
+    fun setCombinedDictionaryEnabled(item: CombinedDictionaryItem, enabled: Boolean) {
+        when (item.type) {
+            CombinedDictionaryType.IMPORTED -> {
+                val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == item.id }
+                if (targetIndex < 0) return
+                dictionaryRefs = dictionaryRefs.toMutableList().also { refs ->
+                    refs[targetIndex] = refs[targetIndex].copy(enabled = enabled)
+                }
+                persistImportState()
+            }
+            CombinedDictionaryType.MOUNTED -> {
+                val cacheKey = item.id.removePrefix("mnt:")
+                mdxMountState = mdxMountState.copy(
+                    entries = mdxMountState.entries.map { current ->
+                        if (current.cacheKey == cacheKey) current.copy(enabled = enabled) else current
+                    }
+                )
+                saveMdxMountState(context, mdxMountState)
+            }
+        }
+        refreshLookupIfNeeded()
     }
 
     fun moveCombinedDictionary(fromIndex: Int, toIndex: Int, combinedItems: List<CombinedDictionaryItem>) {
@@ -2336,7 +2414,7 @@ private fun ReaderSyncScreen() {
 
                 val parseResult = withContext(Dispatchers.IO) {
                     runCatching {
-                        importDictionaryToSqlite(
+                        importDictionaryFromZip(
                             context = context,
                             contentResolver = contentResolver,
                             uri = uri,
@@ -2368,7 +2446,7 @@ private fun ReaderSyncScreen() {
                     parsedDictionary.cacheKey
                         .takeIf { it.isNotBlank() }
                         ?.let { key ->
-                            scope.launch(Dispatchers.IO) { deleteDictionaryFromSqlite(context, key) }
+                            scope.launch(Dispatchers.IO) { deleteDictionaryStorage(context, key) }
                         }
                     importErrors += context.getString(R.string.status_duplicate_dictionary_detected, parsedDictionary.name)
                     return@forEachIndexed
@@ -2378,7 +2456,8 @@ private fun ReaderSyncScreen() {
                 nextDictionaryRefs = (nextDictionaryRefs + PersistedDictionaryRef(
                     uri = uriValue,
                     name = displayName,
-                    cacheKey = cacheKey
+                    cacheKey = cacheKey,
+                    enabled = true
                 )).distinctBy { it.uri }
             }
 
@@ -2387,11 +2466,6 @@ private fun ReaderSyncScreen() {
             dictionaryRefs = nextDictionaryRefs
             if (hadDictionaryListChange) {
                 bumpDictionaryDataVersion(context)
-            }
-            if (hadDictionaryListChange && nextLoadedDictionaries.isNotEmpty()) {
-                scope.launch(Dispatchers.Default) {
-                    prewarmDictionaryMemoryIndexes(context, nextLoadedDictionaries)
-                }
             }
             persistImportState()
             clearDictionaryProgress()
@@ -2835,6 +2909,7 @@ private fun ReaderSyncScreen() {
                                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
                                             trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
                                         )
+                                        Spacer(modifier = Modifier.weight(1f, fill = true))
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -2902,6 +2977,7 @@ private fun ReaderSyncScreen() {
                         }
                         Row(
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Button(onClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) }) {
@@ -2914,10 +2990,21 @@ private fun ReaderSyncScreen() {
                                     Text(stringResource(R.string.settings_mdx_title))
                                 }
                             }
-                            OutlinedButton(
-                                onClick = { showDictionaryManager = !showDictionaryManager }
-                            ) {
-                                Text(if (showDictionaryManager) stringResource(R.string.dictionary_hide_list) else stringResource(R.string.dictionary_show_list))
+                            OutlinedButton(onClick = { showDictionaryManager = !showDictionaryManager }) {
+                                Text(
+                                    if (showDictionaryManager) {
+                                        stringResource(R.string.dictionary_hide_list)
+                                    } else {
+                                        stringResource(R.string.dictionary_show_list)
+                                    }
+                                )
+                            }
+                            OutlinedButton(onClick = { showDictionaryDeleteActions = !showDictionaryDeleteActions }) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription = stringResource(R.string.common_delete),
+                                    tint = if (showDictionaryDeleteActions) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
 
@@ -2929,7 +3016,8 @@ private fun ReaderSyncScreen() {
                                     type = CombinedDictionaryType.IMPORTED,
                                     title = ref.name.ifBlank { context.getString(R.string.dictionary_default_name, index + 1) },
                                     countText = loaded?.entryCount?.let { context.getString(R.string.dictionary_count, it) }
-                                        ?: stringResource(R.string.dictionary_unloaded)
+                                        ?: stringResource(R.string.dictionary_unloaded),
+                                    enabled = ref.enabled
                                 )
                             }
                             val mountedItems = if (mdxMountState.enabled) {
@@ -2939,7 +3027,7 @@ private fun ReaderSyncScreen() {
                                         type = CombinedDictionaryType.MOUNTED,
                                         title = entry.displayName.ifBlank { "mounted.mdx" },
                                         countText = if (entry.enabled) context.getString(R.string.mdx_dict_enabled) else context.getString(R.string.mdx_dict_disabled),
-                                        mountedEnabled = entry.enabled
+                                        enabled = entry.enabled
                                     )
                                 }
                             } else {
@@ -2963,64 +3051,74 @@ private fun ReaderSyncScreen() {
                                             modifier = Modifier.padding(10.dp),
                                             verticalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
-                                            Text(item.title)
-                                            Text(
-                                                when (item.type) {
-                                                    CombinedDictionaryType.IMPORTED -> item.countText
-                                                    CombinedDictionaryType.MOUNTED -> stringResource(R.string.mdx_dict_prefix, item.countText)
-                                                },
-                                                style = MaterialTheme.typography.bodySmall
-                                            )
-                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                OutlinedButton(
-                                                    onClick = { moveCombinedDictionary(index, index - 1, combinedItems) },
-                                                    enabled = !dictionaryLoading && index > 0
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.weight(1f),
+                                                    verticalArrangement = Arrangement.spacedBy(4.dp)
                                                 ) {
-                                                    Text("↑")
-                                                }
-                                                OutlinedButton(
-                                                    onClick = { moveCombinedDictionary(index, index + 1, combinedItems) },
-                                                    enabled = !dictionaryLoading && index < combinedItems.lastIndex
-                                                ) {
-                                                    Text("↓")
-                                                }
-                                                if (item.type == CombinedDictionaryType.MOUNTED) {
-                                                    val cacheKey = item.id.removePrefix("mnt:")
-                                                    val enabled = item.mountedEnabled == true
-                                                    OutlinedButton(
-                                                        onClick = {
-                                                            mdxMountState = mdxMountState.copy(
-                                                                entries = mdxMountState.entries.map { current ->
-                                                                    if (current.cacheKey == cacheKey) current.copy(enabled = !enabled) else current
-                                                                }
-                                                            )
-                                                            saveMdxMountState(context, mdxMountState)
-                                                            invalidateDictionaryLookupCaches()
-                                                            if (lookupQuery.isNotBlank()) {
-                                                                triggerLookupCandidates(listOf(lookupQuery))
-                                                            }
+                                                    Text(item.title)
+                                                    Text(
+                                                        when (item.type) {
+                                                            CombinedDictionaryType.IMPORTED -> item.countText
+                                                            CombinedDictionaryType.MOUNTED -> stringResource(R.string.mdx_dict_prefix, item.countText)
                                                         },
-                                                        enabled = !dictionaryLoading
+                                                        style = MaterialTheme.typography.bodySmall
+                                                    )
+                                                }
+                                            }
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Row(
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    OutlinedButton(
+                                                        onClick = { moveCombinedDictionary(index, index - 1, combinedItems) },
+                                                        enabled = !dictionaryLoading && index > 0
                                                     ) {
-                                                        Text(if (enabled) stringResource(R.string.mdx_disable) else stringResource(R.string.mdx_enable))
+                                                        Text("↑")
+                                                    }
+                                                    OutlinedButton(
+                                                        onClick = { moveCombinedDictionary(index, index + 1, combinedItems) },
+                                                        enabled = !dictionaryLoading && index < combinedItems.lastIndex
+                                                    ) {
+                                                        Text("↓")
+                                                    }
+                                                    if (showDictionaryDeleteActions) {
+                                                        OutlinedButton(
+                                                            onClick = {
+                                                                when (item.type) {
+                                                                    CombinedDictionaryType.IMPORTED -> {
+                                                                        val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == item.id }
+                                                                        if (targetIndex >= 0) removeDictionaryAt(targetIndex)
+                                                                    }
+                                                                    CombinedDictionaryType.MOUNTED -> {
+                                                                        removeMountedDictionaryByCacheKey(item.id.removePrefix("mnt:"))
+                                                                    }
+                                                                }
+                                                            },
+                                                            enabled = !dictionaryLoading,
+                                                            contentPadding = ButtonDefaults.ContentPadding
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Outlined.Delete,
+                                                                contentDescription = stringResource(R.string.common_delete),
+                                                                tint = MaterialTheme.colorScheme.error
+                                                            )
+                                                        }
                                                     }
                                                 }
-                                                OutlinedButton(
-                                                    onClick = {
-                                                        when (item.type) {
-                                                            CombinedDictionaryType.IMPORTED -> {
-                                                                val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == item.id }
-                                                                if (targetIndex >= 0) removeDictionaryAt(targetIndex)
-                                                            }
-                                                            CombinedDictionaryType.MOUNTED -> {
-                                                                removeMountedDictionaryByCacheKey(item.id.removePrefix("mnt:"))
-                                                            }
-                                                        }
-                                                    },
+                                                Spacer(modifier = Modifier.weight(1f))
+                                                Switch(
+                                                    checked = item.enabled,
+                                                    onCheckedChange = { checked -> setCombinedDictionaryEnabled(item, checked) },
                                                     enabled = !dictionaryLoading
-                                                ) {
-                                                    Text(stringResource(R.string.common_delete))
-                                                }
+                                                )
                                             }
                                         }
                                     }
@@ -3202,45 +3300,67 @@ private fun ReaderSyncScreen() {
                                                                     indexLabel = (definitionIndex + 1).toString(),
                                                                     dictionaryName = null,
                                                                     dictionaryCss = dictionaryGroup.css,
-                                                                    highlightedRects = if (dictionaryPageHighlightedDefinitionKey == definitionKey) {
-                                                                        dictionaryPageHighlightedRects
-                                                                    } else {
-                                                                        emptyList()
-                                                                    },
-                                                                    onLookupTap = { tapData ->
-                                                                        scope.launch {
-                                                                            val tapCandidates = listOf(
-                                                                                tapData.scanText.trim(),
-                                                                                tapData.text.trim(),
-                                                                                tapData.nodeText.trim()
-                                                                            )
-                                                                                .filter { it.isNotBlank() }
-                                                                                .distinct()
-                                                                            val resolvedLookup = withContext(Dispatchers.Default) {
-                                                                                runCatching {
-                                                                                    computeLookupResultsWithWinningCandidate(
-                                                                                        context = context,
-                                                                                        dictionaries = effectiveLookupDictionaries,
-                                                                                        candidates = tapCandidates,
-                                                                                        profile = DictionaryQueryProfile.FAST,
-                                                                                        expandCandidates = false
-                                                                                    )
-                                                                                }.getOrNull()
+                                                                     highlightedRects = if (dictionaryPageHighlightedDefinitionKey == definitionKey) {
+                                                                         dictionaryPageHighlightedRects
+                                                                     } else {
+                                                                         emptyList()
+                                                                     },
+                                                                     onLookupTap = { tapData ->
+                                                                         scope.launch {
+                                                                            val mergedCandidates = buildMinimalLookupCandidatesFromTap(tapData)
+                                                                            if (mergedCandidates.isEmpty()) {
+                                                                                android.util.Log.d(
+                                                                                    "BookLookupTap",
+                                                                                    "dictionary tap skip emptyCandidates source=${tapData.tapSource} scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
+                                                                                )
+                                                                                return@launch
                                                                             }
-                                                                            val matchedLength =
-                                                                                resolvedLookup?.hits
-                                                                                    ?.firstOrNull()
-                                                                                    ?.matchedLength
-                                                                                    ?.coerceAtLeast(1)
-                                                                                    ?: selectLookupScanText(
-                                                                                        tapData.scanText.ifBlank { tapData.text },
-                                                                                        0
-                                                                                    )?.text?.length?.coerceAtLeast(1)
-                                                                                    ?: tapData.scanText.length.coerceAtLeast(1)
-                                                                            val resolvedRects = resolveDefinitionMatchedRects(
-                                                                                tapData = tapData,
-                                                                                matchedLength = matchedLength
+                                                                            val preferredDictionaries = tapData.lookupDictionaryCacheKey
+                                                                                ?.takeIf { it.isNotBlank() }
+                                                                                ?.let { cacheKey -> effectiveLookupDictionaries.filter { it.cacheKey == cacheKey } }
+                                                                                .orEmpty()
+                                                                                .ifEmpty { effectiveLookupDictionaries.filter { it.name == dictionaryGroup.dictionary } }
+                                                                            val lookupHits = withContext(Dispatchers.Default) {
+                                                                                val precheckHits = computeLookupResultsWithWinningCandidate(
+                                                                                    context = context,
+                                                                                    dictionaries = preferredDictionaries.ifEmpty { effectiveLookupDictionaries },
+                                                                                    candidates = mergedCandidates,
+                                                                                    profile = if (tapData.tapSource.equals("entry-link", ignoreCase = true)) {
+                                                                                        DictionaryQueryProfile.FULL
+                                                                                    } else {
+                                                                                        DictionaryQueryProfile.FAST
+                                                                                    },
+                                                                                    expandCandidates = false
+                                                                                )?.hits.orEmpty()
+                                                                                if (tapData.tapSource.equals("entry-link", ignoreCase = true)) {
+                                                                                    val exactQuery = mergedCandidates.firstOrNull()?.trim().orEmpty()
+                                                                                    precheckHits.filter { hit ->
+                                                                                        val term = hit.entry.term.trim()
+                                                                                        val reading = hit.entry.reading?.trim().orEmpty()
+                                                                                        term == exactQuery || reading == exactQuery
+                                                                                    }
+                                                                                } else {
+                                                                                    precheckHits
+                                                                                }
+                                                                            }
+                                                                            if (lookupHits.isEmpty()) {
+                                                                                dictionaryPageHighlightedDefinitionKey = null
+                                                                                dictionaryPageHighlightedRects = emptyList()
+                                                                                android.util.Log.d(
+                                                                                    "BookLookupTap",
+                                                                                    "dictionary tap skip noHits source=${tapData.tapSource} scanLen=${tapData.scanText.length} candidates=${mergedCandidates.joinToString("|")}"
+                                                                                )
+                                                                                return@launch
+                                                                            }
+                                                                            val matchedLength = lookupHits.firstOrNull()?.matchedLength?.coerceAtLeast(1) ?: 1
+                                                                            android.util.Log.d(
+                                                                                "BookLookupTap",
+                                                                                "dictionary tap matched source=${tapData.tapSource} scanLen=${tapData.scanText.length} firstTerm='${lookupHits.firstOrNull()?.entry?.term.orEmpty()}' firstMatchedLen=${lookupHits.firstOrNull()?.matchedLength ?: -1} usedMatchedLen=$matchedLength candidates=${mergedCandidates.joinToString("|")}"
                                                                             )
+                                                                             val resolvedRects = resolveDefinitionMatchedRects(
+                                                                                 tapData = tapData,
+                                                                                 matchedLength = matchedLength
+                                                                             )
                                                                             val highlightRects = if (resolvedRects != null) {
                                                                                 val rebuilt = rebuildRectsFromCharacterRectsShared(
                                                                                     charRects = resolvedRects.localCharRects,
@@ -3258,47 +3378,42 @@ private fun ReaderSyncScreen() {
                                                                                     startOffset = tapData.offset,
                                                                                     matchedLength = matchedLength
                                                                                 )
+                                                                             }
+                                                                             dictionaryPageHighlightedDefinitionKey = definitionKey
+                                                                             dictionaryPageHighlightedRects = highlightRects
+                                                                            val anchorRects = tapData.resolveScreenAnchorRects().takeIf { it.isNotEmpty() }
+                                                                            val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
+                                                                            val anchorBottom = anchor?.boundingRectCoreOrNull()?.bottom
+                                                                            val shouldPlaceBelow = anchorBottom?.let { it <= view.height * 0.56f } ?: true
+                                                                            android.util.Log.d(
+                                                                                MAIN_LOOKUP_DEBUG_LOG_TAG,
+                                                                                "dictionary tap dispatch source=${tapData.tapSource} merged=${mergedCandidates.joinToString("|")} preferred=${dictionaryGroup.dictionary}"
+                                                                            )
+                                                                            val isEntryTap = tapData.tapSource.equals("entry", ignoreCase = true)
+                                                                            val isEntryLinkTap =
+                                                                                tapData.tapSource.equals("entry-link", ignoreCase = true)
+                                                                            val isStrictLinkTap = isEntryTap || isEntryLinkTap
+                                                                            val pinnedDefinitionKeyForTap = when {
+                                                                                isEntryTap ->
+                                                                                    tapData.tappedDefinitionKey ?: definitionKey
+                                                                                else -> null
                                                                             }
-                                                                            dictionaryPageHighlightedDefinitionKey = definitionKey
-                                                                            dictionaryPageHighlightedRects = highlightRects
-                                                                            val mergedCandidates = buildList {
-                                                                                resolvedLookup?.query
-                                                                                    ?.trim()
-                                                                                    ?.takeIf { it.isNotBlank() }
-                                                                                    ?.let { add(it) }
-                                                                                buildRawLookupCandidatesFromTap(tapData).forEach { candidate ->
-                                                                                    if (candidate.isNotBlank() && !contains(candidate)) {
-                                                                                        add(candidate)
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                            if (mergedCandidates.isNotEmpty()) {
-                                                                                val anchorRects = tapData.resolveScreenAnchorRects().takeIf { it.isNotEmpty() }
-                                                                                val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
-                                                                                val anchorBottom = anchor?.boundingRectCoreOrNull()?.bottom
-                                                                                val shouldPlaceBelow = anchorBottom?.let { it <= view.height * 0.56f } ?: true
-                                                                                android.util.Log.d(
-                                                                                    MAIN_LOOKUP_DEBUG_LOG_TAG,
-                                                                                    "dictionary tap dispatch source=${tapData.tapSource} merged=${mergedCandidates.joinToString("|")} preferred=${dictionaryGroup.dictionary}"
+                                                                            startMainLookup(
+                                                                                MainLookupRequest.Candidates(
+                                                                                    rawCandidates = mergedCandidates,
+                                                                                    preferredDictionaryName = dictionaryGroup.dictionary,
+                                                                                    preferredDictionaryCacheKey = tapData.lookupDictionaryCacheKey,
+                                                                                    restrictToPreferredDictionary = isStrictLinkTap,
+                                                                                    expandCandidates = false,
+                                                                                    exactTermOnly = isStrictLinkTap,
+                                                                                    pinnedDefinitionKey = pinnedDefinitionKeyForTap,
+                                                                                    anchor = anchor,
+                                                                                    placeBelow = shouldPlaceBelow
                                                                                 )
-                                                                                startMainLookup(
-                                                                                    MainLookupRequest.Candidates(
-                                                                                        rawCandidates = mergedCandidates,
-                                                                                        preferredDictionaryName = dictionaryGroup.dictionary,
-                                                                                        exactTermOnly = tapData.tapSource.equals("entry", ignoreCase = true),
-                                                                                        pinnedDefinitionKey = if (tapData.tapSource.equals("entry", ignoreCase = true)) {
-                                                                                            tapData.tappedDefinitionKey ?: definitionKey
-                                                                                        } else {
-                                                                                            null
-                                                                                        },
-                                                                                        anchor = anchor,
-                                                                                        placeBelow = shouldPlaceBelow
-                                                                                    )
-                                                                                )
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                )
+                                                                            )
+                                                                         }
+                                                                     }
+                                                                 )
                                                             }
                                                         }
                                                     }
@@ -3381,6 +3496,7 @@ private fun ReaderSyncScreen() {
                         onAudiobookClick = { context.startActivity(Intent(context, AudiobookSettingsActivity::class.java)) },
                         onControlModeClick = { context.startActivity(Intent(context, ControlModeSettingsActivity::class.java)) },
                         onAudiobookUiClick = { context.startActivity(Intent(context, AudiobookUiSettingsActivity::class.java)) },
+                        onFontClick = { context.startActivity(Intent(context, FontSettingsActivity::class.java)) },
                         onControllerClick = { context.startActivity(Intent(context, ControllerSettingsActivity::class.java)) },
                         onAnkiClick = { context.startActivity(Intent(context, AnkiSettingsActivity::class.java)) },
                         onAdvancedOverlayClick = { context.startActivity(Intent(context, OverlaySettingsActivity::class.java)) },
@@ -3661,16 +3777,24 @@ private fun ReaderSyncScreen() {
                 onDefinitionLookup = { sourceLayerIndex, definitionKey, tapData ->
                     val isTopLayer = sourceLayerIndex == mainLookupSession.lastIndex
                     val isPreviousLayer = sourceLayerIndex == mainLookupSession.lastIndex - 1
-                    if (isTopLayer || isPreviousLayer) {
-                        val resolvedDefinitionKey = tapData.tappedDefinitionKey ?: definitionKey
+                    val resolvedDefinitionKey = tapData.tappedDefinitionKey ?: definitionKey
+                    android.util.Log.d(
+                        "BookLookupTap",
+                        "main cardTap dispatch layer=$sourceLayerIndex last=${mainLookupSession.lastIndex} isTop=$isTopLayer isPrev=$isPreviousLayer key=$resolvedDefinitionKey source=${tapData.tapSource} scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
+                    )
+                    val effectiveLayerIndex = if (isTopLayer || isPreviousLayer) {
+                        sourceLayerIndex
+                    } else {
+                        mainLookupSession.truncateTo(sourceLayerIndex)
+                        sourceLayerIndex.coerceIn(0, mainLookupSession.lastIndex.coerceAtLeast(0))
+                    }
                         startMainLookup(
                             MainLookupRequest.RecursiveTap(
-                                sourceLayerIndex = sourceLayerIndex,
+                                sourceLayerIndex = effectiveLayerIndex,
                                 definitionKey = resolvedDefinitionKey,
                                 tapData = tapData
                             )
                         )
-                    }
                 },
                 onPlayAudio = { _, groupedResult ->
                     playLookupGroupAudio(groupedResult)
