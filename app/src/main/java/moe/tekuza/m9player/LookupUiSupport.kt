@@ -95,6 +95,7 @@ private class DefinitionLookupViewTag(
     var lastLoadStartMs: Long = 0L
     var lastLoadToken: Long = 0L
     var shellBootstrapped: Boolean = false
+    var patchRetryToken: Long = 0L
 }
 
 private val lookupWebViewPool = ArrayDeque<WebView>()
@@ -833,11 +834,10 @@ internal fun RichDefinitionView(
                             val token = System.currentTimeMillis()
                             lastLoadStartMs = token
                             lastLoadToken = token
-                            if (!shellBootstrapped) {
-                                Log.d(
-                                    BOOK_LOOKUP_RENDER_LOG_TAG,
-                                    "webview load token=$token bytes=${html.length}"
-                                )
+                            patchRetryToken = 0L
+                            fun fallbackToFullLoad(fallbackToken: Long) {
+                                lastLoadStartMs = fallbackToken
+                                lastLoadToken = fallbackToken
                                 webView.loadDataWithBaseURL(
                                     null,
                                     html,
@@ -845,6 +845,13 @@ internal fun RichDefinitionView(
                                     "utf-8",
                                     null
                                 )
+                            }
+                            if (!shellBootstrapped) {
+                                Log.d(
+                                    BOOK_LOOKUP_RENDER_LOG_TAG,
+                                    "webview load token=$token bytes=${html.length}"
+                                )
+                                fallbackToFullLoad(token)
                                 shellBootstrapped = true
                             } else {
                                 val patchScript = buildDefinitionPatchScript(
@@ -859,20 +866,31 @@ internal fun RichDefinitionView(
                                 webView.evaluateJavascript(patchScript) { result ->
                                     val decoded = decodeEvaluateJavascriptJson(result) ?: result.orEmpty()
                                     if (decoded != "ok") {
+                                        if (decoded == "missing" && patchRetryToken != token) {
+                                            patchRetryToken = token
+                                            webView.post {
+                                                val currentTag = webView.tag as? DefinitionLookupViewTag
+                                                if (currentTag?.lastLoadToken != token) return@post
+                                                webView.evaluateJavascript(patchScript) { retryResult ->
+                                                    val retryDecoded = decodeEvaluateJavascriptJson(retryResult) ?: retryResult.orEmpty()
+                                                    if (retryDecoded == "ok") return@evaluateJavascript
+                                                    Log.d(
+                                                        BOOK_LOOKUP_RENDER_LOG_TAG,
+                                                        "webview patch fallback token=$token retryResult=$retryDecoded"
+                                                    )
+                                                    val fallbackToken = System.currentTimeMillis()
+                                                    currentTag.patchRetryToken = 0L
+                                                    fallbackToFullLoad(fallbackToken)
+                                                }
+                                            }
+                                            return@evaluateJavascript
+                                        }
                                         Log.d(
                                             BOOK_LOOKUP_RENDER_LOG_TAG,
                                             "webview patch fallback token=$token result=$decoded"
                                         )
                                         val fallbackToken = System.currentTimeMillis()
-                                        lastLoadStartMs = fallbackToken
-                                        lastLoadToken = fallbackToken
-                                        webView.loadDataWithBaseURL(
-                                            null,
-                                            html,
-                                            "text/html",
-                                            "utf-8",
-                                            null
-                                        )
+                                        fallbackToFullLoad(fallbackToken)
                                     }
                                 }
                             }

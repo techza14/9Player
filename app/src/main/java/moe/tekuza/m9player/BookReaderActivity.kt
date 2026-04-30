@@ -61,11 +61,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
@@ -566,6 +566,7 @@ private fun BookReaderScreen(
     } else {
         uiTestLayoutModeHorizontal
     }
+    val chapterRowVisible = !uiTestMode || uiTestChapterVisible
     var coverModeEnabled by remember(srtUri) { mutableStateOf(srtUri == null) }
     val hasSubtitleFile = srtUri != null
     var showOverallProgress by remember { mutableStateOf(false) }
@@ -2397,16 +2398,20 @@ private fun BookReaderScreen(
         val useLeftVerticalLayout = uiTestLayoutMode == 2
         val density = LocalDensity.current
         var leftControlsWidthDp by remember { mutableStateOf(0.dp) }
-        val leftRailGap = 16.dp
+        val leftRailGap = 0.dp
+        val leftRailContentGap = 8.dp
         var topBarBottomDp by remember { mutableStateOf(0.dp) }
         var chapterRowBottomDp by remember { mutableStateOf(0.dp) }
-        val leftRailTopDp = if (chapterRowBottomDp > topBarBottomDp) {
+        var contentContainerTopDp by remember { mutableStateOf(0.dp) }
+        var contentContainerHeightDp by remember { mutableStateOf(0.dp) }
+        val fallbackLeftRailTopDp = if (chapterRowBottomDp > topBarBottomDp) {
             chapterRowBottomDp + 2.dp
         } else {
             topBarBottomDp + 2.dp
         }
+        val leftRailTopDp = contentContainerTopDp.takeIf { it > 0.dp } ?: fallbackLeftRailTopDp
         val contentStartPadding: Dp = if (useLeftVerticalLayout && bottomControlsVisible) {
-            leftControlsWidthDp + leftRailGap
+            leftControlsWidthDp + leftRailContentGap
         } else {
             0.dp
         }
@@ -2422,7 +2427,7 @@ private fun BookReaderScreen(
                                 .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            if (audioChapters.isNotEmpty()) {
+                            if (audioChapters.isNotEmpty() && chapterRowVisible) {
                                 val activeChapterTitle = audioChapters
                                     .getOrNull(activeChapterIndex)
                                     ?.title
@@ -2456,7 +2461,7 @@ private fun BookReaderScreen(
                                     }
                                 }
                             }
-                            if (audioChapters.isNotEmpty() && chapterOptionsVisible) {
+                            if (audioChapters.isNotEmpty() && chapterOptionsVisible && chapterRowVisible) {
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -2624,14 +2629,22 @@ private fun BookReaderScreen(
                                     Modifier
                                 }
                             )
-                            OutlinedButton(onClick = { lyricsMode = !lyricsMode }) {
-                                Text(
-                                    if (lyricsMode) {
-                                        stringResource(R.string.bookreader_subtitle_list)
+                            val stepSeconds = (loadAudiobookSettingsConfig(context).seekStepMillis / 1000L)
+                            OutlinedButton(
+                                enabled = cues.isNotEmpty(),
+                                onClick = {
+                                    adjacentJumpMode = if (adjacentJumpMode == AdjacentJumpMode.CUE) {
+                                        AdjacentJumpMode.DURATION
                                     } else {
-                                        stringResource(R.string.bookreader_subtitle_single)
+                                        AdjacentJumpMode.CUE
                                     }
-                                )
+                                }
+                            ) {
+                                val label = when (effectiveAdjacentJumpMode) {
+                                    AdjacentJumpMode.CUE -> stringResource(R.string.bookreader_jump_by_cue)
+                                    AdjacentJumpMode.DURATION -> stringResource(R.string.bookreader_jump_by_duration, stepSeconds.toInt())
+                                }
+                                Text(label)
                             }
                         }
                     }
@@ -2863,7 +2876,7 @@ private fun BookReaderScreen(
                         }
                     }
                 }
-                if (useLeftVerticalLayout && bottomControlsVisible && audioChapters.isNotEmpty() && uiTestChapterVisible) {
+                if (useLeftVerticalLayout && bottomControlsVisible && audioChapters.isNotEmpty() && chapterRowVisible) {
                     val activeChapterTitle = audioChapters
                         .getOrNull(activeChapterIndex)
                         ?.title
@@ -2914,23 +2927,33 @@ private fun BookReaderScreen(
                     }
                 }
 
-                Surface(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .padding(start = contentStartPadding)
-                        .padding(
-                            top = if (coverModeEnabled) 18.dp else 0.dp,
-                            bottom = if (coverModeEnabled) 20.dp else 0.dp
-                        ),
-                    tonalElevation = 1.dp,
-                    shape = MaterialTheme.shapes.large
                 ) {
-                    BoxWithConstraints(
+                    Surface(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(if (coverModeEnabled) 0.dp else 16.dp)
+                            .padding(start = contentStartPadding)
+                            .padding(
+                                top = if (coverModeEnabled) 18.dp else 0.dp,
+                                bottom = if (coverModeEnabled) 20.dp else 0.dp
+                            )
+                            .onGloballyPositioned { coordinates ->
+                                if (useLeftVerticalLayout && bottomControlsVisible) {
+                                    contentContainerTopDp = with(density) { coordinates.positionInRoot().y.toDp() }
+                                    contentContainerHeightDp = with(density) { coordinates.size.height.toDp() }
+                                }
+                            },
+                        tonalElevation = 1.dp,
+                        shape = MaterialTheme.shapes.large
                     ) {
+                        BoxWithConstraints(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(if (coverModeEnabled) 0.dp else 16.dp)
+                        ) {
                         val density = LocalDensity.current
                         val bookVerticalWriting = readerUiWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
                         val verticalRowsPerColumn = remember(
@@ -3251,14 +3274,14 @@ private fun BookReaderScreen(
                                 }
                             }
                         }
+                        }
                     }
-                }
-                }
                 if (useLeftVerticalLayout && bottomControlsVisible) {
                     LeftVerticalControlRail(
                         modifier = Modifier
                             .align(Alignment.TopStart)
-                            .padding(start = leftRailGap, top = leftRailTopDp),
+                            .offset(x = leftRailGap)
+                            .fillMaxHeight(),
                         displayedRightDurationTimeMs = displayedRightDurationTimeMs,
                         displayedLeftTimeMs = displayedLeftTimeMs,
                         sliderMax = sliderMax,
@@ -3268,21 +3291,25 @@ private fun BookReaderScreen(
                         activeChapterStartMs = activeChapterStartMs,
                         timelineRangeMs = timelineRangeMs,
                         durationMs = durationMs,
-                        isPlaying = isPlaying,
+                        isPlaying = player.isPlaying,
+                        onToggleDurationMode = { showOverallDuration = !showOverallDuration },
                         onLeftRailMeasured = { coordinates ->
                             leftControlsWidthDp = with(density) { coordinates.size.width.toDp() }
                         },
                         onPreviewPositionChanged = { dragPreviewPositionMs = it },
-                        onSeekManual = { seekToManual(it) },
+                        onSeekManual = { targetMs -> seekToManual(targetMs) },
                         onRequestTimeEdit = {
                             timeEditInput = formatBookTime(displayedLeftTimeMs)
                             timeEditError = null
                             timeEditDialogVisible = true
                         },
-                        onPrevious = { jumpToAdjacentCueByUi(-1) },
-                        onPlayPause = { if (player.isPlaying) player.pause() else player.play() },
-                        onNext = { jumpToAdjacentCueByUi(1) }
+                        onPrevious = { jumpToAdjacentCue(-1) },
+                        onPlayPause = {
+                            if (player.isPlaying) player.pause() else player.play()
+                        },
+                        onNext = { jumpToAdjacentCue(1) }
                     )
+                }
                 }
             }
         }
@@ -3621,6 +3648,24 @@ private fun BookReaderScreen(
         }
     )
 }
+}
+
+@Composable
+private fun LeftVerticalRailShell(
+    modifier: Modifier = Modifier,
+    onLeftRailMeasured: (androidx.compose.ui.layout.LayoutCoordinates) -> Unit
+) {
+    Surface(
+        tonalElevation = 2.dp,
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
+        modifier = modifier
+            .width(60.dp)
+            .onGloballyPositioned(onLeftRailMeasured)
+    ) {
+        Box(modifier = Modifier.fillMaxSize())
+    }
+}
 
 @Composable
 private fun LeftVerticalControlRail(
@@ -3635,6 +3680,7 @@ private fun LeftVerticalControlRail(
     timelineRangeMs: Long,
     durationMs: Long,
     isPlaying: Boolean,
+    onToggleDurationMode: () -> Unit,
     onLeftRailMeasured: (androidx.compose.ui.layout.LayoutCoordinates) -> Unit,
     onPreviewPositionChanged: (Long?) -> Unit,
     onSeekManual: (Long) -> Unit,
@@ -3644,132 +3690,128 @@ private fun LeftVerticalControlRail(
     onNext: () -> Unit
 ) {
     var verticalTimelineHeightPx by remember { mutableStateOf(220f) }
+    var pendingSeekTargetMs by remember { mutableStateOf<Long?>(null) }
+    fun resolveVerticalTimelineTarget(y: Float): Long? {
+        if (displayedDurationTimeMs <= 0L) return null
+        val ratio = 1f - (y.coerceIn(0f, verticalTimelineHeightPx) / verticalTimelineHeightPx)
+        val clamped = (ratio * timelineRangeMs.toFloat()).toLong()
+            .coerceIn(0L, timelineRangeMs)
+        return if (useChapterTimeline) {
+            activeChapterStartMs + clamped
+        } else {
+            clamped.coerceIn(0L, durationMs.coerceAtLeast(0L))
+        }
+    }
     Surface(
-        tonalElevation = 4.dp,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.42f),
+        tonalElevation = 2.dp,
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
         modifier = modifier
-            .fillMaxHeight()
-            .wrapContentWidth()
+            .width(60.dp)
             .onGloballyPositioned(onLeftRailMeasured)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxHeight()
-                .padding(vertical = 6.dp),
+                .padding(horizontal = 8.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f),
-                modifier = Modifier.wrapContentWidth(Alignment.CenterHorizontally)
-            ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = formatBookTime(displayedRightDurationTimeMs),
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                    Box(
-                        modifier = Modifier
-                            .width(18.dp)
-                            .height(220.dp)
-                            .background(Color(0xFFD4E0F2), RoundedCornerShape(10.dp))
-                            .onGloballyPositioned { coordinates ->
-                                verticalTimelineHeightPx = coordinates.size.height.toFloat().coerceAtLeast(1f)
-                            }
-                            .pointerInput(
-                                sliderMax,
-                                displayedDurationTimeMs,
-                                useChapterTimeline,
-                                activeChapterStartMs,
-                                timelineRangeMs,
-                                durationMs,
-                                verticalTimelineHeightPx
-                            ) {
-                                detectVerticalDragGestures(
-                                    onVerticalDrag = { change, _ ->
-                                        if (displayedDurationTimeMs <= 0L) return@detectVerticalDragGestures
-                                        val y = change.position.y.coerceIn(0f, verticalTimelineHeightPx)
-                                        val ratio = 1f - (y / verticalTimelineHeightPx)
-                                        val clamped = (ratio * timelineRangeMs.toFloat()).toLong()
-                                            .coerceIn(0L, timelineRangeMs)
-                                        val preview = if (useChapterTimeline) {
-                                            activeChapterStartMs + clamped
-                                        } else {
-                                            clamped.coerceIn(0L, durationMs.coerceAtLeast(0L))
-                                        }
-                                        onPreviewPositionChanged(preview)
-                                    },
-                                    onDragEnd = {
-                                        // Seek on release.
-                                        val preview = if (displayedDurationTimeMs <= 0L) null else {
-                                            val ratio = if (sliderMax > 0f) (sliderValue / sliderMax).coerceIn(0f, 1f) else 0f
-                                            val clamped = (ratio * timelineRangeMs.toFloat()).toLong().coerceIn(0L, timelineRangeMs)
-                                            if (useChapterTimeline) activeChapterStartMs + clamped else clamped.coerceIn(0L, durationMs.coerceAtLeast(0L))
-                                        }
-                                        preview?.let(onSeekManual)
-                                        onPreviewPositionChanged(null)
-                                    },
-                                    onDragCancel = { onPreviewPositionChanged(null) }
-                                )
-                            }
+            Text(
+                text = formatBookTime(displayedRightDurationTimeMs),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                maxLines = 1,
+                modifier = if (useChapterTimeline) {
+                    Modifier.clickable(onClick = onToggleDurationMode)
+                } else {
+                    Modifier
+                }
+            )
+            Box(
+                modifier = Modifier
+                    .width(18.dp)
+                    .heightIn(min = 180.dp, max = 520.dp)
+                    .weight(1f, fill = false)
+                    .background(Color(0xFFD4E0F2), RoundedCornerShape(10.dp))
+                    .onGloballyPositioned { coordinates ->
+                        verticalTimelineHeightPx = coordinates.size.height.toFloat().coerceAtLeast(1f)
+                    }
+                    .pointerInput(
+                        displayedDurationTimeMs,
+                        useChapterTimeline,
+                        activeChapterStartMs,
+                        timelineRangeMs,
+                        durationMs,
+                        verticalTimelineHeightPx
                     ) {
-                        val ratio = if (sliderMax > 0f) (sliderValue / sliderMax).coerceIn(0f, 1f) else 0f
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .fillMaxWidth()
-                                .fillMaxHeight(ratio)
-                                .background(Color(0xFF3E6E9C), RoundedCornerShape(10.dp))
+                        detectVerticalDragGestures(
+                            onDragStart = { offset ->
+                                val target = resolveVerticalTimelineTarget(offset.y)
+                                pendingSeekTargetMs = target
+                                onPreviewPositionChanged(target)
+                            },
+                            onVerticalDrag = { change, _ ->
+                                val target = resolveVerticalTimelineTarget(change.position.y)
+                                pendingSeekTargetMs = target
+                                onPreviewPositionChanged(target)
+                                change.consume()
+                            },
+                            onDragEnd = {
+                                pendingSeekTargetMs?.let(onSeekManual)
+                                pendingSeekTargetMs = null
+                                onPreviewPositionChanged(null)
+                            },
+                            onDragCancel = {
+                                pendingSeekTargetMs = null
+                                onPreviewPositionChanged(null)
+                            }
                         )
                     }
-                    Text(
-                        text = formatBookTime(displayedLeftTimeMs),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.clickable(onClick = onRequestTimeEdit)
+            ) {
+                val ratio = if (sliderMax > 0f) (sliderValue / sliderMax).coerceIn(0f, 1f) else 0f
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .fillMaxHeight(ratio)
+                        .background(Color(0xFF3E6E9C), RoundedCornerShape(10.dp))
+                )
+            }
+            Text(
+                text = formatBookTime(displayedLeftTimeMs),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                modifier = Modifier.clickable(onClick = onRequestTimeEdit)
+            )
+            Spacer(modifier = Modifier.weight(0.9f))
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                IconButton(onClick = onPrevious, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_overlay_previous),
+                        contentDescription = stringResource(R.string.controller_previous)
                     )
                 }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f),
-                modifier = Modifier.wrapContentWidth(Alignment.CenterHorizontally)
-            ) {
-                Column(
-                    modifier = Modifier.padding(vertical = 0.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(18.dp)
-                ) {
-                    IconButton(onClick = onPrevious, modifier = Modifier.size(40.dp)) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_overlay_previous),
-                            contentDescription = stringResource(R.string.controller_previous)
-                        )
-                    }
-                    IconButton(onClick = onPlayPause, modifier = Modifier.size(40.dp)) {
-                        Icon(
-                            painter = painterResource(
-                                id = if (isPlaying) R.drawable.ic_overlay_pause else R.drawable.ic_overlay_play
-                            ),
-                            contentDescription = if (isPlaying) {
-                                stringResource(R.string.common_pause)
-                            } else {
-                                stringResource(R.string.common_play)
-                            }
-                        )
-                    }
-                    IconButton(onClick = onNext, modifier = Modifier.size(40.dp)) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_overlay_next),
-                            contentDescription = stringResource(R.string.controller_next)
-                        )
-                    }
+                IconButton(onClick = onPlayPause, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        painter = painterResource(
+                            id = if (isPlaying) R.drawable.ic_overlay_pause else R.drawable.ic_overlay_play
+                        ),
+                        contentDescription = if (isPlaying) {
+                            stringResource(R.string.common_pause)
+                        } else {
+                            stringResource(R.string.common_play)
+                        }
+                    )
+                }
+                IconButton(onClick = onNext, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_overlay_next),
+                        contentDescription = stringResource(R.string.controller_next)
+                    )
                 }
             }
         }

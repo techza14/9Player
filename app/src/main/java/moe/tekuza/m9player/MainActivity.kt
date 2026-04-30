@@ -50,6 +50,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -72,6 +73,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -115,6 +117,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ClosedCaption
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Settings
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.FileProvider
@@ -280,7 +283,7 @@ private data class CombinedDictionaryItem(
     val type: CombinedDictionaryType,
     val title: String,
     val countText: String,
-    val mountedEnabled: Boolean? = null
+    val enabled: Boolean = true
 )
 
 private fun loadDictionaryOrderIds(context: Context): List<String> {
@@ -397,6 +400,7 @@ private fun ReaderSyncScreen() {
     var ankiError by remember { mutableStateOf<String?>(null) }
 
     var showDictionaryManager by remember { mutableStateOf(false) }
+    var showDictionaryDeleteActions by remember { mutableStateOf(false) }
     var activeSection by rememberSaveable(stateSaver = miningSectionSaver) {
         mutableStateOf(MiningSection.MAIN)
     }
@@ -441,6 +445,7 @@ private fun ReaderSyncScreen() {
 
     val importedLookupById = remember(dictionaryRefs, loadedDictionaries) {
         dictionaryRefs.mapIndexedNotNull { index, ref ->
+            if (!ref.enabled) return@mapIndexedNotNull null
             val loaded = loadedDictionaries.getOrNull(index) ?: return@mapIndexedNotNull null
             importedDictionaryId(ref) to loaded
         }.toMap(LinkedHashMap())
@@ -1589,7 +1594,6 @@ private fun ReaderSyncScreen() {
             dictionaryLoading = false
             clearDictionaryProgress()
             persistImportState()
-            schedulePrewarmDictionaryMemoryIndexes(context, restoredDictionaryList)
         }
 
         if (ankiPermissionGranted) {
@@ -1861,21 +1865,15 @@ private fun ReaderSyncScreen() {
                 } else {
                     readerBooks.firstOrNull { it.title == request.sourceBookTitle }?.audioUri ?: audioUri
                 }
-                val selectedToken = selection?.text?.trim()?.takeIf { it.isNotBlank() }
-                val candidates = normalizeLookupCandidates(
-                    listOfNotNull(
-                        selectedToken,
-                        extractLookupToken(cue.text).trim().takeIf { it.isNotBlank() }
-                    )
-                )
-                if (candidates.isEmpty()) {
+                val selectedToken = selection?.text?.trim().orEmpty()
+                if (selectedToken.isBlank()) {
                     mainLookupPopupError = context.getString(R.string.bookreader_lookup_failed)
                     return
                 }
                 mainLookupPopupVisible = true
                 mainLookupAutoPlayNonce += 1L
                 mainLookupAutoPlayedKey = null
-                mainLookupPopupTitle = candidates.firstOrNull() ?: selectedToken.orEmpty()
+                mainLookupPopupTitle = selectedToken
                 mainLookupPopupError = null
                 mainLookupPopupLoading = true
                 fun buildCueLayer(
@@ -1902,7 +1900,7 @@ private fun ReaderSyncScreen() {
                             placeBelow = request.placeBelow,
                             preferSidePlacement = true,
                             selectedRange = null,
-                            selectionText = candidates.firstOrNull(),
+                            selectionText = selectedToken,
                             popupSentence = null
                         )
                     } else {
@@ -1911,7 +1909,7 @@ private fun ReaderSyncScreen() {
                             loading = loading,
                             error = error,
                             selectedRange = null,
-                            selectionText = candidates.firstOrNull()
+                            selectionText = selectedToken
                         )
                     }
                 }
@@ -1923,7 +1921,7 @@ private fun ReaderSyncScreen() {
                     )
                 )
                 queryMainLookupCandidates(
-                    candidates = candidates,
+                    candidates = listOf(selectedToken),
                     expandCandidates = false
                 ) { result ->
                     result.onSuccess { hits ->
@@ -2306,6 +2304,36 @@ private fun ReaderSyncScreen() {
         }
     }
 
+    fun refreshLookupIfNeeded() {
+        invalidateDictionaryLookupCaches()
+        if (lookupQuery.isNotBlank()) {
+            triggerLookupCandidates(listOf(lookupQuery))
+        }
+    }
+
+    fun setCombinedDictionaryEnabled(item: CombinedDictionaryItem, enabled: Boolean) {
+        when (item.type) {
+            CombinedDictionaryType.IMPORTED -> {
+                val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == item.id }
+                if (targetIndex < 0) return
+                dictionaryRefs = dictionaryRefs.toMutableList().also { refs ->
+                    refs[targetIndex] = refs[targetIndex].copy(enabled = enabled)
+                }
+                persistImportState()
+            }
+            CombinedDictionaryType.MOUNTED -> {
+                val cacheKey = item.id.removePrefix("mnt:")
+                mdxMountState = mdxMountState.copy(
+                    entries = mdxMountState.entries.map { current ->
+                        if (current.cacheKey == cacheKey) current.copy(enabled = enabled) else current
+                    }
+                )
+                saveMdxMountState(context, mdxMountState)
+            }
+        }
+        refreshLookupIfNeeded()
+    }
+
     fun moveCombinedDictionary(fromIndex: Int, toIndex: Int, combinedItems: List<CombinedDictionaryItem>) {
         if (fromIndex == toIndex) return
         if (fromIndex !in combinedItems.indices || toIndex !in combinedItems.indices) return
@@ -2428,7 +2456,8 @@ private fun ReaderSyncScreen() {
                 nextDictionaryRefs = (nextDictionaryRefs + PersistedDictionaryRef(
                     uri = uriValue,
                     name = displayName,
-                    cacheKey = cacheKey
+                    cacheKey = cacheKey,
+                    enabled = true
                 )).distinctBy { it.uri }
             }
 
@@ -2437,9 +2466,6 @@ private fun ReaderSyncScreen() {
             dictionaryRefs = nextDictionaryRefs
             if (hadDictionaryListChange) {
                 bumpDictionaryDataVersion(context)
-            }
-            if (hadDictionaryListChange && nextLoadedDictionaries.isNotEmpty()) {
-                schedulePrewarmDictionaryMemoryIndexes(context, nextLoadedDictionaries)
             }
             persistImportState()
             clearDictionaryProgress()
@@ -2883,6 +2909,7 @@ private fun ReaderSyncScreen() {
                                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
                                             trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
                                         )
+                                        Spacer(modifier = Modifier.weight(1f, fill = true))
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -2950,6 +2977,7 @@ private fun ReaderSyncScreen() {
                         }
                         Row(
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Button(onClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) }) {
@@ -2962,10 +2990,21 @@ private fun ReaderSyncScreen() {
                                     Text(stringResource(R.string.settings_mdx_title))
                                 }
                             }
-                            OutlinedButton(
-                                onClick = { showDictionaryManager = !showDictionaryManager }
-                            ) {
-                                Text(if (showDictionaryManager) stringResource(R.string.dictionary_hide_list) else stringResource(R.string.dictionary_show_list))
+                            OutlinedButton(onClick = { showDictionaryManager = !showDictionaryManager }) {
+                                Text(
+                                    if (showDictionaryManager) {
+                                        stringResource(R.string.dictionary_hide_list)
+                                    } else {
+                                        stringResource(R.string.dictionary_show_list)
+                                    }
+                                )
+                            }
+                            OutlinedButton(onClick = { showDictionaryDeleteActions = !showDictionaryDeleteActions }) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription = stringResource(R.string.common_delete),
+                                    tint = if (showDictionaryDeleteActions) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
 
@@ -2977,7 +3016,8 @@ private fun ReaderSyncScreen() {
                                     type = CombinedDictionaryType.IMPORTED,
                                     title = ref.name.ifBlank { context.getString(R.string.dictionary_default_name, index + 1) },
                                     countText = loaded?.entryCount?.let { context.getString(R.string.dictionary_count, it) }
-                                        ?: stringResource(R.string.dictionary_unloaded)
+                                        ?: stringResource(R.string.dictionary_unloaded),
+                                    enabled = ref.enabled
                                 )
                             }
                             val mountedItems = if (mdxMountState.enabled) {
@@ -2987,7 +3027,7 @@ private fun ReaderSyncScreen() {
                                         type = CombinedDictionaryType.MOUNTED,
                                         title = entry.displayName.ifBlank { "mounted.mdx" },
                                         countText = if (entry.enabled) context.getString(R.string.mdx_dict_enabled) else context.getString(R.string.mdx_dict_disabled),
-                                        mountedEnabled = entry.enabled
+                                        enabled = entry.enabled
                                     )
                                 }
                             } else {
@@ -3011,64 +3051,74 @@ private fun ReaderSyncScreen() {
                                             modifier = Modifier.padding(10.dp),
                                             verticalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
-                                            Text(item.title)
-                                            Text(
-                                                when (item.type) {
-                                                    CombinedDictionaryType.IMPORTED -> item.countText
-                                                    CombinedDictionaryType.MOUNTED -> stringResource(R.string.mdx_dict_prefix, item.countText)
-                                                },
-                                                style = MaterialTheme.typography.bodySmall
-                                            )
-                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                OutlinedButton(
-                                                    onClick = { moveCombinedDictionary(index, index - 1, combinedItems) },
-                                                    enabled = !dictionaryLoading && index > 0
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.weight(1f),
+                                                    verticalArrangement = Arrangement.spacedBy(4.dp)
                                                 ) {
-                                                    Text("↑")
-                                                }
-                                                OutlinedButton(
-                                                    onClick = { moveCombinedDictionary(index, index + 1, combinedItems) },
-                                                    enabled = !dictionaryLoading && index < combinedItems.lastIndex
-                                                ) {
-                                                    Text("↓")
-                                                }
-                                                if (item.type == CombinedDictionaryType.MOUNTED) {
-                                                    val cacheKey = item.id.removePrefix("mnt:")
-                                                    val enabled = item.mountedEnabled == true
-                                                    OutlinedButton(
-                                                        onClick = {
-                                                            mdxMountState = mdxMountState.copy(
-                                                                entries = mdxMountState.entries.map { current ->
-                                                                    if (current.cacheKey == cacheKey) current.copy(enabled = !enabled) else current
-                                                                }
-                                                            )
-                                                            saveMdxMountState(context, mdxMountState)
-                                                            invalidateDictionaryLookupCaches()
-                                                            if (lookupQuery.isNotBlank()) {
-                                                                triggerLookupCandidates(listOf(lookupQuery))
-                                                            }
+                                                    Text(item.title)
+                                                    Text(
+                                                        when (item.type) {
+                                                            CombinedDictionaryType.IMPORTED -> item.countText
+                                                            CombinedDictionaryType.MOUNTED -> stringResource(R.string.mdx_dict_prefix, item.countText)
                                                         },
-                                                        enabled = !dictionaryLoading
+                                                        style = MaterialTheme.typography.bodySmall
+                                                    )
+                                                }
+                                            }
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Row(
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    OutlinedButton(
+                                                        onClick = { moveCombinedDictionary(index, index - 1, combinedItems) },
+                                                        enabled = !dictionaryLoading && index > 0
                                                     ) {
-                                                        Text(if (enabled) stringResource(R.string.mdx_disable) else stringResource(R.string.mdx_enable))
+                                                        Text("↑")
+                                                    }
+                                                    OutlinedButton(
+                                                        onClick = { moveCombinedDictionary(index, index + 1, combinedItems) },
+                                                        enabled = !dictionaryLoading && index < combinedItems.lastIndex
+                                                    ) {
+                                                        Text("↓")
+                                                    }
+                                                    if (showDictionaryDeleteActions) {
+                                                        OutlinedButton(
+                                                            onClick = {
+                                                                when (item.type) {
+                                                                    CombinedDictionaryType.IMPORTED -> {
+                                                                        val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == item.id }
+                                                                        if (targetIndex >= 0) removeDictionaryAt(targetIndex)
+                                                                    }
+                                                                    CombinedDictionaryType.MOUNTED -> {
+                                                                        removeMountedDictionaryByCacheKey(item.id.removePrefix("mnt:"))
+                                                                    }
+                                                                }
+                                                            },
+                                                            enabled = !dictionaryLoading,
+                                                            contentPadding = ButtonDefaults.ContentPadding
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Outlined.Delete,
+                                                                contentDescription = stringResource(R.string.common_delete),
+                                                                tint = MaterialTheme.colorScheme.error
+                                                            )
+                                                        }
                                                     }
                                                 }
-                                                OutlinedButton(
-                                                    onClick = {
-                                                        when (item.type) {
-                                                            CombinedDictionaryType.IMPORTED -> {
-                                                                val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == item.id }
-                                                                if (targetIndex >= 0) removeDictionaryAt(targetIndex)
-                                                            }
-                                                            CombinedDictionaryType.MOUNTED -> {
-                                                                removeMountedDictionaryByCacheKey(item.id.removePrefix("mnt:"))
-                                                            }
-                                                        }
-                                                    },
+                                                Spacer(modifier = Modifier.weight(1f))
+                                                Switch(
+                                                    checked = item.enabled,
+                                                    onCheckedChange = { checked -> setCombinedDictionaryEnabled(item, checked) },
                                                     enabled = !dictionaryLoading
-                                                ) {
-                                                    Text(stringResource(R.string.common_delete))
-                                                }
+                                                )
                                             }
                                         }
                                     }
@@ -3446,6 +3496,7 @@ private fun ReaderSyncScreen() {
                         onAudiobookClick = { context.startActivity(Intent(context, AudiobookSettingsActivity::class.java)) },
                         onControlModeClick = { context.startActivity(Intent(context, ControlModeSettingsActivity::class.java)) },
                         onAudiobookUiClick = { context.startActivity(Intent(context, AudiobookUiSettingsActivity::class.java)) },
+                        onFontClick = { context.startActivity(Intent(context, FontSettingsActivity::class.java)) },
                         onControllerClick = { context.startActivity(Intent(context, ControllerSettingsActivity::class.java)) },
                         onAnkiClick = { context.startActivity(Intent(context, AnkiSettingsActivity::class.java)) },
                         onAdvancedOverlayClick = { context.startActivity(Intent(context, OverlaySettingsActivity::class.java)) },

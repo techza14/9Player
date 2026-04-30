@@ -21,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.FontDownload
 import androidx.compose.material.icons.outlined.FolderCopy
 import moe.tekuza.m9player.ui.theme.TsetTheme
 
@@ -32,7 +31,6 @@ class OtherSettingsActivity : ComponentActivity() {
             TsetTheme {
                 OtherSettingsScreen(
                     onBack = { finish() },
-                    onOpenFont = { startActivity(Intent(this, FontSettingsActivity::class.java)) },
                     onOpenMdx = { startActivity(Intent(this, MdxMountSettingsActivity::class.java)) }
                 )
             }
@@ -43,7 +41,6 @@ class OtherSettingsActivity : ComponentActivity() {
 @Composable
 private fun OtherSettingsScreen(
     onBack: () -> Unit,
-    onOpenFont: () -> Unit,
     onOpenMdx: () -> Unit
 ) {
     SettingsScaffold(
@@ -57,11 +54,6 @@ private fun OtherSettingsScreen(
                 .padding(vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
-            SettingsLikeItem(
-                icon = Icons.Outlined.FontDownload,
-                title = stringResource(R.string.settings_font_title),
-                onClick = onOpenFont
-            )
             SettingsLikeItem(
                 icon = Icons.Outlined.FolderCopy,
                 title = stringResource(R.string.settings_mdx_title),
