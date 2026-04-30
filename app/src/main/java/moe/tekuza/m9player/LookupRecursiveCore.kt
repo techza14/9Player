@@ -21,7 +21,9 @@ internal fun prepareRecursiveLookupStart(
     explicitAnchor: ReaderLookupAnchor?,
     viewportHeight: Int
 ): RecursiveLookupStart? {
-    val term = if (tapData.tapSource.equals("entry", ignoreCase = true)) {
+    val isEntryLikeTap = tapData.tapSource.equals("entry", ignoreCase = true) ||
+        tapData.tapSource.equals("entry-link", ignoreCase = true)
+    val term = if (isEntryLikeTap) {
         tapData.scanText.trim().ifBlank { tapData.text.trim() }
     } else {
         val selection = selectLookupScanText(tapData.scanText.ifBlank { tapData.text }, 0) ?: return null
@@ -46,51 +48,115 @@ internal suspend fun executeRecursiveLookupQuery(
     dictionaries: List<LoadedDictionary>,
     term: String,
     tapSource: String,
-    sourceDictionaryName: String?
+    sourceDictionaryName: String?,
+    sourceDictionaryCacheKey: String? = null
 ): RecursiveLookupQueryResult {
-    val isEntryTap = tapSource.equals("entry", ignoreCase = true)
+    val isEntryLinkTap = tapSource.equals("entry-link", ignoreCase = true)
+    val isEntryTap = tapSource.equals("entry", ignoreCase = true) ||
+        isEntryLinkTap
     val exactQuery = term.trim()
-    fun filterExactOrKeep(base: List<DictionarySearchResult>): List<DictionarySearchResult> {
+    fun filterExactOrKeep(base: List<DictionarySearchResult>, strictExact: Boolean): List<DictionarySearchResult> {
         if (exactQuery.isBlank()) return base
         val exact = base.filter { hit ->
             val entryTerm = hit.entry.term.trim()
             val entryReading = hit.entry.reading?.trim().orEmpty()
             entryTerm == exactQuery || entryReading == exactQuery
         }
-        return if (exact.isNotEmpty()) exact else base
+        if (exact.isNotEmpty()) return exact
+        return if (strictExact) emptyList() else base
     }
-    if (isEntryTap) {
-        val sourceDictName = sourceDictionaryName?.trim().orEmpty()
-        val sourceDictionaries = if (sourceDictName.isBlank()) {
-            emptyList()
-        } else {
-            dictionaries.filter { it.name.equals(sourceDictName, ignoreCase = true) }
-        }
-        if (sourceDictionaries.isNotEmpty()) {
-            val sourceComputed = computeTapLookupResultsWithWinningCandidate(
-                context = context,
-                dictionaries = sourceDictionaries,
-                query = term
+    val sourceDictName = sourceDictionaryName?.trim().orEmpty()
+    val sourceDictCacheKey = sourceDictionaryCacheKey?.trim().orEmpty()
+    val sourceDictionaries = if (sourceDictCacheKey.isNotBlank()) {
+        dictionaries.filter { it.cacheKey == sourceDictCacheKey }
+    } else if (sourceDictName.isBlank()) {
+        emptyList()
+    } else {
+        dictionaries.filter { it.name.equals(sourceDictName, ignoreCase = true) }
+    }
+    if (isEntryLinkTap && sourceDictionaries.isEmpty()) {
+        return RecursiveLookupQueryResult(
+            term = exactQuery.ifBlank { term },
+            hits = emptyList()
+        )
+    }
+    if (sourceDictionaries.isNotEmpty()) {
+        val sourceComputed = computeTapLookupResultsWithWinningCandidate(
+            context = context,
+            dictionaries = sourceDictionaries,
+            query = term,
+            profile = if (isEntryLinkTap) DictionaryQueryProfile.FULL else DictionaryQueryProfile.FAST
+        )
+        val sourceHitsRaw = if (isEntryTap) {
+            filterExactOrKeep(
+                sourceComputed?.hits.orEmpty(),
+                strictExact = isEntryLinkTap
             )
-            val sourceHits = filterExactOrKeep(sourceComputed?.hits.orEmpty())
-            if (sourceHits.isNotEmpty()) {
-                return RecursiveLookupQueryResult(
-                    term = exactQuery.ifBlank { sourceComputed?.query ?: term },
-                    hits = sourceHits
-                )
-            }
+        } else {
+            sourceComputed?.hits.orEmpty()
+        }
+        val sourceHits = sourceHitsRaw.sortedWith(
+            compareByDescending<DictionarySearchResult> {
+                entryExactPrefixBoost(it.entry, exactQuery.ifBlank { term })
+            }.thenByDescending { it.score }
+        )
+        val sourceCoversAllDictionaries =
+            sourceDictionaries.size == dictionaries.size &&
+                sourceDictionaries.all { source ->
+                    dictionaries.any { it.name.equals(source.name, ignoreCase = true) }
+                }
+        if (sourceHits.isNotEmpty()) {
+            return RecursiveLookupQueryResult(
+                term = exactQuery.ifBlank { sourceComputed?.query ?: term },
+                hits = sourceHits
+            )
+        }
+        if (isEntryLinkTap) {
+            return RecursiveLookupQueryResult(
+                term = exactQuery.ifBlank { sourceComputed?.query ?: term },
+                hits = emptyList()
+            )
+        }
+        // Avoid duplicate same-query work when source dictionary already equals the full set.
+        if (sourceCoversAllDictionaries) {
+            return RecursiveLookupQueryResult(
+                term = exactQuery.ifBlank { sourceComputed?.query ?: term },
+                hits = sourceHits
+            )
         }
     }
     val computed = computeTapLookupResultsWithWinningCandidate(
         context = context,
         dictionaries = dictionaries,
-        query = term
+        query = term,
+        profile = if (isEntryLinkTap) DictionaryQueryProfile.FULL else DictionaryQueryProfile.FAST
     )
-    val finalHits = if (isEntryTap) filterExactOrKeep(computed?.hits.orEmpty()) else computed?.hits.orEmpty()
+    val finalHits = if (isEntryTap) {
+        filterExactOrKeep(
+            computed?.hits.orEmpty(),
+            strictExact = isEntryLinkTap
+        )
+    } else {
+        computed?.hits.orEmpty()
+    }
     return RecursiveLookupQueryResult(
         term = exactQuery.ifBlank { computed?.query ?: term },
         hits = finalHits
     )
+}
+
+private fun entryExactPrefixBoost(entry: DictionaryEntry, query: String): Int {
+    val q = query.trim()
+    if (q.isBlank()) return 0
+    val term = entry.term.trim()
+    val reading = entry.reading?.trim().orEmpty()
+    return when {
+        term.equals(q, ignoreCase = true) -> 4
+        reading.equals(q, ignoreCase = true) -> 3
+        term.startsWith(q, ignoreCase = true) -> 2
+        reading.startsWith(q, ignoreCase = true) -> 1
+        else -> 0
+    }
 }
 
 internal fun rebuildDefinitionRectsByMatchedLengthCore(

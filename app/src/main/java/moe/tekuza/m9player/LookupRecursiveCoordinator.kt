@@ -175,13 +175,20 @@ private fun launchRecursiveLookup(
                     dictionaries = dictionaries,
                     term = term,
                     tapSource = tapData.tapSource,
-                    sourceDictionaryName = lookupDictionaryNameFromDefinitionKey(definitionKey)
+                    sourceDictionaryName = lookupDictionaryNameFromDefinitionKey(definitionKey),
+                    sourceDictionaryCacheKey = tapData.lookupDictionaryCacheKey
                 )
             }
         }
         result.onSuccess { queryResult ->
             if (!isRequestNonceCurrent(requestNonce)) return@onSuccess
             val hits = queryResult.hits
+            Log.d(
+                logAnchorTag,
+                "recursiveDebug query term=$term source=${tapData.tapSource} dictOrder=${
+                    dictionaries.joinToString("|") { it.name }
+                } hitDicts=${hits.joinToString("|") { it.entry.dictionary }}"
+            )
             if (hits.isEmpty()) {
                 Log.d(logAnchorTag, "recursiveAbort reason=no_hits term=$term")
                 return@onSuccess

@@ -3641,41 +3641,6 @@ companion object {
                 }
             })
             webViewClient = object : android.webkit.WebViewClient() {
-                fun dispatchLookupUrlTap(raw: String, host: WebView?): Boolean {
-                    val target = resolveLookupTargetFromCustomUrl(raw) ?: return false
-                    val scheme = runCatching {
-                        Uri.parse(raw).scheme?.lowercase(Locale.ROOT).orEmpty()
-                    }.getOrDefault("")
-                    val safeHost = host ?: this@apply
-                    val right = safeHost.width.toFloat().takeIf { it > 0f } ?: 1f
-                    val bottom = safeHost.height.toFloat().takeIf { it > 0f } ?: 1f
-                    val localRect = Rect(0f, 0f, right, bottom)
-                    val callback = bridge.onLookupTap
-                    if (callback == null) {
-                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "native link dispatch skipped callback_null scheme=$scheme target=$target")
-                        return true
-                    }
-                    callback.invoke(
-                        DefinitionLookupTapData(
-                            text = target,
-                            scanText = target,
-                            tapSource = "entry",
-                            sentence = target,
-                            offset = 0,
-                            nodeText = target,
-                            nodePathJson = "[]",
-                            tappedDefinitionKey = null,
-                            hostView = safeHost,
-                            screenRect = null,
-                            localRects = listOf(localRect),
-                            localCharRects = listOf(localRect),
-                            screenCharRects = emptyList()
-                        )
-                    )
-                    Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "native link dispatch scheme=$scheme target=$target")
-                    return true
-                }
-
                 override fun shouldInterceptRequest(
                     view: WebView?,
                     request: android.webkit.WebResourceRequest?
@@ -3697,9 +3662,8 @@ companion object {
                 ): Boolean {
                     val uri = request?.url ?: return false
                     val raw = uri.toString()
-                    if (resolveLookupTargetFromCustomUrl(raw) != null) {
+                    if (parseCustomLookupUrlTarget(raw) != null) {
                         Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
-                        dispatchLookupUrlTap(raw, view)
                         return true
                     }
                     return false
@@ -3707,9 +3671,8 @@ companion object {
 
                 override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                     val raw = url?.trim().orEmpty()
-                    if (resolveLookupTargetFromCustomUrl(raw) != null) {
+                    if (parseCustomLookupUrlTarget(raw) != null) {
                         Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
-                        dispatchLookupUrlTap(raw, view)
                         return true
                     }
                     return false
@@ -4204,12 +4167,14 @@ companion object {
             )
             val settings = loadAudiobookSettingsConfig(this@AudiobookFloatingOverlayService)
             pausePlaybackForFloatingLookupIfNeeded(settings)
-            val term = if (tapData.tapSource.equals("entry", ignoreCase = true)) {
+            val isEntryLikeTap = tapData.tapSource.equals("entry", ignoreCase = true) ||
+                tapData.tapSource.equals("entry-link", ignoreCase = true)
+            val term = if (isEntryLikeTap) {
                 tapData.scanText.trim().ifBlank { tapData.text.trim() }
             } else {
                 selectLookupScanText(tapData.scanText.ifBlank { tapData.text }, 0)?.text?.trim().orEmpty()
             }.takeIf { it.isNotBlank() } ?: run {
-                if (tapData.tapSource.equals("entry", ignoreCase = true)) {
+                if (isEntryLikeTap) {
                     Log.d(
                         FLOATING_LOOKUP_TAP_LOG_TAG,
                         "recursive keep layer on entry empty_term sourceLayer=$sourceLayerIndex"
@@ -4243,7 +4208,8 @@ companion object {
                         dictionaries = dictionaries,
                         term = term,
                         tapSource = tapData.tapSource,
-                        sourceDictionaryName = lookupDictionaryNameFromDefinitionKey(definitionKey)
+                        sourceDictionaryName = lookupDictionaryNameFromDefinitionKey(definitionKey),
+                        sourceDictionaryCacheKey = tapData.lookupDictionaryCacheKey
                     )
                 }
             }
@@ -4259,7 +4225,7 @@ companion object {
                     "recursive result hits=${hits.size} term=$term matched=$matchedLength tapSource=${tapData.tapSource}"
                 )
                 if (hits.isEmpty()) {
-                    if (tapData.tapSource.equals("entry", ignoreCase = true)) {
+                    if (isEntryLikeTap) {
                         Log.d(
                             FLOATING_LOOKUP_TAP_LOG_TAG,
                             "recursive keep layer on entry no_hits sourceLayer=$sourceLayerIndex term=$term"
@@ -4300,7 +4266,7 @@ companion object {
                     FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG,
                     "preflight key=$definitionKey len=$matchedLength applied=$preflightApplied"
                 )
-                if (!preflightApplied && !tapData.tapSource.equals("entry", ignoreCase = true)) {
+                if (!preflightApplied && !isEntryLikeTap) {
                     return@onSuccess
                 }
                 // Keep recursive popup anchor tied to the exact tap location.

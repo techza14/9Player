@@ -75,6 +75,7 @@ internal data class DefinitionLookupTapData(
     val nodeText: String,
     val nodePathJson: String,
     val tappedDefinitionKey: String?,
+    val lookupDictionaryCacheKey: String? = null,
     val hostView: WebView?,
     val screenRect: Rect?,
     val localRects: List<Rect>,
@@ -670,41 +671,6 @@ internal fun RichDefinitionView(
                                 }.isSuccess
                             }
 
-                            fun dispatchLookupUrlTap(raw: String, host: WebView?): Boolean {
-                                val target = resolveLookupTargetFromCustomUrl(raw) ?: return false
-                                val scheme = runCatching {
-                                    Uri.parse(raw).scheme?.lowercase(Locale.ROOT).orEmpty()
-                                }.getOrDefault("")
-                                val safeHost = host ?: this@apply
-                                val right = safeHost.width.toFloat().takeIf { it > 0f } ?: 1f
-                                val bottom = safeHost.height.toFloat().takeIf { it > 0f } ?: 1f
-                                val localRect = Rect(0f, 0f, right, bottom)
-                                val callback = bridge.onLookupTap
-                                if (callback == null) {
-                                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "native link dispatch skipped callback_null scheme=$scheme target=$target")
-                                    return true
-                                }
-                                callback.invoke(
-                DefinitionLookupTapData(
-                    text = target,
-                    scanText = target,
-                    tapSource = "entry-link",
-                    sentence = target,
-                    offset = 0,
-                    nodeText = target,
-                    nodePathJson = "[]",
-                    tappedDefinitionKey = null,
-                    hostView = safeHost,
-                    screenRect = null,
-                    localRects = listOf(localRect),
-                                        localCharRects = listOf(localRect),
-                                        screenCharRects = emptyList()
-                                    )
-                                )
-                                Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "native link dispatch scheme=$scheme target=$target")
-                                return true
-                            }
-
                             override fun shouldInterceptRequest(
                                 view: WebView?,
                                 request: WebResourceRequest?
@@ -725,7 +691,6 @@ internal fun RichDefinitionView(
                                 val raw = uri.toString()
                                 if (resolveLookupTargetFromCustomUrl(raw) != null) {
                                     Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
-                                    dispatchLookupUrlTap(raw, view)
                                     return true
                                 }
                                 if (openExternalUrl(uri.toString())) return true
@@ -736,7 +701,6 @@ internal fun RichDefinitionView(
                                 val raw = url?.trim().orEmpty()
                                 if (resolveLookupTargetFromCustomUrl(raw) != null) {
                                     Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
-                                    dispatchLookupUrlTap(raw, view)
                                     return true
                                 }
                                 if (openExternalUrl(raw)) return true
@@ -765,17 +729,31 @@ internal fun RichDefinitionView(
                                         val effectiveScale = this@apply.scale.takeIf { it.isFinite() && it > 0f } ?: 1f
                                         val clientX = event.x / effectiveScale
                                         val clientY = event.y / effectiveScale
+                                        Log.d(
+                                            BOOK_LOOKUP_TAP_LOG_TAG,
+                                            "webview touch down x=${event.x.toInt()} y=${event.y.toInt()} client=${clientX.toInt()},${clientY.toInt()} scroll=${scrollX},${scrollY}"
+                                        )
                                         evaluateJavascript(
-                                            "(function(){try{var el=document.elementFromPoint($clientX,$clientY);if(!el){return '0|0';}var zone=el.closest('table,.gloss-sc-table-container,[data-sc筆順],[data-sc-筆順]');if(!zone){return '0|0';}var sc=zone.closest('.gloss-sc-table-container,.nine-brushorder-scroll,[data-sc筆順],[data-sc-筆順]')||zone;var draggable=(sc.scrollWidth-sc.clientWidth)>1;return '1|' + (draggable?'1':'0');}catch(e){return '0|0';}})();"
+                                            "(function(){try{var el=document.elementFromPoint($clientX,$clientY);if(!el){return '0|0|none|0|0|0';}var tag=(el.tagName||'').toLowerCase();var selectable=window.getComputedStyle?window.getComputedStyle(el).webkitUserSelect||window.getComputedStyle(el).userSelect||'': '';var sel=(window.getSelection&&window.getSelection());var selText=sel?String(sel.toString()||''):'';var zone=el.closest('table,.gloss-sc-table-container,[data-sc筆順],[data-sc-筆順]');if(!zone){return '0|0|' + tag + '|' + selText.length + '|' + selectable + '|0';}var sc=zone.closest('.gloss-sc-table-container,.nine-brushorder-scroll,[data-sc筆順],[data-sc-筆順]')||zone;var draggable=(sc.scrollWidth-sc.clientWidth)>1;return '1|' + (draggable?'1':'0') + '|' + tag + '|' + selText.length + '|' + selectable + '|' + ((sc.scrollLeft||0));}catch(e){return '0|0|error|0|0|0';}})();"
                                         ) { result ->
                                             val parts = (decodeEvaluateJavascriptJson(result) ?: "").trim().split('|')
                                             touchOnTableZone = parts.getOrNull(0) == "1"
                                             touchOnDraggableTable = parts.getOrNull(1) == "1"
+                                            Log.d(
+                                                BOOK_LOOKUP_TAP_LOG_TAG,
+                                                "webview touch target table=$touchOnTableZone draggable=$touchOnDraggableTable tag=${parts.getOrNull(2).orEmpty()} selLen=${parts.getOrNull(3).orEmpty()} userSelect=${parts.getOrNull(4).orEmpty()} innerScroll=${parts.getOrNull(5).orEmpty()}"
+                                            )
                                         }
                                     }
                                     MotionEvent.ACTION_MOVE -> {
                                         val dx = event.x - downX
                                         val dy = event.y - downY
+                                        if (!moved && (kotlin.math.abs(dx) > 8f || kotlin.math.abs(dy) > 8f)) {
+                                            Log.d(
+                                                BOOK_LOOKUP_TAP_LOG_TAG,
+                                                "webview touch move dx=${dx.toInt()} dy=${dy.toInt()} table=$touchOnTableZone draggable=$touchOnDraggableTable parentDisallow=$disallowParentIntercept scroll=${scrollX},${scrollY}"
+                                            )
+                                        }
                                         if (
                                             touchOnTableZone &&
                                             touchOnDraggableTable &&
@@ -794,6 +772,10 @@ internal fun RichDefinitionView(
                                         }
                                     }
                                     MotionEvent.ACTION_UP -> {
+                                        Log.d(
+                                            BOOK_LOOKUP_TAP_LOG_TAG,
+                                            "webview touch up moved=$moved parentDisallow=$disallowParentIntercept scroll=${scrollX},${scrollY}"
+                                        )
                                         if (disallowParentIntercept) {
                                             v?.parent?.requestDisallowInterceptTouchEvent(false)
                                             disallowParentIntercept = false
@@ -818,6 +800,10 @@ internal fun RichDefinitionView(
                                         }
                                     }
                                     MotionEvent.ACTION_CANCEL -> {
+                                        Log.d(
+                                            BOOK_LOOKUP_TAP_LOG_TAG,
+                                            "webview touch cancel moved=$moved parentDisallow=$disallowParentIntercept scroll=${scrollX},${scrollY}"
+                                        )
                                         if (disallowParentIntercept) {
                                             v?.parent?.requestDisallowInterceptTouchEvent(false)
                                             disallowParentIntercept = false
@@ -1260,6 +1246,7 @@ internal fun buildDefinitionHtml(
             document.addEventListener('touchstart', function(e) {
                 const t = e.touches && e.touches[0];
                 if (!t) return;
+                clearNativeSelection();
                 touchStartX = t.clientX;
                 touchStartY = t.clientY;
                 touchMoved = false;
@@ -1274,6 +1261,12 @@ internal fun buildDefinitionHtml(
                     touchMoved = true;
                 }
             }, { capture: true, passive: true });
+            function clearNativeSelection() {
+                try {
+                    const selection = window.getSelection && window.getSelection();
+                    if (selection && selection.rangeCount > 0) selection.removeAllRanges();
+                } catch (_) {}
+            }
             let lastTapX = -1;
             let lastTapY = -1;
             let lastTapTs = 0;
@@ -1306,7 +1299,16 @@ internal fun buildDefinitionHtml(
                 return anchor || null;
             }
             function findDefinitionKeyFromTarget(target) {
-                if (!target || !target.closest) return '';
+                if (!target) return '';
+                let node = target;
+                while (node) {
+                    if (node.getAttribute) {
+                        const value = (node.getAttribute('data-definition-key') || '').trim();
+                        if (value) return value;
+                    }
+                    node = node.parentElement || node.parentNode || null;
+                }
+                if (!target.closest) return '';
                 const owner = target.closest('[data-definition-key]');
                 if (!owner || !owner.getAttribute) return '';
                 return (owner.getAttribute('data-definition-key') || '').trim();
@@ -1333,7 +1335,7 @@ internal fun buildDefinitionHtml(
                 return /^entry:/i.test(String(href || '').trim());
             }
             function isDictresHref(href) {
-                return /^dictres:/i.test(String(href || '').trim());
+                return /^(dictres|mdictres):/i.test(String(href || '').trim());
             }
             function isQueryLookupHref(href) {
                 const text = String(href || '').trim();
@@ -1341,18 +1343,162 @@ internal fun buildDefinitionHtml(
                 if (/^(?:https?|mailto|tel|javascript):/i.test(text)) return false;
                 return /(?:^\?|[?&;])(query|term|word|q|target)=/i.test(text);
             }
+            function rectToPayload(rect) {
+                return {
+                    left: rect && rect.left || 0,
+                    top: rect && rect.top || 0,
+                    right: rect && rect.right || 0,
+                    bottom: rect && rect.bottom || 0
+                };
+            }
+            function normalizeLookupLinkText(raw) {
+                return String(raw || '')
+                    .replace(/^[\s←→↩↪⇐⇒]+/, '')
+                    .replace(/\s+/g, '')
+                    .trim();
+            }
+            function extractLookupTargetFromHref(href) {
+                const raw = String(href || '').trim();
+                if (!raw) return '';
+                const decoded = (value) => {
+                    try { return decodeURIComponent(String(value || '').replace(/\+/g, ' ')); } catch (_) { return String(value || ''); }
+                };
+                const readParam = (text) => {
+                    const match = String(text || '').match(/(?:^\?|[?&;])(query|term|word|q|target|entry)=([^&#;]+)/i);
+                    return match && match[2] ? decoded(match[2]).replace(/&amp;/g, '&').trim() : '';
+                };
+                return readParam(raw) || readParam(decoded(raw));
+            }
+            function findTextNodeContaining(root, needle) {
+                const target = normalizeLookupLinkText(needle);
+                if (!root || !target) return null;
+                const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+                let node = walker.nextNode();
+                while (node) {
+                    const text = node.textContent || '';
+                    const compact = text.replace(/\s+/g, '');
+                    const compactIndex = compact.indexOf(target);
+                    if (compactIndex >= 0) {
+                        let seen = 0;
+                        for (let i = 0; i < text.length; i += 1) {
+                            if (/\s/.test(text[i])) continue;
+                            if (seen === compactIndex) {
+                                return { node, offset: i };
+                            }
+                            seen += 1;
+                        }
+                    }
+                    node = walker.nextNode();
+                }
+                return null;
+            }
+            function isRubyAnnotationNode(node) {
+                let current = node && node.parentElement ? node.parentElement : null;
+                while (current && current !== document.body) {
+                    const tag = String(current.tagName || '').toLowerCase();
+                    if (tag === 'rt' || tag === 'rp') return true;
+                    if (current === node) break;
+                    current = current.parentElement || null;
+                }
+                return false;
+            }
+            function collectLookupTargetCharacters(root, needle) {
+                const target = normalizeLookupLinkText(needle);
+                if (!root || !target) return null;
+                const chars = [];
+                const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+                let node = walker.nextNode();
+                while (node) {
+                    if (!isRubyAnnotationNode(node)) {
+                        const text = node.textContent || '';
+                        for (let i = 0; i < text.length; i += 1) {
+                            const ch = text[i];
+                            if (/\s/.test(ch)) continue;
+                            chars.push({ ch, node, offset: i });
+                        }
+                    }
+                    node = walker.nextNode();
+                }
+                const compact = chars.map(item => item.ch).join('');
+                const start = compact.indexOf(target);
+                if (start < 0) return null;
+                const selected = chars.slice(start, start + target.length);
+                const charRects = [];
+                selected.forEach(item => {
+                    const charRange = document.createRange();
+                    charRange.setStart(item.node, item.offset);
+                    charRange.setEnd(item.node, Math.min(item.offset + 1, (item.node.textContent || '').length));
+                    const rect = charRange.getBoundingClientRect();
+                    if (rect && (rect.width > 0 || rect.height > 0)) {
+                        charRects.push(rectToPayload(rect));
+                    }
+                });
+                if (!charRects.length) return null;
+                return {
+                    text: selected.map(item => item.ch).join(''),
+                    charRects,
+                    localRects: mergeRectsByLine(charRects)
+                };
+            }
+            function resolveLookupLinkPayloadRects(anchor, targetText, clientX, clientY) {
+                const baseRect = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
+                const fallback = baseRect && (baseRect.width > 0 || baseRect.height > 0)
+                    ? [rectToPayload(baseRect)]
+                    : [{ left: clientX || 0, top: clientY || 0, right: clientX || 0, bottom: clientY || 0 }];
+                const target = normalizeLookupLinkText(targetText);
+                const collectedFromTarget = collectLookupTargetCharacters(anchor, target);
+                const found = collectedFromTarget ? null : (findTextNodeContaining(anchor, targetText) || null);
+                const collected = collectedFromTarget || (
+                    found && found.node
+                        ? collectLookupCharacters(found.node, found.offset, Math.max(1, target.length || 1), false)
+                        : null
+                );
+                const localRects = collected && collected.localRects && collected.localRects.length > 0
+                    ? collected.localRects
+                    : fallback;
+                const charRects = collected && collected.charRects && collected.charRects.length > 0
+                    ? collected.charRects
+                    : localRects;
+                const picked = pickRectForPoint(localRects, clientX || 0, clientY || 0) || localRects[0] || fallback[0];
+                return { rects: [picked], charRects: charRects };
+            }
+            function postPopupMessage(type, payload) {
+                if (!window.NineLookup || !window.NineLookup.onPopupMessage || !type) return false;
+                try {
+                    const message = JSON.stringify({
+                        type: String(type),
+                        payload: payload || {}
+                    });
+                    window.NineLookup.onPopupMessage(message);
+                    return true;
+                } catch (_) {
+                    return false;
+                }
+            }
             function dispatchLookupLinkTap(anchor, href, clientX, clientY) {
-                if (!window.NineLookup || !window.NineLookup.onLookupLinkTap || !anchor) return false;
-                const rect = anchor.getBoundingClientRect();
-                if (!rect) return false;
+                if (!anchor) return false;
+                const target = extractLookupTargetFromHref(href) || anchor.textContent || '';
+                const rectPayload = resolveLookupLinkPayloadRects(anchor, target, clientX, clientY);
+                const rect = (rectPayload.rects && rectPayload.rects[0]) || { left: clientX || 0, top: clientY || 0, right: clientX || 0, bottom: clientY || 0 };
                 const left = rect.left || clientX || 0;
                 const top = rect.top || clientY || 0;
                 const right = rect.right || left;
                 const bottom = rect.bottom || top;
                 const definitionKey = findDefinitionKeyFromTarget(anchor);
-                window.NineLookup.onLookupLinkTap(href, left, top, right, bottom, definitionKey);
+                const posted = postPopupMessage('lookup', {
+                    mode: 'entry-link',
+                    href: href,
+                    left: left,
+                    top: top,
+                    right: right,
+                    bottom: bottom,
+                    localRectsJson: JSON.stringify(rectPayload.rects || []),
+                    localCharRectsJson: JSON.stringify(rectPayload.charRects || []),
+                    definitionKey: definitionKey
+                });
+                if (!posted) return false;
                 if (window.NineLookup && window.NineLookup.onDebug) {
-                    window.NineLookup.onDebug('lookup link tap href=' + href);
+                    window.NineLookup.onDebug('lookup link tap href=' + href + ' key=' + (definitionKey || '') + ' rects=' + ((rectPayload.rects || []).length));
                 }
                 return true;
             }
@@ -1363,14 +1509,15 @@ internal fun buildDefinitionHtml(
                 if (isEntryHref(href) || isDictresHref(href) || isQueryLookupHref(href)) {
                     return dispatchLookupLinkTap(anchor, href, clientX, clientY) || dispatchEntryTap(anchor, clientX, clientY);
                 }
-                if (window.NineLookup && window.NineLookup.onOpenExternalUrl) {
-                    window.NineLookup.onOpenExternalUrl(href);
-                    if (window.NineLookup.onDebug) {
-                        window.NineLookup.onDebug('external link tap=' + href);
-                    }
-                    return true;
+                const posted = postPopupMessage('audio', {
+                    action: 'open-external',
+                    href: href
+                });
+                if (!posted) return false;
+                if (window.NineLookup.onDebug) {
+                    window.NineLookup.onDebug('external link tap=' + href);
                 }
-                return false;
+                return true;
             }
             function normalizeEntryScanText(raw) {
                 if (!raw) return '';
@@ -1402,7 +1549,7 @@ internal fun buildDefinitionHtml(
                 return text;
             }
             function dispatchEntryTap(anchor, clientX, clientY) {
-                if (!window.NineLookup || !window.NineLookup.onTapWithDefinitionKey || !anchor) return false;
+                if (!anchor) return false;
                 const rect = anchor.getBoundingClientRect();
                 if (!rect) return false;
                 const left = rect.left || clientX || 0;
@@ -1413,29 +1560,31 @@ internal fun buildDefinitionHtml(
                 const scanText = normalizeEntryScanText(nodeText);
                 const definitionKey = findDefinitionKeyFromTarget(anchor);
                 const payloadRect = [{ left, top, right, bottom }];
-                window.NineLookup.onTapWithDefinitionKey(
-                    nodeText,
-                    scanText || nodeText,
-                    'entry',
-                    scanText || nodeText,
-                    0,
-                    nodeText,
-                    '[]',
-                    JSON.stringify(payloadRect),
-                    JSON.stringify(payloadRect),
-                    left,
-                    top,
-                    right,
-                    bottom,
-                    definitionKey
-                );
+                const posted = postPopupMessage('lookup', {
+                    mode: 'entry',
+                    text: nodeText,
+                    scanText: scanText || nodeText,
+                    tapSource: 'entry',
+                    sentence: scanText || nodeText,
+                    offset: 0,
+                    nodeText: nodeText,
+                    nodePathJson: '[]',
+                    localRectsJson: JSON.stringify(payloadRect),
+                    localCharRectsJson: JSON.stringify(payloadRect),
+                    left: left,
+                    top: top,
+                    right: right,
+                    bottom: bottom,
+                    definitionKey: definitionKey
+                });
+                if (!posted) return false;
                 if (window.NineLookup && window.NineLookup.onDebug) {
                     window.NineLookup.onDebug('entry tap scan=' + (scanText || nodeText));
                 }
                 return true;
             }
             function handleLookupTap(clientX, clientY, fromTouch) {
-                if (!window.NineLookup || !window.NineLookup.onTapWithDefinitionKey) return;
+                if (!window.NineLookup || !window.NineLookup.onPopupMessage) return;
                 if (Date.now() < suppressClickUntil) return;
                 const directTarget = document.elementFromPoint(clientX || 0, clientY || 0);
                 const directImage = findImageTarget(directTarget);
@@ -1535,28 +1684,48 @@ internal fun buildDefinitionHtml(
                 const scanText = scanData && scanData.text ? scanData.text : text.slice(safeOffset, selectionEndExclusive).trim();
                 const nodePath = JSON.stringify(getNodePath(node));
                 const definitionKey = findDefinitionKeyFromTarget(directTarget) || findDefinitionKeyFromTarget(node.parentElement);
-                window.NineLookup.onTapWithDefinitionKey(
-                    text,
-                    scanText,
-                    'text',
-                    extractSentence(text, safeOffset),
-                    safeOffset,
-                    node.textContent || '',
-                    nodePath,
-                    JSON.stringify(localRects),
-                    JSON.stringify(charRects),
-                    targetRect.left || 0,
-                    targetRect.top || 0,
-                    targetRect.right || 0,
-                    targetRect.bottom || 0,
-                    definitionKey
-                );
+                postPopupMessage('lookup', {
+                    mode: 'text',
+                    text: text,
+                    scanText: scanText,
+                    tapSource: 'text',
+                    sentence: extractSentence(text, safeOffset),
+                    offset: safeOffset,
+                    nodeText: node.textContent || '',
+                    nodePathJson: nodePath,
+                    localRectsJson: JSON.stringify(localRects),
+                    localCharRectsJson: JSON.stringify(charRects),
+                    left: targetRect.left || 0,
+                    top: targetRect.top || 0,
+                    right: targetRect.right || 0,
+                    bottom: targetRect.bottom || 0,
+                    definitionKey: definitionKey
+                });
                 if (fromTouch) {
                     suppressClickUntil = Date.now() + 260;
                 }
             }
             window.__nineLookupHandleTap = handleLookupTap;
+            document.addEventListener('selectstart', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                clearNativeSelection();
+            }, true);
+            document.addEventListener('dragstart', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                clearNativeSelection();
+            }, true);
+            document.addEventListener('contextmenu', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                clearNativeSelection();
+            }, true);
+            document.addEventListener('selectionchange', function() {
+                clearNativeSelection();
+            }, true);
             document.addEventListener('touchend', function(e) {
+                clearNativeSelection();
                 if (Date.now() < suppressClickUntil) {
                     const touched = e.changedTouches && e.changedTouches[0]
                         ? document.elementFromPoint(e.changedTouches[0].clientX || 0, e.changedTouches[0].clientY || 0)
@@ -1686,6 +1855,16 @@ internal fun buildDefinitionHtml(
                     --tag-archaism-background-color: #eeeeee;
                 }
                 body { margin: 0; padding: 0; font-size: 14px; line-height: 1.4; color: var(--text-color); }
+                html, body, body * {
+                    -webkit-touch-callout: none !important;
+                    -webkit-user-select: none !important;
+                    user-select: none !important;
+                }
+                a, img {
+                    -webkit-user-drag: none !important;
+                    user-drag: none !important;
+                }
+                ::selection { background: transparent; }
                 img { max-width: 100%; height: auto; cursor: zoom-in; }
                 .gloss-image-link {
                     display: inline-block;
@@ -1893,7 +2072,13 @@ private fun decodePreviewImage(context: android.content.Context, rawSrc: String)
     }.getOrNull()
 }
 
-internal fun resolveLookupTargetFromCustomUrl(rawUrl: String): String? {
+internal data class CustomLookupUrlTarget(
+    val scheme: String,
+    val target: String,
+    val dictionaryCacheKey: String? = null
+)
+
+internal fun parseCustomLookupUrlTarget(rawUrl: String): CustomLookupUrlTarget? {
     val raw = rawUrl.trim()
     if (raw.isBlank()) return null
     val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return null
@@ -1918,38 +2103,43 @@ internal fun resolveLookupTargetFromCustomUrl(rawUrl: String): String? {
 
     if (scheme == "entry") {
         val encoded = uri.schemeSpecificPart.orEmpty().removePrefix("//")
-        return normalizeCandidate(Uri.decode(encoded))
+        val target = normalizeCandidate(Uri.decode(encoded)) ?: return null
+        return CustomLookupUrlTarget(scheme = scheme, target = target)
     }
 
-    arrayOf("entry", "term", "word", "q", "target")
-        .firstNotNullOfOrNull { key -> normalizeCandidate(uri.getQueryParameter(key)) }
-        ?.let { return it }
-
-    extractQueryCandidate(raw)?.let { return it }
-    extractQueryCandidate(Uri.decode(raw))?.let { return it }
-
-    if (scheme.isNotBlank() && scheme != "dictres") return null
-
-    extractQueryCandidate(Uri.decode(uri.schemeSpecificPart.orEmpty()))?.let { return it }
-
-    normalizeCandidate(uri.fragment?.let(Uri::decode))?.let { return it }
-
-    val lastSegment = uri.pathSegments.lastOrNull().orEmpty().trim()
-    if (lastSegment.isNotBlank()) {
-        val decoded = Uri.decode(lastSegment)
-        extractQueryCandidate(decoded)?.let { return it }
-        val withoutExt = decoded
-            .removeSuffix(".html")
-            .removeSuffix(".htm")
-            .removeSuffix(".xhtml")
-            .removeSuffix(".mdx")
-            .removeSuffix(".txt")
-        normalizeCandidate(withoutExt)?.let { return it }
+    if (scheme == "dictres" || scheme == "mdictres") {
+        val dictionaryCacheKey = normalizeCandidate(uri.host)
+        arrayOf("query", "term", "word", "q", "target", "entry")
+            .firstNotNullOfOrNull { key -> normalizeCandidate(uri.getQueryParameter(key)) }
+            ?.let { return CustomLookupUrlTarget(scheme = scheme, target = it, dictionaryCacheKey = dictionaryCacheKey) }
+        extractQueryCandidate(raw)?.let { return CustomLookupUrlTarget(scheme = scheme, target = it, dictionaryCacheKey = dictionaryCacheKey) }
+        extractQueryCandidate(Uri.decode(raw))?.let { return CustomLookupUrlTarget(scheme = scheme, target = it, dictionaryCacheKey = dictionaryCacheKey) }
+        extractQueryCandidate(Uri.decode(uri.schemeSpecificPart.orEmpty()))?.let {
+            return CustomLookupUrlTarget(scheme = scheme, target = it, dictionaryCacheKey = dictionaryCacheKey)
+        }
+        val decodedPath = Uri.decode(uri.path.orEmpty())
+        extractQueryCandidate(decodedPath)?.let { return CustomLookupUrlTarget(scheme = scheme, target = it, dictionaryCacheKey = dictionaryCacheKey) }
+        val decodedLastPathSegment = Uri.decode(uri.pathSegments.lastOrNull().orEmpty())
+        extractQueryCandidate(decodedLastPathSegment)?.let { return CustomLookupUrlTarget(scheme = scheme, target = it, dictionaryCacheKey = dictionaryCacheKey) }
+        normalizeCandidate(uri.fragment?.let(Uri::decode))?.let {
+            return CustomLookupUrlTarget(scheme = scheme, target = it, dictionaryCacheKey = dictionaryCacheKey)
+        }
+        return null
     }
 
-    val ssp = uri.schemeSpecificPart.orEmpty().removePrefix("//")
-    val tail = ssp.substringAfterLast('/').substringAfterLast('#').substringAfterLast('?')
-    return normalizeCandidate(Uri.decode(tail))
+    if (scheme.isBlank()) {
+        arrayOf("entry", "term", "word", "q", "target", "query")
+            .firstNotNullOfOrNull { key -> normalizeCandidate(uri.getQueryParameter(key)) }
+            ?.let { return CustomLookupUrlTarget(scheme = scheme, target = it) }
+        extractQueryCandidate(raw)?.let { return CustomLookupUrlTarget(scheme = scheme, target = it) }
+        extractQueryCandidate(Uri.decode(raw))?.let { return CustomLookupUrlTarget(scheme = scheme, target = it) }
+    }
+
+    return null
+}
+
+internal fun resolveLookupTargetFromCustomUrl(rawUrl: String): String? {
+    return parseCustomLookupUrlTarget(rawUrl)?.target
 }
 
 private fun looksLikeHtmlDefinition(text: String): Boolean {
@@ -1981,6 +2171,10 @@ internal class DefinitionLookupBridge(
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile
     private var lastEntryTapAtMs: Long = 0L
+    @Volatile
+    private var lastLookupLinkTapAtMs: Long = 0L
+    @Volatile
+    private var lastLookupLinkTarget: String = ""
 
     @JavascriptInterface
     fun onDebug(message: String?) {
@@ -1988,7 +2182,70 @@ internal class DefinitionLookupBridge(
     }
 
     @JavascriptInterface
-    fun onOpenExternalUrl(rawUrl: String?) {
+    fun onPopupMessage(rawJson: String?) {
+        val json = rawJson?.trim().orEmpty()
+        if (json.isBlank()) return
+        runCatching {
+            val root = JSONObject(json)
+            val type = root.optString("type").trim().lowercase(Locale.ROOT)
+            val payload = root.optJSONObject("payload") ?: JSONObject()
+            when (type) {
+                "lookup" -> {
+                    val mode = payload.optString("mode").trim().lowercase(Locale.ROOT)
+                    if (mode == "entry-link") {
+                        dispatchLookupLink(
+                            rawUrl = payload.optString("href"),
+                            left = payload.optDouble("left", 0.0).toFloat(),
+                            top = payload.optDouble("top", 0.0).toFloat(),
+                            right = payload.optDouble("right", 0.0).toFloat(),
+                            bottom = payload.optDouble("bottom", 0.0).toFloat(),
+                            localRectsJson = payload.optString("localRectsJson"),
+                            localCharRectsJson = payload.optString("localCharRectsJson"),
+                            tappedDefinitionKey = payload.optString("definitionKey")
+                        )
+                    } else {
+                        dispatchTap(
+                            text = payload.optString("text"),
+                            scanText = payload.optString("scanText"),
+                            tapSource = payload.optString("tapSource"),
+                            sentence = payload.optString("sentence"),
+                            offset = payload.optInt("offset", 0),
+                            nodeText = payload.optString("nodeText"),
+                            nodePathJson = payload.optString("nodePathJson"),
+                            localRectsJson = payload.optString("localRectsJson"),
+                            localCharRectsJson = payload.optString("localCharRectsJson"),
+                            left = payload.optDouble("left", 0.0).toFloat(),
+                            top = payload.optDouble("top", 0.0).toFloat(),
+                            right = payload.optDouble("right", 0.0).toFloat(),
+                            bottom = payload.optDouble("bottom", 0.0).toFloat(),
+                            tappedDefinitionKey = payload.optString("definitionKey")
+                        )
+                    }
+                }
+                "tab" -> {
+                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge popupMessage tab payload=$payload")
+                }
+                "back" -> {
+                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge popupMessage back")
+                }
+                "audio" -> {
+                    val action = payload.optString("action").trim().lowercase(Locale.ROOT)
+                    if (action == "open-external") {
+                        dispatchOpenExternalUrl(payload.optString("href"))
+                    } else {
+                        Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge popupMessage audio action=$action")
+                    }
+                }
+                else -> {
+                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge popupMessage unknown type=$type")
+                }
+            }
+        }.onFailure {
+            Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge popupMessage parse failed json=$json")
+        }
+    }
+
+    private fun dispatchOpenExternalUrl(rawUrl: String?) {
         val raw = rawUrl?.trim().orEmpty()
         if (raw.isBlank()) return
         val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return
@@ -2000,14 +2257,23 @@ internal class DefinitionLookupBridge(
             .onFailure { Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "openExternal failed url=$raw") }
     }
 
-    @JavascriptInterface
-    fun onLookupLinkTap(rawUrl: String?, left: Float, top: Float, right: Float, bottom: Float, tappedDefinitionKey: String?) {
+    private fun dispatchLookupLink(
+        rawUrl: String?,
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        localRectsJson: String?,
+        localCharRectsJson: String?,
+        tappedDefinitionKey: String?
+    ) {
         val raw = rawUrl?.trim().orEmpty()
         if (raw.isBlank()) {
             Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge lookupLink skip reason=blank_url")
             return
         }
-        val target = resolveLookupTargetFromCustomUrl(raw)
+        val parsed = parseCustomLookupUrlTarget(raw)
+        val target = parsed?.target
         if (target == null) {
             Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge lookupLink skip reason=target_null raw=$raw")
             return
@@ -2017,10 +2283,24 @@ internal class DefinitionLookupBridge(
             Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge lookupLink skip reason=callback_null target=$target")
             return
         }
-        Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge lookupLink dispatch target=$target raw=$raw")
+        Log.d(
+            BOOK_LOOKUP_TAP_LOG_TAG,
+            "bridge lookupLink dispatch target=$target dictKey=${parsed.dictionaryCacheKey.orEmpty()} key=${tappedDefinitionKey?.trim().orEmpty()} raw=$raw"
+        )
         lastEntryTapAtMs = System.currentTimeMillis()
+        lastLookupLinkTapAtMs = lastEntryTapAtMs
+        lastLookupLinkTarget = target
         val localRect = Rect(left, top, right, bottom)
+        val localRects = parseRectListJson(localRectsJson).ifEmpty { listOf(localRect) }
+        val localCharRects = parseRectListJson(localCharRectsJson).ifEmpty { localRects }
         val dispatch = Runnable {
+            val host = hostView
+            val screenRect = host?.cssRectToScreenRect(localRect)
+            val screenCharRects = host?.cssRectsToScreenRects(localCharRects).orEmpty()
+            Log.d(
+                BOOK_LOOKUP_TAP_LOG_TAG,
+                "bridge lookupLink rects local=${localRects.size} chars=${localCharRects.size} screenChars=${screenCharRects.size}"
+            )
             callback.invoke(
                 DefinitionLookupTapData(
                     text = target,
@@ -2031,11 +2311,12 @@ internal class DefinitionLookupBridge(
                     nodeText = target,
                     nodePathJson = "[]",
                     tappedDefinitionKey = tappedDefinitionKey?.trim()?.takeIf { it.isNotBlank() },
-                    hostView = hostView,
-                    screenRect = null,
-                    localRects = listOf(localRect),
-                    localCharRects = listOf(localRect),
-                    screenCharRects = emptyList()
+                    lookupDictionaryCacheKey = parsed.dictionaryCacheKey?.trim()?.takeIf { it.isNotBlank() },
+                    hostView = host,
+                    screenRect = screenRect,
+                    localRects = localRects,
+                    localCharRects = localCharRects,
+                    screenCharRects = screenCharRects
                 )
             )
         }
@@ -2050,61 +2331,6 @@ internal class DefinitionLookupBridge(
         val callback = onImageTap ?: return
         val dispatch = Runnable { callback.invoke(src) }
         if (Looper.myLooper() == Looper.getMainLooper()) dispatch.run() else mainHandler.post(dispatch)
-    }
-
-    @JavascriptInterface
-    fun onTap(text: String?, scanText: String?, tapSource: String?, sentence: String?, offset: Int, nodeText: String?, nodePathJson: String?, localRectsJson: String?, localCharRectsJson: String?, left: Float, top: Float, right: Float, bottom: Float) {
-        dispatchTap(
-            text = text,
-            scanText = scanText,
-            tapSource = tapSource,
-            sentence = sentence,
-            offset = offset,
-            nodeText = nodeText,
-            nodePathJson = nodePathJson,
-            localRectsJson = localRectsJson,
-            localCharRectsJson = localCharRectsJson,
-            left = left,
-            top = top,
-            right = right,
-            bottom = bottom,
-            tappedDefinitionKey = null
-        )
-    }
-
-    @JavascriptInterface
-    fun onTapWithDefinitionKey(
-        text: String?,
-        scanText: String?,
-        tapSource: String?,
-        sentence: String?,
-        offset: Int,
-        nodeText: String?,
-        nodePathJson: String?,
-        localRectsJson: String?,
-        localCharRectsJson: String?,
-        left: Float,
-        top: Float,
-        right: Float,
-        bottom: Float,
-        tappedDefinitionKey: String?
-    ) {
-        dispatchTap(
-            text = text,
-            scanText = scanText,
-            tapSource = tapSource,
-            sentence = sentence,
-            offset = offset,
-            nodeText = nodeText,
-            nodePathJson = nodePathJson,
-            localRectsJson = localRectsJson,
-            localCharRectsJson = localCharRectsJson,
-            left = left,
-            top = top,
-            right = right,
-            bottom = bottom,
-            tappedDefinitionKey = tappedDefinitionKey
-        )
     }
 
     private fun dispatchTap(
@@ -2131,6 +2357,25 @@ internal class DefinitionLookupBridge(
             val isEntryLike = sourceValue.equals("entry", ignoreCase = true) ||
                 sourceValue.equals("entry-link", ignoreCase = true)
             if (isEntryLike) {
+                if (sourceValue.equals("entry", ignoreCase = true)) {
+                    val elapsedFromLookupLink = now - lastLookupLinkTapAtMs
+                    if (elapsedFromLookupLink in 0..700) {
+                        val lookupTarget = lastLookupLinkTarget
+                        val candidate = scanValue.ifBlank { value }.trim()
+                        val sameTap =
+                            lookupTarget.isNotBlank() &&
+                                (candidate == lookupTarget ||
+                                    candidate.contains(lookupTarget) ||
+                                    lookupTarget.contains(candidate))
+                        if (sameTap) {
+                            Log.d(
+                                BOOK_LOOKUP_TAP_LOG_TAG,
+                                "bridge onTap drop entry-after-link elapsedMs=$elapsedFromLookupLink target=$lookupTarget candidate=$candidate"
+                            )
+                            return
+                        }
+                    }
+                }
                 lastEntryTapAtMs = now
             } else if (sourceValue.equals("text", ignoreCase = true)) {
                 val elapsed = now - lastEntryTapAtMs
@@ -2167,7 +2412,23 @@ internal class DefinitionLookupBridge(
                         localCharRects = localCharRects,
                         screenCharRects = screenCharRects
                     )
-                    onLookupTap?.invoke(data)
+                    val callback = onLookupTap
+                    if (callback == null) {
+                        Log.d(
+                            BOOK_LOOKUP_TAP_LOG_TAG,
+                            "bridge onTap callback_null source=$sourceValue textLen=${value.length} scanLen=${scanValue.length}"
+                        )
+                    } else {
+                        Log.d(
+                            BOOK_LOOKUP_TAP_LOG_TAG,
+                            "bridge onTap callback_invoke source=$sourceValue textLen=${value.length} scanLen=${scanValue.length} offset=$offset"
+                        )
+                        callback.invoke(data)
+                        Log.d(
+                            BOOK_LOOKUP_TAP_LOG_TAG,
+                            "bridge onTap callback_done source=$sourceValue"
+                        )
+                    }
                 } catch (t: Throwable) {
                     Log.e(BOOK_LOOKUP_TAP_LOG_TAG, "bridge dispatch failed", t)
                 }

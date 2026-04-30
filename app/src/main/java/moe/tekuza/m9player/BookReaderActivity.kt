@@ -177,6 +177,7 @@ private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
 private const val BOOK_LOOKUP_POS_LOG_TAG = "BookLookupPos"
 private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
 private const val BOOK_LOOKUP_SELECTION_LOG_TAG = "BookLookupSelection"
+private const val BOOK_LOOKUP_TAP_LOG_TAG = "BookLookupTap"
 private const val BOOK_UI_MODE_LOG_TAG = "BookUiMode"
 private const val BOOK_VERTICAL_TAP_DEBUG_OVERLAY = false
 private const val BOOK_CUE_LOOP_LOG_TAG = "BookCueLoop"
@@ -953,9 +954,11 @@ private fun BookReaderScreen(
         }
     }
     LaunchedEffect(visibleSelectedRange, activeCueIndex, readerUiWritingMode, lyricsMode) {
+        val rootRange = rootLookupLayer?.selectedRange
+        val rootSelectionText = rootLookupLayer?.selectionText.orEmpty()
         Log.d(
             BOOK_LOOKUP_SELECTION_LOG_TAG,
-            "visibleRange activeCue=$activeCueIndex mode=$readerUiWritingMode lyrics=$lyricsMode range=${formatRangeForLog(visibleSelectedRange)}"
+            "visibleRange activeCue=$activeCueIndex mode=$readerUiWritingMode lyrics=$lyricsMode range=${formatRangeForLog(visibleSelectedRange)} rootRange=${formatRangeForLog(rootRange)} rootSelection='${rootSelectionText.take(24)}'"
         )
     }
     LaunchedEffect(activeCueIndex, visibleSelectedRange, lyricsMode) {
@@ -1744,6 +1747,10 @@ private fun BookReaderScreen(
             BOOK_LOOKUP_POS_LOG_TAG,
             "tapLookup start cueIndex=$cueIndex offset=$offset t=$lookupStartMs"
         )
+        Log.d(
+            BOOK_LOOKUP_TAP_LOG_TAG,
+            "tapLookup start cueIndex=$cueIndex offset=$offset t=$lookupStartMs"
+        )
         val requestNonce = lookupPopupRequestNonce + 1L
         lookupPopupRequestNonce = requestNonce
         if (dictionariesSnapshot.isEmpty()) {
@@ -1792,10 +1799,7 @@ private fun BookReaderScreen(
 
             fun applyLookupResult(hits: List<DictionarySearchResult>, computedQuery: String?) {
                 if (hits.isEmpty()) return
-                val matchedLength = hits.firstOrNull { it.matchedLength > 0 }?.matchedLength
-                    ?: computedQuery?.length
-                    ?: selectedToken?.length
-                    ?: 1
+                val matchedLength = hits.firstOrNull()?.matchedLength?.coerceAtLeast(1) ?: 1
                 val fallbackOffset = offset.coerceIn(0, cue.text.lastIndex.coerceAtLeast(0))
                 val fallbackRange = fallbackOffset until (fallbackOffset + 1)
                 val resolvedRange = trimSelectionRangeByMatchedLength(
@@ -1809,6 +1813,15 @@ private fun BookReaderScreen(
                 }.trim().takeIf { it.isNotBlank() }
                     ?: computedQuery?.trim()?.takeIf { it.isNotBlank() }
                     ?: selectedToken
+                val firstHit = hits.firstOrNull()
+                Log.d(
+                    BOOK_LOOKUP_SELECTION_LOG_TAG,
+                    "applyLookupResult cueIndex=$cueIndex token='${selectedToken.orEmpty()}' query='${computedQuery.orEmpty()}' firstTerm='${firstHit?.entry?.term.orEmpty()}' firstMatchedLen=${firstHit?.matchedLength ?: -1} usedMatchedLen=$matchedLength baseRange=${formatRangeForLog(selectionRange)} resolvedRange=${formatRangeForLog(resolvedRange)} resolvedText='${selectionText.orEmpty().take(24)}'"
+                )
+                Log.d(
+                    BOOK_LOOKUP_TAP_LOG_TAG,
+                    "applyLookupResult cueIndex=$cueIndex firstMatchedLen=${firstHit?.matchedLength ?: -1} usedMatchedLen=$matchedLength baseRange=${formatRangeForLog(selectionRange)} resolvedRange=${formatRangeForLog(resolvedRange)} resolvedText='${selectionText.orEmpty().take(24)}'"
+                )
                 val expandedAnchor = if (readerUiWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
                     anchor.expandForSelectionText(
                         selectionText = selectionText,
@@ -1835,6 +1848,10 @@ private fun BookReaderScreen(
                 Log.d(
                     BOOK_LOOKUP_POS_LOG_TAG,
                     "tapLookup success cueIndex=$cueIndex query='${computedQuery ?: query}' hits=${hits.size} elapsedMs=${(System.currentTimeMillis() - lookupStartMs).coerceAtLeast(0L)}"
+                )
+                Log.d(
+                    BOOK_LOOKUP_TAP_LOG_TAG,
+                    "tapLookup success cueIndex=$cueIndex query='${computedQuery ?: query}' hits=${hits.size}"
                 )
             }
 
@@ -1910,6 +1927,10 @@ private fun BookReaderScreen(
         tapData: DefinitionLookupTapData,
         anchor: ReaderLookupAnchor?
     ) {
+        Log.d(
+            BOOK_LOOKUP_TAP_LOG_TAG,
+            "recursive start sourceLayer=$sourceLayerIndex key=$definitionKey tapSource=${tapData.tapSource} scanLen=${tapData.scanText.length} textLen=${tapData.text.length} offset=${tapData.offset}"
+        )
         launchRecursiveLookupIntoSession(
             context = context,
             scope = scope,
@@ -1939,6 +1960,11 @@ private fun BookReaderScreen(
                 }
             },
             buildLayer = { resolved ->
+                val firstHit = resolved.hits.firstOrNull()
+                Log.d(
+                    BOOK_LOOKUP_TAP_LOG_TAG,
+                    "recursive apply sourceLayer=$sourceLayerIndex term='${resolved.term}' firstTerm='${firstHit?.entry?.term.orEmpty()}' firstMatchedLen=${firstHit?.matchedLength ?: -1} hits=${resolved.hits.size}"
+                )
                 buildLookupLayer(
                     loading = false,
                     error = null,
@@ -1957,6 +1983,10 @@ private fun BookReaderScreen(
             onNoSourceLayer = { _ -> },
             onNoCue = { _ -> },
             onNoSelection = {
+                Log.d(
+                    BOOK_LOOKUP_TAP_LOG_TAG,
+                    "recursive noSelection sourceLayer=$sourceLayerIndex tapSource=${tapData.tapSource} scan='${tapData.scanText.take(24)}' text='${tapData.text.take(24)}'"
+                )
                 if (tapData.tapSource.equals("entry", ignoreCase = true)) {
                     Log.d(
                         BOOK_LOOKUP_ANCHOR_LOG_TAG,
@@ -2385,17 +2415,14 @@ private fun BookReaderScreen(
             bottomBar = {
                 if (bottomControlsVisible && !useLeftVerticalLayout) {
                     Surface(tonalElevation = 4.dp) {
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .navigationBarsPadding()
-                                .padding(12.dp)
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                            if (audioChapters.isNotEmpty() && (!uiTestMode || uiTestChapterVisible)) {
+                            if (audioChapters.isNotEmpty()) {
                                 val activeChapterTitle = audioChapters
                                     .getOrNull(activeChapterIndex)
                                     ?.title
@@ -2429,7 +2456,7 @@ private fun BookReaderScreen(
                                     }
                                 }
                             }
-                            if (audioChapters.isNotEmpty() && (!uiTestMode || uiTestChapterVisible) && chapterOptionsVisible) {
+                            if (audioChapters.isNotEmpty() && chapterOptionsVisible) {
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -2511,6 +2538,32 @@ private fun BookReaderScreen(
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(onClick = { jumpToAdjacentCue(-1) }) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_overlay_previous),
+                                        contentDescription = "Previous"
+                                    )
+                                }
+                                IconButton(onClick = { if (player.isPlaying) player.pause() else player.play() }) {
+                                    Icon(
+                                        painter = painterResource(
+                                            id = if (isPlaying) R.drawable.ic_overlay_pause else R.drawable.ic_overlay_play
+                                        ),
+                                        contentDescription = if (isPlaying) "Pause" else "Play"
+                                    )
+                                }
+                                IconButton(onClick = { jumpToAdjacentCue(1) }) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_overlay_next),
+                                        contentDescription = "Next"
+                                    )
+                                }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -2548,7 +2601,7 @@ private fun BookReaderScreen(
                         }
                     }
                 }
-                } else if (bottomControlsVisible && useLeftVerticalLayout) {
+                if (bottomControlsVisible && useLeftVerticalLayout) {
                     Surface(tonalElevation = 4.dp) {
                         Row(
                             modifier = Modifier
@@ -3519,17 +3572,21 @@ private fun BookReaderScreen(
         onDefinitionLookup = { layerIndex, definitionKey, tapData ->
             val isTopLayer = layerIndex == lookupSession.lastIndex
             val isPreviousLayer = layerIndex == lookupSession.lastIndex - 1
-            if (isTopLayer || isPreviousLayer) {
-                val resolvedDefinitionKey = tapData.tappedDefinitionKey ?: definitionKey
-                Log.d(
-                    BOOK_LOOKUP_ANCHOR_LOG_TAG,
-                    "cardTap layer=$layerIndex key=$resolvedDefinitionKey scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
-                )
-                val anchorRects = tapData.resolveScreenAnchorRects()
-                    .takeIf { it.isNotEmpty() }
-                val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
-                performRecursiveLookupFromDefinition(layerIndex, resolvedDefinitionKey, tapData, anchor)
+            val resolvedDefinitionKey = tapData.tappedDefinitionKey ?: definitionKey
+            Log.d(
+                BOOK_LOOKUP_TAP_LOG_TAG,
+                "cardTap dispatch layer=$layerIndex last=${lookupSession.lastIndex} isTop=$isTopLayer isPrev=$isPreviousLayer key=$resolvedDefinitionKey source=${tapData.tapSource} scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
+            )
+            val effectiveLayerIndex = if (isTopLayer || isPreviousLayer) {
+                layerIndex
+            } else {
+                truncateLookupLayersTo(layerIndex)
+                layerIndex.coerceIn(0, lookupSession.lastIndex.coerceAtLeast(0))
             }
+            val anchorRects = tapData.resolveScreenAnchorRects()
+                .takeIf { it.isNotEmpty() }
+            val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
+            performRecursiveLookupFromDefinition(effectiveLayerIndex, resolvedDefinitionKey, tapData, anchor)
         },
         onRangeSelection = { layerIndex ->
             val isTopRootLayer =

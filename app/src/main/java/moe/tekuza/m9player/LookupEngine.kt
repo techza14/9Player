@@ -44,7 +44,7 @@ internal fun loadAvailableDictionaries(
             restoredUri?.let { queryLookupSourceDisplayName(contentResolver, it) }.orEmpty()
         }
         val cacheKey = ref.cacheKey ?: buildDictionaryCacheKey(ref.uri, displayName)
-        loadDictionaryFromSqlite(context, cacheKey)
+        loadDictionaryFromStorage(context, cacheKey)
     }
     return includeMountedMdxDictionary(context, imported)
 }

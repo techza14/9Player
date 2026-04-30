@@ -53,7 +53,7 @@ internal object MdictNativeBridge {
                 safeEntriesPath,
                 safeQuery,
                 maxResults.coerceIn(1, 128),
-                scanLength.coerceIn(1, 64)
+                scanLength.coerceAtLeast(1)
             )
         }.getOrElse { return emptyList() }
         return parseLookupResult(raw)
@@ -77,7 +77,7 @@ internal object MdictNativeBridge {
                 safeCacheKey,
                 safeQuery,
                 maxResults.coerceIn(1, 128),
-                scanLength.coerceIn(1, 64)
+                scanLength.coerceAtLeast(1)
             )
         }.getOrElse { return emptyList() }
         return parseLookupResult(raw)

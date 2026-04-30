@@ -1,11 +1,9 @@
 package moe.tekuza.m9player
 
 import android.content.ContentResolver
-import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
-import android.database.sqlite.SQLiteStatement
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
@@ -25,6 +23,7 @@ import java.net.URLDecoder
 import java.util.Locale
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
 import kotlin.math.max
 
 private const val DB_NAME = "dictionary_store.db"
@@ -99,21 +98,6 @@ private const val COL_TERM_NORM = "term_norm"
 private const val COL_READING_NORM = "reading_norm"
 private const val COL_ALIAS_NORM = "alias_norm"
 
-private const val SQL_INSERT_ENTRY = """
-    INSERT INTO $TABLE_ENTRIES (
-        $COL_CACHE_KEY,
-        $COL_TERM,
-        $COL_READING,
-        $COL_DEFINITION,
-        $COL_PITCH,
-        $COL_FREQUENCY,
-        $COL_DICTIONARY_NAME,
-        $COL_TERM_NORM,
-        $COL_READING_NORM,
-        $COL_ALIAS_NORM
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-"""
-
 private data class DictionaryLookupQueryCacheKey(
     val dictionariesKey: String,
     val normalizedQuery: String,
@@ -155,6 +139,9 @@ private val dictionaryLookupQueryCache =
         }
     }
 
+private val dictionaryLookupInFlight =
+    mutableMapOf<DictionaryLookupQueryCacheKey, FutureTask<List<DictionarySearchResult>>>()
+
 private val dictionaryTermIndexCache =
     object : LinkedHashMap<String, DictionaryTermIndexCacheEntry>(DICTIONARY_TERM_INDEX_CACHE_LIMIT, 0.75f, true) {
         override fun removeEldestEntry(
@@ -175,6 +162,8 @@ private val dictionaryMemoryIndexCache =
 
 private var mountedMdxPrewarmStateKey: String? = null
 private val mountedMdxPrewarmLock = Any()
+private var dictionaryPrewarmGeneration: Long = 0L
+private val dictionaryPrewarmLock = Any()
 
 
 private class DictionaryDbHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
@@ -548,6 +537,31 @@ internal fun prewarmDictionaryMemoryIndexes(
     )
 }
 
+internal fun schedulePrewarmDictionaryMemoryIndexes(
+    context: Context,
+    dictionaries: List<LoadedDictionary>,
+    delayMs: Long = 1200L
+) {
+    if (dictionaries.isEmpty()) return
+    val appContext = context.applicationContext
+    val generation = synchronized(dictionaryPrewarmLock) {
+        dictionaryPrewarmGeneration += 1L
+        dictionaryPrewarmGeneration
+    }
+    Thread {
+        runCatching { Thread.sleep(delayMs.coerceAtLeast(0L)) }
+        val stillLatest = synchronized(dictionaryPrewarmLock) {
+            generation == dictionaryPrewarmGeneration
+        }
+        if (!stillLatest) return@Thread
+        prewarmDictionaryMemoryIndexes(appContext, dictionaries)
+    }.apply {
+        name = "dictionary-prewarm"
+        isDaemon = true
+        start()
+    }
+}
+
 private fun loadDictionaryLookupQueryCache(
     key: DictionaryLookupQueryCacheKey
 ): List<DictionarySearchResult>? {
@@ -568,6 +582,41 @@ private fun saveDictionaryLookupQueryCache(
     synchronized(dictionaryLookupQueryCache) {
         dictionaryLookupQueryCache[key] = results
     }
+}
+
+private fun runSingleFlightLookup(
+    key: DictionaryLookupQueryCacheKey,
+    producer: () -> List<DictionarySearchResult>
+): List<DictionarySearchResult> {
+    val ownerTask: FutureTask<List<DictionarySearchResult>>
+    var isOwner = false
+    synchronized(dictionaryLookupInFlight) {
+        val existing = dictionaryLookupInFlight[key]
+        if (existing != null) {
+            Log.d(
+                DICTIONARY_LOOKUP_TAG,
+                "search singleFlight join query=${key.normalizedQuery} dictKey=${key.dictionariesKey.take(48)} profile=${key.profile}"
+            )
+            return existing.get()
+        }
+        ownerTask = FutureTask(Callable { producer() })
+        dictionaryLookupInFlight[key] = ownerTask
+        isOwner = true
+    }
+    if (isOwner) {
+        return try {
+            ownerTask.run()
+            ownerTask.get()
+        } finally {
+            synchronized(dictionaryLookupInFlight) {
+                val current = dictionaryLookupInFlight[key]
+                if (current === ownerTask) {
+                    dictionaryLookupInFlight.remove(key)
+                }
+            }
+        }
+    }
+    return ownerTask.get()
 }
 
 private fun buildLookupCacheDictionariesKey(dictionaries: List<LoadedDictionary>): String {
@@ -653,10 +702,7 @@ private fun searchDictionaryWithHoshi(
         DictionaryQueryProfile.FAST -> maxResults.coerceIn(8, 16)
         DictionaryQueryProfile.FULL -> (maxResults * 2).coerceIn(24, 140)
     }
-    val scanLength = when (profile) {
-        DictionaryQueryProfile.FAST -> minOf(query.length.coerceAtLeast(1), 4)
-        DictionaryQueryProfile.FULL -> 16
-    }
+    val scanLength = query.trim().length.coerceAtLeast(1)
     val hits = HoshiNativeBridge.lookup(
         dictionaryPaths = bindings.map { it.dictionaryDir.absolutePath },
         query = query,
@@ -704,58 +750,53 @@ private fun searchDictionaryWithHoshi(
         .take(maxResults)
 }
 
-internal fun loadDictionaryFromSqlite(context: Context, cacheKey: String): LoadedDictionary? {
+internal fun loadDictionaryFromStorage(
+    context: Context,
+    cacheKey: String,
+    fallbackDisplayName: String = "Dictionary"
+): LoadedDictionary? {
     if (cacheKey.isBlank()) return null
     return runCatching {
-        readableDb(context).query(
-            TABLE_DICTIONARIES,
-            arrayOf(COL_NAME, COL_FORMAT, COL_STYLES_CSS, COL_ENTRY_COUNT),
-            "$COL_CACHE_KEY = ?",
-            arrayOf(cacheKey),
-            null,
-            null,
-            null,
-            "1"
-        ).use { cursor ->
-            if (!cursor.moveToFirst()) return null
-            LoadedDictionary(
-                cacheKey = cacheKey,
-                name = cursor.getString(0).orEmpty(),
-                format = cursor.getString(1).orEmpty(),
-                entries = emptyList(),
-                stylesCss = cursor.getString(2)?.takeIf { it.isNotBlank() },
-                entryCount = cursor.getInt(3).coerceAtLeast(0)
-            )
-        }
+        val dictionaryDir = locateHoshiDictionaryDir(context, cacheKey) ?: return null
+        val infoFile = File(dictionaryDir, DICTIONARY_HOSHI_INFO_FILE)
+        val infoJson = runCatching {
+            if (infoFile.isFile) JSONObject(infoFile.readText(Charsets.UTF_8)) else null
+        }.getOrNull()
+        val resolvedName = infoJson?.optString("title")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: fallbackDisplayName.substringBeforeLast('.').trim().ifBlank { "Dictionary" }
+        val resolvedCount = infoJson?.optInt("termCount", -1)
+            ?.takeIf { it >= 0 }
+            ?: 0
+        val stylesCss = runCatching {
+            val stylesFile = File(dictionaryDir, DICTIONARY_HOSHI_STYLES_FILE)
+            if (stylesFile.isFile) stylesFile.readText(Charsets.UTF_8).trim().ifBlank { null } else null
+        }.getOrNull()
+        LoadedDictionary(
+            cacheKey = cacheKey,
+            name = resolvedName,
+            format = "Yomichan/Migaku ZIP (hoshidicts)",
+            entries = emptyList(),
+            stylesCss = stylesCss,
+            entryCount = resolvedCount
+        )
     }.getOrNull()
 }
 
-internal fun deleteDictionaryFromSqlite(context: Context, cacheKey: String): Boolean {
+internal fun deleteDictionaryStorage(context: Context, cacheKey: String): Boolean {
     if (cacheKey.isBlank()) return true
-    val metaDeleted = runCatching {
-        val db = writableDb(context)
-        db.beginTransaction()
-        try {
-            // Legacy cleanup for entries that were written before per-dictionary entry DB.
-            db.delete(TABLE_ENTRIES, "$COL_CACHE_KEY = ?", arrayOf(cacheKey))
-            db.delete(TABLE_DICTIONARIES, "$COL_CACHE_KEY = ?", arrayOf(cacheKey))
-            db.setTransactionSuccessful()
-            true
-        } finally {
-            db.endTransaction()
-        }
-    }.getOrElse { false }
     val storageDeleted = deleteDictionaryStorageDir(context, cacheKey)
-    if (metaDeleted || storageDeleted) {
+    if (storageDeleted) {
         clearDictionaryLookupQueryCache()
         clearDictionaryTermIndexCache(cacheKey)
         HoshiNativeBridge.clearLookupCache()
         MdictNativeBridge.clearLookupCache()
     }
-    return metaDeleted || storageDeleted
+    return storageDeleted
 }
 
-internal fun importDictionaryToSqlite(
+internal fun importDictionaryFromZip(
     context: Context,
     contentResolver: ContentResolver,
     uri: Uri,
@@ -807,60 +848,53 @@ internal fun searchDictionarySql(
         Log.d(DICTIONARY_LOOKUP_TAG, "search cacheHit count=${cached.size} query=$normalizedQuery")
         return cached
     }
-
-    val hoshiResults = searchDictionaryWithHoshi(
-        context = context,
-        dictionaries = effectiveDictionaries,
-        query = query,
-        maxResults = maxResults,
-        profile = profile
-    )
-    val mdictNativeResults = searchDictionaryWithMdictNative(
-        context = context,
-        dictionaries = effectiveDictionaries,
-        query = query,
-        maxResults = maxResults,
-        profile = profile
-    )
-    val mdxOnly = effectiveDictionaries.isNotEmpty() &&
-        effectiveDictionaries.all { it.format.contains("MDX", ignoreCase = true) }
-    val sqliteResults = if (mdxOnly && mdictNativeResults.isNotEmpty()) {
-        emptyList()
-    } else {
-        searchDictionaryWithSqlite(
+    return runSingleFlightLookup(lookupCacheKey) {
+        val recheck = loadDictionaryLookupQueryCache(lookupCacheKey)
+        if (recheck != null) {
+            Log.d(DICTIONARY_LOOKUP_TAG, "search cacheHit(singleFlight) count=${recheck.size} query=$normalizedQuery")
+            return@runSingleFlightLookup recheck
+        }
+        val hoshiResults = searchDictionaryWithHoshi(
             context = context,
             dictionaries = effectiveDictionaries,
             query = query,
             maxResults = maxResults,
             profile = profile
         )
-    }
-    val merged = linkedMapOf<String, DictionarySearchResult>()
-    (hoshiResults + mdictNativeResults + sqliteResults).forEach { result ->
-        val key = entryStableKey(result.entry)
-        val existing = merged[key]
-        if (existing == null || result.isHigherPriorityThan(existing)) {
-            merged[key] = result
+        val mdictNativeResults = searchDictionaryWithMdictNative(
+            context = context,
+            dictionaries = effectiveDictionaries,
+            query = query,
+            maxResults = maxResults,
+            profile = profile
+        )
+        val merged = linkedMapOf<String, DictionarySearchResult>()
+        (hoshiResults + mdictNativeResults).forEach { result ->
+            val entryKey = entryStableKey(result.entry)
+            val existing = merged[entryKey]
+            if (existing == null || result.isHigherPriorityThan(existing)) {
+                merged[entryKey] = result
+            }
         }
+        val topResults = merged.values
+            .sortedWith { left, right -> compareDictionarySearchPriority(right, left) }
+            .take(maxResults)
+        val results = finalizeLookupResultsForDisplay(
+            context = context,
+            dictionaries = effectiveDictionaries,
+            query = normalizedQuery,
+            results = topResults,
+            rewriteLimit = if (profile == DictionaryQueryProfile.FAST) 0 else LOOKUP_REWRITE_LIMIT
+        )
+        Log.d(
+            DICTIONARY_LOOKUP_TAG,
+            "search done hoshi=${hoshiResults.size} mdictNative=${mdictNativeResults.size} merged=${results.size} query=$normalizedQuery"
+        )
+        if (results.isNotEmpty()) {
+            saveDictionaryLookupQueryCache(lookupCacheKey, results)
+        }
+        results
     }
-    val topResults = merged.values
-        .sortedWith { left, right -> compareDictionarySearchPriority(right, left) }
-        .take(maxResults)
-    val results = finalizeLookupResultsForDisplay(
-        context = context,
-        dictionaries = effectiveDictionaries,
-        query = normalizedQuery,
-        results = topResults,
-        rewriteLimit = if (profile == DictionaryQueryProfile.FAST) 0 else LOOKUP_REWRITE_LIMIT
-    )
-    Log.d(
-        DICTIONARY_LOOKUP_TAG,
-        "search done hoshi=${hoshiResults.size} mdictNative=${mdictNativeResults.size} sqlite=${sqliteResults.size} merged=${results.size} query=$normalizedQuery"
-    )
-    if (results.isNotEmpty()) {
-        saveDictionaryLookupQueryCache(lookupCacheKey, results)
-    }
-    return results
 }
 
 private data class LookupRewriteContext(
@@ -979,8 +1013,7 @@ private fun searchDictionaryWithMdictNative(
     val trimmedQuery = query.trim()
     if (trimmedQuery.isBlank()) return emptyList()
 
-    // MDX mounted path is fixed to the fast profile.
-    val scanLength = 8
+    val scanLength = trimmedQuery.length.coerceAtLeast(1)
     val lookupLimit = maxResults.coerceIn(8, 48)
 
     val merged = linkedMapOf<String, DictionarySearchResult>()
@@ -1279,45 +1312,6 @@ private fun clearMountedMdxRuntimeCaches() {
     }
 }
 
-private fun searchDictionaryWithSqlite(
-    context: Context,
-    dictionaries: List<LoadedDictionary>,
-    query: String,
-    maxResults: Int,
-    profile: DictionaryQueryProfile
-): List<DictionarySearchResult> {
-    val normalizedQuery = normalizeLookupSql(query)
-    if (normalizedQuery.isBlank() || dictionaries.isEmpty()) return emptyList()
-    val config = dictionarySqlLookupConfig(profile, maxResults)
-    val merged = linkedMapOf<String, DictionarySearchResult>()
-
-    dictionaries.forEachIndexed { order, dictionary ->
-        val cacheKey = dictionary.cacheKey.takeIf { it.isNotBlank() } ?: return@forEachIndexed
-        val mdxLikeDictionary = dictionary.format.contains("MDX", ignoreCase = true)
-        if (mdxLikeDictionary) return@forEachIndexed
-        val local = searchDictionaryWithMemoryIndex(
-            context = context,
-            cacheKey = cacheKey,
-            normalizedQuery = normalizedQuery,
-            rawQuery = query.trim(),
-            config = config,
-            dictionaryOrder = order,
-            maxResults = maxResults
-        )
-        local.forEach { result ->
-            val key = entryStableKey(result.entry)
-            val existing = merged[key]
-            if (existing == null || result.isHigherPriorityThan(existing)) {
-                merged[key] = result
-            }
-        }
-    }
-
-    return merged.values
-        .sortedWith { left, right -> compareDictionarySearchPriority(right, left) }
-        .take(maxResults.coerceAtLeast(1) * 2)
-}
-
 private fun searchDictionaryWithMemoryIndex(
     context: Context,
     cacheKey: String,
@@ -1586,32 +1580,8 @@ private fun importDictionaryZipWithHoshi(
             .coerceAtMost(Int.MAX_VALUE.toLong())
             .toInt()
 
-        val entriesDb = openDictionaryEntriesDbForWrite(context, cacheKey)
-        try {
-            clearDictionaryEntryRows(entriesDb, cacheKey)
-        } finally {
-            runCatching { entriesDb.close() }
-        }
         runCatching { dictionaryTermIndexFile(context, cacheKey).delete() }
         clearDictionaryTermIndexCache(cacheKey)
-
-        val metaDb = writableDb(context)
-        metaDb.beginTransaction()
-        try {
-            upsertDictionaryMeta(
-                db = metaDb,
-                cacheKey = cacheKey,
-                sourceUri = uri.toString(),
-                displayName = displayName,
-                name = dictionaryName,
-                format = "Yomichan/Migaku ZIP (hoshidicts)",
-                stylesCss = stylesCss,
-                entryCount = entryCount
-            )
-            metaDb.setTransactionSuccessful()
-        } finally {
-            metaDb.endTransaction()
-        }
 
         HoshiNativeBridge.clearLookupCache()
         onProgress?.invoke(DictionaryImportProgress(stage = "Done", current = 1, total = 1))
@@ -1628,95 +1598,6 @@ private fun importDictionaryZipWithHoshi(
     }
 }
 
-private fun saveParsedDictionaryToSqlite(
-    context: Context,
-    cacheKey: String,
-    sourceUri: String,
-    displayName: String,
-    dictionary: LoadedDictionary
-): LoadedDictionary {
-    val entriesDb = openDictionaryEntriesDbForWrite(context, cacheKey)
-    val count = try {
-        withFastImportPragmas(entriesDb) {
-            entriesDb.beginTransaction()
-            try {
-                clearDictionaryEntryRows(entriesDb, cacheKey)
-                val statement = entriesDb.compileStatement(SQL_INSERT_ENTRY)
-                var inserted = 0
-                dictionary.entries.forEach { entry ->
-                    insertEntrySql(statement, cacheKey, dictionary.name, entry)
-                    inserted += 1
-                }
-                entriesDb.setTransactionSuccessful()
-                inserted
-            } finally {
-                entriesDb.endTransaction()
-            }
-        }
-    } finally {
-        runCatching { writeDictionaryTermBinaryIndex(context, cacheKey, entriesDb) }
-        runCatching { entriesDb.close() }
-    }
-
-    runCatching {
-        writableDb(context).delete(TABLE_ENTRIES, "$COL_CACHE_KEY = ?", arrayOf(cacheKey))
-    }
-
-    val metaDb = writableDb(context)
-    metaDb.beginTransaction()
-    try {
-        upsertDictionaryMeta(
-            db = metaDb,
-            cacheKey = cacheKey,
-            sourceUri = sourceUri,
-            displayName = displayName,
-            name = dictionary.name,
-            format = dictionary.format,
-            stylesCss = dictionary.stylesCss,
-            entryCount = count
-        )
-        metaDb.setTransactionSuccessful()
-    } finally {
-        metaDb.endTransaction()
-    }
-
-    return LoadedDictionary(
-        cacheKey = cacheKey,
-        name = dictionary.name,
-        format = dictionary.format,
-        entries = emptyList(),
-        stylesCss = dictionary.stylesCss,
-        entryCount = count
-    )
-}
-
-private fun clearDictionaryEntryRows(db: SQLiteDatabase, cacheKey: String) {
-    db.delete(TABLE_ENTRIES, "$COL_CACHE_KEY = ?", arrayOf(cacheKey))
-}
-
-private fun upsertDictionaryMeta(
-    db: SQLiteDatabase,
-    cacheKey: String,
-    sourceUri: String,
-    displayName: String,
-    name: String,
-    format: String,
-    stylesCss: String?,
-    entryCount: Int
-) {
-    val values = ContentValues().apply {
-        put(COL_CACHE_KEY, cacheKey)
-        put(COL_NAME, name)
-        put(COL_FORMAT, format)
-        put(COL_STYLES_CSS, stylesCss)
-        put(COL_ENTRY_COUNT, entryCount)
-        put(COL_URI, sourceUri)
-        put(COL_DISPLAY_NAME, displayName)
-        put(COL_UPDATED_AT, System.currentTimeMillis())
-    }
-    db.insertWithOnConflict(TABLE_DICTIONARIES, null, values, SQLiteDatabase.CONFLICT_REPLACE)
-}
-
 internal fun glossaryRawToDefinitionHtmlSql(glossaryRaw: String): String {
     val trimmed = glossaryRaw.trim()
     if (trimmed.isBlank()) return ""
@@ -1730,35 +1611,6 @@ internal fun glossaryRawToDefinitionHtmlSql(glossaryRaw: String): String {
     return parsedDefinition.ifBlank {
         normalizeDefinitionForDisplaySql(trimmed)
     }
-}
-
-private fun insertEntrySql(
-    statement: SQLiteStatement,
-    cacheKey: String,
-    dictionaryName: String,
-    entry: DictionaryEntry
-) {
-    val definition = entry.definitions.firstOrNull().orEmpty()
-    val termNorm = normalizeLookupSql(entry.term)
-    val readingNorm = normalizeLookupSql(entry.reading.orEmpty())
-    val aliasNorm = if (FAST_IMPORT_ALIAS_FROM_DEFINITION) {
-        extractAliasForLookupSql(entry.term, definition)
-    } else {
-        termNorm
-    }
-
-    statement.clearBindings()
-    statement.bindString(1, cacheKey)
-    statement.bindString(2, entry.term)
-    if (entry.reading.isNullOrBlank()) statement.bindNull(3) else statement.bindString(3, entry.reading)
-    if (definition.isBlank()) statement.bindNull(4) else statement.bindString(4, definition)
-    if (entry.pitch.isNullOrBlank()) statement.bindNull(5) else statement.bindString(5, entry.pitch)
-    if (entry.frequency.isNullOrBlank()) statement.bindNull(6) else statement.bindString(6, entry.frequency)
-    statement.bindString(7, dictionaryName)
-    statement.bindString(8, termNorm)
-    statement.bindString(9, readingNorm)
-    statement.bindString(10, aliasNorm)
-    statement.executeInsert()
 }
 
 private fun readJsonValueSql(reader: JsonReader): Any? {
