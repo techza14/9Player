@@ -17,8 +17,8 @@ android {
         applicationId = "moe.tekuza.m9player"
         minSdk = 29
         targetSdk = 36
-        versionCode = 28
-        versionName = "1.4.4"
+        versionCode = 29
+        versionName = "1.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -162,4 +162,5 @@ tasks.register("buildMdictRust") {
 tasks.named("preBuild") {
     dependsOn("buildMdictRust")
 }
+
 
