@@ -56,9 +56,10 @@ private fun FontSettingsScreen(onBack: () -> Unit) {
     var settings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
     val fontPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            val ok = persistReadPermission(context, uri)
-            if (ok) {
-                saveSubtitleCustomFontUri(context, uri)
+            val displayName = queryDisplayName(context, uri)
+            val privateFontUri = importSubtitleCustomFontToPrivateStorage(context, uri)
+            if (privateFontUri != null) {
+                saveSubtitleCustomFont(context, privateFontUri, displayName)
                 SubtitleFontUiRefreshTicker.bump()
                 settings = loadAudiobookSettingsConfig(context)
                 Toast.makeText(context, context.getString(R.string.settings_font_imported), Toast.LENGTH_SHORT).show()
@@ -67,8 +68,10 @@ private fun FontSettingsScreen(onBack: () -> Unit) {
             }
         }
     }
-    val fontLabel = remember(settings.subtitleCustomFontUri) {
-        settings.subtitleCustomFontUri?.let { queryDisplayName(context, it) } ?: context.getString(R.string.settings_font_none)
+    val fontLabel = remember(settings.subtitleCustomFontUri, settings.subtitleCustomFontName) {
+        settings.subtitleCustomFontName
+            ?: settings.subtitleCustomFontUri?.let { queryDisplayName(context, it) }
+            ?: context.getString(R.string.settings_font_none)
     }
 
     SettingsScaffold(
@@ -113,6 +116,7 @@ private fun FontSettingsScreen(onBack: () -> Unit) {
                 title = stringResource(R.string.common_clear),
                 titleColor = MaterialTheme.colorScheme.error,
                 onClick = {
+                    deleteImportedSubtitleCustomFont(context)
                     saveSubtitleCustomFontUri(context, null)
                     SubtitleFontUiRefreshTicker.bump()
                     settings = loadAudiobookSettingsConfig(context)
@@ -195,16 +199,6 @@ private fun SettingsLikeItem(
     }
 }
 
-private fun persistReadPermission(context: Context, uri: Uri): Boolean {
-    return runCatching {
-        context.contentResolver.takePersistableUriPermission(
-            uri,
-            Intent.FLAG_GRANT_READ_URI_PERMISSION
-        )
-        true
-    }.getOrDefault(false)
-}
-
 private fun queryDisplayName(context: Context, uri: Uri): String {
     return runCatching {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
@@ -214,5 +208,9 @@ private fun queryDisplayName(context: Context, uri: Uri): String {
                 null
             }
         }
-    }.getOrNull() ?: uri.lastPathSegment.orEmpty().ifBlank { context.getString(R.string.settings_font_none) }
+    }.getOrNull() ?: uri.lastPathSegment
+        ?.substringAfterLast('/')
+        ?.substringAfterLast(':')
+        .orEmpty()
+        .ifBlank { context.getString(R.string.settings_font_none) }
 }

@@ -56,7 +56,9 @@ fun TsetTheme(
     }
     val settings = loadAudiobookSettingsConfig(context)
     val globalFontFamily = if (settings.subtitleGlobalFontEnabled) {
-        resolveSubtitleTypeface(context, settings.subtitleCustomFontUri)?.let { FontFamily(it) }
+        resolveSubtitleTypeface(context, settings.subtitleCustomFontUri)?.let { typeface ->
+            runCatching { FontFamily(typeface) }.getOrNull()
+        }
     } else {
         null
     }

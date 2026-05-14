@@ -128,39 +128,13 @@ internal fun DictionaryManagementCard(
             }
 
             if (showDictionaryManager) {
-                val importedItems = dictionaryRefs.mapIndexed { index, ref ->
-                    val loaded = loadedDictionaries.getOrNull(index)
-                    CombinedDictionaryItem(
-                        id = importedDictionaryId(ref),
-                        type = CombinedDictionaryType.IMPORTED,
-                        title = ref.name.ifBlank { context.getString(R.string.dictionary_default_name, index + 1) },
-                        countText = loaded?.entryCount?.let { context.getString(R.string.dictionary_count, it) }
-                            ?: stringResource(R.string.dictionary_unloaded),
-                        enabled = ref.enabled
-                    )
-                }
-                val mountedItems = if (mdxMountState.enabled) {
-                    mdxMountState.entries.map { entry ->
-                        CombinedDictionaryItem(
-                            id = "mnt:${entry.cacheKey}",
-                            type = CombinedDictionaryType.MOUNTED,
-                            title = entry.displayName.ifBlank { "mounted.mdx" },
-                            countText = if (entry.enabled) context.getString(R.string.mdx_dict_enabled) else context.getString(R.string.mdx_dict_disabled),
-                            enabled = entry.enabled
-                        )
-                    }
-                } else {
-                    emptyList()
-                }
-                val combinedById = (importedItems + mountedItems).associateBy { it.id }
-                val combinedItems = buildList {
-                    dictionaryOrderIds.forEach { id ->
-                        combinedById[id]?.let(::add)
-                    }
-                    (importedItems + mountedItems).forEach { item ->
-                        if (none { it.id == item.id }) add(item)
-                    }
-                }
+                val combinedItems = buildCombinedDictionaryItems(
+                    context = context,
+                    dictionaryRefs = dictionaryRefs,
+                    loadedDictionaries = loadedDictionaries,
+                    dictionaryOrderIds = dictionaryOrderIds,
+                    mdxMountState = mdxMountState
+                )
 
                 if (combinedItems.isEmpty()) {
                     Text(stringResource(R.string.dictionary_empty))

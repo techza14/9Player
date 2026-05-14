@@ -13,12 +13,23 @@ internal fun loadAvailableDictionaries(
         .filter { it.enabled }
         .distinctBy { it.uri }
         .toList()
-    val imported = refs.mapIndexedNotNull { index, ref ->
-        loadPersistedDictionaryFromStorage(
+    val importedById = refs.mapIndexedNotNull { index, ref ->
+        val loaded = loadPersistedDictionaryFromStorage(
             context = context,
             ref = ref,
             fallbackDisplayName = ref.name.ifBlank { "Dictionary ${index + 1}" }
-        )?.second
+        )?.second ?: return@mapIndexedNotNull null
+        importedDictionaryId(ref) to loaded
     }
-    return includeMountedMdxDictionary(context, imported)
+    val mountedById = mountedMdxDictionariesFromState(context)
+        .map { dictionary -> "mnt:${dictionary.cacheKey}" to dictionary }
+    val dictionariesById = LinkedHashMap<String, LoadedDictionary>().apply {
+        importedById.forEach { (id, dictionary) -> put(id, dictionary) }
+        mountedById.forEach { (id, dictionary) -> put(id, dictionary) }
+    }
+    val orderedIds = normalizeDictionaryOrderIds(
+        orderIds = loadDictionaryOrderIds(context),
+        currentIds = dictionariesById.keys.toList()
+    )
+    return orderedIds.mapNotNull { dictionariesById[it] }
 }

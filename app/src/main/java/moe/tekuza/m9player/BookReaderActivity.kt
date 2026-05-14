@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -1025,10 +1026,13 @@ private fun BookReaderScreen(
             onBack(current, total)
         }
     }
-    val subtitleFontFamily = remember(
+    val subtitleTypeface = remember(
         audiobookSettings.subtitleCustomFontUri
     ) {
-        resolveSubtitleTypeface(context, audiobookSettings.subtitleCustomFontUri)?.let { typeface ->
+        resolveSubtitleTypeface(context, audiobookSettings.subtitleCustomFontUri)
+    }
+    val subtitleFontFamily = remember(subtitleTypeface) {
+        subtitleTypeface?.let { typeface ->
             runCatching { FontFamily(typeface) }.getOrNull()
         }
     }
@@ -2894,6 +2898,7 @@ private fun BookReaderScreen(
                                                         VerticalLookupClickableSubtitle(
                                                             sourceText = cue.text,
                                                             style = cueStyle,
+                                                            typeface = subtitleTypeface,
                                                             rowsPerColumn = verticalRowsPerColumn,
                                                             selectedSourceRange = visibleSelectedRange,
                                                             compactVerticalLayout = true,
@@ -2928,6 +2933,7 @@ private fun BookReaderScreen(
                                                         VerticalSubtitleText(
                                                             text = cue.text,
                                                             style = cueStyle,
+                                                            typeface = subtitleTypeface,
                                                             rowsPerColumn = verticalRowsPerColumn,
                                                             compactVerticalLayout = true,
                                                             onClick = {
@@ -2952,6 +2958,7 @@ private fun BookReaderScreen(
                                                     VerticalSubtitleText(
                                                         text = cue.text,
                                                         style = cueStyle,
+                                                        typeface = subtitleTypeface,
                                                         rowsPerColumn = verticalRowsPerColumn,
                                                         compactVerticalLayout = true,
                                                         onClick = { jumpToCue(index) },
@@ -3097,6 +3104,7 @@ private fun BookReaderScreen(
                                         VerticalLookupClickableSubtitle(
                                             sourceText = activeCue.text,
                                             style = activeSubtitleStyle,
+                                            typeface = subtitleTypeface,
                                             rowsPerColumn = verticalRowsPerColumn,
                                             selectedSourceRange = visibleSelectedRange,
                                             lookupEnabled = !cueRangeSelectionMode,
@@ -3967,6 +3975,7 @@ private fun ReaderLookupClickableSubtitle(
 private fun VerticalSubtitleText(
     text: String,
     style: androidx.compose.ui.text.TextStyle,
+    typeface: Typeface?,
     rowsPerColumn: Int,
     compactVerticalLayout: Boolean = false,
     onClick: (() -> Unit)? = null,
@@ -3992,7 +4001,7 @@ private fun VerticalSubtitleText(
         update = { view ->
             view.isClickable = onClick != null
             view.setOnClickListener { onClick?.invoke() }
-            view.bind(text, textColor.toArgb(), textSizePx)
+            view.bind(text, textColor.toArgb(), textSizePx, typeface)
         }
     )
 }
@@ -4026,6 +4035,7 @@ private fun rememberVerticalCueWidth(
 private fun VerticalLookupClickableSubtitle(
     sourceText: String,
     style: androidx.compose.ui.text.TextStyle,
+    typeface: Typeface?,
     rowsPerColumn: Int,
     selectedSourceRange: IntRange? = null,
     compactVerticalLayout: Boolean = false,
@@ -4059,6 +4069,7 @@ private fun VerticalLookupClickableSubtitle(
                 newText = sourceText,
                 color = textColor.toArgb(),
                 sizePx = textSizePx,
+                typeface = typeface,
                 lineHeightPx = lineHeightPx,
                 rowsPerColumn = rowsPerColumn,
                 selectedSourceRange = selectedSourceRange,
@@ -4095,18 +4106,22 @@ private class VerticalSubtitleView(context: Context) : android.view.View(context
     private var cachedLayout: VerticalSubtitleLayout? = null
     private var cachedHeight: Int = -1
     private var cachedTextSize: Float = Float.NaN
+    private var cachedTypeface: Typeface? = null
 
-    fun bind(newText: String, color: Int, sizePx: Float) {
+    fun bind(newText: String, color: Int, sizePx: Float, typeface: Typeface?) {
         val normalizedText = normalizeVerticalPunctuation(newText)
         val changed = content != normalizedText ||
             paint.color != color ||
-            paint.textSize != sizePx
+            paint.textSize != sizePx ||
+            paint.typeface != typeface
         if (!changed) return
         content = normalizedText
         paint.color = color
         paint.textSize = sizePx
+        paint.typeface = typeface
         cachedLayout = null
         cachedHeight = -1
+        cachedTypeface = null
         requestLayout()
         invalidate()
     }
@@ -4132,7 +4147,11 @@ private class VerticalSubtitleView(context: Context) : android.view.View(context
 
     private fun obtainLayout(targetHeight: Int): VerticalSubtitleLayout? {
         if (content.isBlank() || targetHeight <= 0) return null
-        if (cachedLayout != null && cachedHeight == targetHeight && cachedTextSize == paint.textSize) {
+        if (cachedLayout != null &&
+            cachedHeight == targetHeight &&
+            cachedTextSize == paint.textSize &&
+            cachedTypeface == paint.typeface
+        ) {
             return cachedLayout
         }
         cachedLayout = VerticalSubtitleLayoutEngine.build(
@@ -4143,6 +4162,7 @@ private class VerticalSubtitleView(context: Context) : android.view.View(context
         )
         cachedHeight = targetHeight
         cachedTextSize = paint.textSize
+        cachedTypeface = paint.typeface
         return cachedLayout
     }
 }
@@ -4168,13 +4188,16 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
     private var cachedGridHeight: Int = -1
     private var cachedGridText: String = ""
     private var cachedGridTextSize: Float = Float.NaN
+    private var cachedGridTypeface: Typeface? = null
     private var cachedVerticalLayout: VerticalSubtitleLayout? = null
     private var cachedVerticalLayoutHeight: Int = -1
+    private var cachedVerticalLayoutTypeface: Typeface? = null
 
     fun bind(
         newText: String,
         color: Int,
         sizePx: Float,
+        typeface: Typeface?,
         lineHeightPx: Float,
         rowsPerColumn: Int,
         selectedSourceRange: IntRange?,
@@ -4185,6 +4208,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         val changed = content != normalizedText ||
             paint.color != color ||
             paint.textSize != sizePx ||
+            paint.typeface != typeface ||
             this.lineHeightPx != lineHeightPx ||
             this.rowsPerColumn != rowsPerColumn ||
             this.selectedSourceRange != selectedSourceRange
@@ -4195,6 +4219,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         content = normalizedText
         paint.color = color
         paint.textSize = sizePx
+        paint.typeface = typeface
         this.lineHeightPx = lineHeightPx.coerceAtLeast(1f)
         this.rowsPerColumn = rowsPerColumn.coerceAtLeast(2)
         lastSelectionDebugSignature = null
@@ -4303,17 +4328,20 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         cachedGridHeight = -1
         cachedGridText = ""
         cachedGridTextSize = Float.NaN
+        cachedGridTypeface = null
     }
 
     private fun clearVerticalLayoutCache() {
         cachedVerticalLayout = null
         cachedVerticalLayoutHeight = -1
+        cachedVerticalLayoutTypeface = null
     }
 
     private fun obtainVerticalLayout(targetHeight: Int): VerticalSubtitleLayout? {
         if (content.isBlank() || targetHeight <= 0) return null
         if (cachedVerticalLayout != null &&
-            cachedVerticalLayoutHeight == targetHeight
+            cachedVerticalLayoutHeight == targetHeight &&
+            cachedVerticalLayoutTypeface == paint.typeface
         ) {
             return cachedVerticalLayout
         }
@@ -4324,6 +4352,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
             effectiveCellHeightPx()
         )
         cachedVerticalLayoutHeight = targetHeight
+        cachedVerticalLayoutTypeface = paint.typeface
         return cachedVerticalLayout
     }
 
@@ -4359,7 +4388,8 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         if (cachedGridModel != null &&
             cachedGridHeight == viewHeight &&
             cachedGridText == content &&
-            cachedGridTextSize == paint.textSize
+            cachedGridTextSize == paint.textSize &&
+            cachedGridTypeface == paint.typeface
         ) {
             return cachedGridModel
         }
@@ -4389,6 +4419,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         cachedGridHeight = viewHeight
         cachedGridText = content
         cachedGridTextSize = paint.textSize
+        cachedGridTypeface = paint.typeface
         return computed
     }
 
@@ -4555,7 +4586,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         val model = buildGridModel(height)
         val dynamicRows = model?.maxRows ?: rowsPerColumn.coerceAtLeast(2)
         val dynamicColumns = model?.columnCount ?: 0
-        val signature = "${width}x$height|${paint.textSize.roundToInt()}|$rowsPerColumn|$dynamicRows|$dynamicColumns|${content.length}"
+        val signature = "${width}x$height|${paint.textSize.roundToInt()}|${paint.typeface?.hashCode() ?: 0}|$rowsPerColumn|$dynamicRows|$dynamicColumns|${content.length}"
         if (signature == lastLayoutMetricsSignature) return
         lastLayoutMetricsSignature = signature
         Log.d(

@@ -101,7 +101,7 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
                 deleteDictionaryStorage(context, cacheKey)
             }
         }
-        dictionaryOrderIds = dictionaryOrderIds.filterNot { it == removedId }
+        dictionaryOrderIds = removeDictionaryOrderId(dictionaryOrderIds, removedId)
         saveDictionaryOrderIds(context, dictionaryOrderIds)
         persistedImports = persistedImports.copy(dictionaries = dictionaryRefs)
         savePersistedImports(context, persistedImports)
@@ -112,76 +112,43 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
         if (cacheKey.isBlank()) return
         mdxMountState = mdxMountState.copy(entries = mdxMountState.entries.filterNot { it.cacheKey == cacheKey })
         saveMdxMountState(context, mdxMountState)
-        dictionaryOrderIds = dictionaryOrderIds.filterNot { it == "mnt:$cacheKey" }
+        dictionaryOrderIds = removeDictionaryOrderId(dictionaryOrderIds, "mnt:$cacheKey")
         saveDictionaryOrderIds(context, dictionaryOrderIds)
         refreshLookupIfNeeded()
     }
 
     fun setImportedDictionaryEnabled(dictionaryId: String, enabled: Boolean) {
-        val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == dictionaryId }
-        if (targetIndex < 0) return
-        val current = dictionaryRefs[targetIndex]
-        if (current.enabled == enabled) return
-        dictionaryRefs = dictionaryRefs.toMutableList().also { refs ->
-            refs[targetIndex] = current.copy(enabled = enabled)
-        }
+        val nextRefs = setImportedDictionaryEnabled(dictionaryRefs, dictionaryId, enabled)
+        if (nextRefs === dictionaryRefs || nextRefs == dictionaryRefs) return
+        dictionaryRefs = nextRefs
         persistedImports = persistedImports.copy(dictionaries = dictionaryRefs)
         savePersistedImports(context, persistedImports)
         refreshLookupIfNeeded()
     }
 
     fun setMountedDictionaryEnabled(cacheKey: String, enabled: Boolean) {
-        val currentEntries = mdxMountState.entries
-        val targetIndex = currentEntries.indexOfFirst { it.cacheKey == cacheKey }
-        if (targetIndex < 0) return
-        val current = currentEntries[targetIndex]
-        if (current.enabled == enabled) return
-        mdxMountState = mdxMountState.copy(
-            entries = currentEntries.toMutableList().also { entries ->
-                entries[targetIndex] = current.copy(enabled = enabled)
-            }
-        )
+        val nextState = setMountedDictionaryEnabled(mdxMountState, cacheKey, enabled)
+        if (nextState == mdxMountState) return
+        mdxMountState = nextState
         saveMdxMountState(context, mdxMountState)
         refreshLookupIfNeeded()
     }
 
     fun moveCombinedDictionary(fromIndex: Int, toIndex: Int) {
-        val importedItems = dictionaryRefs.mapIndexed { index, ref ->
-            val loaded = loadedDictionaries.getOrNull(index)
-            CombinedDictionaryItem(
-                id = importedDictionaryId(ref),
-                type = CombinedDictionaryType.IMPORTED,
-                title = ref.name.ifBlank { context.getString(R.string.dictionary_default_name, index + 1) },
-                countText = loaded?.entryCount?.let { context.getString(R.string.dictionary_count, it) }
-                    ?: context.getString(R.string.dictionary_unloaded),
-                enabled = ref.enabled
-            )
-        }
-        val mountedItems = if (mdxMountState.enabled) {
-            mdxMountState.entries.map { entry ->
-                CombinedDictionaryItem(
-                    id = "mnt:${entry.cacheKey}",
-                    type = CombinedDictionaryType.MOUNTED,
-                    title = entry.displayName.ifBlank { "mounted.mdx" },
-                    countText = if (entry.enabled) context.getString(R.string.mdx_dict_enabled) else context.getString(R.string.mdx_dict_disabled),
-                    enabled = entry.enabled
-                )
-            }
-        } else {
-            emptyList()
-        }
-        val combinedById = (importedItems + mountedItems).associateBy { it.id }
-        val combinedItems = buildList {
-            dictionaryOrderIds.forEach { id -> combinedById[id]?.let(::add) }
-            (importedItems + mountedItems).forEach { item ->
-                if (none { it.id == item.id }) add(item)
-            }
-        }
-        if (fromIndex == toIndex) return
-        if (fromIndex !in combinedItems.indices || toIndex !in combinedItems.indices) return
-        val ids = combinedItems.map { it.id }.toMutableList()
-        val moved = ids.removeAt(fromIndex)
-        ids.add(toIndex, moved)
+        val combinedItems = buildCombinedDictionaryItems(
+            context = context,
+            dictionaryRefs = dictionaryRefs,
+            loadedDictionaries = loadedDictionaries,
+            dictionaryOrderIds = dictionaryOrderIds,
+            mdxMountState = mdxMountState
+        )
+        val ids = moveDictionaryOrder(
+            orderIds = dictionaryOrderIds,
+            currentIds = combinedItems.map { it.id },
+            fromIndex = fromIndex,
+            toIndex = toIndex
+        )
+        if (ids == dictionaryOrderIds) return
         dictionaryOrderIds = ids
         saveDictionaryOrderIds(context, dictionaryOrderIds)
         refreshLookupIfNeeded()

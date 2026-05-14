@@ -392,14 +392,19 @@ private fun ReaderSyncScreen() {
     val selectedBookIds = remember { mutableStateListOf<String>() }
     var isBookSelectionMode by remember { mutableStateOf(false) }
 
-    var loadedDictionaries by remember { mutableStateOf<List<LoadedDictionary>>(emptyList()) }
-    var dictionaryRefs by remember { mutableStateOf<List<PersistedDictionaryRef>>(emptyList()) }
-    var dictionaryLoading by remember { mutableStateOf(false) }
-    var dictionaryProgressText by remember { mutableStateOf<String?>(null) }
-    var dictionaryProgressValue by remember { mutableStateOf<Float?>(null) }
-    var dictionaryError by remember { mutableStateOf<String?>(null) }
-    var dictionaryOrderIds by remember { mutableStateOf(loadDictionaryOrderIds(context)) }
-    var mdxMountState by remember { mutableStateOf(loadMdxMountState(context)) }
+    val dictionaryController = rememberDictionaryManagementController(
+        context = context,
+        contentResolver = contentResolver,
+        scope = scope
+    )
+    val loadedDictionaries = dictionaryController.loadedDictionaries
+    val dictionaryRefs = dictionaryController.dictionaryRefs
+    val dictionaryLoading = dictionaryController.dictionaryLoading
+    val dictionaryProgressText = dictionaryController.dictionaryProgressText
+    val dictionaryProgressValue = dictionaryController.dictionaryProgressValue
+    val dictionaryError = dictionaryController.dictionaryError
+    val dictionaryOrderIds = dictionaryController.dictionaryOrderIds
+    val mdxMountState = dictionaryController.mdxMountState
     var dictionaryUiConfig by remember { mutableStateOf(loadDictionaryUiConfig(context)) }
 
     var lookupQuery by remember { mutableStateOf("") }
@@ -566,17 +571,7 @@ private fun ReaderSyncScreen() {
     }
 
     LaunchedEffect(dictionaryRefs, mdxMountState.entries) {
-        val importedIds = dictionaryRefs.map(::importedDictionaryId)
-        val mountedIds = mdxMountState.entries.map { "mnt:${it.cacheKey}" }
-        val currentIds = (importedIds + mountedIds).distinct()
-        val normalized = buildList {
-            dictionaryOrderIds.forEach { id -> if (id in currentIds) add(id) }
-            currentIds.forEach { id -> if (id !in this) add(id) }
-        }
-        if (normalized != dictionaryOrderIds) {
-            dictionaryOrderIds = normalized
-            saveDictionaryOrderIds(context, normalized)
-        }
+        dictionaryController.normalizeOrderForCurrentDictionaries()
     }
 
     LaunchedEffect(persistedImportsLoaded, importGuideVisible) {
@@ -594,8 +589,8 @@ private fun ReaderSyncScreen() {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 audiobookSettings = loadAudiobookSettingsConfig(context)
-                mdxMountState = loadMdxMountState(context)
                 dictionaryUiConfig = loadDictionaryUiConfig(context)
+                dictionaryController.reloadExternalState()
                 scope.launch {
                     var loadedSnapshots = loadReaderBookPlaybackSnapshotsForBooks(
                         context = context,
@@ -603,31 +598,7 @@ private fun ReaderSyncScreen() {
                     )
                     run {
                         val persistedNow = loadPersistedImports(context)
-                        if (persistedNow.dictionaries != dictionaryRefs) {
-                            val loadedById = dictionaryRefs.mapIndexedNotNull { index, ref ->
-                                loadedDictionaries.getOrNull(index)?.let { loaded ->
-                                    importedDictionaryId(ref) to loaded
-                                }
-                            }.toMap()
-                            val restoredPairs = persistedNow.dictionaries
-                                .distinctBy { it.uri }
-                                .mapIndexedNotNull { index, ref ->
-                                    val cached = loadedById[importedDictionaryId(ref)]
-                                    if (cached != null) {
-                                        ref.copy(dictionaryType = cached.dictionaryType) to cached
-                                    } else {
-                                        withContext(Dispatchers.IO) {
-                                            loadPersistedDictionaryFromStorage(
-                                                context = context,
-                                                ref = ref,
-                                                fallbackDisplayName = ref.name.ifBlank { "Dictionary ${index + 1}" }
-                                            )
-                                        }
-                                    }
-                                }
-                            dictionaryRefs = restoredPairs.map { it.first }
-                            loadedDictionaries = restoredPairs.map { it.second }
-                        }
+                        dictionaryController.syncPersistedDictionaries(persistedNow.dictionaries)
                         if (persistedNow.books.isNotEmpty() && readerBooks.isNotEmpty()) {
                             val persistedByAudio = persistedNow.books.associateBy { it.audioUri }
                             var changed = false
@@ -858,7 +829,7 @@ private fun ReaderSyncScreen() {
             }
         }
 
-    fun persistImportState() {
+    fun persistImportState(dictionaryRefsOverride: List<PersistedDictionaryRef> = dictionaryRefs) {
         val previous = loadPersistedImports(context)
         val previousByAudio = previous.books.associateBy { it.audioUri }
         val persistedBooks = readerBooks.map { book ->
@@ -902,7 +873,7 @@ private fun ReaderSyncScreen() {
                 books = persistedBooks,
                 selectedBookId = selectedBookId,
                 homeLibraryView = homeLibraryView.name,
-                dictionaries = dictionaryRefs
+                dictionaries = dictionaryRefsOverride
             )
         )
     }
@@ -1026,17 +997,6 @@ private fun ReaderSyncScreen() {
 
     fun refreshCollectedCues() {
         collectedCues = loadBookReaderCollectedCues(context)
-    }
-
-    fun updateDictionaryProgress(progress: DictionaryImportProgress) {
-        val (text, value) = formatDictionaryImportProgress(context, progress)
-        dictionaryProgressText = text
-        dictionaryProgressValue = value
-    }
-
-    fun clearDictionaryProgress() {
-        dictionaryProgressText = null
-        dictionaryProgressValue = null
     }
 
     fun buildReaderBook(
@@ -1620,44 +1580,10 @@ private fun ReaderSyncScreen() {
             }
         }
 
-        if (persisted.dictionaries.isNotEmpty()) {
-            dictionaryError = null
-
-            val restoredDictionaryList = mutableListOf<LoadedDictionary>()
-            val restoredRefs = mutableListOf<PersistedDictionaryRef>()
-            val distinctRefs = persisted.dictionaries.distinctBy { it.uri }
-
-            val missingNames = mutableListOf<String>()
-            distinctRefs.forEachIndexed { index, ref ->
-                val displayName = ref.name.ifBlank { "Dictionary ${index + 1}" }
-                val restoredPair = withContext(Dispatchers.IO) {
-                    loadPersistedDictionaryFromStorage(
-                        context = context,
-                        ref = ref,
-                        fallbackDisplayName = displayName
-                    )
-                }
-                if (restoredPair != null) {
-                    restoredRefs += restoredPair.first
-                    restoredDictionaryList += restoredPair.second
-                } else {
-                    missingNames += displayName
-                }
-            }
-
-            loadedDictionaries = restoredDictionaryList
-            dictionaryRefs = restoredRefs
-            dictionaryLoading = false
-            clearDictionaryProgress()
-            if (missingNames.isNotEmpty()) {
-                dictionaryError = context.getString(
-                    R.string.dictionary_error_missing_local_files,
-                    missingNames.joinToString(", ")
-                )
-            } else {
-                persistImportState()
-            }
-        }
+        dictionaryController.restorePersistedDictionaries(
+            persistedRefs = persisted.dictionaries,
+            onPersistDictionaryRefs = ::persistImportState
+        )
 
         if (ankiPermissionGranted) {
             refreshAnkiCatalog()
@@ -2094,62 +2020,6 @@ private fun ReaderSyncScreen() {
         }
     }
 
-    fun removeDictionaryAt(index: Int) {
-        val ref = dictionaryRefs.getOrNull(index) ?: return
-        val removedId = importedDictionaryId(ref)
-
-        dictionaryRefs = dictionaryRefs.filterIndexed { i, _ -> i != index }
-        loadedDictionaries = loadedDictionaries.filterIndexed { i, _ -> i != index }
-        bumpDictionaryDataVersion(context)
-        ref.cacheKey?.let { cacheKey ->
-            scope.launch(Dispatchers.IO) {
-                deleteDictionaryStorage(context, cacheKey)
-            }
-        }
-        persistImportState()
-        dictionaryOrderIds = dictionaryOrderIds.filterNot { it == removedId }
-        saveDictionaryOrderIds(context, dictionaryOrderIds)
-        if (lookupQuery.isNotBlank()) {
-            triggerMainHoshiQueryLookup(lookupQuery)
-        }
-    }
-
-    fun moveDictionary(fromIndex: Int, toIndex: Int) {
-        if (fromIndex == toIndex) return
-        if (fromIndex !in dictionaryRefs.indices || toIndex !in dictionaryRefs.indices) return
-
-        val refs = dictionaryRefs.toMutableList()
-        val movedRef = refs.removeAt(fromIndex)
-        refs.add(toIndex, movedRef)
-        dictionaryRefs = refs
-        bumpDictionaryDataVersion(context)
-
-        val dictionaries = loadedDictionaries.toMutableList()
-        if (fromIndex in dictionaries.indices) {
-            val movedDictionary = dictionaries.removeAt(fromIndex)
-            val targetIndex = toIndex.coerceIn(0, dictionaries.size)
-            dictionaries.add(targetIndex, movedDictionary)
-            loadedDictionaries = dictionaries
-        }
-
-        persistImportState()
-        if (lookupQuery.isNotBlank()) {
-            triggerMainHoshiQueryLookup(lookupQuery)
-        }
-    }
-
-    fun removeMountedDictionaryByCacheKey(cacheKey: String) {
-        if (cacheKey.isBlank()) return
-        mdxMountState = mdxMountState.copy(entries = mdxMountState.entries.filterNot { it.cacheKey == cacheKey })
-        saveMdxMountState(context, mdxMountState)
-        dictionaryOrderIds = dictionaryOrderIds.filterNot { it == "mnt:$cacheKey" }
-        saveDictionaryOrderIds(context, dictionaryOrderIds)
-        invalidateDictionaryLookupCaches()
-        if (lookupQuery.isNotBlank()) {
-            triggerMainHoshiQueryLookup(lookupQuery)
-        }
-    }
-
     fun refreshLookupIfNeeded() {
         invalidateDictionaryLookupCaches()
         bumpDictionaryDataVersion(context)
@@ -2158,75 +2028,44 @@ private fun ReaderSyncScreen() {
         }
     }
 
+    fun removeDictionaryAt(index: Int) {
+        dictionaryController.removeImportedDictionary(
+            index = index,
+            onPersistDictionaryRefs = ::persistImportState,
+            onLookupDataChanged = ::refreshLookupIfNeeded
+        )
+    }
+
+    fun removeMountedDictionaryByCacheKey(cacheKey: String) {
+        dictionaryController.removeMountedDictionary(
+            cacheKey = cacheKey,
+            onLookupDataChanged = ::refreshLookupIfNeeded
+        )
+    }
+
     fun setImportedDictionaryEnabled(dictionaryId: String, enabled: Boolean) {
-        val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == dictionaryId }
-        if (targetIndex < 0) return
-        val current = dictionaryRefs[targetIndex]
-        if (current.enabled == enabled) return
-        dictionaryRefs = dictionaryRefs.toMutableList().also { refs ->
-            refs[targetIndex] = current.copy(enabled = enabled)
-        }
-        persistImportState()
-        refreshLookupIfNeeded()
+        dictionaryController.setImportedDictionaryEnabled(
+            dictionaryId = dictionaryId,
+            enabled = enabled,
+            onPersistDictionaryRefs = ::persistImportState,
+            onLookupDataChanged = ::refreshLookupIfNeeded
+        )
     }
 
     fun setMountedDictionaryEnabled(cacheKey: String, enabled: Boolean) {
-        val currentEntries = mdxMountState.entries
-        val targetIndex = currentEntries.indexOfFirst { it.cacheKey == cacheKey }
-        if (targetIndex < 0) return
-        val current = currentEntries[targetIndex]
-        if (current.enabled == enabled) return
-        mdxMountState = mdxMountState.copy(
-            entries = currentEntries.toMutableList().also { entries ->
-                entries[targetIndex] = current.copy(enabled = enabled)
-            }
+        dictionaryController.setMountedDictionaryEnabled(
+            cacheKey = cacheKey,
+            enabled = enabled,
+            onLookupDataChanged = ::refreshLookupIfNeeded
         )
-        saveMdxMountState(context, mdxMountState)
-        refreshLookupIfNeeded()
     }
 
     fun moveCombinedDictionary(fromIndex: Int, toIndex: Int) {
-        val importedItems = dictionaryRefs.mapIndexed { index, ref ->
-            val loaded = loadedDictionaries.getOrNull(index)
-            CombinedDictionaryItem(
-                id = importedDictionaryId(ref),
-                type = CombinedDictionaryType.IMPORTED,
-                title = ref.name.ifBlank { context.getString(R.string.dictionary_default_name, index + 1) },
-                countText = loaded?.entryCount?.let { context.getString(R.string.dictionary_count, it) }
-                    ?: context.getString(R.string.dictionary_unloaded),
-                enabled = ref.enabled
-            )
-        }
-        val mountedItems = if (mdxMountState.enabled) {
-            mdxMountState.entries.map { entry ->
-                CombinedDictionaryItem(
-                    id = "mnt:${entry.cacheKey}",
-                    type = CombinedDictionaryType.MOUNTED,
-                    title = entry.displayName.ifBlank { "mounted.mdx" },
-                    countText = if (entry.enabled) context.getString(R.string.mdx_dict_enabled) else context.getString(R.string.mdx_dict_disabled),
-                    enabled = entry.enabled
-                )
-            }
-        } else {
-            emptyList()
-        }
-        val combinedById = (importedItems + mountedItems).associateBy { it.id }
-        val combinedItems = buildList {
-            dictionaryOrderIds.forEach { id -> combinedById[id]?.let(::add) }
-            (importedItems + mountedItems).forEach { item ->
-                if (none { it.id == item.id }) add(item)
-            }
-        }
-        if (fromIndex == toIndex) return
-        if (fromIndex !in combinedItems.indices || toIndex !in combinedItems.indices) return
-        val ids = combinedItems.map { it.id }.toMutableList()
-        val moved = ids.removeAt(fromIndex)
-        ids.add(toIndex, moved)
-        dictionaryOrderIds = ids
-        saveDictionaryOrderIds(context, dictionaryOrderIds)
-        if (lookupQuery.isNotBlank()) {
-            triggerMainHoshiQueryLookup(lookupQuery)
-        }
+        dictionaryController.moveCombinedDictionary(
+            fromIndex = fromIndex,
+            toIndex = toIndex,
+            onLookupDataChanged = ::refreshLookupIfNeeded
+        )
     }
 
     val pickBookAudioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -2256,115 +2095,11 @@ private fun ReaderSyncScreen() {
     }
 
     val pickDictionaryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        val selectedUris = uris.distinctBy { it.toString() }
-        if (selectedUris.isEmpty()) return@rememberLauncherForActivityResult
-
-        scope.launch {
-            dictionaryLoading = true
-            dictionaryError = null
-            var nextLoadedDictionaries = loadedDictionaries
-            var nextDictionaryRefs = dictionaryRefs
-            val importErrors = mutableListOf<String>()
-            val importTargets = selectedUris.filter { uri ->
-                val name = queryDisplayName(contentResolver, uri).lowercase(Locale.US)
-                name.endsWith(".zip")
-            }
-            if (importTargets.isEmpty()) {
-                dictionaryLoading = false
-                dictionaryError = context.getString(R.string.dictionary_error_pick_zip_only)
-                clearDictionaryProgress()
-                return@launch
-            }
-
-            importTargets.forEachIndexed { index, uri ->
-                keepReadPermission(context, uri)
-                val displayName = queryDisplayName(contentResolver, uri)
-                val uriValue = uri.toString()
-                if (nextDictionaryRefs.any { it.uri == uriValue }) {
-                    importErrors += context.getString(R.string.status_duplicate_dictionary)
-                    return@forEachIndexed
-                }
-                val cacheKey = buildDictionaryCacheKey(uriValue, displayName)
-
-                updateDictionaryProgress(
-                    DictionaryImportProgress(
-                        stage = context.getString(R.string.dictionary_import_batch, index + 1, importTargets.size, displayName),
-                        current = 0,
-                        total = 0
-                    )
-                )
-
-                val parseResult = withContext(Dispatchers.IO) {
-                    runCatching {
-                        importDictionaryFromZip(
-                            context = context,
-                            contentResolver = contentResolver,
-                            uri = uri,
-                            displayName = displayName,
-                            cacheKey = cacheKey
-                        ) { progress ->
-                            scope.launch(Dispatchers.Main.immediate) {
-                                updateDictionaryProgress(
-                                    progress.copy(
-                                        stage = context.getString(
-                                            R.string.dictionary_import_batch_suffix,
-                                            localizeDictionaryImportStage(context, progress.stage),
-                                            index + 1,
-                                            importTargets.size
-                                        )
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-
-                val parsedDictionary = parseResult.getOrNull()
-                if (parsedDictionary == null) {
-                    importErrors += parseResult.exceptionOrNull()?.message ?: "Failed to import dictionary"
-                    return@forEachIndexed
-                }
-
-                val duplicateByName = nextLoadedDictionaries.any {
-                    it.name.equals(parsedDictionary.name, ignoreCase = true) &&
-                        it.entryCount > 0 &&
-                        parsedDictionary.entryCount > 0 &&
-                        it.entryCount == parsedDictionary.entryCount
-                }
-                if (duplicateByName) {
-                    parsedDictionary.cacheKey
-                        .takeIf { it.isNotBlank() }
-                        ?.let { key ->
-                            scope.launch(Dispatchers.IO) { deleteDictionaryStorage(context, key) }
-                        }
-                    importErrors += context.getString(R.string.status_duplicate_dictionary_detected, parsedDictionary.name)
-                    return@forEachIndexed
-                }
-
-                nextLoadedDictionaries = nextLoadedDictionaries + parsedDictionary
-                nextDictionaryRefs = (nextDictionaryRefs + PersistedDictionaryRef(
-                    uri = uriValue,
-                    name = displayName,
-                    cacheKey = cacheKey,
-                    dictionaryType = parsedDictionary.dictionaryType,
-                    enabled = true
-                )).distinctBy { it.uri }
-            }
-
-            val hadDictionaryListChange = nextDictionaryRefs != dictionaryRefs
-            loadedDictionaries = nextLoadedDictionaries
-            dictionaryRefs = nextDictionaryRefs
-            if (hadDictionaryListChange) {
-                bumpDictionaryDataVersion(context)
-            }
-            persistImportState()
-            clearDictionaryProgress()
-            dictionaryLoading = false
-            dictionaryError = importErrors.takeIf { it.isNotEmpty() }?.joinToString("\n")
-            if (lookupQuery.isNotBlank()) {
-                triggerMainHoshiQueryLookup(lookupQuery)
-            }
-        }
+        dictionaryController.importDictionaries(
+            uris = uris,
+            onPersistDictionaryRefs = ::persistImportState,
+            onLookupDataChanged = ::refreshLookupIfNeeded
+        )
     }
 
     val activeCue = remember(positionMs, srtCues) { findCueAtTime(srtCues, positionMs) }

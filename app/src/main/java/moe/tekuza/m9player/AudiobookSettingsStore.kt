@@ -30,6 +30,7 @@ private const val AUDIOBOOK_LOOKUP_RANGE_SELECTION_ENABLED_KEY = "audiobook_look
 private const val AUDIOBOOK_LOOKUP_ROOT_FULL_WIDTH_ENABLED_KEY = "audiobook_lookup_root_full_width_enabled"
 private const val AUDIOBOOK_SUBTITLE_GLOBAL_FONT_ENABLED_KEY = "audiobook_subtitle_global_font_enabled"
 private const val AUDIOBOOK_SUBTITLE_CUSTOM_FONT_URI_KEY = "audiobook_subtitle_custom_font_uri"
+private const val AUDIOBOOK_SUBTITLE_CUSTOM_FONT_NAME_KEY = "audiobook_subtitle_custom_font_name"
 private const val DEFAULT_AUDIOBOOK_SKIP_MILLIS = 10_000L
 internal const val DEFAULT_FLOATING_OVERLAY_SIZE_DP = 58
 internal const val MIN_FLOATING_OVERLAY_SIZE_DP = 36
@@ -92,6 +93,7 @@ internal data class AudiobookSettingsConfig(
     val lookupRootFullWidthEnabled: Boolean = false,
     val subtitleGlobalFontEnabled: Boolean = false,
     val subtitleCustomFontUri: Uri? = null,
+    val subtitleCustomFontName: String? = null,
     val lookupAudioMode: LookupAudioMode = LookupAudioMode.LOCAL_TTS,
     val lookupLocalAudioUri: Uri? = null,
     val floatingOverlaySizeDp: Int = DEFAULT_FLOATING_OVERLAY_SIZE_DP,
@@ -148,6 +150,9 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
         lookupRootFullWidthEnabled = prefs.getBoolean(AUDIOBOOK_LOOKUP_ROOT_FULL_WIDTH_ENABLED_KEY, false),
         subtitleGlobalFontEnabled = prefs.getBoolean(AUDIOBOOK_SUBTITLE_GLOBAL_FONT_ENABLED_KEY, false),
         subtitleCustomFontUri = subtitleFontUri,
+        subtitleCustomFontName = prefs.getString(AUDIOBOOK_SUBTITLE_CUSTOM_FONT_NAME_KEY, null)
+            ?.trim()
+            ?.takeIf { it.isNotBlank() },
         lookupAudioMode = LookupAudioMode.fromStorage(prefs.getString(AUDIOBOOK_LOOKUP_AUDIO_MODE_KEY, null)),
         lookupLocalAudioUri = lookupAudioUri,
         floatingOverlaySizeDp = prefs.getInt(
@@ -197,6 +202,15 @@ internal fun saveSubtitleCustomFontUri(context: Context, uri: Uri?) {
     context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
         .edit()
         .putString(AUDIOBOOK_SUBTITLE_CUSTOM_FONT_URI_KEY, uri?.toString())
+        .remove(AUDIOBOOK_SUBTITLE_CUSTOM_FONT_NAME_KEY)
+        .apply()
+}
+
+internal fun saveSubtitleCustomFont(context: Context, uri: Uri?, displayName: String?) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(AUDIOBOOK_SUBTITLE_CUSTOM_FONT_URI_KEY, uri?.toString())
+        .putString(AUDIOBOOK_SUBTITLE_CUSTOM_FONT_NAME_KEY, displayName?.trim()?.takeIf { it.isNotBlank() })
         .apply()
 }
 

@@ -15,6 +15,7 @@ import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStreamReader
 import java.io.StringReader
 import java.util.Locale
 import java.util.zip.ZipInputStream
@@ -29,7 +30,7 @@ private const val DICTIONARY_HOSHI_STYLES_FILE = "styles.css"
 private const val IMPORT_PROGRESS_STEP = 3
 private const val MDICT_MEDIA_LOG_TAG = "MdictMedia"
 private const val HOSHI_LOOKUP_PERF_LOG_TAG = "HoshiLookupPerf"
-private const val HOSHI_META_TYPE_SCAN_LIMIT_BYTES = 256 * 1024
+private const val HOSHI_META_TYPE_SCAN_LIMIT_ROWS = 2048
 
 private val NORMALIZE_WHITESPACE_REGEX = Regex("\\s+")
 private val STRIP_HTML_TAGS_REGEX = Regex("<[^>]+>")
@@ -131,7 +132,7 @@ private fun detectHoshiDictionaryType(zipFile: File): HoshiDictionaryType {
     }
 }
 
-private fun detectHoshiDictionaryType(
+internal fun detectHoshiDictionaryType(
     stream: java.io.InputStream
 ): HoshiDictionaryType {
     var hasTermBank = false
@@ -149,13 +150,13 @@ private fun detectHoshiDictionaryType(
                     }
 
                     isHoshiTermMetaBankFile(path) -> {
-                        val modeSample = readHoshiMetaModeSample(zip)
-                        if (modeSample.contains("freq")) hasFrequencyMeta = true
-                        if (modeSample.contains("pitch") || modeSample.contains("accent")) hasPitchMeta = true
+                        val modeFlags = readHoshiMetaModeFlags(zip)
+                        if (modeFlags.hasFrequency) hasFrequencyMeta = true
+                        if (modeFlags.hasPitch) hasPitchMeta = true
                     }
                 }
             }
-            if (hasTermBank || (hasFrequencyMeta && hasPitchMeta)) {
+            if (hasFrequencyMeta) {
                 break
             }
             zip.closeEntry()
@@ -173,21 +174,103 @@ private fun detectHoshiDictionaryType(
     }
 }
 
-private fun readHoshiMetaModeSample(stream: java.io.InputStream): String {
-    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-    val output = StringBuilder()
-    var remaining = HOSHI_META_TYPE_SCAN_LIMIT_BYTES
-    while (remaining > 0) {
-        val read = stream.read(buffer, 0, minOf(buffer.size, remaining))
-        if (read <= 0) break
-        output.append(String(buffer, 0, read, Charsets.UTF_8))
-        val sample = output.toString().lowercase(Locale.US)
-        if (sample.contains("freq") || sample.contains("pitch") || sample.contains("accent")) {
-            return sample
+private data class HoshiMetaModeFlags(
+    val hasFrequency: Boolean = false,
+    val hasPitch: Boolean = false
+)
+
+private fun readHoshiMetaModeFlags(stream: java.io.InputStream): HoshiMetaModeFlags {
+    return runCatching {
+        val reader = InputStreamReader(stream, Charsets.UTF_8)
+        var flags = HoshiMetaModeFlags()
+        var arrayDepth = 0
+        var rowFieldIndex = -1
+        var rowCount = 0
+        var inString = false
+        var escaped = false
+        var capturingMode = false
+        val modeBuilder = StringBuilder()
+
+        while (true) {
+            val read = reader.read()
+            if (read < 0) break
+            val char = read.toChar()
+
+            if (inString) {
+                when {
+                    escaped -> {
+                        if (capturingMode) modeBuilder.append(char)
+                        escaped = false
+                    }
+
+                    char == '\\' -> {
+                        escaped = true
+                    }
+
+                    char == '"' -> {
+                        inString = false
+                        if (capturingMode) {
+                            flags = flags.withMode(modeBuilder.toString())
+                            capturingMode = false
+                            modeBuilder.clear()
+                            if (flags.hasFrequency && flags.hasPitch) break
+                        }
+                    }
+
+                    capturingMode -> modeBuilder.append(char)
+                }
+                continue
+            }
+
+            when (char) {
+                '"' -> {
+                    inString = true
+                    if (arrayDepth == 2 && rowFieldIndex == 1) {
+                        capturingMode = true
+                        modeBuilder.clear()
+                    }
+                }
+
+                '[' -> {
+                    arrayDepth += 1
+                    if (arrayDepth == 2) {
+                        rowFieldIndex = 0
+                        rowCount += 1
+                        if (rowCount > HOSHI_META_TYPE_SCAN_LIMIT_ROWS) break
+                    }
+                }
+
+                ']' -> {
+                    if (arrayDepth == 2) rowFieldIndex = -1
+                    if (arrayDepth > 0) arrayDepth -= 1
+                }
+
+                ',' -> {
+                    if (arrayDepth == 2 && rowFieldIndex >= 0) {
+                        rowFieldIndex += 1
+                    }
+                }
+            }
         }
-        remaining -= read
-    }
-    return output.toString().lowercase(Locale.US)
+        flags
+    }.getOrDefault(HoshiMetaModeFlags())
+}
+
+private fun HoshiMetaModeFlags.with(other: HoshiMetaModeFlags): HoshiMetaModeFlags {
+    return HoshiMetaModeFlags(
+        hasFrequency = hasFrequency || other.hasFrequency,
+        hasPitch = hasPitch || other.hasPitch
+    )
+}
+
+private fun HoshiMetaModeFlags.withMode(mode: String): HoshiMetaModeFlags {
+    val normalizedMode = mode.lowercase(Locale.US)
+    return with(
+        HoshiMetaModeFlags(
+            hasFrequency = normalizedMode == "freq",
+            hasPitch = normalizedMode == "pitch" || normalizedMode.contains("accent")
+        )
+    )
 }
 
 private fun locateHoshiDictionaryDir(
@@ -427,7 +510,7 @@ internal fun includeMountedMdxDictionary(
     }
 }
 
-private fun mountedMdxDictionariesFromState(context: Context): List<LoadedDictionary> {
+internal fun mountedMdxDictionariesFromState(context: Context): List<LoadedDictionary> {
     val mountedState = loadMdxMountState(context)
     if (!mountedState.enabled) return emptyList()
     return mountedState.entries
