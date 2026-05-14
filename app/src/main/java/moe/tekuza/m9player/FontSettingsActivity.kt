@@ -1,10 +1,7 @@
 package moe.tekuza.m9player
 
-import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
-import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -56,7 +53,7 @@ private fun FontSettingsScreen(onBack: () -> Unit) {
     var settings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
     val fontPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            val displayName = queryDisplayName(context, uri)
+            val displayName = queryDisplayName(context.contentResolver, uri)
             val privateFontUri = importSubtitleCustomFontToPrivateStorage(context, uri)
             if (privateFontUri != null) {
                 saveSubtitleCustomFont(context, privateFontUri, displayName)
@@ -70,7 +67,10 @@ private fun FontSettingsScreen(onBack: () -> Unit) {
     }
     val fontLabel = remember(settings.subtitleCustomFontUri, settings.subtitleCustomFontName) {
         settings.subtitleCustomFontName
-            ?: settings.subtitleCustomFontUri?.let { queryDisplayName(context, it) }
+            ?: settings.subtitleCustomFontUri?.lastPathSegment
+                ?.substringAfterLast('/')
+                ?.substringAfterLast(':')
+                ?.takeIf { it.isNotBlank() }
             ?: context.getString(R.string.settings_font_none)
     }
 
@@ -197,20 +197,4 @@ private fun SettingsLikeItem(
             )
         }
     }
-}
-
-private fun queryDisplayName(context: Context, uri: Uri): String {
-    return runCatching {
-        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                cursor.getString(0)?.takeIf { it.isNotBlank() }
-            } else {
-                null
-            }
-        }
-    }.getOrNull() ?: uri.lastPathSegment
-        ?.substringAfterLast('/')
-        ?.substringAfterLast(':')
-        .orEmpty()
-        .ifBlank { context.getString(R.string.settings_font_none) }
 }

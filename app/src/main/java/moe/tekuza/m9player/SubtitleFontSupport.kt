@@ -34,6 +34,9 @@ private object SubtitleFontCache {
     private fun loadTypefaceInternal(context: Context, uri: Uri?): Typeface? {
         val safeUri = uri ?: return null
         return runCatching {
+            if (safeUri.scheme.equals("file", ignoreCase = true)) {
+                return@runCatching safeUri.path?.let { Typeface.createFromFile(File(it)) }
+            }
             openSubtitleFontInputStream(context, safeUri)?.use { input ->
                 val tempFile = File.createTempFile("subtitle-font-", ".tmp", context.cacheDir)
                 tempFile.outputStream().use { output -> input.copyTo(output) }

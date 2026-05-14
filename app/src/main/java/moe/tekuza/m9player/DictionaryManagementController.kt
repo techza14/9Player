@@ -83,15 +83,31 @@ internal class DictionaryManagementController(
         persistedRefs: List<PersistedDictionaryRef>,
         onPersistDictionaryRefs: (List<PersistedDictionaryRef>) -> Unit
     ) {
-        if (persistedRefs.isEmpty()) return
         dictionaryError = null
+        if (persistedRefs.isEmpty()) {
+            loadedDictionaries = emptyList()
+            dictionaryRefs = emptyList()
+            dictionaryLoading = false
+            clearDictionaryProgress()
+            normalizeOrderForCurrentDictionaries()
+            return
+        }
 
+        dictionaryLoading = true
         val restoredDictionaryList = mutableListOf<LoadedDictionary>()
         val restoredRefs = mutableListOf<PersistedDictionaryRef>()
         val missingNames = mutableListOf<String>()
+        val distinctRefs = persistedRefs.distinctBy { it.uri }
 
-        persistedRefs.distinctBy { it.uri }.forEachIndexed { index, ref ->
+        distinctRefs.forEachIndexed { index, ref ->
             val displayName = ref.name.ifBlank { "Dictionary ${index + 1}" }
+            updateDictionaryProgress(
+                DictionaryImportProgress(
+                    stage = context.getString(R.string.dictionary_loading),
+                    current = index + 1,
+                    total = distinctRefs.size
+                )
+            )
             val restoredPair = withContext(Dispatchers.IO) {
                 loadPersistedDictionaryFromStorage(
                     context = context,

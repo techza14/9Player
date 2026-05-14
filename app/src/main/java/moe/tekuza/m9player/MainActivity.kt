@@ -2028,46 +2028,6 @@ private fun ReaderSyncScreen() {
         }
     }
 
-    fun removeDictionaryAt(index: Int) {
-        dictionaryController.removeImportedDictionary(
-            index = index,
-            onPersistDictionaryRefs = ::persistImportState,
-            onLookupDataChanged = ::refreshLookupIfNeeded
-        )
-    }
-
-    fun removeMountedDictionaryByCacheKey(cacheKey: String) {
-        dictionaryController.removeMountedDictionary(
-            cacheKey = cacheKey,
-            onLookupDataChanged = ::refreshLookupIfNeeded
-        )
-    }
-
-    fun setImportedDictionaryEnabled(dictionaryId: String, enabled: Boolean) {
-        dictionaryController.setImportedDictionaryEnabled(
-            dictionaryId = dictionaryId,
-            enabled = enabled,
-            onPersistDictionaryRefs = ::persistImportState,
-            onLookupDataChanged = ::refreshLookupIfNeeded
-        )
-    }
-
-    fun setMountedDictionaryEnabled(cacheKey: String, enabled: Boolean) {
-        dictionaryController.setMountedDictionaryEnabled(
-            cacheKey = cacheKey,
-            enabled = enabled,
-            onLookupDataChanged = ::refreshLookupIfNeeded
-        )
-    }
-
-    fun moveCombinedDictionary(fromIndex: Int, toIndex: Int) {
-        dictionaryController.moveCombinedDictionary(
-            fromIndex = fromIndex,
-            toIndex = toIndex,
-            onLookupDataChanged = ::refreshLookupIfNeeded
-        )
-    }
-
     val pickBookAudioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         keepReadPermission(context, uri)
@@ -2588,11 +2548,41 @@ private fun ReaderSyncScreen() {
                             onOpenMdxClick = {
                                 context.startActivity(Intent(context, MdxMountSettingsActivity::class.java))
                             },
-                            onMoveCombinedDictionary = { fromIndex, toIndex -> moveCombinedDictionary(fromIndex, toIndex) },
-                            onRemoveImportedDictionary = ::removeDictionaryAt,
-                            onRemoveMountedDictionary = ::removeMountedDictionaryByCacheKey,
-                            onSetImportedDictionaryEnabled = ::setImportedDictionaryEnabled,
-                            onSetMountedDictionaryEnabled = ::setMountedDictionaryEnabled
+                            onMoveCombinedDictionary = { fromIndex, toIndex ->
+                                dictionaryController.moveCombinedDictionary(
+                                    fromIndex = fromIndex,
+                                    toIndex = toIndex,
+                                    onLookupDataChanged = ::refreshLookupIfNeeded
+                                )
+                            },
+                            onRemoveImportedDictionary = { index ->
+                                dictionaryController.removeImportedDictionary(
+                                    index = index,
+                                    onPersistDictionaryRefs = ::persistImportState,
+                                    onLookupDataChanged = ::refreshLookupIfNeeded
+                                )
+                            },
+                            onRemoveMountedDictionary = { cacheKey ->
+                                dictionaryController.removeMountedDictionary(
+                                    cacheKey = cacheKey,
+                                    onLookupDataChanged = ::refreshLookupIfNeeded
+                                )
+                            },
+                            onSetImportedDictionaryEnabled = { dictionaryId, enabled ->
+                                dictionaryController.setImportedDictionaryEnabled(
+                                    dictionaryId = dictionaryId,
+                                    enabled = enabled,
+                                    onPersistDictionaryRefs = ::persistImportState,
+                                    onLookupDataChanged = ::refreshLookupIfNeeded
+                                )
+                            },
+                            onSetMountedDictionaryEnabled = { cacheKey, enabled ->
+                                dictionaryController.setMountedDictionaryEnabled(
+                                    cacheKey = cacheKey,
+                                    enabled = enabled,
+                                    onLookupDataChanged = ::refreshLookupIfNeeded
+                                )
+                            }
                         )
                     }
 
