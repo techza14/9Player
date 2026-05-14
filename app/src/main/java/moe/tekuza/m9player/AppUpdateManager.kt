@@ -2,7 +2,6 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +13,7 @@ import java.net.URL
 import java.util.Locale
 
 private const val GITHUB_LATEST_RELEASE_URL = "https://api.github.com/repos/techza14/9Player/releases/latest"
+private const val UPDATE_APK_CACHE_DIR = "update_apk"
 
 internal data class AppUpdateRelease(
     val tagName: String,
@@ -32,6 +32,7 @@ internal sealed interface AppUpdateCheckResult {
 
 internal suspend fun checkLatestAppUpdate(context: Context): AppUpdateCheckResult = withContext(Dispatchers.IO) {
     runCatching {
+        cleanupInstalledOrOldUpdateApks(context)
         val connection = (URL(GITHUB_LATEST_RELEASE_URL).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 10_000
@@ -87,8 +88,10 @@ internal suspend fun downloadAppUpdateApk(
     onProgress: (Float?) -> Unit
 ): Result<File> = withContext(Dispatchers.IO) {
     runCatching {
-        val updateDir = File(context.cacheDir, "update_apk").apply { mkdirs() }
-        val outputFile = File(updateDir, release.apkName.sanitizeFileName().ifBlank { "9player-update.apk" })
+        val updateDir = updateApkCacheDir(context)
+        val outputFile = File(updateDir, updateApkFileName(release))
+        cleanupUpdateApksExcept(updateDir, outputFile)
+        if (outputFile.exists()) outputFile.delete()
         val connection = (URL(release.apkUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 10_000
@@ -132,6 +135,54 @@ internal fun launchAppUpdateInstall(context: Context, apkFile: File): Boolean {
         context.startActivity(intent)
         true
     }.getOrDefault(false)
+}
+
+private fun cleanupInstalledOrOldUpdateApks(context: Context) {
+    cleanupInstalledOrOldUpdateApks(
+        updateDir = updateApkCacheDir(context),
+        currentVersion = resolveAppVersionName(context)
+    )
+}
+
+internal fun cleanupInstalledOrOldUpdateApks(updateDir: File, currentVersion: String) {
+    updateDir.listFiles { file ->
+        file.isFile && file.extension.equals("apk", ignoreCase = true)
+    }?.forEach { file ->
+        val apkVersion = file.name.extractUpdateApkVersion() ?: return@forEach
+        if (compareAppVersions(apkVersion, currentVersion) <= 0) {
+            file.delete()
+        }
+    }
+}
+
+internal fun cleanupUpdateApksExcept(updateDir: File, keepFile: File) {
+    updateDir.mkdirs()
+    val keepPath = keepFile.toPath().toAbsolutePath().normalize().toString()
+    updateDir.listFiles { file ->
+        file.isFile && file.extension.equals("apk", ignoreCase = true)
+    }?.forEach { file ->
+        if (file.toPath().toAbsolutePath().normalize().toString() != keepPath) {
+            file.delete()
+        }
+    }
+}
+
+private fun updateApkCacheDir(context: Context): File {
+    return File(context.cacheDir, UPDATE_APK_CACHE_DIR).apply { mkdirs() }
+}
+
+private fun String.extractUpdateApkVersion(): String? {
+    return Regex("""(?:^|[-_])v?(\d+(?:\.\d+)+)(?:[-_][^.]*)?\.apk$""", RegexOption.IGNORE_CASE)
+        .find(this)
+        ?.groupValues
+        ?.getOrNull(1)
+}
+
+private fun updateApkFileName(release: AppUpdateRelease): String {
+    val releaseName = release.apkName.sanitizeFileName()
+    if (releaseName.extractUpdateApkVersion() != null) return releaseName
+    val tagName = release.tagName.sanitizeFileName().ifBlank { "update" }
+    return "9player-$tagName.apk"
 }
 
 private fun compareAppVersions(leftRaw: String, rightRaw: String): Int {
