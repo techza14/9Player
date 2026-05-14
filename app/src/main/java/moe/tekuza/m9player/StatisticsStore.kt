@@ -2,8 +2,8 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.net.Uri
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private const val STATISTICS_PREFS = "reader_statistics"
@@ -17,8 +17,8 @@ private const val KEY_DAY_LISTENED_PREFIX = "day_listened_"
 private const val KEY_DAY_LOOKUP_PREFIX = "day_lookup_"
 private const val KEY_WEEK_LISTENED_PREFIX = "week_listened_"
 private const val KEY_WEEK_LOOKUP_PREFIX = "week_lookup_"
-private val StatisticsDayFormat = SimpleDateFormat("yyyyMMdd", Locale.US)
-private val StatisticsWeekFormat = SimpleDateFormat("YYYYww", Locale.US)
+private val StatisticsDayFormat = DateTimeFormatter.ofPattern("yyyyMMdd", Locale.US)
+private val StatisticsWeekFormat = DateTimeFormatter.ofPattern("YYYYww", Locale.US)
 
 internal data class StatisticsSummarySnapshot(
     val todayListeningMs: Long,
@@ -179,7 +179,8 @@ private fun statisticsPrefs(context: Context) =
 private fun bookListenedKey(bookKey: String) = "$KEY_LISTENED_PREFIX$bookKey"
 private fun bookLookupKey(bookKey: String) = "$KEY_LOOKUP_PREFIX$bookKey"
 private fun bookCompletedKey(bookKey: String) = "$KEY_COMPLETED_PREFIX$bookKey"
-private fun dayListenedKey() = "$KEY_DAY_LISTENED_PREFIX${StatisticsDayFormat.format(Date())}"
-private fun dayLookupKey() = "$KEY_DAY_LOOKUP_PREFIX${StatisticsDayFormat.format(Date())}"
-private fun weekListenedKey() = "$KEY_WEEK_LISTENED_PREFIX${StatisticsWeekFormat.format(Date())}"
-private fun weekLookupKey() = "$KEY_WEEK_LOOKUP_PREFIX${StatisticsWeekFormat.format(Date())}"
+private fun statisticsToday(): LocalDate = LocalDate.now()
+private fun dayListenedKey() = "$KEY_DAY_LISTENED_PREFIX${StatisticsDayFormat.format(statisticsToday())}"
+private fun dayLookupKey() = "$KEY_DAY_LOOKUP_PREFIX${StatisticsDayFormat.format(statisticsToday())}"
+private fun weekListenedKey() = "$KEY_WEEK_LISTENED_PREFIX${StatisticsWeekFormat.format(statisticsToday())}"
+private fun weekLookupKey() = "$KEY_WEEK_LOOKUP_PREFIX${StatisticsWeekFormat.format(statisticsToday())}"

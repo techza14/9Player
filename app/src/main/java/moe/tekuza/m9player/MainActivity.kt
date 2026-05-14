@@ -173,7 +173,6 @@ class MainActivity : AppCompatActivity() {
                 ReaderSyncScreen()
             }
         }
-        maybeShowAutoUpdatePromptOrCheck()
     }
 
     override fun onStart() {
@@ -218,29 +217,6 @@ class MainActivity : AppCompatActivity() {
         autoUpdateCheckJob?.cancel()
         autoUpdateCheckJob = null
         super.onDestroy()
-    }
-
-    private fun maybeShowAutoUpdatePromptOrCheck() {
-        val config = loadAppUpdateConfig(this)
-        if (!config.firstPromptShown) {
-            android.app.AlertDialog.Builder(this)
-                .setTitle(getString(R.string.update_first_prompt_title))
-                .setMessage(getString(R.string.update_first_prompt_message))
-                .setPositiveButton(getString(R.string.update_first_prompt_enable)) { _, _ ->
-                    markAutoUpdateFirstPromptShown(this)
-                    saveAutoUpdateEnabled(this, true)
-                    checkAppUpdateInBackground(force = true)
-                }
-                .setNegativeButton(getString(R.string.update_first_prompt_skip)) { _, _ ->
-                    markAutoUpdateFirstPromptShown(this)
-                    saveAutoUpdateEnabled(this, false)
-                }
-                .show()
-            return
-        }
-        if (config.autoUpdateEnabled) {
-            checkAppUpdateInBackground(force = false)
-        }
     }
 
     fun checkAppUpdateInBackground(force: Boolean) {
