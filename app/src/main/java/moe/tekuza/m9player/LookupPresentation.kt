@@ -31,12 +31,6 @@ internal fun lookupDefinitionKey(term: String, dictionaryName: String, definitio
     return "${lookupDictionarySectionKey(term, dictionaryName)}|$definitionIndex"
 }
 
-internal fun lookupDictionaryNameFromDefinitionKey(definitionKey: String): String? {
-    val parts = definitionKey.split("|")
-    if (parts.size < 4) return null
-    return parts[2].trim().takeIf { it.isNotBlank() }
-}
-
 internal fun buildLookupPresentation(layer: ReaderLookupLayer): List<LookupGroupedPresentation> {
     return layer.groupedResults.map { grouped ->
         LookupGroupedPresentation(

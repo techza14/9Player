@@ -6,6 +6,7 @@ internal data class LoadedDictionary(
     val cacheKey: String = "",
     val name: String,
     val format: String,
+    val dictionaryType: String = "Term",
     val entries: List<DictionaryEntry>,
     val stylesCss: String? = null,
     val entryCount: Int = entries.size
@@ -53,6 +54,7 @@ internal data class MinedCard(
     val definitions: List<String>,
     val dictionaryName: String?,
     val dictionaryCss: String?,
+    val glossaryFirstHtml: String? = null,
     val glossaryByDictionary: List<MinedDictionaryGlossary> = emptyList(),
     val pitch: String?,
     val frequency: String?,
@@ -69,4 +71,3 @@ internal data class MinedDictionaryGlossary(
     val definitions: List<String>,
     val dictionaryCss: String? = null
 )
-

@@ -31,6 +31,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -43,11 +44,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -55,14 +61,9 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Icon
@@ -90,10 +91,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
@@ -106,12 +109,16 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Audiotrack
@@ -135,13 +142,26 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import moe.tekuza.m9player.hoshi.features.dictionary.DictionarySettings
+import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupHtml
+import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupItem
+import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupAssets
+import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupOptions
+import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupStackView
+import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbacks
+import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
+import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
+import de.manhhao.hoshi.LookupResult
+import org.json.JSONObject
 import java.io.File
 import java.io.InputStream
 import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
     private var floatingOverlayStartJob: Job? = null
+    private var autoUpdateCheckJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         applySavedAppLanguage(this)
@@ -153,6 +173,7 @@ class MainActivity : AppCompatActivity() {
                 ReaderSyncScreen()
             }
         }
+        maybeShowAutoUpdatePromptOrCheck()
     }
 
     override fun onStart() {
@@ -194,7 +215,74 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         floatingOverlayStartJob?.cancel()
         floatingOverlayStartJob = null
+        autoUpdateCheckJob?.cancel()
+        autoUpdateCheckJob = null
         super.onDestroy()
+    }
+
+    private fun maybeShowAutoUpdatePromptOrCheck() {
+        val config = loadAppUpdateConfig(this)
+        if (!config.firstPromptShown) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle(getString(R.string.update_first_prompt_title))
+                .setMessage(getString(R.string.update_first_prompt_message))
+                .setPositiveButton(getString(R.string.update_first_prompt_enable)) { _, _ ->
+                    markAutoUpdateFirstPromptShown(this)
+                    saveAutoUpdateEnabled(this, true)
+                    checkAppUpdateInBackground(force = true)
+                }
+                .setNegativeButton(getString(R.string.update_first_prompt_skip)) { _, _ ->
+                    markAutoUpdateFirstPromptShown(this)
+                    saveAutoUpdateEnabled(this, false)
+                }
+                .show()
+            return
+        }
+        if (config.autoUpdateEnabled) {
+            checkAppUpdateInBackground(force = false)
+        }
+    }
+
+    fun checkAppUpdateInBackground(force: Boolean) {
+        val config = loadAppUpdateConfig(this)
+        val checkIntervalMs = 12L * 60L * 60L * 1000L
+        if (!force && System.currentTimeMillis() - config.lastCheckedAtMs < checkIntervalMs) return
+        autoUpdateCheckJob?.cancel()
+        autoUpdateCheckJob = lifecycleScope.launch {
+            val result = checkLatestAppUpdate(this@MainActivity)
+            saveAppUpdateCheckedAt(this@MainActivity, System.currentTimeMillis())
+            val release = (result as? AppUpdateCheckResult.UpdateAvailable)?.release ?: return@launch
+            if (isFinishing || isDestroyed) return@launch
+            android.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle(getString(R.string.update_launch_prompt_title))
+                .setMessage(getString(R.string.update_launch_prompt_message, release.displayName))
+                .setPositiveButton(getString(R.string.update_launch_prompt_positive)) { _, _ ->
+                    downloadUpdateFromLaunchPrompt(release)
+                }
+                .setNegativeButton(getString(R.string.update_launch_prompt_negative), null)
+                .show()
+        }
+    }
+
+    private fun downloadUpdateFromLaunchPrompt(release: AppUpdateRelease) {
+        autoUpdateCheckJob?.cancel()
+        autoUpdateCheckJob = lifecycleScope.launch {
+            Toast.makeText(this@MainActivity, getString(R.string.update_downloading), Toast.LENGTH_SHORT).show()
+            val result = downloadAppUpdateApk(this@MainActivity, release) {}
+            result
+                .onSuccess { file ->
+                    if (!launchAppUpdateInstall(this@MainActivity, file)) {
+                        Toast.makeText(this@MainActivity, getString(R.string.update_install_failed), Toast.LENGTH_LONG).show()
+                    }
+                }
+                .onFailure { error ->
+                    Toast.makeText(
+                        this@MainActivity,
+                        getString(R.string.update_failed, error.message ?: error.javaClass.simpleName),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+        }
     }
 }
 
@@ -220,19 +308,8 @@ private sealed interface MainLookupRequest {
     ) : MainLookupRequest
     data class Candidates(
         val rawCandidates: List<String>,
-        val preferredDictionaryName: String? = null,
-        val preferredDictionaryCacheKey: String? = null,
-        val restrictToPreferredDictionary: Boolean = false,
-        val expandCandidates: Boolean = true,
-        val exactTermOnly: Boolean = false,
-        val pinnedDefinitionKey: String? = null,
         val anchor: ReaderLookupAnchor? = null,
         val placeBelow: Boolean = true
-    ) : MainLookupRequest
-    data class RecursiveTap(
-        val sourceLayerIndex: Int,
-        val definitionKey: String,
-        val tapData: DefinitionLookupTapData
     ) : MainLookupRequest
 }
 
@@ -271,41 +348,6 @@ private val FIELD_VARIABLE_CHOICES = listOf(
 )
 private const val MAIN_LOOKUP_DEBUG_LOG_TAG = "MainLookupDebug"
 private const val ANKI_CONFIG_LOG_TAG = "AnkiConfig"
-private const val DICTIONARY_ORDER_PREFS = "dictionary_order_prefs"
-private const val KEY_DICTIONARY_ORDER_IDS = "dictionary_order_ids"
-
-private enum class CombinedDictionaryType {
-    IMPORTED,
-    MOUNTED
-}
-
-private data class CombinedDictionaryItem(
-    val id: String,
-    val type: CombinedDictionaryType,
-    val title: String,
-    val countText: String,
-    val enabled: Boolean = true
-)
-
-private fun loadDictionaryOrderIds(context: Context): List<String> {
-    val raw = context.getSharedPreferences(DICTIONARY_ORDER_PREFS, Context.MODE_PRIVATE)
-        .getString(KEY_DICTIONARY_ORDER_IDS, null)
-        ?.trim()
-        .orEmpty()
-    if (raw.isBlank()) return emptyList()
-    return raw.split('\n')
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
-        .distinct()
-}
-
-private fun saveDictionaryOrderIds(context: Context, ids: List<String>) {
-    val normalized = ids.map { it.trim() }.filter { it.isNotBlank() }.distinct()
-    context.getSharedPreferences(DICTIONARY_ORDER_PREFS, Context.MODE_PRIVATE)
-        .edit()
-        .putString(KEY_DICTIONARY_ORDER_IDS, normalized.joinToString("\n"))
-        .apply()
-}
 
 internal data class ReaderBook(
     val id: String,
@@ -332,10 +374,17 @@ private fun ReaderSyncScreen() {
     val activity = context as? Activity
     val lifecycleOwner = LocalLifecycleOwner.current
     val view = LocalView.current
+    val rootDensity = LocalDensity.current
+    val navigationBarBottomInsetDp = with(rootDensity) {
+        WindowInsets.navigationBars.getBottom(this).toDp().value.toDouble()
+    }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val contentResolver = context.contentResolver
     val scope = rememberCoroutineScope()
+    val dictionaryPageBackground = MaterialTheme.colorScheme.background
+    val dictionaryPageBackgroundCss = dictionaryPageBackground.toCssRgbHex()
+    val isDarkTheme = isSystemInDarkTheme()
 
     var audioUri by remember { mutableStateOf<Uri?>(null) }
     var audioName by remember { mutableStateOf<String?>(null) }
@@ -361,6 +410,9 @@ private fun ReaderSyncScreen() {
     var autoMoveToAudiobookFolder by remember { mutableStateOf(true) }
     var importOnboardingCompleted by remember { mutableStateOf(false) }
     var importGuideVisible by remember { mutableStateOf(false) }
+    var persistedImportsLoaded by remember { mutableStateOf(false) }
+    var autoUpdatePromptVisible by remember { mutableStateOf(false) }
+    var autoUpdateStartupHandled by remember { mutableStateOf(false) }
     val selectedBookIds = remember { mutableStateListOf<String>() }
     var isBookSelectionMode by remember { mutableStateOf(false) }
 
@@ -372,20 +424,13 @@ private fun ReaderSyncScreen() {
     var dictionaryError by remember { mutableStateOf<String?>(null) }
     var dictionaryOrderIds by remember { mutableStateOf(loadDictionaryOrderIds(context)) }
     var mdxMountState by remember { mutableStateOf(loadMdxMountState(context)) }
+    var dictionaryUiConfig by remember { mutableStateOf(loadDictionaryUiConfig(context)) }
 
     var lookupQuery by remember { mutableStateOf("") }
-    var lookupResults by remember { mutableStateOf<List<DictionarySearchResult>>(emptyList()) }
     var lookupLoading by remember { mutableStateOf(false) }
-    var selectedEntryKey by remember { mutableStateOf<String?>(null) }
-    var dictionaryLookupAutoPlayedKey by remember { mutableStateOf<String?>(null) }
-    val dictionaryLookupCollapsedSections = remember { mutableStateMapOf<String, Boolean>() }
-    var dictionaryPageHighlightedDefinitionKey by remember { mutableStateOf<String?>(null) }
-    var dictionaryPageHighlightedRects by remember { mutableStateOf<List<Rect>>(emptyList()) }
-    val dictionaryAnkiDuplicateByKey = remember { mutableStateMapOf<String, Boolean>() }
-    val dictionaryAnkiCheckingByKey = remember { mutableStateMapOf<String, Boolean>() }
-    val duplicateConfig = remember { loadAnkiDuplicateConfig(context) }
-    val allowAddWhenDuplicate = duplicateConfig.action.equals("add", ignoreCase = true)
-
+    var dictionaryFirstLayerHtml by remember { mutableStateOf("") }
+    var dictionaryFirstLayerResults by remember { mutableStateOf<List<LookupResult>>(emptyList()) }
+    var dictionaryFirstLayerClearSelectionSignal by remember { mutableStateOf(0) }
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var pendingAnkiCard by remember { mutableStateOf<MinedCard?>(null) }
     var awaitingExternalAnkiPermission by remember { mutableStateOf(false) }
@@ -416,17 +461,20 @@ private fun ReaderSyncScreen() {
     var renameBookDialogVisible by remember { mutableStateOf(false) }
     var renameTargetBookId by remember { mutableStateOf<String?>(null) }
     var renameBookInput by remember { mutableStateOf("") }
-    var mainLookupPopupVisible by remember { mutableStateOf(false) }
-    var mainLookupPopupTitle by remember { mutableStateOf("") }
-    var mainLookupPopupLoading by remember { mutableStateOf(false) }
-    var mainLookupPopupError by remember { mutableStateOf<String?>(null) }
-    var mainLookupPopupCue by remember { mutableStateOf<SubtitleCue?>(null) }
-    var mainLookupPopupSelectedRange by remember { mutableStateOf<IntRange?>(null) }
-    var mainLookupPopupAudioUri by remember { mutableStateOf<Uri?>(null) }
-    val mainLookupSession = remember { ReaderLookupSession() }
+    val mainHoshiLookupPopups = remember { mutableStateListOf<LookupPopupItem>() }
+    var mainHoshiLookupCue by remember { mutableStateOf<SubtitleCue?>(null) }
+    var mainHoshiLookupSelectedRange by remember { mutableStateOf<IntRange?>(null) }
+    var mainHoshiLookupAudioUri by remember { mutableStateOf<Uri?>(null) }
+    var mainHoshiLookupTitle by remember { mutableStateOf("") }
+    var collectionLookupPreviewVisible by remember { mutableStateOf(false) }
+    var collectionLookupPreviewSentence by remember { mutableStateOf("") }
+    var collectionLookupPreviewCue by remember { mutableStateOf<SubtitleCue?>(null) }
+    var collectionLookupPreviewSelectedRange by remember { mutableStateOf<IntRange?>(null) }
+    var collectionLookupPreviewAudioUri by remember { mutableStateOf<Uri?>(null) }
+    var collectionFirstLayerHtml by remember { mutableStateOf("") }
+    var collectionFirstLayerResults by remember { mutableStateOf<List<LookupResult>>(emptyList()) }
+    var collectionFirstLayerClearSelectionSignal by remember { mutableStateOf(0) }
     var mainLookupRequestNonce by remember { mutableStateOf(0L) }
-    var mainLookupAutoPlayNonce by remember { mutableStateOf(0L) }
-    var mainLookupAutoPlayedKey by remember { mutableStateOf<String?>(null) }
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
     var versionTapCount by remember { mutableStateOf(0) }
     var showVersionEasterGif by remember { mutableStateOf(false) }
@@ -438,11 +486,6 @@ private fun ReaderSyncScreen() {
     var pendingCollectionPlayMs by remember { mutableStateOf<Long?>(null) }
     var pendingCollectionStopMs by remember { mutableStateOf<Long?>(null) }
     var collectionPlayRequestNonce by remember { mutableStateOf(0L) }
-    fun importedDictionaryId(ref: PersistedDictionaryRef): String {
-        val base = ref.cacheKey?.takeIf { it.isNotBlank() }
-            ?: buildDictionaryCacheKey(ref.uri, ref.name.ifBlank { "dictionary" })
-        return "imp:$base"
-    }
 
     val importedLookupById = remember(dictionaryRefs, loadedDictionaries) {
         dictionaryRefs.mapIndexedNotNull { index, ref ->
@@ -485,33 +528,35 @@ private fun ReaderSyncScreen() {
     val dictionaryCssByName = remember(effectiveLookupDictionaries) {
         effectiveLookupDictionaries.associate { it.name to it.stylesCss }
     }
-    val dictionaryPriorityByName = remember(effectiveLookupDictionaries) {
-        effectiveLookupDictionaries.mapIndexed { index, dictionary -> dictionary.name to index }.toMap()
-    }
-    val dictionaryTypeByName = remember(effectiveLookupDictionaries) {
-        effectiveLookupDictionaries.associate { dictionary ->
-            dictionary.name to inferLookupDictionaryType(dictionary.name, dictionary.format)
-        }
+    val mainHoshiLookupSession = remember(context, effectiveLookupDictionaries) {
+        HoshiLookupSession(context, dictionariesProvider = { effectiveLookupDictionaries })
     }
     fun closeMainLookupPopup() {
-        mainLookupPopupVisible = false
-        mainLookupSession.clear()
-        mainLookupPopupCue = null
-        mainLookupPopupSelectedRange = null
-        mainLookupPopupAudioUri = null
+        mainHoshiLookupPopups.clear()
+        mainHoshiLookupCue = null
+        mainHoshiLookupSelectedRange = null
+        mainHoshiLookupAudioUri = null
+        mainHoshiLookupTitle = ""
+        dictionaryFirstLayerHtml = ""
+        dictionaryFirstLayerResults = emptyList()
+        dictionaryFirstLayerClearSelectionSignal += 1
+        collectionLookupPreviewVisible = false
+        collectionLookupPreviewSentence = ""
+        collectionLookupPreviewCue = null
+        collectionLookupPreviewSelectedRange = null
+        collectionLookupPreviewAudioUri = null
+        collectionFirstLayerHtml = ""
+        collectionFirstLayerResults = emptyList()
+        collectionFirstLayerClearSelectionSignal += 1
     }
 
     BackHandler {
         when {
-            mainLookupPopupVisible -> {
-                if (mainLookupSession.size > 1) {
-                    mainLookupSession.pop()
-                } else {
-                    closeMainLookupPopup()
-                }
-            }
+            collectionLookupPreviewVisible -> closeMainLookupPopup()
+            mainHoshiLookupPopups.isNotEmpty() -> closeMainLookupPopup()
             addBookDialogVisible -> addBookDialogVisible = false
             importGuideVisible -> importGuideVisible = false
+            autoUpdatePromptVisible -> autoUpdatePromptVisible = false
             clearCollectionsConfirmVisible -> clearCollectionsConfirmVisible = false
             deleteBooksConfirmVisible -> deleteBooksConfirmVisible = false
             activeSection != MiningSection.MAIN -> activeSection = MiningSection.MAIN
@@ -558,11 +603,23 @@ private fun ReaderSyncScreen() {
         }
     }
 
+    LaunchedEffect(persistedImportsLoaded, importGuideVisible) {
+        if (!persistedImportsLoaded || importGuideVisible || autoUpdateStartupHandled) return@LaunchedEffect
+        autoUpdateStartupHandled = true
+        val updateConfig = loadAppUpdateConfig(context)
+        if (!updateConfig.firstPromptShown) {
+            autoUpdatePromptVisible = true
+        } else if (updateConfig.autoUpdateEnabled) {
+            (activity as? MainActivity)?.checkAppUpdateInBackground(force = false)
+        }
+    }
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 audiobookSettings = loadAudiobookSettingsConfig(context)
                 mdxMountState = loadMdxMountState(context)
+                dictionaryUiConfig = loadDictionaryUiConfig(context)
                 scope.launch {
                     var loadedSnapshots = loadReaderBookPlaybackSnapshotsForBooks(
                         context = context,
@@ -570,6 +627,31 @@ private fun ReaderSyncScreen() {
                     )
                     run {
                         val persistedNow = loadPersistedImports(context)
+                        if (persistedNow.dictionaries != dictionaryRefs) {
+                            val loadedById = dictionaryRefs.mapIndexedNotNull { index, ref ->
+                                loadedDictionaries.getOrNull(index)?.let { loaded ->
+                                    importedDictionaryId(ref) to loaded
+                                }
+                            }.toMap()
+                            val restoredPairs = persistedNow.dictionaries
+                                .distinctBy { it.uri }
+                                .mapIndexedNotNull { index, ref ->
+                                    val cached = loadedById[importedDictionaryId(ref)]
+                                    if (cached != null) {
+                                        ref.copy(dictionaryType = cached.dictionaryType) to cached
+                                    } else {
+                                        withContext(Dispatchers.IO) {
+                                            loadPersistedDictionaryFromStorage(
+                                                context = context,
+                                                ref = ref,
+                                                fallbackDisplayName = ref.name.ifBlank { "Dictionary ${index + 1}" }
+                                            )
+                                        }
+                                    }
+                                }
+                            dictionaryRefs = restoredPairs.map { it.first }
+                            loadedDictionaries = restoredPairs.map { it.second }
+                        }
                         if (persistedNow.books.isNotEmpty() && readerBooks.isNotEmpty()) {
                             val persistedByAudio = persistedNow.books.associateBy { it.audioUri }
                             var changed = false
@@ -971,16 +1053,9 @@ private fun ReaderSyncScreen() {
     }
 
     fun updateDictionaryProgress(progress: DictionaryImportProgress) {
-        dictionaryProgressText = when {
-            progress.total > 0 -> "${progress.stage} (${progress.current}/${progress.total})"
-            progress.current > 0 -> "${progress.stage} (${progress.current})"
-            else -> progress.stage
-        }
-        dictionaryProgressValue = if (progress.total > 0 && progress.current >= 0) {
-            (progress.current.toFloat() / progress.total.toFloat()).coerceIn(0f, 1f)
-        } else {
-            null
-        }
+        val (text, value) = formatDictionaryImportProgress(context, progress)
+        dictionaryProgressText = text
+        dictionaryProgressValue = value
     }
 
     fun clearDictionaryProgress() {
@@ -1414,13 +1489,12 @@ private fun ReaderSyncScreen() {
     }
 
     LaunchedEffect(activeSection) {
+        closeMainLookupPopup()
         if (activeSection == MiningSection.COLLECTIONS) {
             refreshCollectedCues()
         }
         if (activeSection != MiningSection.DICTIONARY) {
             lookupQuery = ""
-            lookupResults = emptyList()
-            selectedEntryKey = null
             lookupLoading = false
         }
     }
@@ -1446,6 +1520,7 @@ private fun ReaderSyncScreen() {
         autoMoveToAudiobookFolder = persisted.autoMoveToAudiobookFolder
         importOnboardingCompleted = persisted.importOnboardingCompleted
         importGuideVisible = !persisted.importOnboardingCompleted
+        persistedImportsLoaded = true
         homeLibraryView = when (persisted.homeLibraryView.uppercase(Locale.ROOT)) {
             HomeLibraryView.LIST.name -> HomeLibraryView.LIST
             else -> HomeLibraryView.BOOKSHELF
@@ -1570,69 +1645,27 @@ private fun ReaderSyncScreen() {
         }
 
         if (persisted.dictionaries.isNotEmpty()) {
-            dictionaryLoading = true
             dictionaryError = null
 
             val restoredDictionaryList = mutableListOf<LoadedDictionary>()
             val restoredRefs = mutableListOf<PersistedDictionaryRef>()
             val distinctRefs = persisted.dictionaries.distinctBy { it.uri }
-            val total = distinctRefs.size
 
+            val missingNames = mutableListOf<String>()
             distinctRefs.forEachIndexed { index, ref ->
-                val uri = runCatching { Uri.parse(ref.uri) }.getOrNull() ?: return@forEachIndexed
-                val displayName = ref.name.ifBlank { queryDisplayName(contentResolver, uri) }
-                val cacheKey = ref.cacheKey ?: buildDictionaryCacheKey(ref.uri, displayName)
-
-                updateDictionaryProgress(
-                    DictionaryImportProgress(
-                        stage = "Restoring dictionaries",
-                        current = index + 1,
-                        total = total
+                val displayName = ref.name.ifBlank { "Dictionary ${index + 1}" }
+                val restoredPair = withContext(Dispatchers.IO) {
+                    loadPersistedDictionaryFromStorage(
+                        context = context,
+                        ref = ref,
+                        fallbackDisplayName = displayName
                     )
-                )
-
-                val storedDictionary = withContext(Dispatchers.IO) {
-                    loadDictionaryFromStorage(context, cacheKey)
                 }
-                if (storedDictionary != null) {
-                    restoredDictionaryList += storedDictionary
-                    restoredRefs += PersistedDictionaryRef(
-                        uri = ref.uri,
-                        name = displayName,
-                        cacheKey = cacheKey,
-                        enabled = ref.enabled
-                    )
-                    return@forEachIndexed
-                }
-
-                val parseResult = withContext(Dispatchers.IO) {
-                    runCatching {
-                        importDictionaryFromZip(
-                            context = context,
-                            contentResolver = contentResolver,
-                            uri = uri,
-                            displayName = displayName,
-                            cacheKey = cacheKey
-                        ) { progress ->
-                            scope.launch(Dispatchers.Main.immediate) {
-                                updateDictionaryProgress(progress)
-                            }
-                        }
-                    }
-                }
-
-                val parsedDictionary = parseResult.getOrNull()
-                if (parsedDictionary != null) {
-                    restoredDictionaryList += parsedDictionary
-                    restoredRefs += PersistedDictionaryRef(
-                        uri = ref.uri,
-                        name = displayName,
-                        cacheKey = cacheKey,
-                        enabled = ref.enabled
-                    )
+                if (restoredPair != null) {
+                    restoredRefs += restoredPair.first
+                    restoredDictionaryList += restoredPair.second
                 } else {
-                    val error = parseResult.exceptionOrNull()
-                    dictionaryError = "Failed to restore dictionary $displayName: ${error?.message ?: "unknown error"}"
+                    missingNames += displayName
                 }
             }
 
@@ -1640,7 +1673,14 @@ private fun ReaderSyncScreen() {
             dictionaryRefs = restoredRefs
             dictionaryLoading = false
             clearDictionaryProgress()
-            persistImportState()
+            if (missingNames.isNotEmpty()) {
+                dictionaryError = context.getString(
+                    R.string.dictionary_error_missing_local_files,
+                    missingNames.joinToString(", ")
+                )
+            } else {
+                persistImportState()
+            }
         }
 
         if (ankiPermissionGranted) {
@@ -1648,251 +1688,281 @@ private fun ReaderSyncScreen() {
         }
     }
 
-    fun normalizeLookupCandidates(rawCandidates: List<String>): List<String> {
-        return rawCandidates
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .distinct()
-            .take(24)
+    fun mainHoshiLookupOptions(showRangeSelection: Boolean = false): LookupPopupOptions =
+        LookupPopupOptions(
+            isVertical = false,
+            isFullWidth = false,
+            width = 320,
+            height = 250,
+            swipeToDismiss = true,
+            swipeThreshold = 40,
+            topInset = 0.0,
+            bottomInset = navigationBarBottomInsetDp,
+            dictionarySettings = DictionarySettings(),
+            darkMode = isDarkTheme,
+            eInkMode = false,
+            audioSettings = audiobookSettings,
+            showRangeSelection = showRangeSelection,
+            showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
+            popupActionBar = true,
+        )
+    val mainHoshiLookupAssets = remember(context) { LookupPopupAssets.load(context) }
+
+    fun mainHoshiFallbackSelection(query: String, anchor: ReaderLookupAnchor?): ReaderSelectionData {
+        val densityScale = rootDensity.density.coerceAtLeast(0.1f)
+        val bounds = anchor.boundingRectCoreOrNull() ?: Rect(
+            left = view.width * 0.5f,
+            top = view.height * 0.45f,
+            right = view.width * 0.5f + 1f,
+            bottom = view.height * 0.45f + 1f
+        )
+        return ReaderSelectionData(
+            text = query,
+            sentence = query,
+            rect = ReaderSelectionRect(
+                x = (bounds.left / densityScale).toDouble(),
+                y = (bounds.top / densityScale).toDouble(),
+                width = ((bounds.right - bounds.left) / densityScale).coerceAtLeast(1f).toDouble(),
+                height = ((bounds.bottom - bounds.top) / densityScale).coerceAtLeast(1f).toDouble()
+            ),
+            normalizedOffset = 0,
+            sentenceOffset = 0
+        )
     }
 
-    fun buildMinimalLookupCandidatesFromTap(tapData: DefinitionLookupTapData): List<String> {
-        val primary = tapData.scanText.trim()
-            .ifBlank { tapData.text.trim() }
-            .ifBlank { extractLookupToken(tapData.nodeText) }
-        if (primary.isBlank()) return emptyList()
-        return listOf(primary.take(256))
+    fun clearMainHoshiChildPopups() {
+        mainHoshiLookupPopups.clear()
+        mainHoshiLookupCue = null
+        mainHoshiLookupSelectedRange = null
+        mainHoshiLookupAudioUri = null
+        mainHoshiLookupTitle = ""
     }
 
-    fun computeLookupResults(
-        dictionaries: List<LoadedDictionary>,
-        candidates: List<String>
-    ): List<DictionarySearchResult> {
-        if (dictionaries.isEmpty() || candidates.isEmpty()) return emptyList()
-        val strictHits = computeLookupResultsWithWinningCandidate(
-            context = context,
-            dictionaries = dictionaries,
-            candidates = candidates,
-            profile = DictionaryQueryProfile.FAST,
-            expandCandidates = false
-        )?.hits.orEmpty()
-        if (strictHits.isNotEmpty()) return strictHits
-        return computeLookupResultsWithWinningCandidate(
-            context = context,
-            dictionaries = dictionaries,
-            candidates = candidates,
-            profile = DictionaryQueryProfile.FAST,
-            expandCandidates = true
-        )?.hits.orEmpty()
+    fun currentStatisticsBookKey(): String? {
+        val selected = selectedBookId?.let { id -> readerBooks.firstOrNull { it.id == id } }
+            ?: readerBooks.firstOrNull()
+        return selected?.let { buildReaderBookPlaybackKey(it) }
     }
 
-    fun triggerLookupCandidates(
-        rawCandidates: List<String>,
-        onResult: ((Result<List<DictionarySearchResult>>) -> Unit)? = null
-    ) {
-        val candidates = normalizeLookupCandidates(rawCandidates)
-        if (candidates.isEmpty()) {
-            lookupResults = emptyList()
-            selectedEntryKey = null
+    fun renderMainHoshiFirstLayerHtml(
+        popup: LookupPopupItem,
+        backgroundColorCss: String? = null
+    ): String =
+        LookupPopupHtml.render(
+            results = popup.state.results,
+            assets = mainHoshiLookupAssets,
+            dictionaryStyles = popup.state.dictionaryStyles,
+            settings = popup.state.dictionarySettings,
+            audioSettings = audiobookSettings,
+            showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
+            backgroundColorCss = backgroundColorCss,
+            darkMode = isDarkTheme,
+            eInkMode = false,
+        )
+
+    fun createMainHoshiFirstLayerPopup(
+        selection: ReaderSelectionData,
+        showRangeSelection: Boolean = false
+    ): Pair<LookupPopupItem, Int>? {
+        return mainHoshiLookupSession.createPopup(
+            selection = selection,
+            options = mainHoshiLookupOptions(showRangeSelection = showRangeSelection),
+        )
+    }
+
+    fun showDictionaryFirstLayerLookup(rawQuery: String) {
+        val query = rawQuery.trim()
+        lookupQuery = query
+        if (query.isBlank()) {
             lookupLoading = false
-            onResult?.invoke(Result.success(emptyList()))
+            dictionaryFirstLayerHtml = ""
+            dictionaryFirstLayerResults = emptyList()
+            dictionaryFirstLayerClearSelectionSignal += 1
+            clearMainHoshiChildPopups()
             return
         }
-
-        lookupQuery = candidates.first()
-        val dictionariesSnapshot = effectiveLookupDictionaries
-        scope.launch {
-            lookupLoading = true
-            val result = withContext(Dispatchers.Default) {
-                runCatching { computeLookupResults(dictionariesSnapshot, candidates) }
+        lookupLoading = true
+        runCatching {
+            val selection = mainHoshiFallbackSelection(query, anchor = null)
+            val popup = createMainHoshiFirstLayerPopup(selection = selection)
+            if (popup == null) {
+                dictionaryFirstLayerHtml = ""
+                dictionaryFirstLayerResults = emptyList()
+                dictionaryFirstLayerClearSelectionSignal += 1
+                clearMainHoshiChildPopups()
+                Log.d("MainHoshiResultPopup", "dictionary first-layer empty query='${query.take(32)}'")
+                return@runCatching
             }
-            result.onSuccess { hits ->
-                lookupResults = hits
-                selectedEntryKey = when {
-                    selectedEntryKey != null && hits.any { entryStableKey(it.entry) == selectedEntryKey } -> selectedEntryKey
-                    hits.isNotEmpty() -> entryStableKey(hits.first().entry)
-                    else -> null
-                }
-            }.onFailure { error ->
-                lookupResults = emptyList()
-                selectedEntryKey = null
-                exportStatus = "Lookup failed: ${error.message ?: "unknown error"}"
-            }
-            lookupLoading = false
-            onResult?.invoke(result)
-        }
-    }
-
-    fun queryMainLookupCandidates(
-        candidates: List<String>,
-        preferredDictionaryName: String? = null,
-        preferredDictionaryCacheKey: String? = null,
-        restrictToPreferredDictionary: Boolean = false,
-        expandCandidates: Boolean = true,
-        exactTermOnly: Boolean = false,
-        pinnedDefinitionKey: String? = null,
-        onResult: (Result<List<DictionarySearchResult>>) -> Unit
-    ) {
-        val primaryQuery = candidates.firstOrNull()?.trim().orEmpty()
-        val preferredName = preferredDictionaryName?.trim().orEmpty()
-        val preferredCacheKey = preferredDictionaryCacheKey?.trim().orEmpty()
-        val pinnedKey = pinnedDefinitionKey?.trim().orEmpty()
-        val dictionariesSnapshot = if (preferredCacheKey.isNotBlank()) {
-            val preferred = effectiveLookupDictionaries.filter { it.cacheKey == preferredCacheKey }
-            if (restrictToPreferredDictionary) {
-                preferred
-            } else {
-                preferred + effectiveLookupDictionaries.filter { it.cacheKey != preferredCacheKey }
-            }
-        } else if (preferredName.isBlank()) {
-            effectiveLookupDictionaries
-        } else if (restrictToPreferredDictionary) {
-            effectiveLookupDictionaries.filter { it.name == preferredName }
-        } else {
-            val preferred = effectiveLookupDictionaries.filter { it.name == preferredName }
-            val others = effectiveLookupDictionaries.filter { it.name != preferredName }
-            preferred + others
-        }
-        scope.launch {
-            val result = withContext(Dispatchers.Default) {
-                runCatching {
-                    val base = if (expandCandidates) {
-                        computeLookupResults(dictionariesSnapshot, candidates)
-                    } else {
-                        computeLookupResultsWithWinningCandidate(
-                            context = context,
-                            dictionaries = dictionariesSnapshot,
-                            candidates = candidates,
-                            profile = if (exactTermOnly) DictionaryQueryProfile.FULL else DictionaryQueryProfile.FAST,
-                            expandCandidates = false
-                        )?.hits.orEmpty()
-                    }
-                    if (pinnedKey.isNotBlank()) {
-                        base.mapNotNull { hit ->
-                            val matched = hit.entry.definitions.mapIndexedNotNull { index, definition ->
-                                val key = lookupDefinitionKey(
-                                    term = hit.entry.term,
-                                    dictionaryName = hit.entry.dictionary,
-                                    definitionIndex = index
-                                )
-                                if (key == pinnedKey) definition else null
-                            }
-                            if (matched.isEmpty()) {
-                                null
-                            } else {
-                                hit.copy(entry = hit.entry.copy(definitions = matched))
-                            }
-                        }
-                    } else if (!exactTermOnly || primaryQuery.isBlank()) {
-                        base
-                    } else {
-                        val exact = base.filter { hit ->
-                            val term = hit.entry.term.trim()
-                            val reading = hit.entry.reading?.trim().orEmpty()
-                            term == primaryQuery || reading == primaryQuery
-                        }
-                        exact
-                    }
-                }
-            }
-            onResult(result)
-        }
-    }
-
-    fun setOrPushMainLookupLayer(layer: ReaderLookupLayer) {
-        if (mainLookupSession.size > 0) {
-            mainLookupSession.replaceTop { layer }
-        } else {
-            mainLookupSession.push(layer)
-        }
-    }
-
-    fun buildMainLookupLayer(
-        rawResults: List<DictionarySearchResult>,
-        loading: Boolean,
-        error: String?,
-        selectedRange: IntRange?,
-        selectionText: String?
-    ): ReaderLookupLayer {
-        return buildLookupLayerFromRawResults(
-            rawResults = rawResults,
-            dictionaryCssByName = dictionaryCssByName,
-            dictionaryPriorityByName = dictionaryPriorityByName,
-            dictionaryTypeByName = dictionaryTypeByName,
-            loading = loading,
-            error = error,
-            sourceTerm = null,
-            cue = null,
-            cueIndex = null,
-            anchorOffset = null,
-            anchor = null,
-            placeBelow = true,
-            preferSidePlacement = true,
-            selectedRange = selectedRange,
-            selectionText = selectionText,
-            popupSentence = null
-        )
-    }
-
-    fun openMainLookupCuePreview(cue: SubtitleCue, sourceBookTitle: String? = null) {
-        if (effectiveLookupDictionaries.isEmpty()) {
-            exportStatus = context.getString(R.string.bookreader_lookup_no_dict)
-            return
-        }
-        mainLookupPopupVisible = true
-        mainLookupSession.clear()
-        mainLookupAutoPlayNonce += 1L
-        mainLookupAutoPlayedKey = null
-        mainLookupPopupTitle = cue.text
-        mainLookupPopupError = null
-        mainLookupPopupLoading = false
-        mainLookupPopupCue = cue
-        mainLookupPopupSelectedRange = null
-        mainLookupPopupAudioUri = if (sourceBookTitle.isNullOrBlank()) {
-            audioUri
-        } else {
-            readerBooks.firstOrNull { it.title == sourceBookTitle }?.audioUri ?: audioUri
-        }
-        mainLookupSession.push(
-            buildMainLookupLayer(
-                rawResults = emptyList(),
-                loading = false,
-                error = null,
-                selectedRange = null,
-                selectionText = cue.text
+            dictionaryFirstLayerResults = popup.first.state.results
+            dictionaryFirstLayerHtml = renderMainHoshiFirstLayerHtml(
+                popup = popup.first,
+                backgroundColorCss = dictionaryPageBackgroundCss
             )
-        )
+            dictionaryFirstLayerClearSelectionSignal += 1
+            clearMainHoshiChildPopups()
+            mainHoshiLookupCue = null
+            mainHoshiLookupSelectedRange = null
+            mainHoshiLookupAudioUri = audioUri
+            mainHoshiLookupTitle = query
+            recordStatisticsLookup(context, currentStatisticsBookKey())
+            Log.d("MainHoshiResultPopup", "dictionary first-layer applied query='${query.take(32)}' results=${popup.first.state.results.size}")
+        }.onFailure { error ->
+            dictionaryFirstLayerHtml = ""
+            dictionaryFirstLayerResults = emptyList()
+            dictionaryFirstLayerClearSelectionSignal += 1
+            exportStatus = "Lookup failed: ${error.message ?: "unknown error"}"
+        }
+        lookupLoading = false
     }
 
-    fun pushMainLookupRootLayer(
-        hits: List<DictionarySearchResult>,
-        cue: ReaderSubtitleCue?,
-        selectedRange: IntRange?,
-        selectionText: String?,
-        popupSentence: String?,
-        anchor: ReaderLookupAnchor? = null,
-        placeBelow: Boolean = true
+    fun showCollectionFirstLayerLookup(
+        selection: ReaderSelectionData,
+        sourceRange: IntRange,
+        cue: SubtitleCue?,
+        audioForExport: Uri?,
     ) {
-        mainLookupSession.push(
-            buildLookupLayerFromRawResults(
-                rawResults = hits,
-                dictionaryCssByName = dictionaryCssByName,
-                dictionaryPriorityByName = dictionaryPriorityByName,
-                dictionaryTypeByName = dictionaryTypeByName,
-                loading = false,
-                error = null,
-                sourceTerm = null,
-                cue = cue,
-                cueIndex = null,
-                anchorOffset = null,
-                anchor = anchor,
-                placeBelow = placeBelow,
-                preferSidePlacement = true,
-                selectedRange = selectedRange,
-                selectionText = selectionText,
-                popupSentence = popupSentence
-            )
+        val query = selection.text.trim()
+        if (query.isBlank()) return
+        runCatching {
+            val popup = createMainHoshiFirstLayerPopup(selection = selection)
+            if (popup == null) {
+                collectionFirstLayerHtml = ""
+                collectionFirstLayerResults = emptyList()
+                collectionFirstLayerClearSelectionSignal += 1
+                exportStatus = context.getString(R.string.bookreader_lookup_failed)
+                Log.d("MainHoshiResultPopup", "collection first-layer empty query='${query.take(32)}'")
+                return@runCatching
+            }
+            val matchedText = popup.first.state.results.firstOrNull()?.matched ?: query
+            val selectedRange = matchedRangeFromSentenceOffset(
+                sentence = selection.sentence,
+                sentenceOffset = selection.sentenceOffset,
+                matchedText = matchedText
+            ) ?: sourceRange
+            collectionLookupPreviewSelectedRange = selectedRange
+            collectionFirstLayerResults = popup.first.state.results
+            collectionFirstLayerHtml = renderMainHoshiFirstLayerHtml(popup.first)
+            collectionFirstLayerClearSelectionSignal += 1
+            clearMainHoshiChildPopups()
+            mainHoshiLookupCue = cue
+            mainHoshiLookupSelectedRange = selectedRange
+            mainHoshiLookupAudioUri = audioForExport
+            mainHoshiLookupTitle = query
+            recordStatisticsLookup(context, currentStatisticsBookKey())
+            Log.d("MainHoshiResultPopup", "collection first-layer applied query='${query.take(32)}' results=${popup.first.state.results.size}")
+        }.onFailure { error ->
+            collectionFirstLayerHtml = ""
+            collectionFirstLayerResults = emptyList()
+            collectionFirstLayerClearSelectionSignal += 1
+            exportStatus = "Lookup failed: ${error.message ?: "unknown error"}"
+        }
+    }
+
+    fun showMainHoshiLookup(
+        selection: ReaderSelectionData,
+        cue: SubtitleCue?,
+        selectedRange: IntRange?,
+        audioForExport: Uri?,
+        titleForExport: String,
+        showRangeSelection: Boolean = false
+    ): Boolean {
+        Log.d(
+            "MainHoshiResultPopup",
+            "showMainHoshiLookup start text='${selection.text.take(32)}' range=${selectedRange ?: "null"} rect=${selection.rect.x},${selection.rect.y} ${selection.rect.width}x${selection.rect.height} showRange=$showRangeSelection"
         )
+        val popup = mainHoshiLookupSession.createPopup(
+            selection = selection,
+            options = mainHoshiLookupOptions(showRangeSelection = showRangeSelection),
+        )
+        if (popup == null) {
+            Log.d("MainHoshiResultPopup", "showMainHoshiLookup empty text='${selection.text.take(32)}'")
+            return false
+        }
+        mainHoshiLookupPopups.clear()
+        mainHoshiLookupPopups.add(popup.first)
+        mainHoshiLookupCue = cue
+        mainHoshiLookupSelectedRange = selectedRange
+        mainHoshiLookupAudioUri = audioForExport
+        mainHoshiLookupTitle = titleForExport.ifBlank { selection.text }
+        recordStatisticsLookup(context, currentStatisticsBookKey())
+        Log.d(
+            "MainHoshiResultPopup",
+            "showMainHoshiLookup applied text='${selection.text.take(32)}' popupCount=${mainHoshiLookupPopups.size}"
+        )
+        return true
+    }
+
+    fun pushMainHoshiRecursiveLookup(selection: ReaderSelectionData): Boolean {
+        Log.d(
+            "MainHoshiResultPopup",
+            "pushRecursiveLookup start text='${selection.text.take(32)}' rect=${selection.rect.x},${selection.rect.y} ${selection.rect.width}x${selection.rect.height}"
+        )
+        val popup = mainHoshiLookupSession.createPopup(
+            selection = selection,
+            options = mainHoshiLookupOptions(showRangeSelection = false),
+        )
+        if (popup == null) {
+            Log.d("MainHoshiResultPopup", "pushRecursiveLookup empty text='${selection.text.take(32)}'")
+            return false
+        }
+        mainHoshiLookupPopups.clear()
+        mainHoshiLookupPopups.add(popup.first)
+        Log.d(
+            "MainHoshiResultPopup",
+            "pushRecursiveLookup applied text='${selection.text.take(32)}' popupCount=${mainHoshiLookupPopups.size}"
+        )
+        return true
+    }
+
+    fun startMainHoshiLookup(request: MainLookupRequest): Boolean {
+        Log.d("MainHoshiResultPopup", "startMainHoshiLookup request=${request::class.simpleName}")
+        return when (request) {
+            is MainLookupRequest.Cue -> {
+                val cue = request.cue
+                val selection = findMainLookupSelection(cue.text, request.offset) ?: return true
+                val selectedToken = selection.text.trim().takeIf { it.isNotBlank() } ?: return true
+                val readerSelection = request.anchor?.boundingRectCoreOrNull()?.let { anchorRect ->
+                    createHoshiReaderSelectionFromCueTap(
+                        cueText = cue.text,
+                        cueIndex = 0,
+                        cues = listOf(cue.toReaderSubtitleCue()),
+                        offset = request.offset,
+                        anchorRect = anchorRect,
+                        density = rootDensity.density
+                    )
+                } ?: mainHoshiFallbackSelection(selectedToken, request.anchor).copy(
+                    sentence = cue.text,
+                    sentenceOffset = selection.range.first
+                )
+                val exportAudioUri = if (request.sourceBookTitle.isNullOrBlank()) {
+                    audioUri
+                } else {
+                    readerBooks.firstOrNull { it.title == request.sourceBookTitle }?.audioUri ?: audioUri
+                }
+                showMainHoshiLookup(
+                    selection = readerSelection,
+                    cue = cue,
+                    selectedRange = selection.range,
+                    audioForExport = exportAudioUri,
+                    titleForExport = selectedToken,
+                    showRangeSelection = false
+                )
+                true
+            }
+            is MainLookupRequest.Candidates -> {
+                val query = request.rawCandidates.firstOrNull()?.trim().orEmpty()
+                if (query.isBlank()) return true
+                showMainHoshiLookup(
+                    selection = mainHoshiFallbackSelection(query, request.anchor),
+                    cue = null,
+                    selectedRange = null,
+                    audioForExport = audioUri,
+                    titleForExport = query,
+                    showRangeSelection = false
+                )
+                true
+            }
+        }
     }
 
     fun startMainLookup(request: MainLookupRequest) {
@@ -1900,398 +1970,151 @@ private fun ReaderSyncScreen() {
             exportStatus = context.getString(R.string.bookreader_lookup_no_dict)
             return
         }
-        when (request) {
-            is MainLookupRequest.Cue -> {
-                val cue = request.cue
-                val selection = findMainLookupSelection(cue.text, request.offset)
-                val selectionRange = selection?.range
-                mainLookupPopupSelectedRange = null
-                mainLookupPopupCue = cue
-                mainLookupPopupAudioUri = if (request.sourceBookTitle.isNullOrBlank()) {
-                    audioUri
-                } else {
-                    readerBooks.firstOrNull { it.title == request.sourceBookTitle }?.audioUri ?: audioUri
-                }
-                val selectedToken = selection?.text?.trim().orEmpty()
-                if (selectedToken.isBlank()) {
-                    mainLookupPopupError = context.getString(R.string.bookreader_lookup_failed)
-                    return
-                }
-                mainLookupPopupVisible = true
-                mainLookupAutoPlayNonce += 1L
-                mainLookupAutoPlayedKey = null
-                mainLookupPopupTitle = selectedToken
-                mainLookupPopupError = null
-                mainLookupPopupLoading = true
-                fun buildCueLayer(
-                    rawResults: List<DictionarySearchResult>,
-                    loading: Boolean,
-                    error: String?
-                ): ReaderLookupLayer {
-                    val keepCollectionsRootTopCenter =
-                        activeSection == MiningSection.COLLECTIONS && mainLookupSession.size <= 1
-                    val useAnchoredCueLayer = request.anchor != null && !keepCollectionsRootTopCenter
-                    return if (useAnchoredCueLayer) {
-                        buildLookupLayerFromRawResults(
-                            rawResults = rawResults,
-                            dictionaryCssByName = dictionaryCssByName,
-                            dictionaryPriorityByName = dictionaryPriorityByName,
-                            dictionaryTypeByName = dictionaryTypeByName,
-                            loading = loading,
-                            error = error,
-                            sourceTerm = null,
-                            cue = null,
-                            cueIndex = null,
-                            anchorOffset = null,
-                            anchor = request.anchor,
-                            placeBelow = request.placeBelow,
-                            preferSidePlacement = true,
-                            selectedRange = null,
-                            selectionText = selectedToken,
-                            popupSentence = null
-                        )
-                    } else {
-                        buildMainLookupLayer(
-                            rawResults = rawResults,
-                            loading = loading,
-                            error = error,
-                            selectedRange = null,
-                            selectionText = selectedToken
-                        )
-                    }
-                }
-                setOrPushMainLookupLayer(
-                    buildCueLayer(
-                        rawResults = emptyList(),
-                        loading = true,
-                        error = null
-                    )
-                )
-                queryMainLookupCandidates(
-                    candidates = listOf(selectedToken),
-                    expandCandidates = false
-                ) { result ->
-                    result.onSuccess { hits ->
-                        if (hits.isEmpty()) {
-                            setOrPushMainLookupLayer(
-                                buildCueLayer(
-                                    rawResults = emptyList(),
-                                    loading = false,
-                                    error = null
-                                )
-                            )
-                            mainLookupPopupLoading = false
-                            mainLookupPopupSelectedRange = null
-                            return@onSuccess
-                        }
-                        setOrPushMainLookupLayer(
-                            buildCueLayer(
-                                rawResults = hits,
-                                loading = false,
-                                error = null
-                            )
-                        )
-                        mainLookupPopupSelectedRange = if (hits.isNotEmpty()) {
-                            trimSelectionRangeByMatchedLength(selectionRange, hits.first().matchedLength)
-                        } else {
-                            null
-                        }
-                        mainLookupPopupLoading = false
-                    }.onFailure { error ->
-                        setOrPushMainLookupLayer(
-                            buildCueLayer(
-                                rawResults = emptyList(),
-                                loading = false,
-                                error = error.message ?: context.getString(R.string.bookreader_lookup_failed)
-                            )
-                        )
-                        mainLookupPopupError = error.message ?: context.getString(R.string.bookreader_lookup_failed)
-                        mainLookupPopupLoading = false
-                    }
-                }
-            }
-            is MainLookupRequest.Candidates -> {
-                val candidates = normalizeLookupCandidates(request.rawCandidates)
-                if (candidates.isEmpty()) return
-                if (activeSection == MiningSection.DICTIONARY && request.anchor == null) {
-                    return
-                }
-                val rootToken = candidates.first()
-                val inferredRange = rootToken.indices.firstOrNull()?.let { 0..rootToken.lastIndex }
-                val useAnchoredRootLayer = activeSection == MiningSection.DICTIONARY && request.anchor != null
-                val pushAnchoredLayer = useAnchoredRootLayer && mainLookupSession.size > 0
-                var targetLayerIndex = mainLookupSession.lastIndex
-                fun buildCandidatesLayer(
-                    rawResults: List<DictionarySearchResult>,
-                    loading: Boolean,
-                    error: String?
-                ): ReaderLookupLayer {
-                    return if (useAnchoredRootLayer) {
-                        buildLookupLayerFromRawResults(
-                            rawResults = rawResults,
-                            dictionaryCssByName = dictionaryCssByName,
-                            dictionaryPriorityByName = dictionaryPriorityByName,
-                            dictionaryTypeByName = dictionaryTypeByName,
-                            loading = loading,
-                            error = error,
-                            sourceTerm = null,
-                            cue = null,
-                            cueIndex = null,
-                            anchorOffset = null,
-                            anchor = request.anchor,
-                            placeBelow = request.placeBelow,
-                            preferSidePlacement = true,
-                            selectedRange = inferredRange,
-                            selectionText = rootToken,
-                            popupSentence = null
-                        )
-                    } else {
-                        buildMainLookupLayer(
-                            rawResults = rawResults,
-                            loading = loading,
-                            error = error,
-                            selectedRange = inferredRange,
-                            selectionText = rootToken
-                        )
-                    }
-                }
-                fun applyCandidatesLayer(layer: ReaderLookupLayer) {
-                    if (pushAnchoredLayer && targetLayerIndex in mainLookupSession.layers.indices) {
-                        mainLookupSession.replaceAt(targetLayerIndex) { layer }
-                    } else {
-                        setOrPushMainLookupLayer(layer)
-                        targetLayerIndex = mainLookupSession.lastIndex
-                    }
-                }
-                mainLookupPopupVisible = true
-                mainLookupAutoPlayNonce += 1L
-                mainLookupAutoPlayedKey = null
-                mainLookupPopupTitle = rootToken
-                mainLookupPopupError = null
-                mainLookupPopupLoading = true
-                if (activeSection != MiningSection.COLLECTIONS) {
-                    mainLookupPopupCue = null
-                }
-                mainLookupPopupSelectedRange = inferredRange
-                mainLookupPopupAudioUri = null
-                val loadingLayer = buildCandidatesLayer(
-                    rawResults = emptyList(),
-                    loading = true,
-                    error = null
-                )
-                if (pushAnchoredLayer) {
-                    mainLookupSession.push(loadingLayer)
-                    targetLayerIndex = mainLookupSession.lastIndex
-                } else {
-                    applyCandidatesLayer(loadingLayer)
-                }
-                queryMainLookupCandidates(
-                    candidates = candidates,
-                    preferredDictionaryName = request.preferredDictionaryName,
-                    preferredDictionaryCacheKey = request.preferredDictionaryCacheKey,
-                    restrictToPreferredDictionary = request.restrictToPreferredDictionary,
-                    expandCandidates = request.expandCandidates,
-                    exactTermOnly = request.exactTermOnly,
-                    pinnedDefinitionKey = request.pinnedDefinitionKey
-                ) { result ->
-                    result.onSuccess { hits ->
-                        android.util.Log.d(
-                            MAIN_LOOKUP_DEBUG_LOG_TAG,
-                            "candidates success count=${hits.size} sourceCandidates=${candidates.joinToString("|")} preferred=${request.preferredDictionaryName.orEmpty()} cacheKey=${request.preferredDictionaryCacheKey.orEmpty()} exact=${request.exactTermOnly} pinned=${request.pinnedDefinitionKey.orEmpty()}"
-                        )
-                        if (hits.isEmpty()) {
-                            android.util.Log.d(
-                                MAIN_LOOKUP_DEBUG_LOG_TAG,
-                                "candidates empty section=$activeSection exactOnly=${request.exactTermOnly} preferred=${request.preferredDictionaryName.orEmpty()} cacheKey=${request.preferredDictionaryCacheKey.orEmpty()} pinned=${request.pinnedDefinitionKey.orEmpty()}"
-                            )
-                            applyCandidatesLayer(
-                                buildCandidatesLayer(
-                                    rawResults = emptyList(),
-                                    loading = false,
-                                    error = null
-                                )
-                            )
-                            mainLookupPopupLoading = false
-                            return@onSuccess
-                        }
-                        applyCandidatesLayer(
-                            buildCandidatesLayer(
-                                rawResults = hits,
-                                loading = false,
-                                error = null
-                            )
-                        )
-                        mainLookupPopupLoading = false
-                    }.onFailure { error ->
-                        applyCandidatesLayer(
-                            buildCandidatesLayer(
-                                rawResults = emptyList(),
-                                loading = false,
-                                error = error.message ?: context.getString(R.string.bookreader_lookup_failed)
-                            )
-                        )
-                        mainLookupPopupError = error.message ?: context.getString(R.string.bookreader_lookup_failed)
-                        mainLookupPopupLoading = false
-                    }
-                }
-            }
-            is MainLookupRequest.RecursiveTap -> {
-                val tapData = request.tapData
-                val recursivePriorityByName = effectiveLookupDictionaries
-                    .mapIndexed { index, dictionary -> dictionary.name to index }
-                    .toMap()
-                launchRecursiveLookupIntoSession(
-                    context = context,
-                    scope = scope,
-                    session = mainLookupSession,
-                    sourceLayerIndex = request.sourceLayerIndex,
-                    definitionKey = request.definitionKey,
-                    tapData = tapData,
-                    explicitAnchor = tapData.resolveScreenAnchorRects()
-                        .takeIf { it.isNotEmpty() }
-                        ?.let { ReaderLookupAnchor(rects = it) },
-                    viewportHeight = view.height,
-                    dictionaries = effectiveLookupDictionaries,
-                    nextRequestNonce = {
-                        val next = mainLookupRequestNonce + 1L
-                        mainLookupRequestNonce = next
-                        next
-                    },
-                    isRequestNonceCurrent = { nonce -> mainLookupRequestNonce == nonce },
-                    logAnchorTag = MAIN_LOOKUP_DEBUG_LOG_TAG,
-                    logPosTag = MAIN_LOOKUP_DEBUG_LOG_TAG,
-                    buildPopupSentence = { term, data ->
-                        data.sentence.trim().ifBlank { data.nodeText }
-                    },
-                    buildLayer = { resolved ->
-                        val layer = buildLookupLayerFromRawResults(
-                            rawResults = resolved.hits,
-                            dictionaryCssByName = dictionaryCssByName,
-                            dictionaryPriorityByName = recursivePriorityByName,
-                            dictionaryTypeByName = dictionaryTypeByName,
-                            loading = false,
-                            error = null,
-                            sourceTerm = null,
-                            cue = resolved.sourceCue,
-                            cueIndex = resolved.sourceCueIndex,
-                            anchorOffset = tapData.offset,
-                            anchor = resolved.adjustedAnchor,
-                            placeBelow = resolved.shouldPlaceBelow,
-                            preferSidePlacement = true,
-                            selectedRange = null,
-                            selectionText = resolved.term,
-                            popupSentence = resolved.popupSentence
-                        )
-                        android.util.Log.d(
-                            MAIN_LOOKUP_DEBUG_LOG_TAG,
-                            "recursiveDebug render term=${resolved.term} grouped=${
-                                layer.groupedResults.joinToString(" || ") { grouped ->
-                                    "${grouped.term}:${grouped.dictionaries.joinToString(",") { it.dictionary }}"
-                                }
-                            }"
-                        )
-                        layer
-                    },
-                    onNoSelection = { },
-                    onNoDictionary = { },
-                    onAfterApply = { applied ->
-                        mainLookupPopupTitle = applied.term
-                    },
-                    onFailure = { error ->
-                        mainLookupPopupError = error.message ?: context.getString(R.string.bookreader_lookup_failed)
-                    }
-                )
-            }
-        }
+        startMainHoshiLookup(request)
     }
 
-    fun exportLookupGroupToAnki(
-        groupedResult: GroupedLookupResult,
-        sourceCue: SubtitleCue?,
-        lookupTitle: String
-    ) {
-        val dictionaryGroup = groupedResult.dictionaries.firstOrNull() ?: return
-        val cueText = sourceCue?.text?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: lookupTitle.trim().ifBlank { groupedResult.term }
-        val cue = sourceCue ?: SubtitleCue(
-            startMs = 0L,
-            endMs = 0L,
-            text = cueText
+    fun triggerMainHoshiQueryLookup(rawQuery: String) {
+        val query = rawQuery.trim()
+        lookupQuery = query
+        if (query.isBlank()) {
+            lookupLoading = false
+            closeMainLookupPopup()
+            return
+        }
+        if (effectiveLookupDictionaries.isEmpty()) {
+            exportStatus = context.getString(R.string.bookreader_lookup_no_dict)
+            return
+        }
+        showDictionaryFirstLayerLookup(query)
+    }
+
+    fun openMainLookupCuePreview(cue: SubtitleCue, sourceBookTitle: String? = null) {
+        if (effectiveLookupDictionaries.isEmpty()) {
+            exportStatus = context.getString(R.string.bookreader_lookup_no_dict)
+            return
+        }
+        val exportAudioUri = if (sourceBookTitle.isNullOrBlank()) {
+            audioUri
+        } else {
+            readerBooks.firstOrNull { it.title == sourceBookTitle }?.audioUri ?: audioUri
+        }
+        mainHoshiLookupPopups.clear()
+        mainHoshiLookupCue = null
+        mainHoshiLookupSelectedRange = null
+        mainHoshiLookupAudioUri = null
+        mainHoshiLookupTitle = ""
+        collectionLookupPreviewVisible = true
+        collectionLookupPreviewSentence = cue.text
+        collectionLookupPreviewCue = cue
+        collectionLookupPreviewSelectedRange = null
+        collectionLookupPreviewAudioUri = exportAudioUri
+        collectionFirstLayerHtml = ""
+        collectionFirstLayerResults = emptyList()
+        collectionFirstLayerClearSelectionSignal += 1
+    }
+
+    fun exportMainHoshiLookupEntryToAnki(content: String): Boolean {
+        android.util.Log.d(
+            "AnkiExportDebug",
+            "mainHoshiExport rawContentLen=${content.length} rawPrefix=${content.take(120)}"
         )
-        val popupSelectionText = sourceCue?.let { cueItem ->
-            mainLookupPopupSelectedRange?.let { range ->
-                val start = range.first.coerceIn(0, cueItem.text.length)
-                val endExclusive = (range.last + 1).coerceIn(start, cueItem.text.length)
-                if (endExclusive > start) cueItem.text.substring(start, endExclusive) else ""
-            }
-        }?.trim()?.takeIf { it.isNotBlank() }
-        val exportDefinitions = dictionaryGroup.definitions
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-        val exportDefinitionHtml = exportDefinitions.joinToString("<br>").ifBlank { groupedResult.term }
-        val settingsSnapshot = audiobookSettings
-        closeMainLookupPopup()
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val preparedLookupAudio = prepareLookupAudioForAnkiExport(
-                        context = context,
-                        term = groupedResult.term,
-                        reading = groupedResult.reading,
-                        settings = settingsSnapshot
-                    )
-                    try {
-                        addLookupDefinitionToAnkiMain(
-                            context = context,
-                            cue = cue,
-                            audioUri = mainLookupPopupAudioUri,
-                            lookupAudioUri = preparedLookupAudio?.uri,
-                            bookTitle = readerBooks.firstOrNull { it.audioUri == mainLookupPopupAudioUri }?.title,
-                            entry = dictionaryGroup.entry,
-                            definition = exportDefinitionHtml,
-                            dictionaryCss = dictionaryGroup.css,
-                            groupedDictionaries = groupedResult.dictionaries,
-                            popupSelectionText = popupSelectionText,
-                            lookupTermOverride = groupedResult.term
-                        )
-                    } finally {
-                        preparedLookupAudio?.cleanup?.invoke()
-                    }
-                }
-            }
-            val status = result.fold(
-                onSuccess = { exportResult ->
-                    val message = ankiExportResultMessage(context, exportResult)
-                    if (exportResult !is AnkiExportResult.DuplicateSkipped &&
-                        message.isNotBlank()
-                    ) {
-                        Toast.makeText(
-                            context,
-                            message.take(220),
-                            if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
-                        ).show()
-                    }
-                    ""
-                },
-                onFailure = {
-                    val message = it.message ?: context.getString(R.string.bookreader_anki_export_failed)
-                    Toast.makeText(context, message.take(200), Toast.LENGTH_LONG).show()
-                    message
-                }
-            )
-            exportStatus = status.ifBlank { null }
+        val payload = runCatching { JSONObject(content) }.getOrNull() ?: run {
+            android.util.Log.d("AnkiExportDebug", "mainHoshiExport payloadParseFailed")
+            return false
         }
+        val expression = payload.optString("expression").trim().ifBlank {
+            payload.optString("matched").trim()
+        }
+        if (expression.isBlank()) {
+            android.util.Log.d(
+                "AnkiExportDebug",
+                "mainHoshiExport expressionBlank payloadKeys=${payload.keys().asSequence().joinToString(",")}"
+            )
+            return false
+        }
+        val reading = payload.optString("reading").trim().takeIf { it.isNotBlank() }
+        val glossary = payload.optString("glossary").trim().ifBlank {
+            payload.optString("glossaryFirst").trim().ifBlank { expression }
+        }
+        val frequency = payload.optString("frequenciesHtml").trim().ifBlank {
+            payload.optString("freqHarmonicRank").trim()
+        }
+        val pitch = payload.optString("pitchCategories").trim().ifBlank {
+            payload.optString("pitchPositions").trim()
+        }
+        val primaryDictionaryName = payload.optString("selectedDictionary").trim()
+        val sourceCue = mainHoshiLookupCue
+        val cueText = sourceCue?.text?.trim()?.takeIf { it.isNotBlank() }
+            ?: mainHoshiLookupTitle.trim().ifBlank { expression }
+        val cue = sourceCue ?: SubtitleCue(startMs = 0L, endMs = 0L, text = cueText)
+        val popupSelectionText = payload.optString("popupSelectionText").trim().takeIf { it.isNotBlank() }
+            ?: mainHoshiLookupSelectedRange?.let { range ->
+                val start = range.first.coerceIn(0, cue.text.length)
+                val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
+                if (endExclusive > start) cue.text.substring(start, endExclusive) else null
+            }?.trim()?.takeIf { it.isNotBlank() }
+        val exportAudioUri = mainHoshiLookupAudioUri
+        android.util.Log.d(
+            "AnkiExportDebug",
+            "mainHoshiExport payload expression=$expression reading=${reading.orEmpty()} dict=$primaryDictionaryName " +
+                "glossaryLen=${glossary.length} frequencyLen=${frequency.length} pitchLen=${pitch.length} " +
+                "popupSelectionLen=${popupSelectionText.orEmpty().length} audioUri=${exportAudioUri?.toString().orEmpty()} " +
+                "lookupCue=${sourceCue?.text.orEmpty().take(48)}"
+        )
+        val exportResult = runBlocking {
+            withContext(Dispatchers.IO) {
+                val preparedLookupAudio = prepareLookupAudioForAnkiExport(
+                    context = context,
+                    term = expression,
+                    reading = reading,
+                    settings = audiobookSettings
+                )
+                try {
+                    addLookupDefinitionToAnkiMain(
+                        context = context,
+                        cue = cue,
+                        audioUri = exportAudioUri,
+                        lookupAudioUri = preparedLookupAudio?.uri,
+                        bookTitle = readerBooks.firstOrNull { it.audioUri == exportAudioUri }?.title,
+                        entry = DictionaryEntry(
+                            term = expression,
+                            reading = reading,
+                            definitions = listOf(glossary),
+                            pitch = pitch.ifBlank { null },
+                            frequency = frequency.ifBlank { null },
+                            dictionary = primaryDictionaryName.ifBlank { expression }
+                        ),
+                        definition = glossary,
+                        glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
+                        dictionaryCss = dictionaryCssByName[primaryDictionaryName],
+                        groupedDictionaries = emptyList(),
+                        popupSelectionText = popupSelectionText,
+                        lookupTermOverride = expression
+                    )
+                } finally {
+                    preparedLookupAudio?.cleanup?.invoke()
+                }
+            }
+        }
+        val message = ankiExportResultMessage(context, exportResult)
+        android.util.Log.d(
+            "AnkiExportDebug",
+            "mainHoshiExport result=${exportResult.javaClass.simpleName} message=${message.take(220)}"
+        )
+        if (message.isNotBlank() && exportResult !is AnkiExportResult.DuplicateSkipped) {
+            Toast.makeText(
+                context,
+                message.take(220),
+                if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+            ).show()
+        }
+        return exportResult == AnkiExportResult.Added ||
+            exportResult is AnkiExportResult.DuplicateSkipped
     }
 
-    fun playLookupGroupAudio(groupedResult: GroupedLookupResult) {
-        playLookupAudioForTerm(
-            context = context,
-            term = groupedResult.term,
-            reading = groupedResult.reading,
-            settings = audiobookSettings
-        ) { error ->
-            exportStatus = error
+    fun checkMainAnkiDuplicate(expression: String): AnkiDuplicateCheckResult {
+        return runBlocking {
+            checkAnkiDuplicateByFirstFieldAsync(context, expression)
         }
     }
 
@@ -2311,7 +2134,7 @@ private fun ReaderSyncScreen() {
         dictionaryOrderIds = dictionaryOrderIds.filterNot { it == removedId }
         saveDictionaryOrderIds(context, dictionaryOrderIds)
         if (lookupQuery.isNotBlank()) {
-            triggerLookupCandidates(listOf(lookupQuery))
+            triggerMainHoshiQueryLookup(lookupQuery)
         }
     }
 
@@ -2335,7 +2158,7 @@ private fun ReaderSyncScreen() {
 
         persistImportState()
         if (lookupQuery.isNotBlank()) {
-            triggerLookupCandidates(listOf(lookupQuery))
+            triggerMainHoshiQueryLookup(lookupQuery)
         }
     }
 
@@ -2347,14 +2170,15 @@ private fun ReaderSyncScreen() {
         saveDictionaryOrderIds(context, dictionaryOrderIds)
         invalidateDictionaryLookupCaches()
         if (lookupQuery.isNotBlank()) {
-            triggerLookupCandidates(listOf(lookupQuery))
+            triggerMainHoshiQueryLookup(lookupQuery)
         }
     }
 
     fun refreshLookupIfNeeded() {
         invalidateDictionaryLookupCaches()
+        bumpDictionaryDataVersion(context)
         if (lookupQuery.isNotBlank()) {
-            triggerLookupCandidates(listOf(lookupQuery))
+            triggerMainHoshiQueryLookup(lookupQuery)
         }
     }
 
@@ -2385,7 +2209,38 @@ private fun ReaderSyncScreen() {
         refreshLookupIfNeeded()
     }
 
-    fun moveCombinedDictionary(fromIndex: Int, toIndex: Int, combinedItems: List<CombinedDictionaryItem>) {
+    fun moveCombinedDictionary(fromIndex: Int, toIndex: Int) {
+        val importedItems = dictionaryRefs.mapIndexed { index, ref ->
+            val loaded = loadedDictionaries.getOrNull(index)
+            CombinedDictionaryItem(
+                id = importedDictionaryId(ref),
+                type = CombinedDictionaryType.IMPORTED,
+                title = ref.name.ifBlank { context.getString(R.string.dictionary_default_name, index + 1) },
+                countText = loaded?.entryCount?.let { context.getString(R.string.dictionary_count, it) }
+                    ?: context.getString(R.string.dictionary_unloaded),
+                enabled = ref.enabled
+            )
+        }
+        val mountedItems = if (mdxMountState.enabled) {
+            mdxMountState.entries.map { entry ->
+                CombinedDictionaryItem(
+                    id = "mnt:${entry.cacheKey}",
+                    type = CombinedDictionaryType.MOUNTED,
+                    title = entry.displayName.ifBlank { "mounted.mdx" },
+                    countText = if (entry.enabled) context.getString(R.string.mdx_dict_enabled) else context.getString(R.string.mdx_dict_disabled),
+                    enabled = entry.enabled
+                )
+            }
+        } else {
+            emptyList()
+        }
+        val combinedById = (importedItems + mountedItems).associateBy { it.id }
+        val combinedItems = buildList {
+            dictionaryOrderIds.forEach { id -> combinedById[id]?.let(::add) }
+            (importedItems + mountedItems).forEach { item ->
+                if (none { it.id == item.id }) add(item)
+            }
+        }
         if (fromIndex == toIndex) return
         if (fromIndex !in combinedItems.indices || toIndex !in combinedItems.indices) return
         val ids = combinedItems.map { it.id }.toMutableList()
@@ -2394,7 +2249,7 @@ private fun ReaderSyncScreen() {
         dictionaryOrderIds = ids
         saveDictionaryOrderIds(context, dictionaryOrderIds)
         if (lookupQuery.isNotBlank()) {
-            triggerLookupCandidates(listOf(lookupQuery))
+            triggerMainHoshiQueryLookup(lookupQuery)
         }
     }
 
@@ -2457,7 +2312,7 @@ private fun ReaderSyncScreen() {
 
                 updateDictionaryProgress(
                     DictionaryImportProgress(
-                        stage = "Importing ${index + 1}/${importTargets.size}: $displayName",
+                        stage = context.getString(R.string.dictionary_import_batch, index + 1, importTargets.size, displayName),
                         current = 0,
                         total = 0
                     )
@@ -2474,7 +2329,14 @@ private fun ReaderSyncScreen() {
                         ) { progress ->
                             scope.launch(Dispatchers.Main.immediate) {
                                 updateDictionaryProgress(
-                                    progress.copy(stage = "${progress.stage} (${index + 1}/${importTargets.size})")
+                                    progress.copy(
+                                        stage = context.getString(
+                                            R.string.dictionary_import_batch_suffix,
+                                            localizeDictionaryImportStage(context, progress.stage),
+                                            index + 1,
+                                            importTargets.size
+                                        )
+                                    )
                                 )
                             }
                         }
@@ -2508,6 +2370,7 @@ private fun ReaderSyncScreen() {
                     uri = uriValue,
                     name = displayName,
                     cacheKey = cacheKey,
+                    dictionaryType = parsedDictionary.dictionaryType,
                     enabled = true
                 )).distinctBy { it.uri }
             }
@@ -2523,7 +2386,7 @@ private fun ReaderSyncScreen() {
             dictionaryLoading = false
             dictionaryError = importErrors.takeIf { it.isNotEmpty() }?.joinToString("\n")
             if (lookupQuery.isNotBlank()) {
-                triggerLookupCandidates(listOf(lookupQuery))
+                triggerMainHoshiQueryLookup(lookupQuery)
             }
         }
     }
@@ -2533,70 +2396,12 @@ private fun ReaderSyncScreen() {
         readerBooks.firstOrNull { it.id == selectedBookId }
     }
 
-    val selectedEntry = remember(lookupResults, selectedEntryKey) {
-        lookupResults.firstOrNull { entryStableKey(it.entry) == selectedEntryKey }?.entry
-    }
-    val groupedLookupResults = remember(lookupResults, dictionaryCssByName, dictionaryPriorityByName) {
-        groupLookupResultsByTerm(
-            results = lookupResults,
-            dictionaryCssByName = dictionaryCssByName,
-            dictionaryPriorityByName = dictionaryPriorityByName
-        )
-    }
-    LaunchedEffect(
-        activeSection,
-        lookupLoading,
-        lookupQuery,
-        groupedLookupResults,
-        audiobookSettings.lookupPlaybackAudioEnabled,
-        audiobookSettings.lookupPlaybackAudioAutoPlay
-    ) {
-        if (activeSection != MiningSection.DICTIONARY || lookupLoading) return@LaunchedEffect
-        if (!audiobookSettings.lookupPlaybackAudioEnabled || !audiobookSettings.lookupPlaybackAudioAutoPlay) {
-            return@LaunchedEffect
-        }
-        val normalizedQuery = lookupQuery.trim()
-        if (normalizedQuery.isBlank()) {
-            dictionaryLookupAutoPlayedKey = null
-            return@LaunchedEffect
-        }
-        val target = groupedLookupResults.firstOrNull() ?: return@LaunchedEffect
-        val key = "$normalizedQuery|${target.term}|${target.reading.orEmpty()}"
-        if (dictionaryLookupAutoPlayedKey == key) return@LaunchedEffect
-        dictionaryLookupAutoPlayedKey = key
-        playLookupGroupAudio(target)
-    }
-    val mainLookupActiveLayer = mainLookupSession.activeLayer
-    val groupedMainLookupPopupResults = remember(mainLookupActiveLayer) {
-        mainLookupActiveLayer?.groupedResults ?: emptyList()
-    }
-    LaunchedEffect(
-        mainLookupPopupVisible,
-        mainLookupPopupLoading,
-        mainLookupPopupError,
-        groupedMainLookupPopupResults,
-        audiobookSettings.lookupPlaybackAudioEnabled,
-        audiobookSettings.lookupPlaybackAudioAutoPlay,
-        mainLookupAutoPlayNonce
-    ) {
-        if (!mainLookupPopupVisible || mainLookupPopupLoading || mainLookupPopupError != null) return@LaunchedEffect
-        if (!audiobookSettings.lookupPlaybackAudioEnabled || !audiobookSettings.lookupPlaybackAudioAutoPlay) {
-            return@LaunchedEffect
-        }
-        val target = groupedMainLookupPopupResults.firstOrNull() ?: return@LaunchedEffect
-        val key = "${mainLookupAutoPlayNonce}|${target.term}|${target.reading.orEmpty()}"
-        if (mainLookupAutoPlayedKey == key) return@LaunchedEffect
-        mainLookupAutoPlayedKey = key
-        playLookupGroupAudio(target)
-    }
     val dictionarySpecificVariableChoices = remember(loadedDictionaries) {
         loadedDictionaries.map { "{single-glossary-${it.name}}" }.distinct()
     }
     val fieldVariableChoices = remember(dictionarySpecificVariableChoices) {
         (FIELD_VARIABLE_CHOICES + dictionarySpecificVariableChoices).distinct()
     }
-    val selectedEntryDictionaryCss = selectedEntry?.dictionary?.let(dictionaryCssByName::get)
-
     val sliderValue = when {
         durationMs <= 0L -> 0f
         dragProgress != null -> dragProgress!!.coerceIn(0f, 1f)
@@ -2609,6 +2414,8 @@ private fun ReaderSyncScreen() {
     val cueLookupTokens = remember(activeCue?.text) {
         activeCue?.let { tokenizeLookupTerms(it.text).take(12) } ?: emptyList()
     }
+    val mainPageScrollState = rememberScrollState()
+    val dictionaryManagerScrollState = rememberScrollState()
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -2642,7 +2449,10 @@ private fun ReaderSyncScreen() {
             }
         },
         bottomBar = {
-            NavigationBar {
+            NavigationBar(
+                containerColor = hoshiBottomNavigationBackgroundColor(),
+                tonalElevation = 0.dp
+            ) {
                 NavigationBarItem(
                     selected = activeSection == MiningSection.MAIN,
                     onClick = { activeSection = MiningSection.MAIN },
@@ -2654,7 +2464,7 @@ private fun ReaderSyncScreen() {
                     selected = activeSection == MiningSection.DICTIONARY,
                     onClick = { activeSection = MiningSection.DICTIONARY },
                     // Visual glyph (intentional): keep as a symbol and do not localize.
-                    icon = { Text("辞") },
+                    icon = { Text("調") },
                     label = { Text(stringResource(R.string.nav_dictionary)) }
                 )
                 NavigationBarItem(
@@ -2675,17 +2485,24 @@ private fun ReaderSyncScreen() {
         }
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize()) {
+            val mainContentModifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 16.dp,
+                    bottom = 16.dp
+                )
+                .let { baseModifier ->
+                    if (activeSection == MiningSection.DICTIONARY) {
+                        baseModifier
+                    } else {
+                        baseModifier.verticalScroll(mainPageScrollState)
+                    }
+                }
             Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(
-                        start = 16.dp,
-                        end = 16.dp,
-                        top = 16.dp,
-                        bottom = 16.dp
-                    )
-                    .verticalScroll(rememberScrollState()),
+                modifier = mainContentModifier,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
             Text("⑨Player", style = MaterialTheme.typography.titleLarge)
@@ -2738,7 +2555,10 @@ private fun ReaderSyncScreen() {
                 }
 
                 if (readerBooks.isEmpty()) {
-                    Card(modifier = Modifier.fillMaxWidth()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = hoshiPanelBackgroundColor())
+                    ) {
                         Column(
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -2901,7 +2721,8 @@ private fun ReaderSyncScreen() {
                                     onLongClick = {
                                         requestRenameBook(book)
                                     }
-                                )
+                                ),
+                            colors = CardDefaults.cardColors(containerColor = hoshiCardBackgroundColor())
                         ) {
                             Box(modifier = Modifier.fillMaxWidth()) {
                                 Row(
@@ -2986,7 +2807,10 @@ private fun ReaderSyncScreen() {
                 }
 
                 if (srtLoading || srtError != null || exportStatus != null) {
-                    Card(modifier = Modifier.fillMaxWidth()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = hoshiPanelBackgroundColor())
+                    ) {
                         Column(
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -3005,480 +2829,162 @@ private fun ReaderSyncScreen() {
             }
 
             if (activeSection == MiningSection.DICTIONARY) {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(stringResource(R.string.dictionary_title), style = MaterialTheme.typography.titleMedium)
-                        Text(stringResource(R.string.dictionary_summary, dictionaryCount, totalDictionaryEntries))
-                        if (dictionaryLoading) {
-                            Text(dictionaryProgressText ?: stringResource(R.string.dictionary_importing))
-                            if (dictionaryProgressValue != null) {
-                                LinearProgressIndicator(
-                                    progress = { dictionaryProgressValue ?: 0f },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .let { baseModifier ->
+                            if (showDictionaryManager) {
+                                baseModifier.verticalScroll(dictionaryManagerScrollState)
                             } else {
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                baseModifier
                             }
-                        }
-                        if (dictionaryError != null) {
-                            Text(stringResource(R.string.dictionary_error, dictionaryError.orEmpty()), color = MaterialTheme.colorScheme.error)
-                        }
-                        Row(
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Button(onClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) }) {
-                                Text(stringResource(R.string.dictionary_import))
-                            }
-                            if (mdxMountState.enabled) {
-                                OutlinedButton(
-                                    onClick = { context.startActivity(Intent(context, MdxMountSettingsActivity::class.java)) }
-                                ) {
-                                    Text(stringResource(R.string.settings_mdx_title))
+                        },
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (dictionaryUiConfig.showRichHomeDictionary) {
+                        DictionaryManagementCard(
+                            context = context,
+                            dictionaryCount = dictionaryCount,
+                            totalDictionaryEntries = totalDictionaryEntries,
+                            containerColor = hoshiPanelBackgroundColor(),
+                            itemContainerColor = hoshiCardBackgroundColor(),
+                            dictionaryLoading = dictionaryLoading,
+                            dictionaryProgressText = dictionaryProgressText,
+                            dictionaryProgressValue = dictionaryProgressValue,
+                            dictionaryError = dictionaryError,
+                            showDictionaryManager = showDictionaryManager,
+                            showDictionaryDeleteActions = showDictionaryDeleteActions,
+                            dictionaryRefs = dictionaryRefs,
+                            loadedDictionaries = loadedDictionaries,
+                            dictionaryOrderIds = dictionaryOrderIds,
+                            mdxMountState = mdxMountState,
+                            onImportClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) },
+                            onShowDictionaryManagerToggle = {
+                                val nextShowDictionaryManager = !showDictionaryManager
+                                showDictionaryManager = nextShowDictionaryManager
+                                if (nextShowDictionaryManager) {
+                                    focusManager.clearFocus(force = true)
+                                    keyboardController?.hide()
+                                    lookupLoading = false
+                                    dictionaryFirstLayerHtml = ""
+                                    dictionaryFirstLayerResults = emptyList()
+                                    dictionaryFirstLayerClearSelectionSignal += 1
+                                    clearMainHoshiChildPopups()
                                 }
-                            }
-                            OutlinedButton(onClick = { showDictionaryManager = !showDictionaryManager }) {
-                                Text(
-                                    if (showDictionaryManager) {
-                                        stringResource(R.string.dictionary_hide_list)
-                                    } else {
-                                        stringResource(R.string.dictionary_show_list)
-                                    }
-                                )
-                            }
-                            OutlinedButton(onClick = { showDictionaryDeleteActions = !showDictionaryDeleteActions }) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Delete,
-                                    contentDescription = stringResource(R.string.common_delete),
-                                    tint = if (showDictionaryDeleteActions) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
+                            },
+                            onShowDictionaryDeleteActionsToggle = { showDictionaryDeleteActions = !showDictionaryDeleteActions },
+                            onOpenMdxClick = {
+                                context.startActivity(Intent(context, MdxMountSettingsActivity::class.java))
+                            },
+                            onMoveCombinedDictionary = { fromIndex, toIndex -> moveCombinedDictionary(fromIndex, toIndex) },
+                            onRemoveImportedDictionary = ::removeDictionaryAt,
+                            onRemoveMountedDictionary = ::removeMountedDictionaryByCacheKey,
+                            onSetImportedDictionaryEnabled = ::setImportedDictionaryEnabled,
+                            onSetMountedDictionaryEnabled = ::setMountedDictionaryEnabled
+                        )
+                    }
 
-                        if (showDictionaryManager) {
-                            val importedItems = dictionaryRefs.mapIndexed { index, ref ->
-                                val loaded = loadedDictionaries.getOrNull(index)
-                                CombinedDictionaryItem(
-                                    id = importedDictionaryId(ref),
-                                    type = CombinedDictionaryType.IMPORTED,
-                                    title = ref.name.ifBlank { context.getString(R.string.dictionary_default_name, index + 1) },
-                                    countText = loaded?.entryCount?.let { context.getString(R.string.dictionary_count, it) }
-                                        ?: stringResource(R.string.dictionary_unloaded),
-                                    enabled = ref.enabled
-                                )
-                            }
-                            val mountedItems = if (mdxMountState.enabled) {
-                                mdxMountState.entries.map { entry ->
-                                    CombinedDictionaryItem(
-                                        id = "mnt:${entry.cacheKey}",
-                                        type = CombinedDictionaryType.MOUNTED,
-                                        title = entry.displayName.ifBlank { "mounted.mdx" },
-                                        countText = if (entry.enabled) context.getString(R.string.mdx_dict_enabled) else context.getString(R.string.mdx_dict_disabled),
-                                        enabled = entry.enabled
-                                    )
-                                }
-                            } else {
-                                emptyList()
-                            }
-                            val combinedById = (importedItems + mountedItems).associateBy { it.id }
-                            val combinedItems = buildList {
-                                dictionaryOrderIds.forEach { id ->
-                                    combinedById[id]?.let(::add)
-                                }
-                                (importedItems + mountedItems).forEach { item ->
-                                    if (none { it.id == item.id }) add(item)
-                                }
-                            }
-                            if (combinedItems.isEmpty()) {
-                                Text(stringResource(R.string.dictionary_empty))
-                            } else {
-                                combinedItems.forEachIndexed { index, item ->
-                                    Card(modifier = Modifier.fillMaxWidth()) {
-                                        Column(
-                                            modifier = Modifier.padding(10.dp),
-                                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Column(
-                                                    modifier = Modifier.weight(1f),
-                                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                                ) {
-                                                    Text(item.title)
-                                                    Text(
-                                                        when (item.type) {
-                                                            CombinedDictionaryType.IMPORTED -> item.countText
-                                                            CombinedDictionaryType.MOUNTED -> stringResource(R.string.mdx_dict_prefix, item.countText)
-                                                        },
-                                                        style = MaterialTheme.typography.bodySmall
-                                                    )
-                                                }
-                                            }
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Row(
-                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    OutlinedButton(
-                                                        onClick = { moveCombinedDictionary(index, index - 1, combinedItems) },
-                                                        enabled = !dictionaryLoading && index > 0
-                                                    ) {
-                                                        Text("↑")
-                                                    }
-                                                    OutlinedButton(
-                                                        onClick = { moveCombinedDictionary(index, index + 1, combinedItems) },
-                                                        enabled = !dictionaryLoading && index < combinedItems.lastIndex
-                                                    ) {
-                                                        Text("↓")
-                                                    }
-                                                    if (showDictionaryDeleteActions) {
-                                                        OutlinedButton(
-                                                            onClick = {
-                                                                when (item.type) {
-                                                                    CombinedDictionaryType.IMPORTED -> {
-                                                                        val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == item.id }
-                                                                        if (targetIndex >= 0) removeDictionaryAt(targetIndex)
-                                                                    }
-                                                                    CombinedDictionaryType.MOUNTED -> {
-                                                                        removeMountedDictionaryByCacheKey(item.id.removePrefix("mnt:"))
-                                                                    }
-                                                                }
-                                                            },
-                                                            enabled = !dictionaryLoading,
-                                                            contentPadding = ButtonDefaults.ContentPadding
-                                                        ) {
-                                                            Icon(
-                                                                imageVector = Icons.Outlined.Delete,
-                                                                contentDescription = stringResource(R.string.common_delete),
-                                                                tint = MaterialTheme.colorScheme.error
-                                                            )
-                                                        }
-                                                    }
-                                                }
-                                                Spacer(modifier = Modifier.weight(1f))
-                                                Switch(
-                                                    checked = item.enabled,
-                                                    onCheckedChange = { checked ->
-                                                        when (item.type) {
-                                                            CombinedDictionaryType.IMPORTED -> setImportedDictionaryEnabled(item.id, checked)
-                                                            CombinedDictionaryType.MOUNTED -> setMountedDictionaryEnabled(item.id.removePrefix("mnt:"), checked)
-                                                        }
-                                                    },
-                                                    enabled = !dictionaryLoading
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
+                    if (!showDictionaryManager) {
                         OutlinedTextField(
                             value = lookupQuery,
                             onValueChange = { lookupQuery = it },
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text(stringResource(R.string.dictionary_query_label)) },
-                            singleLine = true
-                        )
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = {
-                                    focusManager.clearFocus(force = true)
-                                    keyboardController?.hide()
-                                    triggerLookupCandidates(listOf(lookupQuery))
-                                },
-                                enabled = effectiveLookupDictionaries.isNotEmpty() && lookupQuery.isNotBlank()
-                            ) {
-                                Text(stringResource(R.string.dictionary_query_button))
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    lookupQuery = ""
-                                    lookupResults = emptyList()
-                                    selectedEntryKey = null
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(
+                                onSearch = {
+                                    if (effectiveLookupDictionaries.isNotEmpty() && lookupQuery.isNotBlank()) {
+                                        focusManager.clearFocus(force = true)
+                                        keyboardController?.hide()
+                                        triggerMainHoshiQueryLookup(lookupQuery)
+                                    }
                                 }
-                            ) {
-                                Text(stringResource(R.string.common_clear))
-                            }
-                        }
+                            )
+                        )
 
                         if (lookupLoading) {
                             Text(stringResource(R.string.dictionary_querying))
                         }
 
-                        groupedLookupResults.forEach { groupedResult ->
-                            Card(modifier = Modifier.fillMaxWidth()) {
-                                Column(
-                                    modifier = Modifier.padding(10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    val ankiKey = remember(groupedResult.term, groupedResult.reading) {
-                                        "${groupedResult.term}|${groupedResult.reading.orEmpty()}"
-                                    }
-                                    val hasDuplicateState = dictionaryAnkiDuplicateByKey.containsKey(ankiKey)
-                                    val duplicateInAnki = dictionaryAnkiDuplicateByKey[ankiKey] == true
-                                    val checkingDuplicate = (dictionaryAnkiCheckingByKey[ankiKey] == true) || !hasDuplicateState
-                                    LaunchedEffect(ankiKey, groupedResult.term) {
-                                        dictionaryAnkiCheckingByKey[ankiKey] = true
-                                        val duplicated = withContext(Dispatchers.IO) {
-                                            hasAnkiDuplicateByFirstFieldAsync(
-                                                context,
-                                                groupedResult.term
-                                            )
-                                        }
-                                        dictionaryAnkiDuplicateByKey[ankiKey] = duplicated
-                                        dictionaryAnkiCheckingByKey[ankiKey] = false
-                                    }
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        LookupHeadwordWithReading(
-                                            term = groupedResult.term,
-                                            reading = groupedResult.reading,
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .padding(end = 8.dp),
+                        if (dictionaryFirstLayerHtml.isNotBlank()) {
+                            var dictionaryFirstLayerOrigin by remember { mutableStateOf(Offset.Zero) }
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f)
+                                    .onGloballyPositioned { coordinates ->
+                                        val bounds = coordinates.boundsInWindow()
+                                        val densityScale = rootDensity.density.coerceAtLeast(0.1f)
+                                        dictionaryFirstLayerOrigin = Offset(
+                                            x = bounds.left / densityScale,
+                                            y = bounds.top / densityScale
                                         )
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            if (audiobookSettings.lookupPlaybackAudioEnabled) {
-                                                OutlinedButton(
-                                                    onClick = { playLookupGroupAudio(groupedResult) }
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Outlined.Audiotrack,
-                                                        contentDescription = stringResource(R.string.common_audio),
-                                                        modifier = Modifier.size(18.dp)
-                                                    )
-                                                }
+                                    },
+                                color = dictionaryPageBackground,
+                            ) {
+                                MainHoshiResultWebView(
+                                    html = dictionaryFirstLayerHtml,
+                                    results = dictionaryFirstLayerResults,
+                                    clearSelectionSignal = dictionaryFirstLayerClearSelectionSignal,
+                                    selectionOffsetX = dictionaryFirstLayerOrigin.x.toDouble(),
+                                    selectionOffsetY = dictionaryFirstLayerOrigin.y.toDouble(),
+                                    callbacks = PopupWebViewCallbacks(
+                                        onTapOutside = { dictionaryFirstLayerClearSelectionSignal += 1 },
+                                        onSwipeDismiss = { dictionaryFirstLayerClearSelectionSignal += 1 },
+                                        onMineEntry = { content -> exportMainHoshiLookupEntryToAnki(content) },
+                                        onDuplicateCheck = { expression -> checkMainAnkiDuplicate(expression) },
+                                        onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
+                                        onTextSelected = { selection ->
+                                            val popup = createMainHoshiFirstLayerPopup(selection = selection)
+                                            if (popup == null) {
+                                                null
+                                            } else {
+                                                mainHoshiLookupPopups.clear()
+                                                mainHoshiLookupPopups.add(popup.first)
+                                                popup.second
                                             }
-                                            OutlinedButton(
-                                                onClick = {
-                                                    val primary = groupedResult.dictionaries.firstOrNull() ?: return@OutlinedButton
-                                                    selectedEntryKey = entryStableKey(primary.entry)
-                                                    exportLookupGroupToAnki(
-                                                        groupedResult = groupedResult,
-                                                        sourceCue = null,
-                                                        lookupTitle = lookupQuery
-                                                    )
-                                                },
-                                                enabled = (!duplicateInAnki || allowAddWhenDuplicate) && !checkingDuplicate
-                                            ) {
-                                                Text(
-                                                    when {
-                                                        checkingDuplicate -> "…"
-                                                        duplicateInAnki -> "-"
-                                                        else -> "+"
-                                                    }
+                                        },
+                                        onLookupRedirect = { query ->
+                                            mainHoshiLookupSession.lookup(
+                                                query,
+                                                DictionarySettings().maxResults,
+                                                DictionarySettings().scanLength,
+                                            )
+                                        },
+                                        onLookupRedirected = { selection, results ->
+                                            if (!pushMainHoshiRecursiveLookup(selection)) {
+                                                Log.w(
+                                                    "MainHoshiResultPopup",
+                                                    "dictionary redirect failed to open recursive popup query='${selection.text.take(32)}' resultCount=${results.size}"
                                                 )
                                             }
-                                        }
-                                    }
-                                    val frequencyLabel = stringResource(R.string.bookreader_meta_frequency)
-                                    val pitchLabel = stringResource(R.string.bookreader_meta_pitch)
-                                    val topFrequencyBadges = groupedResult.dictionaries
-                                        .asSequence()
-                                        .map { dictionaryGroup ->
-                                            parseMetaBadges(
-                                                dictionaryGroup.frequency,
-                                                frequencyLabel
-                                            )
-                                        }
-                                        .firstOrNull { it.isNotEmpty() }
-                                        .orEmpty()
-                                    if (topFrequencyBadges.isNotEmpty()) {
-                                        MetaBadgeRow(
-                                            badges = topFrequencyBadges,
-                                            labelColor = Color(0xFFDDF0DD),
-                                            labelTextColor = Color(0xFF305E33)
-                                        )
-                                    }
-                                    val topPitchBadges = groupedResult.dictionaries
-                                        .asSequence()
-                                        .map { dictionaryGroup ->
-                                            parsePitchBadgeGroups(
-                                                raw = dictionaryGroup.pitch,
-                                                reading = groupedResult.reading,
-                                                defaultLabel = pitchLabel
-                                            )
-                                        }
-                                        .firstOrNull { it.isNotEmpty() }
-                                        .orEmpty()
-                                    if (topPitchBadges.isNotEmpty()) {
-                                        topPitchBadges.forEach { group ->
-                                            PitchBadgeRow(
-                                                group = group,
-                                                labelColor = Color(0xFFE7DDF8),
-                                                labelTextColor = Color(0xFF4E3A74)
-                                            )
-                                        }
-                                    }
-                                    groupedResult.dictionaries.forEach { dictionaryGroup ->
-                                        val sectionKey = "dictionary|${groupedResult.term}|${dictionaryGroup.dictionary}"
-                                        val expanded = !(dictionaryLookupCollapsedSections[sectionKey] ?: false)
-                                        Card(modifier = Modifier.fillMaxWidth()) {
-                                            Column(
-                                                modifier = Modifier.padding(8.dp),
-                                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                                            ) {
-                                                DictionaryEntryHeader(
-                                                    dictionaryName = dictionaryGroup.dictionary,
-                                                    expanded = expanded,
-                                                    onToggleExpanded = {
-                                                        dictionaryLookupCollapsedSections[sectionKey] = expanded
-                                                    }
+                                        },
+                                        onPlayWordAudio = { _url, term, reading ->
+                                            if (!term.isNullOrBlank()) {
+                                                playLookupAudioForTerm(
+                                                    context = context,
+                                                    term = term,
+                                                    reading = reading,
+                                                    settings = audiobookSettings
                                                 )
-                                                val mergedContent = buildLookupMergedDictionaryContent(
-                                                    term = groupedResult.term,
-                                                    dictionaryName = dictionaryGroup.dictionary,
-                                                    definitions = dictionaryGroup.definitions,
-                                                    dictionaryCss = dictionaryGroup.css,
-                                                    highlightedDefinitionKey = dictionaryPageHighlightedDefinitionKey,
-                                                    highlightedDefinitionRects = dictionaryPageHighlightedRects
-                                                )
-                                                if (expanded && mergedContent != null) {
-                                                    RichDefinitionView(
-                                                        definition = mergedContent.definitionHtml,
-                                                        indexLabel = "",
-                                                        definitionCount = 1,
-                                                        dictionaryName = null,
-                                                        dictionaryCss = mergedContent.dictionaryCss,
-                                                        highlightedRects = mergedContent.highlightedRects,
-                                                        onLookupTap = { tapData ->
-                                                            scope.launch {
-                                                                val mergedCandidates = buildMinimalLookupCandidatesFromTap(tapData)
-                                                                if (mergedCandidates.isEmpty()) {
-                                                                    android.util.Log.d(
-                                                                        "BookLookupTap",
-                                                                        "dictionary tap skip emptyCandidates source=${tapData.tapSource} scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
-                                                                    )
-                                                                    return@launch
-                                                                }
-                                                                val preferredDictionaries = tapData.lookupDictionaryCacheKey
-                                                                    ?.takeIf { it.isNotBlank() }
-                                                                    ?.let { cacheKey -> effectiveLookupDictionaries.filter { it.cacheKey == cacheKey } }
-                                                                    .orEmpty()
-                                                                    .ifEmpty { effectiveLookupDictionaries.filter { it.name == dictionaryGroup.dictionary } }
-                                                                val lookupHits = withContext(Dispatchers.Default) {
-                                                                    val precheckHits = computeLookupResultsWithWinningCandidate(
-                                                                        context = context,
-                                                                        dictionaries = preferredDictionaries.ifEmpty { effectiveLookupDictionaries },
-                                                                        candidates = mergedCandidates,
-                                                                        profile = if (tapData.tapSource.equals("entry-link", ignoreCase = true)) {
-                                                                            DictionaryQueryProfile.FULL
-                                                                        } else {
-                                                                            DictionaryQueryProfile.FAST
-                                                                        },
-                                                                        expandCandidates = false
-                                                                    )?.hits.orEmpty()
-                                                                    if (tapData.tapSource.equals("entry-link", ignoreCase = true)) {
-                                                                        val exactQuery = mergedCandidates.firstOrNull()?.trim().orEmpty()
-                                                                        precheckHits.filter { hit ->
-                                                                            val term = hit.entry.term.trim()
-                                                                            val reading = hit.entry.reading?.trim().orEmpty()
-                                                                            term == exactQuery || reading == exactQuery
-                                                                        }
-                                                                    } else {
-                                                                        precheckHits
-                                                                    }
-                                                                }
-                                                                if (lookupHits.isEmpty()) {
-                                                                    dictionaryPageHighlightedDefinitionKey = null
-                                                                    dictionaryPageHighlightedRects = emptyList()
-                                                                    android.util.Log.d(
-                                                                        "BookLookupTap",
-                                                                        "dictionary tap skip noHits source=${tapData.tapSource} scanLen=${tapData.scanText.length} candidates=${mergedCandidates.joinToString("|")}"
-                                                                    )
-                                                                    return@launch
-                                                                }
-                                                                val matchedLength = lookupHits.firstOrNull()?.matchedLength?.coerceAtLeast(1) ?: 1
-                                                                android.util.Log.d(
-                                                                    "BookLookupTap",
-                                                                    "dictionary tap matched source=${tapData.tapSource} scanLen=${tapData.scanText.length} firstTerm='${lookupHits.firstOrNull()?.entry?.term.orEmpty()}' firstMatchedLen=${lookupHits.firstOrNull()?.matchedLength ?: -1} usedMatchedLen=$matchedLength candidates=${mergedCandidates.joinToString("|")}"
-                                                                )
-                                                                val resolvedRects = resolveDefinitionMatchedRects(
-                                                                    tapData = tapData,
-                                                                    matchedLength = matchedLength
-                                                                )
-                                                                val highlightRects = if (resolvedRects != null) {
-                                                                    val rebuilt = rebuildRectsFromCharacterRectsShared(
-                                                                        charRects = resolvedRects.localCharRects,
-                                                                        matchedLength = matchedLength
-                                                                    )
-                                                                    sanitizeResolvedHighlightRectsShared(
-                                                                        rebuilt,
-                                                                        tapData.localRects
-                                                                    )
-                                                                } else {
-                                                                    rebuildDefinitionRectsByMatchedLengthCore(
-                                                                        rects = tapData.localRects,
-                                                                        charRects = tapData.localCharRects,
-                                                                        nodeText = tapData.nodeText,
-                                                                        startOffset = tapData.offset,
-                                                                        matchedLength = matchedLength
-                                                                    )
-                                                                }
-                                                                dictionaryPageHighlightedDefinitionKey = tapData.tappedDefinitionKey
-                                                                    ?.takeIf { it.isNotBlank() }
-                                                                    ?: mergedContent.firstDefinitionKey
-                                                                dictionaryPageHighlightedRects = highlightRects
-                                                                val anchorRects = tapData.resolveScreenAnchorRects().takeIf { it.isNotEmpty() }
-                                                                val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
-                                                                val anchorBottom = anchor?.boundingRectCoreOrNull()?.bottom
-                                                                val shouldPlaceBelow = anchorBottom?.let { it <= view.height * 0.56f } ?: true
-                                                                android.util.Log.d(
-                                                                    MAIN_LOOKUP_DEBUG_LOG_TAG,
-                                                                    "dictionary tap dispatch source=${tapData.tapSource} merged=${mergedCandidates.joinToString("|")} preferred=${dictionaryGroup.dictionary}"
-                                                                )
-                                                                val isEntryTap = tapData.tapSource.equals("entry", ignoreCase = true)
-                                                                val isEntryLinkTap =
-                                                                    tapData.tapSource.equals("entry-link", ignoreCase = true)
-                                                                val isStrictLinkTap = isEntryTap || isEntryLinkTap
-                                                                val pinnedDefinitionKeyForTap = when {
-                                                                    isEntryTap ->
-                                                                        tapData.tappedDefinitionKey ?: mergedContent.firstDefinitionKey
-                                                                    else -> null
-                                                                }
-                                                                startMainLookup(
-                                                                    MainLookupRequest.Candidates(
-                                                                        rawCandidates = mergedCandidates,
-                                                                        preferredDictionaryName = dictionaryGroup.dictionary,
-                                                                        preferredDictionaryCacheKey = tapData.lookupDictionaryCacheKey,
-                                                                        restrictToPreferredDictionary = isStrictLinkTap,
-                                                                        expandCandidates = false,
-                                                                        exactTermOnly = isStrictLinkTap,
-                                                                        pinnedDefinitionKey = pinnedDefinitionKeyForTap,
-                                                                        anchor = anchor,
-                                                                        placeBelow = shouldPlaceBelow
-                                                                    )
-                                                                )
-                                                            }
-                                                        }
-                                                    )
-                                                }
                                             }
-                                        }
-                                    }
-                                }
+                                        },
+                                    ),
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
+                    }
                 }
             }
-        }
-    }
-}
 
             if (activeSection == MiningSection.COLLECTIONS) {
-                Card(modifier = Modifier.fillMaxWidth()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = hoshiPanelBackgroundColor())
+                ) {
                     Column(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -3489,7 +2995,10 @@ private fun ReaderSyncScreen() {
                             Text(stringResource(R.string.collections_empty))
                         } else {
                             collectedCues.forEach { item ->
-                                Card(modifier = Modifier.fillMaxWidth()) {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = hoshiSoftCardBackgroundColor())
+                                ) {
                                     Column(
                                         modifier = Modifier.padding(10.dp),
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -3548,7 +3057,9 @@ private fun ReaderSyncScreen() {
                         onFontClick = { context.startActivity(Intent(context, FontSettingsActivity::class.java)) },
                         onControllerClick = { context.startActivity(Intent(context, ControllerSettingsActivity::class.java)) },
                         onAnkiClick = { context.startActivity(Intent(context, AnkiSettingsActivity::class.java)) },
+                        onDictionaryClick = { context.startActivity(Intent(context, DictionarySettingsActivity::class.java)) },
                         onAdvancedOverlayClick = { context.startActivity(Intent(context, OverlaySettingsActivity::class.java)) },
+                        onAdvancedStatisticsClick = { context.startActivity(Intent(context, StatisticsDemoActivity::class.java)) },
                         onAdvancedOtherClick = { context.startActivity(Intent(context, OtherSettingsActivity::class.java)) },
                         onLanguageClick = { languageDialogVisible = true },
                         onGuideClick = {
@@ -3565,6 +3076,7 @@ private fun ReaderSyncScreen() {
                                     Toast.makeText(context, context.getString(R.string.settings_export_diagnostics_failed), Toast.LENGTH_SHORT).show()
                                 }
                         },
+                        onUpdateClick = { context.startActivity(Intent(context, UpdateSettingsActivity::class.java)) },
                         onVersionClick = {
                             val version = resolveAppVersionName(context)
                             Toast.makeText(context, context.getString(R.string.settings_version_toast, version), Toast.LENGTH_SHORT).show()
@@ -3651,6 +3163,22 @@ private fun ReaderSyncScreen() {
             )
         }
 
+        if (autoUpdatePromptVisible) {
+            AutoUpdateFirstPromptDialog(
+                onSkip = {
+                    markAutoUpdateFirstPromptShown(context)
+                    saveAutoUpdateEnabled(context, false)
+                    autoUpdatePromptVisible = false
+                },
+                onEnable = {
+                    markAutoUpdateFirstPromptShown(context)
+                    saveAutoUpdateEnabled(context, true)
+                    autoUpdatePromptVisible = false
+                    (activity as? MainActivity)?.checkAppUpdateInBackground(force = true)
+                }
+            )
+        }
+
         if (clearCollectionsConfirmVisible) {
             ClearCollectionsDialog(
                 onDismiss = { clearCollectionsConfirmVisible = false },
@@ -3732,134 +3260,151 @@ private fun ReaderSyncScreen() {
             )
         }
 
-        if (mainLookupPopupVisible) {
-            LookupPopupHost(
-                visible = true,
-                session = mainLookupSession,
-                logTag = MAIN_LOOKUP_DEBUG_LOG_TAG,
-                onDismissTopLayer = {
-                    if (mainLookupSession.size > 1) {
-                        mainLookupSession.pop()
-                    } else {
-                        closeMainLookupPopup()
-                    }
-                },
-                onTruncateToLayer = { layerIndex ->
-                    mainLookupSession.truncateTo(layerIndex)
-                },
-                buildActionState = { layerIndex, layer, _, _ ->
-                    buildLookupCardActionState(
-                        sourceTerm = layer.sourceTerm,
-                        layerIndex = layerIndex,
-                        sessionSize = mainLookupSession.size,
-                        showRangeSelection = false,
-                        showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
-                        showAddToAnki = true
-                    )
-                },
-                contentMaxHeightReserveDp = { layerIndex, _, _, _ ->
-                    if (activeSection == MiningSection.COLLECTIONS && layerIndex == 0 && mainLookupPopupCue != null) 96 else 0
-                },
-                beforeCardContent = { layerIndex, _, _, _ ->
-                    if (layerIndex == 0 && activeSection == MiningSection.COLLECTIONS) {
-                        val popupCue = mainLookupPopupCue
-                        if (popupCue != null) {
-                            var popupCueCoordinates by remember(popupCue.text, mainLookupPopupSelectedRange, layerIndex) {
-                                mutableStateOf<LayoutCoordinates?>(null)
-                            }
-                            var popupCueLayout by remember(popupCue.text, mainLookupPopupSelectedRange, layerIndex) {
-                                mutableStateOf<TextLayoutResult?>(null)
-                            }
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = buildMainHighlightedText(popupCue.text, mainLookupPopupSelectedRange),
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    modifier = Modifier
-                                        .onGloballyPositioned { popupCueCoordinates = it }
-                                        .pointerInput(popupCue) {
-                                            detectTapGestures { tapOffset ->
-                                                val layout = popupCueLayout ?: return@detectTapGestures
-                                                val charOffset = layout.getOffsetForPosition(tapOffset)
-                                                    .coerceIn(0, (popupCue.text.length - 1).coerceAtLeast(0))
-                                                val localRect = layout.getBoundingBox(charOffset)
-                                                val coords = popupCueCoordinates
-                                                val anchor = coords?.let {
-                                                    val topLeft = it.localToWindow(localRect.topLeft)
-                                                    val bottomRight = it.localToWindow(localRect.bottomRight)
-                                                    ReaderLookupAnchor(
-                                                        rects = listOf(
-                                                            Rect(
-                                                                topLeft.x,
-                                                                topLeft.y,
-                                                                bottomRight.x,
-                                                                bottomRight.y
-                                                            )
-                                                        )
-                                                    )
-                                                }
-                                                val placeBelow = anchor?.boundingRectCoreOrNull()
-                                                    ?.let { rect -> rect.bottom <= view.height * 0.56f }
-                                                    ?: true
-                                                startMainLookup(
-                                                    MainLookupRequest.Cue(
-                                                        cue = popupCue,
-                                                        offset = layout.getOffsetForPosition(tapOffset),
-                                                        anchor = anchor,
-                                                        placeBelow = placeBelow
-                                                    )
-                                                )
-                                            }
-                                        },
-                                    onTextLayout = { popupCueLayout = it }
+        if (collectionLookupPreviewVisible) {
+            MainCollectionsHoshiPopup(
+                previewSentence = collectionLookupPreviewSentence,
+                selectedRange = collectionLookupPreviewSelectedRange,
+                html = collectionFirstLayerHtml,
+                results = collectionFirstLayerResults,
+                clearSelectionSignal = collectionFirstLayerClearSelectionSignal,
+                onClose = { closeMainLookupPopup() },
+                onPreviewLookup = { offset, layout, coords ->
+                    val selection = selectLookupScanText(collectionLookupPreviewSentence, offset)
+                        ?: return@MainCollectionsHoshiPopup
+                    val query = selection.text.trim()
+                    if (query.isBlank()) return@MainCollectionsHoshiPopup
+                    val anchor = if (layout != null && coords != null) {
+                        val charOffset = selection.range.first
+                            .coerceIn(0, (collectionLookupPreviewSentence.length - 1).coerceAtLeast(0))
+                        val localRect = layout.getBoundingBox(charOffset)
+                        val topLeft = coords.localToWindow(localRect.topLeft)
+                        val bottomRight = coords.localToWindow(localRect.bottomRight)
+                        ReaderLookupAnchor(
+                            rects = listOf(
+                                Rect(
+                                    topLeft.x,
+                                    topLeft.y,
+                                    bottomRight.x,
+                                    bottomRight.y
                                 )
-                                Text(
-                                    "${formatTime(popupCue.startMs)} - ${formatTime(popupCue.endMs)}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        }
-                    }
-                },
-                onToggleSection = { layerIndex, key, expanded ->
-                    mainLookupSession.toggleCollapsedSection(layerIndex, key, expanded)
-                },
-                onDefinitionLookup = { sourceLayerIndex, definitionKey, tapData ->
-                    val isTopLayer = sourceLayerIndex == mainLookupSession.lastIndex
-                    val isPreviousLayer = sourceLayerIndex == mainLookupSession.lastIndex - 1
-                    val resolvedDefinitionKey = tapData.tappedDefinitionKey ?: definitionKey
-                    android.util.Log.d(
-                        "BookLookupTap",
-                        "main cardTap dispatch layer=$sourceLayerIndex last=${mainLookupSession.lastIndex} isTop=$isTopLayer isPrev=$isPreviousLayer key=$resolvedDefinitionKey source=${tapData.tapSource} scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
-                    )
-                    val effectiveLayerIndex = if (isTopLayer || isPreviousLayer) {
-                        sourceLayerIndex
-                    } else {
-                        mainLookupSession.truncateTo(sourceLayerIndex)
-                        sourceLayerIndex.coerceIn(0, mainLookupSession.lastIndex.coerceAtLeast(0))
-                    }
-                        startMainLookup(
-                            MainLookupRequest.RecursiveTap(
-                                sourceLayerIndex = effectiveLayerIndex,
-                                definitionKey = resolvedDefinitionKey,
-                                tapData = tapData
                             )
                         )
+                    } else null
+                    if (anchor == null) {
+                        exportStatus = context.getString(R.string.bookreader_lookup_failed)
+                        Log.w(
+                            "MainHoshiResultPopup",
+                            "Missing anchor for collection first-layer lookup; refusing to open popup"
+                        )
+                        return@MainCollectionsHoshiPopup
+                    }
+                    Log.d(
+                        "MainHoshiResultPopup",
+                        "collection first-layer anchor=${anchor.boundingRectCoreOrNull()?.let { "${it.left},${it.top},${it.right},${it.bottom}" }} " +
+                            "query='${query.take(32)}' selection='${selection.text.take(32)}' selectedRange=${selection.range}"
+                    )
+                    showCollectionFirstLayerLookup(
+                        selection = mainHoshiFallbackSelection(query, anchor).copy(
+                            sentence = collectionLookupPreviewSentence,
+                            sentenceOffset = selection.range.first
+                        ),
+                        sourceRange = selection.range,
+                        cue = collectionLookupPreviewCue,
+                        audioForExport = collectionLookupPreviewAudioUri
+                    )
                 },
-                onPlayAudio = { _, groupedResult ->
-                    playLookupGroupAudio(groupedResult)
+                onResultTextSelected = { selection ->
+                    val popup = createMainHoshiFirstLayerPopup(selection = selection)
+                    if (popup == null) {
+                        null
+                    } else {
+                        mainHoshiLookupPopups.clear()
+                        mainHoshiLookupPopups.add(popup.first)
+                        popup.second
+                    }
                 },
-                onAddToAnki = { _, groupedResult ->
-                    val primary = groupedResult.dictionaries.firstOrNull()
-                    if (primary != null) {
-                        selectedEntryKey = entryStableKey(primary.entry)
-                        exportLookupGroupToAnki(
-                            groupedResult = groupedResult,
-                            sourceCue = mainLookupPopupCue,
-                            lookupTitle = mainLookupPopupTitle
+                onLookupRedirect = { query ->
+                    mainHoshiLookupSession.lookup(
+                        query,
+                        DictionarySettings().maxResults,
+                        DictionarySettings().scanLength,
+                    )
+                },
+                onResultRedirected = { selection, results ->
+                    if (!pushMainHoshiRecursiveLookup(selection)) {
+                        Log.w(
+                            "MainHoshiResultPopup",
+                            "collection redirect failed to open recursive popup query='${selection.text.take(32)}' resultCount=${results.size}"
                         )
                     }
                 },
-                onCloseAll = { closeMainLookupPopup() }
+                onTapOutside = {
+                    collectionFirstLayerClearSelectionSignal += 1
+                },
+                onMineEntry = { content -> exportMainHoshiLookupEntryToAnki(content) },
+                onDuplicateCheck = { expression -> checkMainAnkiDuplicate(expression) },
+                onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
+                onPlayWordAudio = { term, reading ->
+                    if (!term.isNullOrBlank()) {
+                        playLookupAudioForTerm(
+                            context = context,
+                            term = term,
+                            reading = reading,
+                            settings = audiobookSettings
+                        )
+                    }
+                },
+            )
+        }
+
+        if (mainHoshiLookupPopups.isNotEmpty()) {
+            LookupPopupStackView(
+                popups = mainHoshiLookupPopups,
+                onPopupsChange = { next ->
+                    mainHoshiLookupPopups.clear()
+                    mainHoshiLookupPopups.addAll(next)
+                    if (next.isEmpty()) {
+                        mainHoshiLookupCue = null
+                        mainHoshiLookupSelectedRange = null
+                        mainHoshiLookupAudioUri = null
+                        mainHoshiLookupTitle = ""
+                    }
+                },
+                lookupChildPopup = { selection ->
+                    mainHoshiLookupSession.createPopup(
+                        selection = selection,
+                        options = mainHoshiLookupOptions(showRangeSelection = false),
+                    )
+                },
+                onLookupRedirect = { query ->
+                    mainHoshiLookupSession.lookup(
+                        query,
+                        DictionarySettings().maxResults,
+                        DictionarySettings().scanLength,
+                    )
+                },
+                onPlayWordAudio = { _url, term, reading ->
+                    if (!term.isNullOrBlank()) {
+                        playLookupAudioForTerm(
+                            context = context,
+                            term = term,
+                            reading = reading,
+                            settings = audiobookSettings
+                        )
+                    }
+                },
+                onMineEntry = { content ->
+                    exportMainHoshiLookupEntryToAnki(content)
+                },
+                onDuplicateCheck = { expression -> checkMainAnkiDuplicate(expression) },
+                onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
+                onCloseAll = {
+                    clearMainHoshiChildPopups()
+                },
+                modifier = Modifier.fillMaxSize(),
+                onRootPopupDismissed = {
+                    clearMainHoshiChildPopups()
+                },
             )
         }
 
@@ -3924,7 +3469,7 @@ private fun VersionEasterGifPopup(
     }
 }
 
-private fun resolveAppVersionName(context: Context): String {
+internal fun resolveAppVersionName(context: Context): String {
     return runCatching {
         @Suppress("DEPRECATION")
         context.packageManager.getPackageInfo(context.packageName, 0)
@@ -4064,50 +3609,6 @@ private fun extractRecentReaderLogs(recentLogs: String): String {
         .filter { line -> interestingTags.any { tag -> line.contains(tag) } }
         .joinToString(separator = "\n")
         .ifBlank { "(no recent BookReaderBack/BookLookupTap logs captured)" }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun FieldVariableDropdown(
-    fieldName: String,
-    selectedValue: String,
-    options: List<String>,
-    onSelect: (String) -> Unit
-) {
-    var expanded by remember(fieldName) { mutableStateOf(false) }
-    val displayText = selectedValue.ifBlank { "(Empty)" }
-
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = !expanded }
-    ) {
-        OutlinedTextField(
-            value = displayText,
-            onValueChange = {},
-            readOnly = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .menuAnchor(type = MenuAnchorType.PrimaryNotEditable),
-            label = { Text(fieldName) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            singleLine = true
-        )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
-            options.forEach { choice ->
-                val text = choice.ifBlank { "(Empty)" }
-                DropdownMenuItem(
-                    text = { Text(text) },
-                    onClick = {
-                        expanded = false
-                        onSelect(choice)
-                    }
-                )
-            }
-        }
-    }
 }
 
 private data class SubtitleCue(
@@ -4785,6 +4286,7 @@ private fun addLookupDefinitionToAnkiMain(
     bookTitle: String?,
     entry: DictionaryEntry,
     definition: String,
+    glossaryFirstHtml: String? = null,
     dictionaryCss: String?,
     groupedDictionaries: List<GroupedLookupDictionary> = emptyList(),
     popupSelectionText: String? = null,
@@ -4840,39 +4342,43 @@ private fun addLookupDefinitionToAnkiMain(
     return exportToAnkiDroidApiResult(context, card, preparedExport.config)
 }
 
-private fun buildMinedCard(
-    cue: SubtitleCue,
-    selectedEntry: DictionaryEntry?,
-    lookupQuery: String,
-    audioUri: Uri?,
-    dictionaryCss: String?
-): MinedCard {
-    val fallbackWord = extractLookupToken(lookupQuery).ifBlank { extractLookupToken(cue.text) }
-    val word = selectedEntry?.term?.ifBlank { null } ?: fallbackWord.ifBlank { "Unknown" }
-    return MinedCard(
-        word = word,
-        sentence = cue.text,
-        reading = selectedEntry?.reading,
-        definitions = selectedEntry?.definitions ?: emptyList(),
-        dictionaryName = selectedEntry?.dictionary,
-        dictionaryCss = dictionaryCss,
-        pitch = selectedEntry?.pitch,
-        frequency = selectedEntry?.frequency,
-        cueStartMs = cue.startMs,
-        cueEndMs = cue.endMs,
-        audioUri = audioUri
-    )
-}
-
-private fun buildMainHighlightedText(text: String, selectedRange: IntRange?): AnnotatedString {
+internal fun buildMainHighlightedText(text: String, selectedRange: IntRange?): AnnotatedString {
     return buildAnnotatedString {
         append(text)
         val range = selectedRange ?: return@buildAnnotatedString
         val start = range.first.coerceIn(0, text.length)
         val endExclusive = (range.last + 1).coerceIn(start, text.length)
         if (endExclusive <= start) return@buildAnnotatedString
-        addStyle(SpanStyle(background = Color(0x66A0A0A0)), start, endExclusive)
+        addStyle(SpanStyle(background = Color(0x1FA0A0A0)), start, endExclusive)
     }
+}
+
+@Composable
+internal fun MainLookupClickableSentence(
+    text: AnnotatedString,
+    style: androidx.compose.ui.text.TextStyle,
+    modifier: Modifier = Modifier,
+    onTextLayout: (TextLayoutResult) -> Unit = {},
+    onTextTap: (offset: Int) -> Unit,
+) {
+    var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+    Text(
+        text = text,
+        style = style,
+        modifier = modifier.pointerInput(text, onTextTap) {
+            detectTapGestures { tapOffset ->
+                val layout = textLayoutResult ?: return@detectTapGestures
+                val textLength = text.text.length
+                if (textLength <= 0) return@detectTapGestures
+                val offset = layout.getOffsetForPosition(tapOffset).coerceIn(0, textLength - 1)
+                onTextTap(offset)
+            }
+        },
+        onTextLayout = {
+            textLayoutResult = it
+            onTextLayout(it)
+        }
+    )
 }
 
 private fun findMainLookupSelection(

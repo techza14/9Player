@@ -9,6 +9,7 @@ internal data class PersistedDictionaryRef(
     val uri: String,
     val name: String,
     val cacheKey: String? = null,
+    val dictionaryType: String = "Term",
     val enabled: Boolean = true
 )
 
@@ -80,8 +81,15 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         if (uri.isBlank()) continue
         val name = item.optString("name").trim()
         val cacheKey = item.optString("cacheKey").trim().ifBlank { null }
+        val dictionaryType = item.optString("dictionaryType").trim().ifBlank { "Term" }
         val enabled = item.optBoolean("enabled", true)
-        dictionaries += PersistedDictionaryRef(uri = uri, name = name, cacheKey = cacheKey, enabled = enabled)
+        dictionaries += PersistedDictionaryRef(
+            uri = uri,
+            name = name,
+            cacheKey = cacheKey,
+            dictionaryType = dictionaryType,
+            enabled = enabled
+        )
     }
 
     val books = mutableListOf<PersistedReaderBook>()
@@ -156,6 +164,7 @@ internal fun savePersistedImports(context: Context, state: PersistedImports) {
                         put("uri", ref.uri)
                         put("name", ref.name)
                         put("cacheKey", ref.cacheKey ?: "")
+                        put("dictionaryType", ref.dictionaryType)
                         put("enabled", ref.enabled)
                     })
                 }

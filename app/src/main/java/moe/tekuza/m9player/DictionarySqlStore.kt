@@ -3,21 +3,21 @@ package moe.tekuza.m9player
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import androidx.documentfile.provider.DocumentFile
 import android.util.Log
 import android.util.JsonReader
 import android.util.JsonToken
+import de.manhhao.hoshi.HoshiDicts
 import org.json.JSONObject
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.StringReader
-import java.net.URLDecoder
 import java.util.Locale
-import java.util.concurrent.Callable
-import java.util.concurrent.Executors
-import java.util.concurrent.FutureTask
-import kotlin.math.max
+import java.util.zip.ZipInputStream
 
 private const val DICTIONARY_ENTRY_STORE_DIR = "dictionary_entry_store"
 private const val DICTIONARY_HOSHI_ROOT_DIR = "hoshidicts"
@@ -26,21 +26,11 @@ private const val DICTIONARY_HOSHI_BLOBS_FILE = "blobs.bin"
 private const val DICTIONARY_HOSHI_OFFSETS_FILE = "offsets.bin"
 private const val DICTIONARY_HOSHI_HASH_FILE = "hash.mph"
 private const val DICTIONARY_HOSHI_STYLES_FILE = "styles.css"
-private const val LOOKUP_QUERY_CACHE_LIMIT = 180
-private const val LOOKUP_QUERY_CACHE_SCHEMA_VERSION = 3
-private const val LOOKUP_REWRITE_LIMIT = 40
-private const val FAST_FIRST_SCREEN_RESULTS = 10
-private const val FAST_MOUNTED_EARLY_STOP_MS = 1200L
 private const val IMPORT_PROGRESS_STEP = 3
-private const val DICTIONARY_LOOKUP_TAG = "DictionaryLookup"
 private const val MDICT_MEDIA_LOG_TAG = "MdictMedia"
+private const val HOSHI_LOOKUP_PERF_LOG_TAG = "HoshiLookupPerf"
+private const val HOSHI_META_TYPE_SCAN_LIMIT_BYTES = 256 * 1024
 
-internal enum class DictionaryQueryProfile {
-    FAST,
-    FULL
-}
-
-private val NORMALIZE_PUNCT_OR_SYMBOL_REGEX = Regex("[\\p{Punct}\\p{S}]")
 private val NORMALIZE_WHITESPACE_REGEX = Regex("\\s+")
 private val STRIP_HTML_TAGS_REGEX = Regex("<[^>]+>")
 private val LOOKS_LIKE_HTML_REGEX = Regex("<\\s*/?\\s*[a-zA-Z][^>]*>")
@@ -49,34 +39,12 @@ private val STRUCTURED_DATA_KEY_SANITIZE_REGEX = Regex("[^a-z0-9_-]")
 private val MARKDOWN_IMAGE_REGEX = Regex("!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)")
 private val MARKDOWN_LINK_REGEX = Regex("\\[([^\\]]+)\\]\\(([^)\\s]+)\\)")
 private val PLAIN_URL_REGEX = Regex("https?://[^\\s<]+")
-private val KANJI_TOKEN_REGEX = Regex("[\\u4E00-\\u9FFF\\u3400-\\u4DBF\\uF900-\\uFAFF\\u3005\\u3006\\u30F6]{1,12}")
 private val HTML_IMG_SRC_QUOTED_REGEX =
     Regex("(?i)<img\\b([^>]*?)\\bsrc\\s*=\\s*(['\"])(.*?)\\2([^>]*)>")
 private val HTML_IMG_SRC_UNQUOTED_REGEX =
     Regex("(?i)<img\\b([^>]*?)\\bsrc\\s*=\\s*([^\\s>]+)([^>]*)>")
-private val HTML_TAG_REGEX = Regex("(?is)<[^>]+>")
-private val HTML_ATTR_QUOTED_REGEX = Regex("(?i)\\b(src|href)\\s*=\\s*(['\"])(.*?)\\2")
-private val HTML_ATTR_UNQUOTED_REGEX = Regex("(?i)\\b(src|href)\\s*=\\s*([^\\s\"'>]+)")
-private val URI_SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
-
-private data class DictionaryLookupQueryCacheKey(
-    val dictionariesKey: String,
-    val normalizedQuery: String,
-    val maxResults: Int,
-    val profile: DictionaryQueryProfile
-)
-
-private val dictionaryLookupQueryCache =
-    object : LinkedHashMap<DictionaryLookupQueryCacheKey, List<DictionarySearchResult>>(LOOKUP_QUERY_CACHE_LIMIT, 0.75f, true) {
-        override fun removeEldestEntry(
-            eldest: MutableMap.MutableEntry<DictionaryLookupQueryCacheKey, List<DictionarySearchResult>>?
-        ): Boolean {
-            return size > LOOKUP_QUERY_CACHE_LIMIT
-        }
-    }
-
-private val dictionaryLookupInFlight =
-    mutableMapOf<DictionaryLookupQueryCacheKey, FutureTask<List<DictionarySearchResult>>>()
+private var hoshiLookupPreparedKey: String? = null
+private val hoshiLookupPreparedLock = Any()
 
 private var mountedMdxPrewarmStateKey: String? = null
 private val mountedMdxPrewarmLock = Any()
@@ -103,6 +71,16 @@ private fun dictionaryHoshiRootDir(context: Context, cacheKey: String): File {
     return dir
 }
 
+private fun dictionaryHoshiTypeRootDir(
+    context: Context,
+    cacheKey: String,
+    type: HoshiDictionaryType
+): File {
+    val dir = File(dictionaryHoshiRootDir(context, cacheKey), type.directoryName)
+    if (!dir.exists()) dir.mkdirs()
+    return dir
+}
+
 private fun isValidHoshiDictionaryDir(dir: File): Boolean {
     if (!dir.isDirectory) return false
     return File(dir, DICTIONARY_HOSHI_INFO_FILE).isFile &&
@@ -111,13 +89,131 @@ private fun isValidHoshiDictionaryDir(dir: File): Boolean {
         File(dir, DICTIONARY_HOSHI_HASH_FILE).isFile
 }
 
-private fun locateHoshiDictionaryDir(context: Context, cacheKey: String): File? {
+private fun normalizeHoshiZipPath(path: String): String {
+    return path.replace('\\', '/').trimStart('/').removePrefix("./")
+}
+
+private fun isHoshiTermBankFile(path: String): Boolean {
+    val fileName = normalizeHoshiZipPath(path).substringAfterLast('/').lowercase(Locale.US)
+    return Regex("term_bank_\\d+\\.json").matches(fileName)
+}
+
+private fun isHoshiTermMetaBankFile(path: String): Boolean {
+    val fileName = normalizeHoshiZipPath(path).substringAfterLast('/').lowercase(Locale.US)
+    return Regex("term_meta_bank_\\d+\\.json").matches(fileName)
+}
+
+private fun inferHoshiDictionaryTypeFromPath(dir: File): HoshiDictionaryType? {
+    var current: File? = dir
+    while (current != null) {
+        when (current.name) {
+            HoshiDictionaryType.Term.directoryName -> return HoshiDictionaryType.Term
+            HoshiDictionaryType.Frequency.directoryName -> return HoshiDictionaryType.Frequency
+            HoshiDictionaryType.Pitch.directoryName -> return HoshiDictionaryType.Pitch
+        }
+        current = current.parentFile
+    }
+    return null
+}
+
+private fun detectHoshiDictionaryType(
+    contentResolver: ContentResolver,
+    uri: Uri
+): HoshiDictionaryType {
+    return contentResolver.openInputStream(uri)?.use { stream ->
+        detectHoshiDictionaryType(stream)
+    } ?: HoshiDictionaryType.Term
+}
+
+private fun detectHoshiDictionaryType(zipFile: File): HoshiDictionaryType {
+    return zipFile.inputStream().use { stream ->
+        detectHoshiDictionaryType(stream)
+    }
+}
+
+private fun detectHoshiDictionaryType(
+    stream: java.io.InputStream
+): HoshiDictionaryType {
+    var hasTermBank = false
+    var hasFrequencyMeta = false
+    var hasPitchMeta = false
+
+    ZipInputStream(BufferedInputStream(stream)).use { zip ->
+        var entry = zip.nextEntry
+        while (entry != null) {
+            if (!entry.isDirectory) {
+                val path = normalizeHoshiZipPath(entry.name)
+                when {
+                    isHoshiTermBankFile(path) -> {
+                        hasTermBank = true
+                    }
+
+                    isHoshiTermMetaBankFile(path) -> {
+                        val modeSample = readHoshiMetaModeSample(zip)
+                        if (modeSample.contains("freq")) hasFrequencyMeta = true
+                        if (modeSample.contains("pitch") || modeSample.contains("accent")) hasPitchMeta = true
+                    }
+                }
+            }
+            if (hasTermBank || (hasFrequencyMeta && hasPitchMeta)) {
+                break
+            }
+            zip.closeEntry()
+            entry = zip.nextEntry
+        }
+    }
+
+    return when {
+        hasTermBank -> HoshiDictionaryType.Term
+        hasFrequencyMeta && !hasPitchMeta -> HoshiDictionaryType.Frequency
+        hasPitchMeta && !hasFrequencyMeta -> HoshiDictionaryType.Pitch
+        hasFrequencyMeta -> HoshiDictionaryType.Frequency
+        hasPitchMeta -> HoshiDictionaryType.Pitch
+        else -> HoshiDictionaryType.Term
+    }
+}
+
+private fun readHoshiMetaModeSample(stream: java.io.InputStream): String {
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    val output = StringBuilder()
+    var remaining = HOSHI_META_TYPE_SCAN_LIMIT_BYTES
+    while (remaining > 0) {
+        val read = stream.read(buffer, 0, minOf(buffer.size, remaining))
+        if (read <= 0) break
+        output.append(String(buffer, 0, read, Charsets.UTF_8))
+        val sample = output.toString().lowercase(Locale.US)
+        if (sample.contains("freq") || sample.contains("pitch") || sample.contains("accent")) {
+            return sample
+        }
+        remaining -= read
+    }
+    return output.toString().lowercase(Locale.US)
+}
+
+private fun locateHoshiDictionaryDir(
+    context: Context,
+    cacheKey: String,
+    type: HoshiDictionaryType? = null
+): File? {
     val root = File(dictionaryStorageDir(context, cacheKey), DICTIONARY_HOSHI_ROOT_DIR)
     if (!root.isDirectory) return null
-    return root.listFiles()
-        ?.filter { isValidHoshiDictionaryDir(it) }
-        ?.sortedByDescending { it.lastModified() }
-        ?.firstOrNull()
+    val searchRoots = if (type != null) {
+        listOf(File(root, type.directoryName))
+    } else {
+        HoshiDictionaryType.entries.map { File(root, it.directoryName) }
+    }
+    return searchRoots.asSequence()
+        .filter { it.isDirectory }
+        .flatMap { directory ->
+            directory.listFiles()?.asSequence() ?: emptySequence()
+        }
+        .filter { isValidHoshiDictionaryDir(it) }
+        .sortedByDescending { it.lastModified() }
+        .firstOrNull()
+        ?: root.listFiles()
+            ?.filter { isValidHoshiDictionaryDir(it) }
+            ?.sortedByDescending { it.lastModified() }
+            ?.firstOrNull()
 }
 
 private fun deleteDictionaryStorageDir(context: Context, cacheKey: String): Boolean {
@@ -126,90 +222,23 @@ private fun deleteDictionaryStorageDir(context: Context, cacheKey: String): Bool
     return runCatching { dir.deleteRecursively() }.getOrElse { false }
 }
 
-private fun clearDictionaryLookupQueryCache() {
-    synchronized(dictionaryLookupQueryCache) {
-        dictionaryLookupQueryCache.clear()
+private fun clearHoshiLookupPreparation() {
+    synchronized(hoshiLookupPreparedLock) {
+        hoshiLookupPreparedKey = null
     }
 }
 
 internal fun invalidateDictionaryLookupCaches() {
-    clearDictionaryLookupQueryCache()
+    clearHoshiLookupPreparation()
     clearMountedMdxRuntimeCaches()
     HoshiNativeBridge.clearLookupCache()
     MdictNativeBridge.clearLookupCache()
 }
 
-private fun loadDictionaryLookupQueryCache(
-    key: DictionaryLookupQueryCacheKey
-): List<DictionarySearchResult>? {
-    val cached = synchronized(dictionaryLookupQueryCache) {
-        dictionaryLookupQueryCache[key]
-    }
-    Log.d(
-        DICTIONARY_LOOKUP_TAG,
-        "resultCache ${if (cached != null) "HIT" else "MISS"} query=${key.normalizedQuery} dictKey=${key.dictionariesKey.take(48)} profile=${key.profile}"
-    )
-    return cached
-}
-
-private fun saveDictionaryLookupQueryCache(
-    key: DictionaryLookupQueryCacheKey,
-    results: List<DictionarySearchResult>
-) {
-    synchronized(dictionaryLookupQueryCache) {
-        dictionaryLookupQueryCache[key] = results
-    }
-}
-
-private fun runSingleFlightLookup(
-    key: DictionaryLookupQueryCacheKey,
-    producer: () -> List<DictionarySearchResult>
-): List<DictionarySearchResult> {
-    val ownerTask: FutureTask<List<DictionarySearchResult>>
-    var isOwner = false
-    synchronized(dictionaryLookupInFlight) {
-        val existing = dictionaryLookupInFlight[key]
-        if (existing != null) {
-            Log.d(
-                DICTIONARY_LOOKUP_TAG,
-                "search singleFlight join query=${key.normalizedQuery} dictKey=${key.dictionariesKey.take(48)} profile=${key.profile}"
-            )
-            return existing.get()
-        }
-        ownerTask = FutureTask(Callable { producer() })
-        dictionaryLookupInFlight[key] = ownerTask
-        isOwner = true
-    }
-    if (isOwner) {
-        return try {
-            ownerTask.run()
-            ownerTask.get()
-        } finally {
-            synchronized(dictionaryLookupInFlight) {
-                val current = dictionaryLookupInFlight[key]
-                if (current === ownerTask) {
-                    dictionaryLookupInFlight.remove(key)
-                }
-            }
-        }
-    }
-    return ownerTask.get()
-}
-
-private fun buildLookupCacheDictionariesKey(dictionaries: List<LoadedDictionary>): String {
-    val base = dictionaries
-        .mapNotNull { dictionary ->
-            val cacheKey = dictionary.cacheKey.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            "$cacheKey:${dictionary.entryCount}"
-        }
-        .joinToString("|")
-    if (base.isBlank()) return ""
-    return "$base|lookupSchema=$LOOKUP_QUERY_CACHE_SCHEMA_VERSION"
-}
-
 private data class HoshiDictionaryBinding(
     val dictionary: LoadedDictionary,
-    val dictionaryDir: File
+    val dictionaryDir: File,
+    val dictionaryType: HoshiDictionaryType
 )
 
 private fun collectHoshiDictionaryBindings(
@@ -219,93 +248,86 @@ private fun collectHoshiDictionaryBindings(
     if (!HoshiNativeBridge.isAvailable) return emptyList()
     return dictionaries.mapNotNull { dictionary ->
         val cacheKey = dictionary.cacheKey.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-        val dir = locateHoshiDictionaryDir(context, cacheKey) ?: return@mapNotNull null
-        HoshiDictionaryBinding(dictionary = dictionary, dictionaryDir = dir)
+        val type = runCatching { HoshiDictionaryType.valueOf(dictionary.dictionaryType) }
+            .getOrDefault(HoshiDictionaryType.Term)
+        val requestedDir = locateHoshiDictionaryDir(context, cacheKey, type)
+        val dir = requestedDir
+            ?: locateHoshiDictionaryDir(context, cacheKey, null)
+            ?: return@mapNotNull null
+        val resolvedType = when {
+            requestedDir != null -> type
+            type != HoshiDictionaryType.Term -> type
+            else -> inferHoshiDictionaryTypeFromPath(dir) ?: type
+        }
+        HoshiDictionaryBinding(dictionary = dictionary, dictionaryDir = dir, dictionaryType = resolvedType)
     }
 }
 
-private fun searchDictionaryWithHoshi(
+private fun prepareHoshiLookupIfNeeded(bindings: List<HoshiDictionaryBinding>) {
+    if (bindings.isEmpty()) return
+    val signature = bindings.joinToString(separator = "\n") { binding ->
+        "${binding.dictionary.cacheKey.trim()}\u0001${binding.dictionaryType.name}\u0001${binding.dictionaryDir.absolutePath}"
+    }
+    synchronized(hoshiLookupPreparedLock) {
+        if (hoshiLookupPreparedKey == signature) return
+        val prepareStartNs = SystemClock.elapsedRealtimeNanos()
+        Log.d(
+            HOSHI_LOOKUP_PERF_LOG_TAG,
+            "rebuildQuery start dictCount=${bindings.size} signatureHash=${signature.hashCode()}"
+        )
+        val termPaths = bindings.filter { it.dictionaryType == HoshiDictionaryType.Term }
+            .map { it.dictionaryDir.absolutePath }
+            .toTypedArray()
+        val freqPaths = bindings.filter { it.dictionaryType == HoshiDictionaryType.Frequency }
+            .map { it.dictionaryDir.absolutePath }
+            .toTypedArray()
+        val pitchPaths = bindings.filter { it.dictionaryType == HoshiDictionaryType.Pitch }
+            .map { it.dictionaryDir.absolutePath }
+            .toTypedArray()
+        Log.d(
+            "HoshiLookupPopup",
+            "prepareHoshiLookup dictCount=${bindings.size} termPaths=${termPaths.size} freqPaths=${freqPaths.size} pitchPaths=${pitchPaths.size} " +
+                "terms=${bindings.filter { it.dictionaryType == HoshiDictionaryType.Term }.joinToString { it.dictionary.name }} " +
+                "freqs=${bindings.filter { it.dictionaryType == HoshiDictionaryType.Frequency }.joinToString { it.dictionary.name }} " +
+                "pitches=${bindings.filter { it.dictionaryType == HoshiDictionaryType.Pitch }.joinToString { it.dictionary.name }}"
+        )
+        HoshiDicts.rebuildQuery(
+            HoshiDicts.lookupObject,
+            termPaths,
+            freqPaths,
+            pitchPaths
+        )
+        hoshiLookupPreparedKey = signature
+        Log.d(
+            HOSHI_LOOKUP_PERF_LOG_TAG,
+            "rebuildQuery done elapsedMs=${(SystemClock.elapsedRealtimeNanos() - prepareStartNs) / 1_000_000L}"
+        )
+    }
+}
+
+internal fun prepareHoshiLookupForDictionaries(
     context: Context,
-    dictionaries: List<LoadedDictionary>,
-    query: String,
-    maxResults: Int,
-    profile: DictionaryQueryProfile
-): List<DictionarySearchResult> {
-    if (query.isBlank() || dictionaries.isEmpty() || !HoshiNativeBridge.isAvailable) return emptyList()
+    dictionaries: List<LoadedDictionary>
+): Int {
     val bindings = collectHoshiDictionaryBindings(context, dictionaries)
-    if (bindings.isEmpty()) return emptyList()
-
-    val dictionaryOrder = bindings
-        .mapIndexed { index, binding -> binding.dictionary.name to index }
-        .toMap()
-    val dictionaryCacheKeyByName = bindings
-        .asSequence()
-        .mapNotNull { binding ->
-            val name = binding.dictionary.name.trim()
-            val cacheKey = binding.dictionary.cacheKey.trim()
-            if (name.isBlank() || cacheKey.isBlank()) null else name.lowercase(Locale.ROOT) to cacheKey
-        }
-        .toMap()
-    val lookupLimit = when (profile) {
-        DictionaryQueryProfile.FAST -> maxResults.coerceIn(8, 16)
-        DictionaryQueryProfile.FULL -> (maxResults * 2).coerceIn(24, 140)
-    }
-    val scanLength = query.trim().length.coerceAtLeast(1)
-    val hits = HoshiNativeBridge.lookup(
-        dictionaryPaths = bindings.map { it.dictionaryDir.absolutePath },
-        query = query,
-        maxResults = lookupLimit,
-        scanLength = scanLength
-    )
-    if (hits.isEmpty()) return emptyList()
-
-    val merged = linkedMapOf<String, DictionarySearchResult>()
-    hits.forEachIndexed { index, hit ->
-        val definition = glossaryRawToDefinitionHtmlSql(hit.glossaryRaw)
-        val normalizedPitch = hit.pitch?.ifBlank { null }
-        val normalizedFrequency = hit.frequency?.ifBlank { null }
-        if (definition.isBlank() && normalizedPitch == null && normalizedFrequency == null) {
-            return@forEachIndexed
-        }
-        val dictionaryName = hit.dictionary.ifBlank { dictionaries.firstOrNull()?.name.orEmpty() }
-        val entry = DictionaryEntry(
-            term = hit.term,
-            reading = hit.reading?.ifBlank { null },
-            definitions = definition.takeIf { it.isNotBlank() }?.let(::listOf) ?: emptyList(),
-            pitch = normalizedPitch,
-            frequency = normalizedFrequency,
-            dictionary = dictionaryName
-        )
-        val order = dictionaryOrder[dictionaryName] ?: dictionaryOrder.size
-        val sourceCacheKey = dictionaryCacheKeyByName[dictionaryName.trim().lowercase(Locale.ROOT)]
-            ?: bindings.singleOrNull()?.dictionary?.cacheKey?.trim()?.ifBlank { null }
-        val score = hit.score + (dictionaryOrder.size - order) * 2 - (index / 8)
-        val key = entryStableKey(entry)
-        val next = DictionarySearchResult(
-            entry = entry,
-            score = score,
-            matchedLength = hit.matchedLength,
-            sourceCacheKey = sourceCacheKey.orEmpty()
-        )
-        val existing = merged[key]
-        if (existing == null || next.isHigherPriorityThan(existing)) {
-            merged[key] = next
-        }
-    }
-
-    return merged.values
-        .sortedWith { left, right -> compareDictionarySearchPriority(right, left) }
-        .take(maxResults)
+    prepareHoshiLookupIfNeeded(bindings)
+    return bindings.size
 }
 
 internal fun loadDictionaryFromStorage(
     context: Context,
     cacheKey: String,
+    dictionaryType: String = HoshiDictionaryType.Term.name,
     fallbackDisplayName: String = "Dictionary"
 ): LoadedDictionary? {
     if (cacheKey.isBlank()) return null
     return runCatching {
-        val dictionaryDir = locateHoshiDictionaryDir(context, cacheKey) ?: return null
+        val resolvedType = runCatching { HoshiDictionaryType.valueOf(dictionaryType) }
+            .getOrDefault(HoshiDictionaryType.Term)
+        val requestedDir = locateHoshiDictionaryDir(context, cacheKey, resolvedType)
+        val dictionaryDir = requestedDir
+            ?: locateHoshiDictionaryDir(context, cacheKey, null)
+            ?: return null
         val infoFile = File(dictionaryDir, DICTIONARY_HOSHI_INFO_FILE)
         val infoJson = runCatching {
             if (infoFile.isFile) JSONObject(infoFile.readText(Charsets.UTF_8)) else null
@@ -314,6 +336,11 @@ internal fun loadDictionaryFromStorage(
             ?.trim()
             ?.takeIf { it.isNotBlank() }
             ?: fallbackDisplayName.substringBeforeLast('.').trim().ifBlank { "Dictionary" }
+        val resolvedDictionaryType = when {
+            requestedDir != null -> resolvedType
+            resolvedType != HoshiDictionaryType.Term -> resolvedType
+            else -> inferHoshiDictionaryTypeFromPath(dictionaryDir) ?: resolvedType
+        }
         val resolvedCount = infoJson?.optInt("termCount", -1)
             ?.takeIf { it >= 0 }
             ?: 0
@@ -325,6 +352,7 @@ internal fun loadDictionaryFromStorage(
             cacheKey = cacheKey,
             name = resolvedName,
             format = "Yomichan/Migaku ZIP (hoshidicts)",
+            dictionaryType = resolvedDictionaryType.name,
             entries = emptyList(),
             stylesCss = stylesCss,
             entryCount = resolvedCount
@@ -332,11 +360,31 @@ internal fun loadDictionaryFromStorage(
     }.getOrNull()
 }
 
+internal fun loadPersistedDictionaryFromStorage(
+    context: Context,
+    ref: PersistedDictionaryRef,
+    fallbackDisplayName: String = "Dictionary"
+): Pair<PersistedDictionaryRef, LoadedDictionary>? {
+    val displayName = ref.name.ifBlank { fallbackDisplayName }
+    val cacheKey = ref.cacheKey ?: buildDictionaryCacheKey(ref.uri, displayName)
+    val loaded = loadDictionaryFromStorage(
+        context = context,
+        cacheKey = cacheKey,
+        dictionaryType = ref.dictionaryType,
+        fallbackDisplayName = displayName
+    ) ?: return null
+    return ref.copy(
+        name = displayName.ifBlank { loaded.name },
+        cacheKey = cacheKey,
+        dictionaryType = loaded.dictionaryType
+    ) to loaded
+}
+
 internal fun deleteDictionaryStorage(context: Context, cacheKey: String): Boolean {
     if (cacheKey.isBlank()) return true
     val storageDeleted = deleteDictionaryStorageDir(context, cacheKey)
     if (storageDeleted) {
-        clearDictionaryLookupQueryCache()
+        clearHoshiLookupPreparation()
         HoshiNativeBridge.clearLookupCache()
         MdictNativeBridge.clearLookupCache()
     }
@@ -362,160 +410,10 @@ internal fun importDictionaryFromZip(
         cacheKey = cacheKey,
         onProgress = onProgress
     )
-    clearDictionaryLookupQueryCache()
+    clearHoshiLookupPreparation()
     HoshiNativeBridge.clearLookupCache()
     MdictNativeBridge.clearLookupCache()
     return imported
-}
-
-internal fun searchDictionarySql(
-    context: Context,
-    dictionaries: List<LoadedDictionary>,
-    query: String,
-    maxResults: Int = MAX_LOOKUP_RESULTS,
-    profile: DictionaryQueryProfile = DictionaryQueryProfile.FAST
-): List<DictionarySearchResult> {
-    val effectiveDictionaries = includeMountedMdxDictionary(context, dictionaries)
-    val normalizedQuery = normalizeLookupSql(query)
-    if (normalizedQuery.isBlank() || effectiveDictionaries.isEmpty()) return emptyList()
-    Log.d(
-        DICTIONARY_LOOKUP_TAG,
-        "search start query=$query normalized=$normalizedQuery dicts=${effectiveDictionaries.size} profile=$profile"
-    )
-    val dictionariesKey = buildLookupCacheDictionariesKey(effectiveDictionaries)
-    if (dictionariesKey.isBlank()) return emptyList()
-    val lookupCacheKey = DictionaryLookupQueryCacheKey(
-        dictionariesKey = dictionariesKey,
-        normalizedQuery = normalizedQuery,
-        maxResults = maxResults,
-        profile = profile
-    )
-    val cached = loadDictionaryLookupQueryCache(lookupCacheKey)
-    if (cached != null) {
-        Log.d(DICTIONARY_LOOKUP_TAG, "search cacheHit count=${cached.size} query=$normalizedQuery")
-        return cached
-    }
-    return runSingleFlightLookup(lookupCacheKey) {
-        val recheck = loadDictionaryLookupQueryCache(lookupCacheKey)
-        if (recheck != null) {
-            Log.d(DICTIONARY_LOOKUP_TAG, "search cacheHit(singleFlight) count=${recheck.size} query=$normalizedQuery")
-            return@runSingleFlightLookup recheck
-        }
-        val hoshiResults = searchDictionaryWithHoshi(
-            context = context,
-            dictionaries = effectiveDictionaries,
-            query = query,
-            maxResults = maxResults,
-            profile = profile
-        )
-        val mdictNativeResults = searchDictionaryWithMdictNative(
-            context = context,
-            dictionaries = effectiveDictionaries,
-            query = query,
-            maxResults = maxResults,
-            profile = profile
-        )
-        val merged = linkedMapOf<String, DictionarySearchResult>()
-        (hoshiResults + mdictNativeResults).forEach { result ->
-            val entryKey = entryStableKey(result.entry)
-            val existing = merged[entryKey]
-            if (existing == null || result.isHigherPriorityThan(existing)) {
-                merged[entryKey] = result
-            }
-        }
-        val topResults = merged.values
-            .sortedWith { left, right -> compareDictionarySearchPriority(right, left) }
-            .take(maxResults)
-        val results = finalizeLookupResultsForDisplay(
-            context = context,
-            dictionaries = effectiveDictionaries,
-            query = normalizedQuery,
-            results = topResults,
-            rewriteLimit = if (profile == DictionaryQueryProfile.FAST) 0 else LOOKUP_REWRITE_LIMIT
-        )
-        Log.d(
-            DICTIONARY_LOOKUP_TAG,
-            "search done hoshi=${hoshiResults.size} mdictNative=${mdictNativeResults.size} merged=${results.size} query=$normalizedQuery"
-        )
-        if (results.isNotEmpty()) {
-            saveDictionaryLookupQueryCache(lookupCacheKey, results)
-        }
-        results
-    }
-}
-
-private data class LookupRewriteContext(
-    val mediaDir: File?,
-    val fallbackUriBuilder: ((String) -> String)?
-)
-
-private fun buildLookupRewriteContextMap(
-    context: Context,
-    dictionaries: List<LoadedDictionary>
-): Map<String, LookupRewriteContext> {
-    if (dictionaries.isEmpty()) return emptyMap()
-    val mountedState = loadMdxMountState(context)
-    val mountedByCacheKey = if (mountedState.enabled) {
-        mountedState.entries
-            .asSequence()
-            .filter { it.enabled && it.cacheKey.isNotBlank() && it.mdxUri.isNotBlank() }
-            .associateBy { it.cacheKey }
-    } else {
-        emptyMap()
-    }
-    return dictionaries
-        .asSequence()
-        .filter { it.cacheKey.isNotBlank() && it.format.contains("MDX", ignoreCase = true) }
-        .associate { dictionary ->
-            val cacheKey = dictionary.cacheKey
-            val mountedEntry = mountedByCacheKey[cacheKey]
-            val rewriteContext = if (mountedEntry != null) {
-                LookupRewriteContext(
-                    mediaDir = null,
-                    fallbackUriBuilder = { rawSrc -> buildMountedMdictResourceUri(cacheKey, rawSrc) }
-                )
-            } else {
-                LookupRewriteContext(
-                    mediaDir = File(dictionaryStorageDir(context, cacheKey), "mdictnative/media"),
-                    fallbackUriBuilder = null
-                )
-            }
-            cacheKey to rewriteContext
-        }
-}
-
-private fun finalizeLookupResultsForDisplay(
-    context: Context,
-    dictionaries: List<LoadedDictionary>,
-    query: String,
-    results: List<DictionarySearchResult>,
-    rewriteLimit: Int
-): List<DictionarySearchResult> {
-    if (results.isEmpty()) return emptyList()
-    val limit = rewriteLimit.coerceAtLeast(1)
-    val rewriteContextByCacheKey = buildLookupRewriteContextMap(context, dictionaries)
-    return results.mapIndexed { index, result ->
-        val cacheKey = result.sourceCacheKey.takeIf { it.isNotBlank() }
-        val rewriteContext = cacheKey?.let(rewriteContextByCacheKey::get)
-        val rewrittenDefinitions = result.entry.definitions
-            .map { definition ->
-                val mdxRewritten = if (index < limit && rewriteContext != null) {
-                    rewriteMdictImageSrcToFileUri(
-                        definition = definition,
-                        mediaDir = rewriteContext.mediaDir,
-                        fallbackUriBuilder = rewriteContext.fallbackUriBuilder,
-                        logContext = "lookup cacheKey=${cacheKey ?: "unknown"} query=$query term=${result.entry.term}"
-                    )
-                } else {
-                    definition
-                }
-                normalizeDefinitionForDisplaySql(
-                    cacheKey?.let { rewriteBundledDictionaryResourceSrcForDisplay(mdxRewritten, it) }
-                        ?: mdxRewritten
-                )
-            }
-        result.copy(entry = result.entry.copy(definitions = rewrittenDefinitions))
-    }
 }
 
 internal fun includeMountedMdxDictionary(
@@ -547,231 +445,6 @@ private fun mountedMdxDictionariesFromState(context: Context): List<LoadedDictio
             )
         }
         .toList()
-}
-
-private fun searchDictionaryWithMdictNative(
-    context: Context,
-    dictionaries: List<LoadedDictionary>,
-    query: String,
-    maxResults: Int,
-    profile: DictionaryQueryProfile
-): List<DictionarySearchResult> {
-    if (!MdictNativeBridge.isAvailable) return emptyList()
-    val trimmedQuery = query.trim()
-    if (trimmedQuery.isBlank()) return emptyList()
-
-    val scanLength = trimmedQuery.length.coerceAtLeast(1)
-    val lookupLimit = maxResults.coerceIn(8, 48)
-
-    val merged = linkedMapOf<String, DictionarySearchResult>()
-    data class NativeLookupJob(
-        val order: Int,
-        val dictionary: LoadedDictionary,
-        val cacheKey: String,
-        val mountedEntry: MdxMountedEntry?
-    )
-    val mountedState = loadMdxMountState(context)
-    val mountedByCacheKey = if (mountedState.enabled) {
-        mountedState.entries
-            .asSequence()
-            .filter { it.enabled && it.cacheKey.isNotBlank() && it.mdxUri.isNotBlank() }
-            .associateBy { it.cacheKey }
-    } else {
-        emptyMap()
-    }
-    val jobs = dictionaries.mapIndexedNotNull { order, dictionary ->
-        val isMdx = dictionary.format.contains("MDX", ignoreCase = true)
-        if (!isMdx) return@mapIndexedNotNull null
-        val cacheKey = dictionary.cacheKey.takeIf { it.isNotBlank() } ?: return@mapIndexedNotNull null
-        NativeLookupJob(
-            order = order,
-            dictionary = dictionary,
-            cacheKey = cacheKey,
-            mountedEntry = mountedByCacheKey[cacheKey]
-        )
-    }
-
-    val mountedHitsByCacheKey = hashMapOf<String, List<MdictNativeLookupHit>>()
-    val mountedJobs = jobs.filter { it.mountedEntry != null }
-    if (mountedJobs.isNotEmpty()) {
-        val startedAt = System.currentTimeMillis()
-        val threadCount = mountedJobs.size.coerceIn(1, 3)
-        val executor = Executors.newFixedThreadPool(threadCount)
-        val completion = java.util.concurrent.ExecutorCompletionService<Pair<NativeLookupJob, List<MdictNativeLookupHit>>>(executor)
-        val futures = mutableListOf<java.util.concurrent.Future<Pair<NativeLookupJob, List<MdictNativeLookupHit>>>>()
-        var earlyStop = false
-        var hitsEstimate = 0
-        var doneCount = 0
-        try {
-            mountedJobs.forEach { job ->
-                futures += completion.submit(
-                    Callable {
-                        val entry = job.mountedEntry ?: return@Callable job to emptyList()
-                        val hits = lookupMountedMdictNative(
-                            context = context,
-                            mdxUri = entry.mdxUri,
-                            cacheKey = job.cacheKey,
-                            query = trimmedQuery,
-                            maxResults = lookupLimit,
-                            scanLength = scanLength
-                        )
-                        if (hits.isEmpty()) {
-                            Log.d(
-                                MDICT_MEDIA_LOG_TAG,
-                                "mounted lookup empty cacheKey=${job.cacheKey} query=$trimmedQuery mdxUri=${entry.mdxUri}"
-                            )
-                        }
-                        job to hits
-                    }
-                )
-            }
-            repeat(mountedJobs.size) {
-                val elapsed = (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
-                val doneFuture = if (profile == DictionaryQueryProfile.FAST) {
-                    completion.poll(250L, java.util.concurrent.TimeUnit.MILLISECONDS)
-                } else {
-                    completion.take()
-                } ?: run {
-                    if (profile == DictionaryQueryProfile.FAST && elapsed >= FAST_MOUNTED_EARLY_STOP_MS) {
-                        earlyStop = true
-                    }
-                    return@repeat
-                }
-                val (doneJob, hits) = runCatching { doneFuture.get() }.getOrDefault(
-                    NativeLookupJob(-1, mountedJobs.first().dictionary, "", null) to emptyList()
-                )
-                if (doneJob.cacheKey.isNotBlank()) {
-                    mountedHitsByCacheKey[doneJob.cacheKey] = hits
-                    doneCount += 1
-                    hitsEstimate += hits.size
-                }
-                if (
-                    profile == DictionaryQueryProfile.FAST &&
-                    (hitsEstimate >= FAST_FIRST_SCREEN_RESULTS ||
-                        (System.currentTimeMillis() - startedAt) >= FAST_MOUNTED_EARLY_STOP_MS)
-                ) {
-                    earlyStop = true
-                    return@repeat
-                }
-            }
-            if (earlyStop) {
-                futures.forEach { future -> runCatching { future.cancel(true) } }
-                Log.d(
-                    MDICT_MEDIA_LOG_TAG,
-                    "mounted lookup early-stop done=$doneCount/${mountedJobs.size} " +
-                        "hits=$hitsEstimate elapsedMs=${(System.currentTimeMillis() - startedAt).coerceAtLeast(0L)} query=$trimmedQuery"
-                )
-            }
-        } finally {
-            executor.shutdown()
-        }
-        val elapsed = (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
-        Log.d(
-            MDICT_MEDIA_LOG_TAG,
-            "mounted lookup batch done dicts=${mountedJobs.size} elapsedMs=$elapsed query=$trimmedQuery"
-        )
-    }
-
-    jobs.forEach { job ->
-        val dictionary = job.dictionary
-        val order = job.order
-        val cacheKey = job.cacheKey
-        val mounted = job.mountedEntry != null
-        val mediaDir = if (mounted) null else File(dictionaryStorageDir(context, cacheKey), "mdictnative/media")
-        val nativeHits = if (mounted) {
-            mountedHitsByCacheKey[cacheKey].orEmpty()
-        } else {
-            val entriesFile = File(dictionaryStorageDir(context, cacheKey), "mdictnative/entries.ndjson")
-            if (!entriesFile.isFile) return@forEach
-            logMdictIdxbinState(
-                context = "lookup-imported",
-                cacheKey = cacheKey,
-                entriesPath = entriesFile.absolutePath
-            )
-            if (mediaDir?.isDirectory == false) {
-                Log.d(
-                    MDICT_MEDIA_LOG_TAG,
-                    "lookup mediaDirMissing cacheKey=$cacheKey dict=${dictionary.name} mediaDir=${mediaDir.absolutePath}"
-                )
-            }
-            MdictNativeBridge.lookup(
-                entriesPath = entriesFile.absolutePath,
-                query = trimmedQuery,
-                maxResults = lookupLimit,
-                scanLength = scanLength
-            )
-        }
-        nativeHits.forEachIndexed { rank, hit ->
-            val definition = normalizeDefinitionForDisplaySql(
-                rewriteMdictEntryLinkForDisplay(hit.definition)
-            )
-            if (definition.isBlank()) return@forEachIndexed
-            val score = (hit.score - order - rank).coerceAtLeast(1)
-            val result = DictionarySearchResult(
-                entry = DictionaryEntry(
-                    term = hit.term,
-                    reading = hit.reading,
-                    definitions = listOf(definition),
-                    pitch = null,
-                    frequency = null,
-                    dictionary = dictionary.name
-                ),
-                score = score,
-                matchedLength = hit.matchedLength,
-                sourceCacheKey = cacheKey
-            )
-            val key = entryStableKey(result.entry)
-            val existing = merged[key]
-            if (existing == null || result.isHigherPriorityThan(existing)) {
-                merged[key] = result
-            }
-        }
-    }
-
-    return merged.values
-        .sortedWith { left, right -> compareDictionarySearchPriority(right, left) }
-        .take(maxResults.coerceAtLeast(1))
-}
-
-private fun lookupMountedMdictNative(
-    context: Context,
-    mdxUri: String,
-    cacheKey: String,
-    query: String,
-    maxResults: Int,
-    scanLength: Int
-): List<MdictNativeLookupHit> {
-    val uri = runCatching { Uri.parse(mdxUri) }.getOrNull() ?: return emptyList()
-    val fallbackFile = materializeMountedMdxTempFile(context, uri, cacheKey) ?: return emptyList()
-    Log.d(MDICT_MEDIA_LOG_TAG, "mounted lookup stable file=${fallbackFile.absolutePath}")
-    val mdxIdx = File("${fallbackFile.absolutePath}.idxbin")
-    Log.d(
-        MDICT_MEDIA_LOG_TAG,
-        "mdx idxbin state cacheKey=$cacheKey mdx=${fallbackFile.absolutePath} " +
-            "idx=${mdxIdx.absolutePath} idxExists=${mdxIdx.isFile} idxSize=${mdxIdx.length()}"
-    )
-    return MdictNativeBridge.lookupMdx(
-        mdxPath = fallbackFile.absolutePath,
-        cacheKey = cacheKey,
-        query = query,
-        maxResults = maxResults,
-        scanLength = scanLength
-    )
-}
-
-private fun logMdictIdxbinState(
-    context: String,
-    cacheKey: String,
-    entriesPath: String
-) {
-    val entriesFile = File(entriesPath)
-    val idxFile = File("$entriesPath.idxbin")
-    Log.d(
-        MDICT_MEDIA_LOG_TAG,
-        "idxbin state ctx=$context cacheKey=$cacheKey entries=${entriesFile.absolutePath} " +
-            "entriesExists=${entriesFile.isFile} entriesSize=${entriesFile.length()} " +
-            "idx=${idxFile.absolutePath} idxExists=${idxFile.isFile} idxSize=${idxFile.length()}"
-    )
 }
 
 private fun materializeMountedMdxTempFile(context: Context, uri: Uri, cacheKey: String): File? {
@@ -859,19 +532,6 @@ private fun clearMountedMdxRuntimeCaches() {
     }
 }
 
-private fun parseMdxLinkTarget(raw: String): String? {
-    val trimmed = raw.trimStart()
-    if (!trimmed.startsWith("@@@LINK=")) return null
-    val target = trimmed
-        .removePrefix("@@@LINK=")
-        .replace("\u0000", "")
-        .lineSequence()
-        .firstOrNull()
-        .orEmpty()
-        .trim()
-    return target.ifBlank { null }
-}
-
 private fun importDictionaryZipWithHoshi(
     context: Context,
     contentResolver: ContentResolver,
@@ -884,26 +544,53 @@ private fun importDictionaryZipWithHoshi(
         error("hoshidicts native bridge unavailable")
     }
 
-    onProgress?.invoke(DictionaryImportProgress(stage = "Preparing native import", current = 0, total = 0))
+    onProgress?.invoke(DictionaryImportProgress(stage = "准备导入", current = 0, total = 100))
     val tempZip = File.createTempFile("dict_import_", ".zip", context.cacheDir)
     try {
+        val archiveSize = queryDictionaryImportSize(contentResolver, uri).takeIf { it > 0L }
         contentResolver.openInputStream(uri)?.use { input ->
             FileOutputStream(tempZip).use { output ->
-                input.copyTo(output)
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var copied = 0L
+                var lastProgress = -1
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    output.write(buffer, 0, read)
+                    copied += read
+                    archiveSize?.let { totalBytes ->
+                        val progress = ((copied.toDouble() / totalBytes.toDouble()) * 30.0)
+                            .toInt()
+                            .coerceIn(0, 30)
+                        if (progress != lastProgress) {
+                            lastProgress = progress
+                            onProgress?.invoke(DictionaryImportProgress(stage = "读取辞典文件", current = progress, total = 100))
+                        }
+                    }
+                }
             }
         } ?: error("Unable to read dictionary archive")
+        onProgress?.invoke(DictionaryImportProgress(stage = "分析辞典", current = 35, total = 100))
 
-        val hoshiRoot = dictionaryHoshiRootDir(context, cacheKey)
-        if (hoshiRoot.exists()) {
-            hoshiRoot.deleteRecursively()
+        val dictionaryType = detectHoshiDictionaryType(tempZip)
+        Log.d(
+            HOSHI_LOOKUP_PERF_LOG_TAG,
+            "auto classify import uri=${uri} type=${dictionaryType.name}"
+        )
+        val hoshiTypeRoot = dictionaryHoshiTypeRootDir(context, cacheKey, dictionaryType)
+        if (hoshiTypeRoot.exists()) {
+            hoshiTypeRoot.deleteRecursively()
         }
-        hoshiRoot.mkdirs()
+        hoshiTypeRoot.mkdirs()
 
-        onProgress?.invoke(DictionaryImportProgress(stage = "Importing", current = 0, total = 0))
+        onProgress?.invoke(DictionaryImportProgress(stage = "导入辞典，可能需要几分钟", current = 0, total = 0))
+        onProgress?.invoke(DictionaryImportProgress(stage = "整理辞典", current = 95, total = 100))
+        HoshiNativeBridge.clearLookupCache()
+        clearHoshiLookupPreparation()
         val nativeResult = HoshiNativeBridge.importZip(
             zipPath = tempZip.absolutePath,
-            outputDir = hoshiRoot.absolutePath,
-            lowRam = false
+            outputDir = hoshiTypeRoot.absolutePath,
+            lowRam = true
         )
         if (!nativeResult.success) {
             val errorDetail = nativeResult.errors.firstOrNull().orEmpty()
@@ -915,7 +602,7 @@ private fun importDictionaryZipWithHoshi(
             .takeIf { it.isNotBlank() }
             ?.let(::File)
             ?.takeIf(::isValidHoshiDictionaryDir)
-            ?: locateHoshiDictionaryDir(context, cacheKey)
+            ?: locateHoshiDictionaryDir(context, cacheKey, dictionaryType)
             ?: error("hoshidicts output not found")
 
         val dictionaryName = nativeResult.title.ifBlank {
@@ -931,17 +618,18 @@ private fun importDictionaryZipWithHoshi(
                 null
             }
         }.getOrNull()
-        val entryCount = nativeResult.termCount
+        val entryCount = (nativeResult.termCount.takeIf { it > 0L } ?: nativeResult.metaCount)
             .coerceAtLeast(0L)
             .coerceAtMost(Int.MAX_VALUE.toLong())
             .toInt()
 
         HoshiNativeBridge.clearLookupCache()
-        onProgress?.invoke(DictionaryImportProgress(stage = "Done", current = 1, total = 1))
+        onProgress?.invoke(DictionaryImportProgress(stage = "完成", current = 100, total = 100))
         return LoadedDictionary(
             cacheKey = cacheKey,
             name = dictionaryName,
             format = "Yomichan/Migaku ZIP (hoshidicts)",
+            dictionaryType = dictionaryType.name,
             entries = emptyList(),
             stylesCss = stylesCss,
             entryCount = entryCount
@@ -949,6 +637,16 @@ private fun importDictionaryZipWithHoshi(
     } finally {
         runCatching { tempZip.delete() }
     }
+}
+
+private fun queryDictionaryImportSize(contentResolver: ContentResolver, uri: Uri): Long {
+    return runCatching {
+        contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use -1L
+            val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+            if (index < 0 || cursor.isNull(index)) -1L else cursor.getLong(index)
+        } ?: -1L
+    }.getOrDefault(-1L)
 }
 
 internal fun glossaryRawToDefinitionHtmlSql(glossaryRaw: String): String {
@@ -1047,7 +745,31 @@ private fun structuredMapToHtmlSql(value: Map<*, *>): String {
             .map { mapString(it).trim() }
             .firstOrNull { it.isNotBlank() }
             .orEmpty()
-        return if (path.isBlank()) "" else "<img src=\"${escapeHtmlAttributeSql(path)}\" />"
+        if (path.isBlank()) return ""
+        val dataAttributes = extractStructuredDataAttributesSql(value["data"]).toMutableMap()
+        val explicitClass = mapString("class").trim()
+        if (dataAttributes["class"].isNullOrBlank() && explicitClass.isNotBlank()) {
+            dataAttributes["class"] = explicitClass
+        }
+        Log.d(
+            "HoshiLookupPopup",
+            "structured image(sql) dict=${mapString("dictionary").takeIf { it.isNotBlank() } ?: mapString("dict")} " +
+                "path=${path.take(64)} class=${explicitClass.ifBlank { dataAttributes["class"].orEmpty() }} " +
+                "dataKeys=${dataAttributes.keys.joinToString(",")} styleLen=${styleValueToCssSql(value["style"]).length} " +
+                "lang=${mapString("lang").takeIf { it.isNotBlank() } ?: ""}"
+        )
+        val dataScAttrs = buildStructuredDataScAttributesSql(dataAttributes)
+        val styleAttr = mergeInlineStyleSql(
+            styleValueToCssSql(value["style"]),
+            supplementalInlineStyleSql(value, "img")
+        ).takeIf { it.isNotBlank() }?.let {
+            " style=\"${escapeHtmlAttributeSql(it)}\""
+        } ?: ""
+        val langAttr = mapString("lang").trim().takeIf { it.isNotBlank() }?.let {
+            " lang=\"${escapeHtmlAttributeSql(it)}\""
+        } ?: ""
+        val inlineAttrs = buildInlineHtmlAttributesSql(value)
+        return "<img$dataScAttrs$langAttr$styleAttr$inlineAttrs>"
     }
 
     val tagRaw = mapString("tag").trim().lowercase(Locale.ROOT)
@@ -1293,13 +1015,6 @@ private fun isLikelyDefinitionSql(text: String): Boolean {
     return true
 }
 
-private fun normalizeTextLineSql(raw: String): String {
-    return raw
-        .replace('\u0000', ' ')
-        .replace(NORMALIZE_WHITESPACE_REGEX, " ")
-        .trim()
-}
-
 private fun plainDefinitionToHtmlSql(raw: String): String {
     val normalized = raw
         .replace("\r\n", "\n")
@@ -1380,62 +1095,6 @@ private fun stripHtmlTagsSql(value: String): String {
         .trim()
 }
 
-private fun extractAliasForLookupSql(term: String, definitionHtml: String): String {
-    val plain = stripHtmlTagsSql(definitionHtml).take(180)
-    val termTokens = KANJI_TOKEN_REGEX
-        .findAll(term)
-        .map { it.value }
-        .toList()
-    val definitionTokens = KANJI_TOKEN_REGEX
-        .findAll(plain)
-        .map { it.value }
-        .filter { it.length in 1..12 }
-        .distinct()
-        .take(8)
-        .toList()
-    return normalizeLookupSql((termTokens + definitionTokens).joinToString(""))
-}
-
-private fun scoreEntryByNormalizedSql(
-    term: String,
-    reading: String,
-    alias: String,
-    normalizedQuery: String
-): Int {
-    var score = 0
-    when {
-        term == normalizedQuery -> score = max(score, 120)
-        reading.isNotBlank() && reading == normalizedQuery -> score = max(score, 115)
-        alias.isNotBlank() && alias == normalizedQuery -> score = max(score, 112)
-    }
-    if (term.startsWith(normalizedQuery)) score = max(score, 96)
-    if (reading.isNotBlank() && reading.startsWith(normalizedQuery)) score = max(score, 90)
-    if (alias.isNotBlank() && alias.startsWith(normalizedQuery)) score = max(score, 89)
-    if (term.contains(normalizedQuery)) score = max(score, 82)
-    if (reading.isNotBlank() && reading.contains(normalizedQuery)) score = max(score, 78)
-    if (alias.isNotBlank() && alias.contains(normalizedQuery)) score = max(score, 76)
-
-    val distancePenalty = (term.length - normalizedQuery.length).coerceAtLeast(0).coerceAtMost(24)
-    return (score - distancePenalty).coerceAtLeast(0)
-}
-
-private fun normalizeLookupSql(value: String): String {
-    return value
-        .lowercase(Locale.ROOT)
-        .replace(NORMALIZE_PUNCT_OR_SYMBOL_REGEX, " ")
-        .replace(NORMALIZE_WHITESPACE_REGEX, "")
-}
-
-private fun rewriteMdictEntryLinkForDisplay(definition: String): String {
-    val target = parseMdxLinkTarget(definition) ?: return definition
-    val encodedTarget = Uri.encode(target)
-    val label = target
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    return "<a href=\"entry://$encodedTarget\">$label</a>"
-}
-
 private fun escapeHtmlAttributeSql(value: String): String {
     return value
         .replace("&", "&amp;")
@@ -1444,135 +1103,9 @@ private fun escapeHtmlAttributeSql(value: String): String {
         .replace(">", "&gt;")
 }
 
-private fun rewriteBundledDictionaryResourceSrcForDisplay(
-    definition: String,
-    cacheKey: String
-): String {
-    if (definition.isBlank()) return definition
-    if (!definition.contains("href=", ignoreCase = true) &&
-        !definition.contains("src=", ignoreCase = true)
-    ) return definition
-
-    fun resolveSrc(rawSrc: String): String {
-        val src = rawSrc.trim().trim('"', '\'')
-        if (src.isBlank()) return rawSrc
-        if (src.startsWith("//")) return rawSrc
-        if (src.startsWith("#")) return rawSrc
-        if (src.startsWith("data:", ignoreCase = true)) return rawSrc
-        if (URI_SCHEME_REGEX.containsMatchIn(src)) return rawSrc
-        val normalized = src
-            .replace('\\', '/')
-            .trimStart('/')
-            .removePrefix("./")
-            .trim()
-        if (normalized.isBlank()) return rawSrc
-        return buildBundledDictionaryResourceUri(cacheKey, normalized)
-    }
-
-    return HTML_TAG_REGEX.replace(definition) { tagMatch ->
-        var tag = tagMatch.value
-        tag = HTML_ATTR_QUOTED_REGEX.replace(tag) { match ->
-            val attr = match.groupValues[1]
-            val quote = match.groupValues[2]
-            val value = match.groupValues[3]
-            "$attr=$quote${escapeHtmlAttributeSql(resolveSrc(value))}$quote"
-        }
-        tag = HTML_ATTR_UNQUOTED_REGEX.replace(tag) { match ->
-            val attr = match.groupValues[1]
-            val value = match.groupValues[2]
-            "$attr=\"${escapeHtmlAttributeSql(resolveSrc(value))}\""
-        }
-        tag
-    }
-}
-
 private fun escapeHtmlTextSql(value: String): String {
     return value
         .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
 }
-
-private fun rewriteMdictImageSrcToFileUri(
-    definition: String,
-    mediaDir: File?,
-    fallbackUriBuilder: ((String) -> String)? = null,
-    logContext: String = ""
-): String {
-    if (definition.isBlank()) return definition
-    if (!definition.contains("<img", ignoreCase = true) &&
-        !definition.contains("href=", ignoreCase = true) &&
-        !definition.contains("src=", ignoreCase = true)
-    ) return definition
-    if (mediaDir?.isDirectory != true && fallbackUriBuilder == null) return definition
-
-    var imageCount = 0
-    var resolvedCount = 0
-    val unresolved = mutableListOf<String>()
-
-    fun resolveSrc(rawSrc: String): String {
-        imageCount += 1
-        val src = rawSrc.trim().trim('"', '\'')
-        if (src.isBlank()) return rawSrc
-        if (src.startsWith("//")) return rawSrc
-        if (src.startsWith("#")) return rawSrc
-        if (src.startsWith("data:", ignoreCase = true)) return rawSrc
-        if (URI_SCHEME_REGEX.containsMatchIn(src)) return rawSrc
-
-        val normalized = src
-            .replace('\\', '/')
-            .trimStart('/')
-            .removePrefix("./")
-            .trim()
-        if (normalized.isBlank()) return rawSrc
-
-        val decoded = runCatching {
-            URLDecoder.decode(normalized, Charsets.UTF_8.name())
-        }.getOrNull()
-        val candidates = linkedSetOf(normalized)
-        if (!decoded.isNullOrBlank()) candidates += decoded
-
-        if (mediaDir?.isDirectory == true) {
-            val resolved = candidates.firstNotNullOfOrNull { candidate ->
-                val file = File(mediaDir, candidate)
-                if (file.isFile) file else null
-            }
-            if (resolved != null) {
-                resolvedCount += 1
-                return resolved.toURI().toString()
-            }
-        }
-        val fallback = fallbackUriBuilder?.invoke(normalized)
-        if (!fallback.isNullOrBlank()) {
-            resolvedCount += 1
-            return fallback
-        }
-        if (unresolved.size < 3) unresolved += src
-        return rawSrc
-    }
-
-    var out = HTML_TAG_REGEX.replace(definition) { tagMatch ->
-        var tag = tagMatch.value
-        tag = HTML_ATTR_QUOTED_REGEX.replace(tag) { match ->
-            val attr = match.groupValues[1]
-            val quote = match.groupValues[2]
-            val value = match.groupValues[3]
-            "$attr=$quote${escapeHtmlAttributeSql(resolveSrc(value))}$quote"
-        }
-        tag = HTML_ATTR_UNQUOTED_REGEX.replace(tag) { match ->
-            val attr = match.groupValues[1]
-            val value = match.groupValues[2]
-            "$attr=\"${escapeHtmlAttributeSql(resolveSrc(value))}\""
-        }
-        tag
-    }
-    if (imageCount > 0) {
-        Log.d(
-            MDICT_MEDIA_LOG_TAG,
-            "rewrite imgs total=$imageCount resolved=$resolvedCount unresolved=${(imageCount - resolvedCount).coerceAtLeast(0)} ctx=$logContext sampleMiss=${unresolved.joinToString("|")}"
-        )
-    }
-    return out
-}
-
-

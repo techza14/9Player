@@ -11,12 +11,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FontDownload
-import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.LibraryAdd
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.QueryStats
+import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.SportsEsports
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -40,11 +41,14 @@ internal fun SettingsPanel(
     onFontClick: () -> Unit,
     onControllerClick: () -> Unit,
     onAnkiClick: () -> Unit,
+    onDictionaryClick: () -> Unit,
     onAdvancedOverlayClick: () -> Unit,
+    onAdvancedStatisticsClick: () -> Unit,
     onAdvancedOtherClick: () -> Unit,
     onLanguageClick: () -> Unit,
     onGuideClick: () -> Unit,
     onExportDiagnosticsClick: () -> Unit,
+    onUpdateClick: () -> Unit,
     onVersionClick: () -> Unit
 ) {
     Column(
@@ -90,6 +94,12 @@ internal fun SettingsPanel(
                 icon = Icons.Outlined.LibraryAdd,
                 title = stringResource(R.string.settings_anki_title),
                 onClick = onAnkiClick,
+                showDivider = true
+            )
+            SettingsListItem(
+                icon = Icons.Outlined.MenuBook,
+                title = stringResource(R.string.settings_dictionary_title),
+                onClick = onDictionaryClick,
                 showDivider = false
             )
         }
@@ -115,7 +125,12 @@ internal fun SettingsPanel(
                 onClick = onAdvancedOverlayClick
             )
             SettingsListItem(
-                icon = Icons.Outlined.MoreHoriz,
+                icon = Icons.Outlined.QueryStats,
+                title = stringResource(R.string.settings_statistics_title),
+                onClick = onAdvancedStatisticsClick
+            )
+            SettingsListItem(
+                icon = Icons.Outlined.Science,
                 title = stringResource(R.string.settings_other_title),
                 onClick = onAdvancedOtherClick,
                 showDivider = false
@@ -135,6 +150,11 @@ internal fun SettingsPanel(
                 title = stringResource(R.string.settings_export_diagnostics_title),
                 subtitle = stringResource(R.string.settings_export_diagnostics_subtitle),
                 onClick = onExportDiagnosticsClick
+            )
+            SettingsListItem(
+                icon = Icons.Outlined.Info,
+                title = stringResource(R.string.settings_update_title),
+                onClick = onUpdateClick
             )
             SettingsListItem(
                 icon = Icons.Outlined.Info,

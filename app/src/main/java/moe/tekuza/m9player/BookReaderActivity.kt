@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
@@ -40,6 +41,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -53,6 +55,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -60,6 +63,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -90,6 +95,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -107,6 +113,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -130,10 +137,10 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 import kotlin.math.ceil
-import kotlin.math.floor
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
@@ -149,18 +156,25 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.text.vertical.VerticalTextLayout
 import moe.tekuza.m9player.ui.theme.TsetTheme
+import moe.tekuza.m9player.hoshi.features.dictionary.DictionarySettings
+import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
+import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupItem
+import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupOptions
+import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupStackView
 import kotlinx.coroutines.CancellationException
+import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.InputStream
 import java.lang.ref.WeakReference
 import java.util.Locale
+import org.json.JSONObject
 import kotlin.math.abs
 
 private const val BOOK_READER_PERMISSION_REQUEST_CODE = 21_001
@@ -174,20 +188,16 @@ private const val BOOK_READER_UI_SWAP_PREV_NEXT_VERTICAL_KEY = "ui_swap_prev_nex
 private const val BOOK_READER_UI_CHAPTER_VISIBLE_KEY = "ui_chapter_visible"
 private const val BOOK_READER_SLEEP_EXIT_CONTROL_KEY = "sleep_exit_control"
 private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
-private const val BOOK_LOOKUP_POS_LOG_TAG = "BookLookupPos"
 private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
 private const val BOOK_LOOKUP_SELECTION_LOG_TAG = "BookLookupSelection"
-private const val BOOK_LOOKUP_TAP_LOG_TAG = "BookLookupTap"
 private const val BOOK_READER_BACK_LOG_TAG = "BookReaderBack"
 private const val BOOK_UI_MODE_LOG_TAG = "BookUiMode"
 private const val BOOK_VERTICAL_TAP_DEBUG_OVERLAY = false
 private const val BOOK_CUE_LOOP_LOG_TAG = "BookCueLoop"
-
-private enum class UiTestControlModule {
-    CHAPTER,
-    TIMELINE,
-    TRANSPORT
-}
+private const val BOOK_VERTICAL_COLUMN_WIDTH_FACTOR = 1.0f
+private val BOOK_VERTICAL_CUE_EDGE_PADDING = 28.dp
+private val BOOK_VERTICAL_CUE_ITEM_HORIZONTAL_PADDING = 0.dp
+private val BOOK_VERTICAL_CUE_GLYPH_SAFETY_WIDTH = 12.dp
 
 class BookReaderActivity : AppCompatActivity() {
     private var gamepadKeyHandler: ((KeyEvent) -> Boolean)? = null
@@ -254,8 +264,9 @@ class BookReaderActivity : AppCompatActivity() {
                                 putExtra(EXTRA_RETURN_POSITION_MS, normalized)
                                 putExtra(EXTRA_RETURN_DURATION_MS, currentDurationMs.coerceAtLeast(0L))
                             }
-                            // Exiting reader should immediately surface overlay controls.
-                            startAudiobookFloatingOverlayService(this)
+                            if (loadAudiobookSettingsConfig(this).floatingOverlayShowOnReaderExit) {
+                                startAudiobookFloatingOverlayService(this)
+                            }
                             startActivity(intent)
                         }
                     }
@@ -515,6 +526,11 @@ private fun BookReaderScreen(
     val context = LocalContext.current
     val activity = context as? Activity
     val view = LocalView.current
+    val rootDensity = LocalDensity.current
+    val isDarkTheme = isSystemInDarkTheme()
+    val navigationBarBottomInsetDp = with(rootDensity) {
+        WindowInsets.navigationBars.getBottom(this).toDp().value.toDouble()
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     var cues by remember { mutableStateOf<List<ReaderSubtitleCue>>(emptyList()) }
     var audioChapters by remember { mutableStateOf<List<ReaderAudioChapter>>(emptyList()) }
@@ -524,12 +540,9 @@ private fun BookReaderScreen(
     var loadedDictionaries by remember { mutableStateOf<List<LoadedDictionary>>(emptyList()) }
     var dictionaryDataVersion by remember { mutableStateOf(loadDictionaryDataVersion(context)) }
 
-    val lookupSession = remember { ReaderLookupSession() }
-    val lookupPopupLayers = lookupSession.layers
-    var lookupPopupTemporarilyHidden by remember { mutableStateOf(false) }
-    var reopenLookupPopupAfterCueRangeSelection by remember { mutableStateOf(false) }
-    var lookupPopupRequestNonce by remember { mutableStateOf(0L) }
-    var lookupPopupPending by remember { mutableStateOf(false) }
+    val hoshiLookupPopups = remember { mutableStateListOf<LookupPopupItem>() }
+    var hoshiLookupPopupTemporarilyHidden by remember { mutableStateOf(false) }
+    var reopenHoshiLookupPopupAfterCueRangeSelection by remember { mutableStateOf(false) }
     var resumePlaybackAfterLookupDismiss by remember { mutableStateOf(false) }
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
 
@@ -582,6 +595,8 @@ private fun BookReaderScreen(
     var pendingSingleTapBaseCueIndex by remember { mutableStateOf<Int?>(null) }
     var pendingSingleTapJob by remember { mutableStateOf<Job?>(null) }
     var liveSelectedRangeAnchor by remember { mutableStateOf<ReaderLookupAnchor?>(null) }
+    var hoshiLookupSelectionCueIndex by remember { mutableStateOf<Int?>(null) }
+    var hoshiLookupSelectionRange by remember { mutableStateOf<IntRange?>(null) }
 
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
@@ -771,7 +786,7 @@ private fun BookReaderScreen(
             cueRangeEndIndex = null
         }
         if (!hasSubtitleFile) {
-            lookupPopupTemporarilyHidden = false
+            hoshiLookupPopupTemporarilyHidden = false
         }
     }
 
@@ -780,8 +795,8 @@ private fun BookReaderScreen(
             cueRangeSelectionMode = false
             cueRangeStartIndex = null
             cueRangeEndIndex = null
-            reopenLookupPopupAfterCueRangeSelection = false
-            lookupPopupTemporarilyHidden = false
+            reopenHoshiLookupPopupAfterCueRangeSelection = false
+            hoshiLookupPopupTemporarilyHidden = false
         }
     }
 
@@ -807,6 +822,7 @@ private fun BookReaderScreen(
                             durationMs = endedDurationMs,
                             allowZeroPositionWrite = true
                         )
+                        recordStatisticsBookCompleted(context, playbackPositionKey)
                         cleanupBookReaderSrtCache(context)
                     }
                 }
@@ -910,7 +926,7 @@ private fun BookReaderScreen(
 
     suspend fun loadReaderDictionariesSnapshot(): List<LoadedDictionary> {
         return withContext(Dispatchers.IO) {
-            loadAvailableDictionaries(context, contentResolver)
+            loadAvailableDictionaries(context)
         }
     }
 
@@ -924,8 +940,10 @@ private fun BookReaderScreen(
     val dictionaryPriorityByName = remember(loadedDictionaries) {
         loadedDictionaries.mapIndexed { index, dictionary -> dictionary.name to index }.toMap()
     }
-    val activeLookupLayer = lookupSession.activeLayer
-    val lookupPopupVisible = activeLookupLayer != null
+    val bookHoshiLookupSession = remember(context, loadedDictionaries) {
+        HoshiLookupSession(context, dictionariesProvider = { loadedDictionaries })
+    }
+    val hoshiLookupPopupVisible = hoshiLookupPopups.isNotEmpty()
     val lyricsFollowTopPaddingPx = with(LocalDensity.current) { 72.dp.toPx() }
 
     DisposableEffect(context) {
@@ -945,29 +963,42 @@ private fun BookReaderScreen(
         dragPreviewPositionMs ?: positionMs
     }
     val activeCueIndex = remember(previewPositionMs, cues) { findBookDisplayCueIndexAtTime(cues, previewPositionMs) }
-    val rootLookupLayer = lookupSession.getOrNull(0)
-    val visibleSelectedRange = remember(rootLookupLayer, activeCueIndex) {
-        val root = rootLookupLayer
-        if (root == null) {
-            null
-        } else if (root.cueIndex == null || root.cueIndex == activeCueIndex) {
-            root.selectedRange
+    val visibleSelectedRange = remember(
+        activeCueIndex,
+        hoshiLookupSelectionCueIndex,
+        hoshiLookupSelectionRange
+    ) {
+        if (hoshiLookupSelectionCueIndex == activeCueIndex) {
+            hoshiLookupSelectionRange
         } else {
             null
         }
     }
     LaunchedEffect(visibleSelectedRange, activeCueIndex, readerUiWritingMode, lyricsMode) {
-        val rootRange = rootLookupLayer?.selectedRange
-        val rootSelectionText = rootLookupLayer?.selectionText.orEmpty()
         Log.d(
             BOOK_LOOKUP_SELECTION_LOG_TAG,
-            "visibleRange activeCue=$activeCueIndex mode=$readerUiWritingMode lyrics=$lyricsMode range=${formatRangeForLog(visibleSelectedRange)} rootRange=${formatRangeForLog(rootRange)} rootSelection='${rootSelectionText.take(24)}'"
+            "visibleRange activeCue=$activeCueIndex mode=$readerUiWritingMode lyrics=$lyricsMode range=${formatRangeForLog(visibleSelectedRange)}"
         )
     }
     LaunchedEffect(activeCueIndex, visibleSelectedRange, lyricsMode) {
         if (visibleSelectedRange == null) {
             liveSelectedRangeAnchor = null
         }
+    }
+    LaunchedEffect(liveSelectedRangeAnchor, visibleSelectedRange, hoshiLookupPopups.size) {
+        val range = visibleSelectedRange ?: return@LaunchedEffect
+        val avoidRects = liveSelectedRangeAnchor.toSelectionRects(rootDensity.density)
+        if (avoidRects.isEmpty()) return@LaunchedEffect
+        val popupIndex = hoshiLookupPopups.indexOfFirst {
+            it.state.selection.sentenceOffset?.let { offset -> offset in range } == true
+        }.takeIf { it >= 0 } ?: 0.takeIf { hoshiLookupPopups.isNotEmpty() } ?: return@LaunchedEffect
+        val current = hoshiLookupPopups.getOrNull(popupIndex) ?: return@LaunchedEffect
+        if (current.state.avoidRects == avoidRects) return@LaunchedEffect
+        hoshiLookupPopups[popupIndex] = current.copy(
+            state = current.state.copy(
+                avoidRects = avoidRects
+            )
+        )
     }
     val activeCue = cues.getOrNull(activeCueIndex)
     val activeCueScrollProgress = remember(activeCue, previewPositionMs) {
@@ -989,7 +1020,7 @@ private fun BookReaderScreen(
             val total = if (player.duration > 0L) player.duration else durationMs.coerceAtLeast(0L)
             Log.d(
                 BOOK_READER_BACK_LOG_TAG,
-                "backToMain source=$source lookupVisible=${lookupSession.size > 0} lookupLayers=${lookupSession.size} pending=$lookupPopupPending playing=${player.isPlaying} positionMs=$current durationMs=$total"
+                "backToMain source=$source hoshiLookupVisible=${hoshiLookupPopups.isNotEmpty()} hoshiLookupLayers=${hoshiLookupPopups.size} playing=${player.isPlaying} positionMs=$current durationMs=$total"
             )
             onBack(current, total)
         }
@@ -1038,6 +1069,11 @@ private fun BookReaderScreen(
     LaunchedEffect(isPlaying, uiTestMode) {
         if (!uiTestMode) {
             BookReaderFloatingBridge.notifyPlaybackState(isPlaying)
+        }
+    }
+    LaunchedEffect(context, playbackPositionKey, uiTestMode) {
+        if (!uiTestMode) {
+            BookReaderFloatingBridge.setCurrentBookKey(context, playbackPositionKey)
         }
     }
     LaunchedEffect(activeCue?.text, uiTestMode) {
@@ -1397,7 +1433,6 @@ private fun BookReaderScreen(
 
     fun jumpToCue(index: Int, showStatus: Boolean = true) {
         val cue = cues.getOrNull(index) ?: return
-        lookupSession.clear()
         resumePlaybackAfterLookupDismiss = false
         player.seekTo(cue.startMs)
         player.play()
@@ -1411,17 +1446,17 @@ private fun BookReaderScreen(
         cueRangeSelectionMode = false
         cueRangeStartIndex = null
         cueRangeEndIndex = null
-        reopenLookupPopupAfterCueRangeSelection = false
-        lookupPopupTemporarilyHidden = false
+        reopenHoshiLookupPopupAfterCueRangeSelection = false
+        hoshiLookupPopupTemporarilyHidden = false
     }
 
-    fun beginCueRangeSelection(reopenLookupPopupAfterSelection: Boolean) {
+    fun beginHoshiCueRangeSelection(reopenLookupPopupAfterSelection: Boolean) {
         if (!audiobookSettings.lookupRangeSelectionEnabled) return
         cueRangeSelectionMode = true
         cueRangeStartIndex = null
         cueRangeEndIndex = null
-        reopenLookupPopupAfterCueRangeSelection = reopenLookupPopupAfterSelection
-        lookupPopupTemporarilyHidden = reopenLookupPopupAfterSelection
+        reopenHoshiLookupPopupAfterCueRangeSelection = reopenLookupPopupAfterSelection
+        hoshiLookupPopupTemporarilyHidden = reopenLookupPopupAfterSelection
         if (!lyricsMode) lyricsMode = true
         if (coverModeEnabled) coverModeEnabled = false
         controlModeStatus = context.getString(R.string.bookreader_range_select_start)
@@ -1457,9 +1492,9 @@ private fun BookReaderScreen(
                     range.count()
                 )
                 cueRangeSelectionMode = false
-                if (reopenLookupPopupAfterCueRangeSelection) {
-                    reopenLookupPopupAfterCueRangeSelection = false
-                    lookupPopupTemporarilyHidden = false
+                if (reopenHoshiLookupPopupAfterCueRangeSelection) {
+                    reopenHoshiLookupPopupAfterCueRangeSelection = false
+                    hoshiLookupPopupTemporarilyHidden = false
                 }
             }
         }
@@ -1475,7 +1510,6 @@ private fun BookReaderScreen(
         pendingSingleTapJob = null
         pendingSingleTapBaseCueIndex = null
         controlTargetCueIndex = null
-        lookupSession.clear()
         resumePlaybackAfterLookupDismiss = false
         player.seekTo(target)
         if (controlModeEnabled) {
@@ -1685,500 +1719,248 @@ private fun BookReaderScreen(
         }
     }
 
-    fun buildLookupLayer(
-        loading: Boolean,
-        error: String?,
-        rawResults: List<DictionarySearchResult>,
-        sourceTerm: String? = null,
-        cue: ReaderSubtitleCue?,
-        cueIndex: Int?,
-        anchorOffset: Int?,
-        anchor: ReaderLookupAnchor?,
-        placeBelow: Boolean,
-        preferSidePlacement: Boolean = false,
-        selectedRange: IntRange?,
-        selectionText: String?,
-        popupSentence: String? = null,
-        highlightedDefinitionKey: String? = null,
-        highlightedDefinitionRects: List<Rect> = emptyList(),
-        collapsedSections: Map<String, Boolean> = emptyMap(),
-        autoPlayNonce: Long = System.nanoTime(),
-        autoPlayedKey: String? = null
-    ): ReaderLookupLayer {
-        return buildLookupLayerFromRawResults(
-            rawResults = rawResults,
-            dictionaryCssByName = dictionaryCssByName,
-            dictionaryPriorityByName = dictionaryPriorityByName,
-            loading = loading,
-            error = error,
-            sourceTerm = sourceTerm,
-            cue = cue,
-            cueIndex = cueIndex,
-            anchorOffset = anchorOffset,
-            anchor = anchor,
-            placeBelow = placeBelow,
-            preferSidePlacement = preferSidePlacement,
-            selectedRange = selectedRange,
-            selectionText = selectionText,
-            popupSentence = popupSentence,
-            highlightedDefinitionKey = highlightedDefinitionKey,
-            highlightedDefinitionRects = highlightedDefinitionRects,
-            collapsedSections = collapsedSections,
-            autoPlayNonce = autoPlayNonce,
-            autoPlayedKey = autoPlayedKey
-        )
+    fun clearHoshiLookupSelection() {
+        hoshiLookupSelectionCueIndex = null
+        hoshiLookupSelectionRange = null
     }
 
-    fun truncateLookupLayersTo(index: Int) {
-        if (index !in lookupPopupLayers.indices) return
-        while (lookupPopupLayers.size > index + 1) {
-            lookupSession.pop()
-        }
-    }
-
-    fun triggerPopupLookup(cue: ReaderSubtitleCue, offset: Int, anchor: ReaderLookupAnchor?) {
+    fun triggerHoshiPopupLookup(selection: ReaderSelectionData, cue: ReaderSubtitleCue?) {
         if (uiTestMode) return
-        val lookupStartMs = System.currentTimeMillis()
-        consumeCueRangeSelection()
-        val dictionariesSnapshot = loadedDictionaries
-        val cueIndex = cues.indexOf(cue).takeIf { it >= 0 }
-        val anchorBounds = anchor.boundingRectOrNull()
-        val estimatedAnchorY = anchorBounds?.bottom ?: (view.height * 0.56f)
-        val shouldPlaceBelow = estimatedAnchorY <= (view.height / 2f)
-        Log.d(
-            BOOK_LOOKUP_ANCHOR_LOG_TAG,
-            "trigger cueIndex=$cueIndex offset=$offset anchor=${formatRectForLog(anchorBounds)} placeBelow=$shouldPlaceBelow"
-        )
-        Log.d(
-            BOOK_LOOKUP_POS_LOG_TAG,
-            "tapLookup start cueIndex=$cueIndex offset=$offset t=$lookupStartMs"
-        )
-        Log.d(
-            BOOK_LOOKUP_TAP_LOG_TAG,
-            "tapLookup start cueIndex=$cueIndex offset=$offset t=$lookupStartMs"
-        )
-        val selection = selectLookupScanText(
-            text = cue.text,
-            charOffset = offset
-        )
-        val selectionRange = selection?.range
-        val selectedToken = selection?.text?.trim()?.takeIf { it.isNotBlank() }
-        Log.d(
-            BOOK_LOOKUP_ANCHOR_LOG_TAG,
-            "triggerSelection cueIndex=$cueIndex selectedRange=${formatRangeForLog(selectionRange)} token=${selectedToken.orEmpty()}"
-        )
-
-        if (selectedToken.isNullOrBlank()) {
-            return
+        val resolvedCue = cue ?: return
+        val resolvedCueIndex = cues.indexOf(resolvedCue).takeIf { it >= 0 }
+        val selectionStart = selection.sentenceOffset
+            ?.coerceIn(0, resolvedCue.text.length)
+            ?: 0
+        val initialSelectionEndExclusive = (selectionStart + selection.text.length.coerceAtLeast(1))
+            .coerceIn(selectionStart, resolvedCue.text.length)
+        hoshiLookupSelectionCueIndex = resolvedCueIndex
+        hoshiLookupSelectionRange = if (initialSelectionEndExclusive > selectionStart) {
+            selectionStart until initialSelectionEndExclusive
+        } else {
+            null
         }
-
-        lookupPopupTemporarilyHidden = false
-        lookupPopupRequestNonce += 1L
-        val requestNonce = lookupPopupRequestNonce
-        lookupPopupPending = true
-
+        val popupStartNs = SystemClock.elapsedRealtimeNanos()
+        consumeCueRangeSelection()
         if (audiobookSettings.pausePlaybackOnLookup && player.isPlaying) {
             setLookupPlaybackState(play = false)
             resumePlaybackAfterLookupDismiss = true
         } else {
             resumePlaybackAfterLookupDismiss = false
         }
-
-        lookupSession.clear()
-
-        fun finishPendingLookupWithoutPopup(resumePlayback: Boolean = true) {
-            lookupPopupPending = false
-            lookupPopupTemporarilyHidden = false
-            lookupSession.clear()
-            consumeCueRangeSelection()
-            if (resumePlayback && resumePlaybackAfterLookupDismiss) {
-                setLookupPlaybackState(play = true)
-            }
-            resumePlaybackAfterLookupDismiss = false
-        }
-
-        if (dictionariesSnapshot.isEmpty()) {
-            finishPendingLookupWithoutPopup()
-            Toast.makeText(context, context.getString(R.string.bookreader_lookup_no_dict), Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        scope.launch {
-            val query = selectedToken
-
-            fun applyLookupResult(hits: List<DictionarySearchResult>, computedQuery: String?) {
-                if (hits.isEmpty()) return
-                val matchedLength = hits.firstOrNull()?.matchedLength?.coerceAtLeast(1) ?: 1
-                val fallbackOffset = offset.coerceIn(0, cue.text.lastIndex.coerceAtLeast(0))
-                val fallbackRange = fallbackOffset until (fallbackOffset + 1)
-                val resolvedRange = trimSelectionRangeByMatchedLength(
-                    selectionRange,
-                    matchedLength
-                ) ?: selectionRange ?: fallbackRange
-                val selectionText = resolvedRange.let { range ->
-                    val start = range.first.coerceIn(0, cue.text.length)
-                    val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
-                    if (endExclusive > start) cue.text.substring(start, endExclusive) else ""
-                }.trim().takeIf { it.isNotBlank() }
-                    ?: computedQuery?.trim()?.takeIf { it.isNotBlank() }
-                    ?: selectedToken
-                val firstHit = hits.firstOrNull()
-                Log.d(
-                    BOOK_LOOKUP_SELECTION_LOG_TAG,
-                    "applyLookupResult cueIndex=$cueIndex token='${selectedToken.orEmpty()}' query='${computedQuery.orEmpty()}' firstTerm='${firstHit?.entry?.term.orEmpty()}' firstMatchedLen=${firstHit?.matchedLength ?: -1} usedMatchedLen=$matchedLength baseRange=${formatRangeForLog(selectionRange)} resolvedRange=${formatRangeForLog(resolvedRange)} resolvedText='${selectionText.orEmpty().take(24)}'"
-                )
-                Log.d(
-                    BOOK_LOOKUP_TAP_LOG_TAG,
-                    "applyLookupResult cueIndex=$cueIndex firstMatchedLen=${firstHit?.matchedLength ?: -1} usedMatchedLen=$matchedLength baseRange=${formatRangeForLog(selectionRange)} resolvedRange=${formatRangeForLog(resolvedRange)} resolvedText='${selectionText.orEmpty().take(24)}'"
-                )
-                val expandedAnchor = if (readerUiWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
-                    anchor.expandForSelectionText(
-                        selectionText = selectionText,
-                        writingMode = readerUiWritingMode
-                    )
-                } else {
-                    anchor
-                }
-                val layer = buildLookupLayer(
-                    loading = false,
-                    error = null,
-                    rawResults = hits,
-                    cue = cue,
-                    cueIndex = cueIndex,
-                    anchorOffset = offset,
-                    anchor = expandedAnchor,
-                    placeBelow = shouldPlaceBelow,
-                    preferSidePlacement = false,
-                    selectedRange = resolvedRange,
-                    selectionText = selectionText
-                )
-                if (lookupSession.size > 0) {
-                    lookupSession.replaceTop { layer }
-                } else {
-                    lookupSession.push(layer)
-                }
-                Log.d(
-                    BOOK_LOOKUP_POS_LOG_TAG,
-                    "tapLookup success cueIndex=$cueIndex query='${computedQuery ?: query}' hits=${hits.size} elapsedMs=${(System.currentTimeMillis() - lookupStartMs).coerceAtLeast(0L)}"
-                )
-                Log.d(
-                    BOOK_LOOKUP_TAP_LOG_TAG,
-                    "tapLookup success cueIndex=$cueIndex query='${computedQuery ?: query}' hits=${hits.size}"
-                )
-            }
-
-            val finalResult = withContext(Dispatchers.Default) {
-                runCatching {
-                    computeTapLookupResultsImmediate(
-                        context = context,
-                        dictionaries = dictionariesSnapshot,
-                        query = query
-                    )
-                }
-            }
-            finalResult.onSuccess { computed ->
-                if (lookupPopupRequestNonce != requestNonce) return@onSuccess
-                val hits = computed?.hits.orEmpty()
-                if (hits.isEmpty()) {
-                    finishPendingLookupWithoutPopup()
-                    Log.d(
-                        BOOK_LOOKUP_POS_LOG_TAG,
-                        "tapLookup empty cueIndex=$cueIndex query='${computed?.query ?: query}' elapsedMs=${(System.currentTimeMillis() - lookupStartMs).coerceAtLeast(0L)}"
-                    )
-                } else {
-                    lookupPopupPending = false
-                    applyLookupResult(hits, computed?.query)
-                }
-            }.onFailure { throwable ->
-                if (lookupPopupRequestNonce != requestNonce) return@onFailure
-                finishPendingLookupWithoutPopup()
-                Toast.makeText(
-                    context,
-                    (throwable.message ?: context.getString(R.string.bookreader_lookup_failed)).take(160),
-                    Toast.LENGTH_SHORT
-                ).show()
-                Log.d(
-                    BOOK_LOOKUP_POS_LOG_TAG,
-                    "tapLookup fail cueIndex=$cueIndex query='$query' elapsedMs=${(System.currentTimeMillis() - lookupStartMs).coerceAtLeast(0L)} error='${throwable.message.orEmpty()}'"
-                )
-            }
-        }
-    }
-
-    fun cancelPendingLookup(resumePlayback: Boolean = true) {
-        if (!lookupPopupPending) return
-        lookupPopupRequestNonce += 1L
-        lookupPopupPending = false
-        lookupPopupTemporarilyHidden = false
-        lookupSession.clear()
-        consumeCueRangeSelection()
-        if (resumePlayback && resumePlaybackAfterLookupDismiss) {
-            setLookupPlaybackState(play = true)
-        }
-        resumePlaybackAfterLookupDismiss = false
-    }
-
-    fun popLookupSnapshotOrClose(resumePlayback: Boolean = true) {
-        lookupPopupRequestNonce += 1L
-        lookupSession.pop()
-        if (lookupSession.size > 0) {
-            lookupPopupTemporarilyHidden = false
-            return
-        }
-        lookupSession.clear()
-        lookupPopupTemporarilyHidden = false
-        consumeCueRangeSelection()
-        if (resumePlayback && resumePlaybackAfterLookupDismiss) {
-            setLookupPlaybackState(play = true)
-        }
-        resumePlaybackAfterLookupDismiss = false
-    }
-
-    fun closeLookupPopup(resumePlayback: Boolean = true) {
-        lookupPopupRequestNonce += 1L
-        lookupSession.clear()
-        lookupPopupTemporarilyHidden = false
-        consumeCueRangeSelection()
-        if (resumePlayback && resumePlaybackAfterLookupDismiss) {
-            setLookupPlaybackState(play = true)
-        }
-        resumePlaybackAfterLookupDismiss = false
-    }
-
-    fun performRecursiveLookupFromDefinition(
-        sourceLayerIndex: Int,
-        definitionKey: String,
-        tapData: DefinitionLookupTapData,
-        anchor: ReaderLookupAnchor?
-    ) {
+        val rect = selection.rect
         Log.d(
-            BOOK_LOOKUP_TAP_LOG_TAG,
-            "recursive start sourceLayer=$sourceLayerIndex key=$definitionKey tapSource=${tapData.tapSource} scanLen=${tapData.scanText.length} textLen=${tapData.text.length} offset=${tapData.offset}"
+            BOOK_LOOKUP_SELECTION_LOG_TAG,
+            "hoshi popup start cueIndex=$resolvedCueIndex textLen=${selection.text.length} rect=${rect.x.toInt()},${rect.y.toInt()} ${rect.width.toInt()}x${rect.height.toInt()} normalizedOffset=${selection.normalizedOffset} sentenceOffset=${selection.sentenceOffset}"
         )
-        launchRecursiveLookupIntoSession(
-            context = context,
-            scope = scope,
-            session = lookupSession,
-            sourceLayerIndex = sourceLayerIndex,
-            definitionKey = definitionKey,
-            tapData = tapData,
-            explicitAnchor = anchor,
-            requireSourceCue = true,
-            viewportHeight = view.height,
-            dictionaries = loadedDictionaries,
-            nextRequestNonce = {
-                val next = lookupPopupRequestNonce + 1L
-                lookupPopupRequestNonce = next
-                next
-            },
-            isRequestNonceCurrent = { nonce -> lookupPopupRequestNonce == nonce },
-            logAnchorTag = BOOK_LOOKUP_ANCHOR_LOG_TAG,
-            logPosTag = BOOK_LOOKUP_POS_LOG_TAG,
-            buildPopupSentence = { term, data ->
-                data.sentence.trim().ifBlank {
-                    extractFullSentenceLikeHoshi(
-                        text = data.nodeText,
-                        anchorText = term,
-                        anchorIndexHint = data.offset
-                    )
-                }
-            },
-            buildLayer = { resolved ->
-                val firstHit = resolved.hits.firstOrNull()
-                Log.d(
-                    BOOK_LOOKUP_TAP_LOG_TAG,
-                    "recursive apply sourceLayer=$sourceLayerIndex term='${resolved.term}' firstTerm='${firstHit?.entry?.term.orEmpty()}' firstMatchedLen=${firstHit?.matchedLength ?: -1} hits=${resolved.hits.size}"
-                )
-                buildLookupLayer(
-                    loading = false,
-                    error = null,
-                    rawResults = resolved.hits,
-                    cue = resolved.sourceCue,
-                    cueIndex = resolved.sourceCueIndex,
-                    anchorOffset = tapData.offset,
-                    anchor = resolved.adjustedAnchor,
-                    placeBelow = resolved.shouldPlaceBelow,
-                    preferSidePlacement = true,
-                    selectedRange = null,
-                    selectionText = resolved.term,
-                    popupSentence = resolved.popupSentence
-                )
-            },
-            onNoSourceLayer = { _ -> },
-            onNoCue = { _ -> },
-            onNoSelection = {
-                Log.d(
-                    BOOK_LOOKUP_TAP_LOG_TAG,
-                    "recursive noSelection sourceLayer=$sourceLayerIndex tapSource=${tapData.tapSource} scan='${tapData.scanText.take(24)}' text='${tapData.text.take(24)}'"
-                )
-                if (tapData.tapSource.equals("entry", ignoreCase = true)) {
-                    Log.d(
-                        BOOK_LOOKUP_ANCHOR_LOG_TAG,
-                        "recursive keep layer on entry no_selection sourceLayer=$sourceLayerIndex scan='${tapData.scanText.take(32)}' text='${tapData.text.take(32)}'"
-                    )
-                } else {
-                    truncateLookupLayersTo(sourceLayerIndex)
-                }
-            },
-            onNoDictionary = {
-                Toast.makeText(context, context.getString(R.string.bookreader_lookup_no_dict), Toast.LENGTH_SHORT).show()
-            },
-            onBeforeApply = {
-                consumeCueRangeSelection()
-                lookupPopupTemporarilyHidden = false
-            },
-            onFailure = { error ->
-                Toast.makeText(
-                    context,
-                    (error.message ?: context.getString(R.string.bookreader_lookup_failed)).take(200),
-                    Toast.LENGTH_LONG
-                ).show()
-            }
+        val preparedDictionaryCount = bookHoshiLookupSession.ensurePrepared().size
+        Log.d(
+            BOOK_LOOKUP_SELECTION_LOG_TAG,
+            "hoshi popup prepared dictCount=$preparedDictionaryCount query='${selection.text.take(32)}'"
         )
-    }
-
-    fun addLookupGroupToAnki(layerIndex: Int, groupedResult: GroupedLookupResult) {
-        val dictionaryGroup = groupedResult.dictionaries.firstOrNull() ?: run {
+        val options = LookupPopupOptions(
+            isVertical = false,
+            isFullWidth = audiobookSettings.lookupRootFullWidthEnabled,
+            width = 320,
+            height = 250,
+            swipeToDismiss = true,
+            swipeThreshold = 40,
+            topInset = 0.0,
+            bottomInset = navigationBarBottomInsetDp,
+            dictionarySettings = DictionarySettings(),
+            darkMode = isDarkTheme,
+            eInkMode = false,
+                    audioSettings = audiobookSettings,
+                    showRangeSelection = hasSubtitleFile && audiobookSettings.lookupRangeSelectionEnabled,
+                    showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
+                    popupActionBar = true,
+                )
+        val popup = bookHoshiLookupSession.createPopup(
+            selection = selection,
+            options = options,
+        )
+        if (popup == null) {
+            hoshiLookupPopups.clear()
+            clearHoshiLookupSelection()
+            Log.d(
+                BOOK_LOOKUP_SELECTION_LOG_TAG,
+                "hoshi popup empty cueIndex=$resolvedCueIndex query='${selection.text.take(32)}' sentenceOffset=${selection.sentenceOffset} elapsedMs=${(SystemClock.elapsedRealtimeNanos() - popupStartNs) / 1_000_000L}"
+            )
             return
         }
-        val currentLayer = lookupSession.getOrNull(layerIndex) ?: return
-        val baseCue = currentLayer.cue ?: return
-        val exportCueRange = selectedCueIndexRange?.takeIf { layerIndex == 0 }
-        val exportAudioUri = audioUri?.takeIf { layerIndex == 0 }
-        val cue = exportCueRange
-            ?.takeIf { it.first >= 0 && it.last < cues.size }
-            ?.let { range ->
-                ReaderSubtitleCue(
-                    startMs = cues[range.first].startMs,
-                    endMs = cues[range.last].endMs,
-                    text = cues.slice(range).joinToString("\n") { it.text }
-                )
-            }
-            ?: baseCue
-        val popupSelectionText = currentLayer.selectionText?.trim()?.takeIf { it.isNotBlank() }
-        val exportDefinitions = dictionaryGroup.definitions
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-        val exportDefinitionHtml = exportDefinitions.joinToString("<br>").ifBlank { groupedResult.term }
-        val settingsSnapshot = audiobookSettings
-        val baseCueIndex = currentLayer.cueIndex ?: cues.indexOf(baseCue).takeIf { it >= 0 } ?: 0
-        val sentenceSelection = when {
-            !currentLayer.popupSentence.isNullOrBlank() -> ReaderSentenceSelection(
-                text = currentLayer.popupSentence,
-                cueRange = baseCueIndex..baseCueIndex
+        Log.d(
+            "HoshiLookupPopup",
+            "book root popup built query='${selection.text.take(32)}' results=${popup.first.state.results.size} cueIndex=$resolvedCueIndex"
+        )
+        hoshiLookupPopups.clear()
+        val popupSelection = popup.first.state.selection
+        val popupSelectionStart = popupSelection.sentenceOffset
+            ?.coerceIn(0, resolvedCue.text.length)
+            ?: selectionStart
+        val matchedLength = popup.first.state.results.firstOrNull()
+            ?.matched
+            ?.length
+            ?.coerceAtLeast(1)
+            ?: 1
+        val selectionEndExclusive = (popupSelectionStart + matchedLength).coerceIn(popupSelectionStart, resolvedCue.text.length)
+        val matchedAnchorRect = popupSelection.anchorRectForSourceRange(popupSelectionStart, selectionEndExclusive)
+        val anchoredPopup = popup.first.copy(
+            state = popup.first.state.copy(
+                selection = popupSelection.copy(rect = matchedAnchorRect)
             )
-            exportCueRange != null -> ReaderSentenceSelection(
-                text = cue.text,
-                cueRange = exportCueRange
-            )
-            settingsSnapshot.lookupExportFullSentence -> currentLayer.cueIndex?.let { cueIndex ->
-                extractFullSentenceLikeHoshiFromCues(
-                    cues = cues,
-                    cueIndex = cueIndex,
-                    anchorText = popupSelectionText ?: groupedResult.term,
-                    selectedRangeInCue = currentLayer.selectedRange,
-                    rawAnchorOffsetInCue = currentLayer.anchorOffset
-                )
-            } ?: ReaderSentenceSelection(
-                text = extractFullSentenceLikeHoshi(
-                    text = cue.text,
-                    anchorText = popupSelectionText ?: groupedResult.term,
-                    anchorIndexHint = currentLayer.anchorOffset ?: currentLayer.selectedRange?.first
-                ),
-                cueRange = baseCueIndex..baseCueIndex
-            )
-            else -> ReaderSentenceSelection(
-                text = cue.text,
-                cueRange = baseCueIndex..baseCueIndex
-            )
+        )
+        hoshiLookupPopups.add(anchoredPopup)
+        recordStatisticsLookup(context, playbackPositionKey)
+        hoshiLookupSelectionCueIndex = resolvedCueIndex
+        hoshiLookupSelectionRange = if (selectionEndExclusive > popupSelectionStart) {
+            popupSelectionStart until selectionEndExclusive
+        } else {
+            null
         }
-        val exportCue = sentenceSelection.cueRange
-            .takeIf { it.first >= 0 && it.last < cues.size }
-            ?.let { range ->
-                ReaderSubtitleCue(
-                    startMs = cues[range.first].startMs,
-                    endMs = cues[range.last].endMs,
-                    text = sentenceSelection.text
-                )
-            }
-            ?: cue
-        consumeCueRangeSelection()
-        when (val action = lookupSession.afterAddToAnki(layerIndex)) {
-            CloseLookupAction.ClearAll -> closeLookupPopup()
-            is CloseLookupAction.ShowLayer -> truncateLookupLayersTo(action.index)
+        Log.d(
+            BOOK_LOOKUP_SELECTION_LOG_TAG,
+            "hoshi popup ready cueIndex=$resolvedCueIndex elapsedMs=${(SystemClock.elapsedRealtimeNanos() - popupStartNs) / 1_000_000L}"
+        )
+    }
+
+    fun triggerPopupLookup(cue: ReaderSubtitleCue, offset: Int, anchor: ReaderLookupAnchor?) {
+        if (uiTestMode) return
+        val cueIndex = cues.indexOf(cue).takeIf { it >= 0 }
+        val anchorBounds = anchor.boundingRectOrNull()
+        Log.d(
+            BOOK_LOOKUP_SELECTION_LOG_TAG,
+            "hoshi tap redirect cueIndex=$cueIndex offset=$offset anchor=${formatRectForLog(anchorBounds)}"
+        )
+        val selection = createHoshiReaderSelectionFromCueTap(
+            cueText = cue.text,
+            cueIndex = cueIndex ?: 0,
+            cues = cues,
+            offset = offset,
+            anchorRect = anchorBounds ?: Rect(
+                left = view.width * 0.5f,
+                top = view.height * 0.5f,
+                right = view.width * 0.5f + 1f,
+                bottom = view.height * 0.5f + 1f
+            ),
+            density = rootDensity.density
+        )
+        triggerHoshiPopupLookup(selection, cue)
+    }
+
+    fun triggerPopupLookup(selection: ReaderSelectionData, cue: ReaderSubtitleCue?) {
+        triggerHoshiPopupLookup(selection, cue)
+    }
+
+    fun closeHoshiLookupPopup() {
+        hoshiLookupPopups.clear()
+        hoshiLookupSelectionCueIndex = null
+        hoshiLookupSelectionRange = null
+        hoshiLookupPopupTemporarilyHidden = false
+        reopenHoshiLookupPopupAfterCueRangeSelection = false
+        clearCueRangeSelection()
+    }
+
+    fun exportBookHoshiLookupEntryToAnki(content: String): Boolean {
+        Log.d(
+            "AnkiExportDebug",
+            "bookHoshiExport rawContentLen=${content.length} rawPrefix=${content.take(120)}"
+        )
+        val payload = runCatching { JSONObject(content) }.getOrNull() ?: run {
+            Log.d("AnkiExportDebug", "bookHoshiExport payloadParseFailed")
+            return false
         }
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val preparedLookupAudio = prepareLookupAudioForAnkiExport(
+        val expression = payload.optString("expression").trim().ifBlank {
+            payload.optString("matched").trim()
+        }
+        if (expression.isBlank()) {
+            Log.d(
+                "AnkiExportDebug",
+                "bookHoshiExport expressionBlank payloadKeys=${payload.keys().asSequence().joinToString(",")}"
+            )
+            return false
+        }
+        val reading = payload.optString("reading").trim().takeIf { it.isNotBlank() }
+        val glossary = payload.optString("glossary").trim().ifBlank {
+            payload.optString("glossaryFirst").trim().ifBlank { expression }
+        }
+        val frequency = payload.optString("frequenciesHtml").trim().ifBlank {
+            payload.optString("freqHarmonicRank").trim()
+        }
+        val pitch = payload.optString("pitchCategories").trim().ifBlank {
+            payload.optString("pitchPositions").trim()
+        }
+        val primaryDictionaryName = payload.optString("selectedDictionary").trim()
+        val cueIndex = hoshiLookupSelectionCueIndex ?: activeCueIndex
+        val sourceCue = cueIndex.takeIf { it in cues.indices }?.let { cues[it] }
+        val cueText = sourceCue?.text?.trim()?.takeIf { it.isNotBlank() }
+            ?: title.trim().ifBlank { expression }
+        val cue = sourceCue ?: ReaderSubtitleCue(startMs = 0L, endMs = 0L, text = cueText)
+        val popupSelectionText = payload.optString("popupSelectionText").trim().takeIf { it.isNotBlank() }
+            ?: hoshiLookupSelectionRange?.let { range ->
+                val start = range.first.coerceIn(0, cue.text.length)
+                val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
+                if (endExclusive > start) cue.text.substring(start, endExclusive) else null
+            }?.trim()?.takeIf { it.isNotBlank() }
+        Log.d(
+            "AnkiExportDebug",
+            "bookHoshiExport payload expression=$expression reading=${reading.orEmpty()} dict=$primaryDictionaryName " +
+                "glossaryLen=${glossary.length} frequencyLen=${frequency.length} pitchLen=${pitch.length} " +
+                "popupSelectionLen=${popupSelectionText.orEmpty().length} cue=${cue.text.take(48)}"
+        )
+        val exportResult = runBlocking {
+            withContext(Dispatchers.IO) {
+                val preparedLookupAudio = prepareLookupAudioForAnkiExport(
+                    context = context,
+                    term = expression,
+                    reading = reading,
+                    settings = audiobookSettings
+                )
+                try {
+                    addLookupDefinitionToAnki(
                         context = context,
-                        term = groupedResult.term,
-                        reading = groupedResult.reading,
-                        settings = settingsSnapshot
+                        cue = cue,
+                        audioUri = audioUri,
+                        lookupAudioUri = preparedLookupAudio?.uri,
+                        bookTitle = title,
+                        entry = DictionaryEntry(
+                            term = expression,
+                            reading = reading,
+                            definitions = listOf(glossary),
+                            pitch = pitch.ifBlank { null },
+                            frequency = frequency.ifBlank { null },
+                            dictionary = primaryDictionaryName.ifBlank { expression }
+                        ),
+                        definition = glossary,
+                        glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
+                        dictionaryCss = dictionaryCssByName[primaryDictionaryName],
+                        groupedDictionaries = emptyList(),
+                        popupSelectionText = popupSelectionText,
+                        sentenceOverride = cue.text
                     )
-                    try {
-                        addLookupDefinitionToAnki(
-                            context = context,
-                            cue = exportCue,
-                            audioUri = exportAudioUri,
-                            lookupAudioUri = preparedLookupAudio?.uri,
-                            bookTitle = title,
-                            entry = dictionaryGroup.entry,
-                            definition = exportDefinitionHtml,
-                            dictionaryCss = dictionaryGroup.css,
-                            groupedDictionaries = groupedResult.dictionaries,
-                            popupSelectionText = popupSelectionText,
-                            sentenceOverride = sentenceSelection.text
-                        )
-                    } finally {
-                        preparedLookupAudio?.cleanup?.invoke()
-                    }
+                } finally {
+                    preparedLookupAudio?.cleanup?.invoke()
                 }
             }
-            result.fold(
-                onSuccess = { exportResult ->
-                    val message = ankiExportResultMessage(context, exportResult)
-                    Toast.makeText(
-                        context,
-                        message.take(200),
-                        if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
-                    ).show()
-                },
-                onFailure = {
-                    val message = formatAnkiFailure(it)
-                    Toast.makeText(context, message.take(200), Toast.LENGTH_LONG).show()
-                }
-            )
         }
+        val message = ankiExportResultMessage(context, exportResult)
+        Log.d(
+            "AnkiExportDebug",
+            "bookHoshiExport result=${exportResult.javaClass.simpleName} message=${message.take(220)}"
+        )
+        if (message.isNotBlank() && exportResult !is AnkiExportResult.DuplicateSkipped) {
+            Toast.makeText(
+                context,
+                message.take(220),
+                if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+            ).show()
+        }
+        return exportResult == AnkiExportResult.Added ||
+            exportResult is AnkiExportResult.DuplicateSkipped
     }
 
-    fun playLookupGroupAudio(layerIndex: Int, groupedResult: GroupedLookupResult) {
-        consumeCueRangeSelection()
-        playLookupAudioForTerm(
-            context = context,
-            term = groupedResult.term,
-            reading = groupedResult.reading,
-            settings = audiobookSettings
-        ) { error ->
-            lookupSession.replaceAt(layerIndex) { it.copy(error = error) }
+    fun checkBookAnkiDuplicate(expression: String): AnkiDuplicateCheckResult {
+        return runBlocking {
+            checkAnkiDuplicateByFirstFieldAsync(context, expression)
         }
-    }
-
-    LaunchedEffect(
-        activeLookupLayer,
-        audiobookSettings.lookupPlaybackAudioEnabled,
-        audiobookSettings.lookupPlaybackAudioAutoPlay
-    ) {
-        val layer = activeLookupLayer ?: return@LaunchedEffect
-        if (layer.loading || layer.error != null) return@LaunchedEffect
-        if (!audiobookSettings.lookupPlaybackAudioEnabled || !audiobookSettings.lookupPlaybackAudioAutoPlay) {
-            return@LaunchedEffect
-        }
-        val target = layer.groupedResults.firstOrNull() ?: return@LaunchedEffect
-        val key = "${layer.autoPlayNonce}|${target.term}|${target.reading.orEmpty()}"
-        if (layer.autoPlayedKey == key) return@LaunchedEffect
-        lookupSession.replaceTop { it.copy(autoPlayedKey = key) }
-        playLookupGroupAudio(lookupSession.lastIndex, target)
     }
 
     fun handleControlOverlaySwipe(step: Int) {
@@ -2408,8 +2190,11 @@ private fun BookReaderScreen(
 
         BackHandler {
             when {
-                lookupPopupPending -> cancelPendingLookup()
-                lookupPopupVisible -> popLookupSnapshotOrClose()
+                hoshiLookupPopupVisible -> {
+                    hoshiLookupPopups.clear()
+                    hoshiLookupSelectionCueIndex = null
+                    hoshiLookupSelectionRange = null
+                }
                 sleepTimerOptionsVisible -> sleepTimerOptionsVisible = false
                 topActionsExpanded -> topActionsExpanded = false
                 speedMenuExpanded -> speedMenuExpanded = false
@@ -3052,10 +2837,15 @@ private fun BookReaderScreen(
                                         modifier = Modifier.fillMaxSize(),
                                         state = lyricsListState,
                                         reverseLayout = true,
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        contentPadding = PaddingValues(horizontal = BOOK_VERTICAL_CUE_EDGE_PADDING),
+                                        horizontalArrangement = Arrangement.spacedBy(0.dp),
                                         verticalAlignment = Alignment.Top
                                     ) {
-                                        itemsIndexed(cues) { index, cue ->
+                                        itemsIndexed(
+                                            items = cues,
+                                            key = { _, cue -> "${cue.startMs}:${cue.endMs}:${cue.text.hashCode()}" },
+                                            contentType = { _, _ -> "verticalCue" }
+                                        ) { index, cue ->
                                             val isActive = index == activeCueIndex
                                             val inSelectedRange = selectedCueIndexRange?.contains(index) == true
                                             val cueDisplay = remember(
@@ -3071,16 +2861,19 @@ private fun BookReaderScreen(
                                             }
                                             Box(
                                                 modifier = Modifier
-                                                    .fillMaxHeight()
+                                                    .fillParentMaxHeight()
                                                     .background(
                                                         if (inSelectedRange) {
                                                             MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
                                                         } else {
                                                             Color.Transparent
-                                                        },
-                                                        shape = RoundedCornerShape(12.dp)
+                                                    },
+                                                    shape = RoundedCornerShape(12.dp)
+                                                )
+                                                    .padding(
+                                                        horizontal = BOOK_VERTICAL_CUE_ITEM_HORIZONTAL_PADDING,
+                                                        vertical = 6.dp
                                                     )
-                                                    .padding(horizontal = 8.dp, vertical = 6.dp)
                                             ) {
                                                 val cueStyle = if (isActive) {
                                                     activeSubtitleStyle
@@ -3090,42 +2883,81 @@ private fun BookReaderScreen(
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
                                                 }
-                                                if (!cueRangeSelectionMode && bookVerticalWriting) {
+                                                if (bookVerticalWriting) {
                                                     if (isActive) {
+                                                        val cueWidth = rememberVerticalCueWidth(
+                                                            text = cue.text,
+                                                            style = cueStyle,
+                                                            rowsPerColumn = verticalRowsPerColumn,
+                                                            compact = true
+                                                        )
                                                         VerticalLookupClickableSubtitle(
                                                             sourceText = cue.text,
                                                             style = cueStyle,
                                                             rowsPerColumn = verticalRowsPerColumn,
                                                             selectedSourceRange = visibleSelectedRange,
-                                                            modifier = Modifier.fillMaxHeight(),
+                                                            compactVerticalLayout = true,
+                                                            lookupEnabled = !cueRangeSelectionMode,
+                                                            modifier = Modifier
+                                                                .fillParentMaxHeight()
+                                                                .width(cueWidth),
+                                                            onDisplayTap = {
+                                                                if (cueRangeSelectionMode) {
+                                                                    handleCueRangeTap(index)
+                                                                }
+                                                            },
                                                             onSelectedRangeAnchorChanged = { anchor ->
                                                                 liveSelectedRangeAnchor = anchor
                                                             },
-                                                            onTextTap = { sourceOffset, anchor ->
+                                                            onTextTap = { offset, anchor ->
+                                                                if (cueRangeSelectionMode) return@VerticalLookupClickableSubtitle
                                                                 Log.d(
                                                                     BOOK_LOOKUP_SELECTION_LOG_TAG,
-                                                                    "verticalTap(list) cueIndex=$index sourceOffset=$sourceOffset range=${formatRangeForLog(visibleSelectedRange)} anchor=${formatRectForLog(anchor.boundingRectOrNull())}"
+                                                                    "verticalNativeTap(list) cueIndex=$index offset=$offset range=${formatRangeForLog(visibleSelectedRange)} anchor=${anchor.boundingRectOrNull()?.let { "${it.left.toInt()},${it.top.toInt()},${it.right.toInt()},${it.bottom.toInt()}" } ?: "null"}"
                                                                 )
-                                                                liveSelectedRangeAnchor = anchor
-                                                                triggerPopupLookup(cue, sourceOffset, anchor)
+                                                                triggerPopupLookup(cue, offset, anchor)
                                                             }
                                                         )
                                                     } else {
+                                                        val cueWidth = rememberVerticalCueWidth(
+                                                            text = cue.text,
+                                                            style = cueStyle,
+                                                            rowsPerColumn = verticalRowsPerColumn,
+                                                            compact = true
+                                                        )
                                                         VerticalSubtitleText(
                                                             text = cue.text,
                                                             style = cueStyle,
+                                                            rowsPerColumn = verticalRowsPerColumn,
+                                                            compactVerticalLayout = true,
+                                                            onClick = {
+                                                                if (cueRangeSelectionMode) {
+                                                                    handleCueRangeTap(index)
+                                                                } else {
+                                                                    jumpToCue(index)
+                                                                }
+                                                            },
                                                             modifier = Modifier
-                                                                .fillMaxHeight()
-                                                                .clickable { jumpToCue(index) }
+                                                                .fillParentMaxHeight()
+                                                                .width(cueWidth)
                                                         )
                                                     }
                                                 } else if (!isActive && !cueRangeSelectionMode) {
+                                                    val cueWidth = rememberVerticalCueWidth(
+                                                        text = cue.text,
+                                                        style = cueStyle,
+                                                        rowsPerColumn = verticalRowsPerColumn,
+                                                        compact = true
+                                                    )
                                                     VerticalSubtitleText(
                                                         text = cue.text,
                                                         style = cueStyle,
+                                                        rowsPerColumn = verticalRowsPerColumn,
+                                                        compactVerticalLayout = true,
+                                                        onClick = { jumpToCue(index) },
                                                         modifier = Modifier
-                                                            .fillMaxHeight()
-                                                            .clickable { jumpToCue(index) }
+                                                            .fillParentMaxHeight()
+                                                            .width(cueWidth)
                                                     )
                                                 } else {
                                                     ReaderLookupClickableSubtitle(
@@ -3177,7 +3009,11 @@ private fun BookReaderScreen(
                                         state = lyricsListState,
                                         verticalArrangement = Arrangement.spacedBy(10.dp)
                                     ) {
-                                        itemsIndexed(cues) { index, cue ->
+                                        itemsIndexed(
+                                            items = cues,
+                                            key = { _, cue -> "${cue.startMs}:${cue.endMs}:${cue.text.hashCode()}" },
+                                            contentType = { _, _ -> "horizontalCue" }
+                                        ) { index, cue ->
                                             val isActive = index == activeCueIndex
                                             val inSelectedRange = selectedCueIndexRange?.contains(index) == true
                                             Box(
@@ -3257,22 +3093,29 @@ private fun BookReaderScreen(
                                         else -> Alignment.Center
                                     }
                                 ) {
-                                    if (bookVerticalWriting && !cueRangeSelectionMode) {
+                                    if (bookVerticalWriting) {
                                         VerticalLookupClickableSubtitle(
                                             sourceText = activeCue.text,
                                             style = activeSubtitleStyle,
                                             rowsPerColumn = verticalRowsPerColumn,
                                             selectedSourceRange = visibleSelectedRange,
+                                            lookupEnabled = !cueRangeSelectionMode,
+                                            modifier = Modifier.fillMaxSize(),
+                                            onDisplayTap = {
+                                                if (cueRangeSelectionMode) {
+                                                    handleCueRangeTap(activeCueIndex)
+                                                }
+                                            },
                                             onSelectedRangeAnchorChanged = { anchor ->
                                                 liveSelectedRangeAnchor = anchor
                                             },
-                                            onTextTap = { sourceOffset, anchor ->
+                                            onTextTap = { offset, anchor ->
+                                                if (cueRangeSelectionMode) return@VerticalLookupClickableSubtitle
                                                 Log.d(
                                                     BOOK_LOOKUP_SELECTION_LOG_TAG,
-                                                    "verticalTap(active) cueIndex=$activeCueIndex sourceOffset=$sourceOffset range=${formatRangeForLog(visibleSelectedRange)} anchor=${formatRectForLog(anchor.boundingRectOrNull())}"
+                                                    "verticalNativeTap(active) cueIndex=$activeCueIndex offset=$offset range=${formatRangeForLog(visibleSelectedRange)} anchor=${anchor.boundingRectOrNull()?.let { "${it.left.toInt()},${it.top.toInt()},${it.right.toInt()},${it.bottom.toInt()}" } ?: "null"}"
                                                 )
-                                                liveSelectedRangeAnchor = anchor
-                                                triggerPopupLookup(activeCue, sourceOffset, anchor)
+                                                triggerPopupLookup(activeCue, offset, anchor)
                                             }
                                         )
                                     } else {
@@ -3583,112 +3426,99 @@ private fun BookReaderScreen(
         }
     }
 
-    LookupPopupHost(
-        visible = lookupPopupVisible,
-        session = lookupSession,
-        logTag = BOOK_LOOKUP_POS_LOG_TAG,
-        temporarilyHidden = lookupPopupTemporarilyHidden,
-        resolveAnchor = { index, layer ->
-            if (index == 0) {
-                // Always prefer the latest rendered selection anchor (may expand after tokenization),
-                // then fall back to tap-time anchor.
-                liveSelectedRangeAnchor ?: layer.anchor
-            } else {
-                layer.anchor
+    if (hoshiLookupPopups.isNotEmpty() && !hoshiLookupPopupTemporarilyHidden) LookupPopupStackView(
+        popups = hoshiLookupPopups,
+        onPopupsChange = { next ->
+            hoshiLookupPopups.clear()
+            hoshiLookupPopups.addAll(next)
+            if (next.isEmpty()) {
+                hoshiLookupSelectionCueIndex = null
+                hoshiLookupSelectionRange = null
+                hoshiLookupPopupTemporarilyHidden = false
+                reopenHoshiLookupPopupAfterCueRangeSelection = false
             }
         },
-        onDismissTopLayer = {
-            if (!lookupPopupTemporarilyHidden) {
-                popLookupSnapshotOrClose()
-            }
-        },
-        onTruncateToLayer = { layerIndex ->
-            truncateLookupLayersTo(layerIndex)
-        },
-        buildActionState = { layerIndex, layer, isTopLayer, _ ->
-            buildLookupCardActionState(
-                sourceTerm = layer.sourceTerm,
-                layerIndex = layerIndex,
-                sessionSize = lookupSession.size,
-                showRangeSelection = isTopLayer && layerIndex == 0 && hasSubtitleFile && audiobookSettings.lookupRangeSelectionEnabled,
-                showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
-                showAddToAnki = !uiTestMode
-            )
-        },
-        onToggleSection = { layerIndex, key, expanded ->
-            if (layerIndex == lookupSession.lastIndex) {
-                lookupSession.toggleCollapsedSection(layerIndex, key, expanded)
-            }
-        },
-        onDefinitionLookup = { layerIndex, definitionKey, tapData ->
-            val isTopLayer = layerIndex == lookupSession.lastIndex
-            val isPreviousLayer = layerIndex == lookupSession.lastIndex - 1
-            val resolvedDefinitionKey = tapData.tappedDefinitionKey ?: definitionKey
+        lookupChildPopup = { selection ->
             Log.d(
-                BOOK_LOOKUP_TAP_LOG_TAG,
-                "cardTap dispatch layer=$layerIndex last=${lookupSession.lastIndex} isTop=$isTopLayer isPrev=$isPreviousLayer key=$resolvedDefinitionKey source=${tapData.tapSource} scanLen=${tapData.scanText.length} textLen=${tapData.text.length}"
+                "AnkiExportDebug",
+                "bookHoshi lookupChildPopup request text='${selection.text.take(24)}' sentenceOffset=${selection.sentenceOffset} hasResults=${hoshiLookupPopups.isNotEmpty()} stackSize=${hoshiLookupPopups.size}"
             )
-            val effectiveLayerIndex = if (isTopLayer || isPreviousLayer) {
-                layerIndex
-            } else {
-                truncateLookupLayersTo(layerIndex)
-                layerIndex.coerceIn(0, lookupSession.lastIndex.coerceAtLeast(0))
+            val popup = bookHoshiLookupSession.createPopup(
+                selection = selection,
+                options = LookupPopupOptions(
+                    isVertical = false,
+                    isFullWidth = audiobookSettings.lookupRootFullWidthEnabled,
+                    width = 320,
+                    height = 250,
+                    swipeToDismiss = true,
+                    swipeThreshold = 40,
+                    topInset = 0.0,
+                    bottomInset = navigationBarBottomInsetDp,
+                    dictionarySettings = DictionarySettings(),
+                    darkMode = isDarkTheme,
+                    eInkMode = false,
+                    audioSettings = audiobookSettings,
+                    showRangeSelection = false,
+                    showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
+                    popupActionBar = true,
+                ),
+            )
+            if (popup == null) {
+                Log.d(
+                    "AnkiExportDebug",
+                    "bookHoshi lookupChildPopup empty text='${selection.text.take(24)}'"
+                )
             }
-            val anchorRects = tapData.resolveScreenAnchorRects()
-                .takeIf { it.isNotEmpty() }
-            val anchor = anchorRects?.let { ReaderLookupAnchor(rects = it) }
-            performRecursiveLookupFromDefinition(effectiveLayerIndex, resolvedDefinitionKey, tapData, anchor)
+            popup
         },
-        onRangeSelection = { layerIndex ->
-            val isTopRootLayer =
-                layerIndex == lookupSession.lastIndex &&
-                    layerIndex == 0 &&
-                    hasSubtitleFile &&
-                    audiobookSettings.lookupRangeSelectionEnabled
-            if (isTopRootLayer) {
-                beginCueRangeSelection(reopenLookupPopupAfterSelection = true)
+        onLookupRedirect = { query ->
+            bookHoshiLookupSession.lookup(
+                query,
+                DictionarySettings().maxResults,
+                DictionarySettings().scanLength,
+            )
+        },
+        onRangeSelection = {
+            beginHoshiCueRangeSelection(reopenLookupPopupAfterSelection = true)
+        },
+        onMineEntry = { content ->
+            Log.d(
+                "AnkiExportDebug",
+                "bookHoshi onMineEntry contentSize=${content.length} selectionCueIndex=$hoshiLookupSelectionCueIndex activeCueIndex=$activeCueIndex"
+            )
+            exportBookHoshiLookupEntryToAnki(content)
+        },
+        onDuplicateCheck = { expression -> checkBookAnkiDuplicate(expression) },
+        onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
+        onPlayWordAudio = { _url, term, reading ->
+            if (!term.isNullOrBlank()) {
+                playLookupAudioForTerm(
+                    context = context,
+                    term = term,
+                    reading = reading,
+                    settings = audiobookSettings
+                )
             }
-        },
-        onPlayAudio = { layerIndex, groupedResult ->
-            val isTopLayer = layerIndex == lookupSession.lastIndex
-            if (isTopLayer && audiobookSettings.lookupPlaybackAudioEnabled) {
-                playLookupGroupAudio(layerIndex, groupedResult)
-            }
-        },
-        onAddToAnki = { layerIndex, groupedResult ->
-            addLookupGroupToAnki(layerIndex, groupedResult)
         },
         onCloseAll = {
-            closeLookupPopup()
+            Log.d(
+                "AnkiExportDebug",
+                "bookHoshi onCloseAll stackSize=${hoshiLookupPopups.size} topIndex=${hoshiLookupPopups.lastIndex}"
+            )
+            closeHoshiLookupPopup()
         },
-        forcePlaceBelowForLayer = { layerIndex, _ ->
-            audiobookSettings.lookupRootFullWidthEnabled && layerIndex == 0
+        modifier = Modifier.fillMaxSize(),
+        onRootPopupDismissed = {
+            hoshiLookupPopups.clear()
+            hoshiLookupSelectionCueIndex = null
+            hoshiLookupSelectionRange = null
+            hoshiLookupPopupTemporarilyHidden = false
+            reopenHoshiLookupPopupAfterCueRangeSelection = false
+            clearCueRangeSelection()
         },
-        fullWidthForLayer = { layerIndex, _ ->
-            audiobookSettings.lookupRootFullWidthEnabled && layerIndex == 0
-        },
-        dockBottomForLayer = { layerIndex, _ ->
-            audiobookSettings.lookupRootFullWidthEnabled && layerIndex == 0
-        }
     )
-}
-}
 
-@Composable
-private fun LeftVerticalRailShell(
-    modifier: Modifier = Modifier,
-    onLeftRailMeasured: (androidx.compose.ui.layout.LayoutCoordinates) -> Unit
-) {
-    Surface(
-        tonalElevation = 2.dp,
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
-        modifier = modifier
-            .width(60.dp)
-            .onGloballyPositioned(onLeftRailMeasured)
-    ) {
-        Box(modifier = Modifier.fillMaxSize())
-    }
+}
 }
 
 @Composable
@@ -4137,33 +3967,59 @@ private fun ReaderLookupClickableSubtitle(
 private fun VerticalSubtitleText(
     text: String,
     style: androidx.compose.ui.text.TextStyle,
+    rowsPerColumn: Int,
+    compactVerticalLayout: Boolean = false,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
-    val textColor = if (style.color == Color.Unspecified) Color.White else style.color
-    val fontSizePx = with(density) {
-        if (style.fontSize != androidx.compose.ui.unit.TextUnit.Unspecified) {
-            style.fontSize.toPx()
-        } else {
-            16.sp.toPx()
-        }
+    val textColor = if (style.color == Color.Unspecified) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        style.color
     }
-
+    val textSizePx = with(density) {
+        if (style.fontSize.isSpecified) style.fontSize.toPx() else 22.sp.toPx()
+    }
     AndroidView(
         modifier = modifier,
         factory = { context ->
-            VerticalSubtitleView(context)
+            VerticalSubtitleView(context).apply {
+                isClickable = onClick != null
+                setOnClickListener { onClick?.invoke() }
+            }
         },
         update = { view ->
-            val argb = android.graphics.Color.argb(
-                (textColor.alpha * 255f).roundToInt().coerceIn(0, 255),
-                (textColor.red * 255f).roundToInt().coerceIn(0, 255),
-                (textColor.green * 255f).roundToInt().coerceIn(0, 255),
-                (textColor.blue * 255f).roundToInt().coerceIn(0, 255)
-            )
-            view.bind(text, argb, fontSizePx)
+            view.isClickable = onClick != null
+            view.setOnClickListener { onClick?.invoke() }
+            view.bind(text, textColor.toArgb(), textSizePx)
         }
     )
+}
+
+@Composable
+private fun rememberVerticalCueWidth(
+    text: String,
+    style: androidx.compose.ui.text.TextStyle,
+    rowsPerColumn: Int,
+    compact: Boolean = false
+): Dp {
+    val density = LocalDensity.current
+    return remember(text, style.fontSize, rowsPerColumn, compact, density) {
+        val fontSizeDp = with(density) {
+            if (style.fontSize.isSpecified) style.fontSize.toDp() else 22.sp.toDp()
+        }
+        val columns = ceil(text.length.toFloat() / rowsPerColumn.coerceAtLeast(1).toFloat())
+            .toInt()
+            .coerceAtLeast(1)
+        if (compact) {
+            (fontSizeDp * (columns * BOOK_VERTICAL_COLUMN_WIDTH_FACTOR) + 8.dp + BOOK_VERTICAL_CUE_GLYPH_SAFETY_WIDTH)
+                .coerceIn(36.dp, 420.dp)
+        } else {
+            (fontSizeDp * (columns * BOOK_VERTICAL_COLUMN_WIDTH_FACTOR) + 40.dp + BOOK_VERTICAL_CUE_GLYPH_SAFETY_WIDTH)
+                .coerceIn(72.dp, 420.dp)
+        }
+    }
 }
 
 @Composable
@@ -4172,56 +4028,61 @@ private fun VerticalLookupClickableSubtitle(
     style: androidx.compose.ui.text.TextStyle,
     rowsPerColumn: Int,
     selectedSourceRange: IntRange? = null,
+    compactVerticalLayout: Boolean = false,
+    lookupEnabled: Boolean = true,
     modifier: Modifier = Modifier,
+    onDisplayTap: (() -> Unit)? = null,
     onSelectedRangeAnchorChanged: ((ReaderLookupAnchor?) -> Unit)? = null,
-    onTextTap: (sourceOffset: Int, anchor: ReaderLookupAnchor) -> Unit
+    onTextTap: (sourceOffset: Int, anchor: ReaderLookupAnchor?) -> Unit
 ) {
     val density = LocalDensity.current
-    val textColor = if (style.color == Color.Unspecified) Color.White else style.color
-    val fontSizePx = with(density) {
-        if (style.fontSize != androidx.compose.ui.unit.TextUnit.Unspecified) {
-            style.fontSize.toPx()
-        } else {
-            16.sp.toPx()
-        }
+    val textColor = if (style.color == Color.Unspecified) {
+        MaterialTheme.colorScheme.onSurface
+    } else {
+        style.color
+    }
+    val textSizePx = with(density) {
+        if (style.fontSize.isSpecified) style.fontSize.toPx() else 28.sp.toPx()
     }
     val lineHeightPx = with(density) {
-        if (style.lineHeight != androidx.compose.ui.unit.TextUnit.Unspecified) {
-            style.lineHeight.toPx()
-        } else {
-            fontSizePx * 1.2f
-        }
+        if (style.lineHeight.isSpecified) style.lineHeight.toPx() else textSizePx
     }
     AndroidView(
         modifier = modifier,
         factory = { context ->
-            VerticalLookupSubtitleView(context)
+            VerticalLookupSubtitleView(context).apply {
+                isClickable = true
+            }
         },
         update = { view ->
-            val argb = android.graphics.Color.argb(
-                (textColor.alpha * 255f).roundToInt().coerceIn(0, 255),
-                (textColor.red * 255f).roundToInt().coerceIn(0, 255),
-                (textColor.green * 255f).roundToInt().coerceIn(0, 255),
-                (textColor.blue * 255f).roundToInt().coerceIn(0, 255)
-            )
             view.bind(
                 newText = sourceText,
-                color = argb,
-                sizePx = fontSizePx,
+                color = textColor.toArgb(),
+                sizePx = textSizePx,
                 lineHeightPx = lineHeightPx,
                 rowsPerColumn = rowsPerColumn,
-                selectedSourceRange = selectedSourceRange
-                ,
-                onSelectionAnchorChanged = onSelectedRangeAnchorChanged
-            ) { sourceOffset, rectInWindow ->
-                val anchorRect = Rect(
-                    left = rectInWindow.left,
-                    top = rectInWindow.top,
-                    right = rectInWindow.right,
-                    bottom = rectInWindow.bottom
-                )
-                onTextTap(sourceOffset, ReaderLookupAnchor(rects = listOf(anchorRect)))
-            }
+                selectedSourceRange = selectedSourceRange,
+                onSelectionAnchorChanged = onSelectedRangeAnchorChanged,
+                onTap = { sourceOffset, rectInWindow ->
+                    if (!lookupEnabled) {
+                        onDisplayTap?.invoke()
+                    } else {
+                        onTextTap(
+                            sourceOffset,
+                            ReaderLookupAnchor(
+                                rects = listOf(
+                                    Rect(
+                                        left = rectInWindow.left,
+                                        top = rectInWindow.top,
+                                        right = rectInWindow.right,
+                                        bottom = rectInWindow.bottom
+                                    )
+                                )
+                            )
+                        )
+                    }
+                }
+            )
         }
     )
 }
@@ -4231,8 +4092,9 @@ private class VerticalSubtitleView(context: Context) : android.view.View(context
     private val paint = TextPaint().apply {
         isAntiAlias = true
     }
-    private var cachedLayout: VerticalTextLayout? = null
+    private var cachedLayout: VerticalSubtitleLayout? = null
     private var cachedHeight: Int = -1
+    private var cachedTextSize: Float = Float.NaN
 
     fun bind(newText: String, color: Int, sizePx: Float) {
         val normalizedText = normalizeVerticalPunctuation(newText)
@@ -4252,7 +4114,7 @@ private class VerticalSubtitleView(context: Context) : android.view.View(context
     override fun onDraw(canvas: android.graphics.Canvas) {
         super.onDraw(canvas)
         val layout = obtainLayout(height) ?: return
-        layout.draw(canvas, width.toFloat(), 0f)
+        VerticalSubtitleLayoutEngine.draw(canvas, paint, layout, width, height)
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -4263,24 +4125,24 @@ private class VerticalSubtitleView(context: Context) : android.view.View(context
             (paint.textSize * 12f).roundToInt().coerceAtLeast(1)
         }
         val layout = obtainLayout(measuredHeight)
-        val desiredWidth = layout?.width?.let { ceil(it.toDouble()).toInt() }?.coerceAtLeast(1) ?: 1
+        val desiredWidth = layout?.contentWidth()?.let { ceil(it.toDouble()).toInt() }?.coerceAtLeast(1) ?: 1
         val measuredWidth = resolveSize(desiredWidth, widthMeasureSpec)
         setMeasuredDimension(measuredWidth, resolveSize(measuredHeight, heightMeasureSpec))
     }
 
-    private fun obtainLayout(targetHeight: Int): VerticalTextLayout? {
+    private fun obtainLayout(targetHeight: Int): VerticalSubtitleLayout? {
         if (content.isBlank() || targetHeight <= 0) return null
-        if (cachedLayout != null && cachedHeight == targetHeight) {
+        if (cachedLayout != null && cachedHeight == targetHeight && cachedTextSize == paint.textSize) {
             return cachedLayout
         }
-        cachedLayout = VerticalTextLayout(
+        cachedLayout = VerticalSubtitleLayoutEngine.build(
             content,
-            0,
-            content.length,
             paint,
-            targetHeight.toFloat()
+            targetHeight,
+            paint.textSize.coerceAtLeast(1f)
         )
         cachedHeight = targetHeight
+        cachedTextSize = paint.textSize
         return cachedLayout
     }
 }
@@ -4306,7 +4168,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
     private var cachedGridHeight: Int = -1
     private var cachedGridText: String = ""
     private var cachedGridTextSize: Float = Float.NaN
-    private var cachedVerticalLayout: VerticalTextLayout? = null
+    private var cachedVerticalLayout: VerticalSubtitleLayout? = null
     private var cachedVerticalLayoutHeight: Int = -1
 
     fun bind(
@@ -4448,44 +4310,40 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         cachedVerticalLayoutHeight = -1
     }
 
-    private fun obtainVerticalLayout(targetHeight: Int): VerticalTextLayout? {
+    private fun obtainVerticalLayout(targetHeight: Int): VerticalSubtitleLayout? {
         if (content.isBlank() || targetHeight <= 0) return null
         if (cachedVerticalLayout != null &&
             cachedVerticalLayoutHeight == targetHeight
         ) {
             return cachedVerticalLayout
         }
-        cachedVerticalLayout = VerticalTextLayout(
+        cachedVerticalLayout = VerticalSubtitleLayoutEngine.build(
             content,
-            0,
-            content.length,
             paint,
-            targetHeight.toFloat()
+            targetHeight,
+            effectiveCellHeightPx()
         )
         cachedVerticalLayoutHeight = targetHeight
         return cachedVerticalLayout
     }
 
     private fun resolveOffsetForEvent(x: Float, y: Float, model: VerticalGridModel): VerticalTapResolved? {
-        val hit = model.cells.firstOrNull { cell ->
-            val left = (width - (cell.column + 1) * model.cellWidth).coerceAtLeast(0f)
-            val top = (cell.row * model.cellHeight).coerceAtLeast(0f)
-            val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
-            val bottom = (top + model.cellHeight).coerceAtMost(height.toFloat())
-            x >= left && x <= right && y >= top && y <= bottom
-        } ?: return null
-
-        val left = (width - (hit.column + 1) * model.cellWidth).coerceAtLeast(0f)
-        val top = (hit.row * model.cellHeight).coerceAtLeast(0f)
-        val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
-        val bottom = (top + model.cellHeight).coerceAtMost(height.toFloat())
+        val layout = obtainVerticalLayout(height) ?: return null
+        val hit = VerticalSubtitleLayoutEngine.hitTest(
+            x = x,
+            y = y,
+            viewWidth = width,
+            viewHeight = height,
+            layout = layout,
+            paint = paint
+        ) ?: return null
         val location = IntArray(2)
         getLocationInWindow(location)
         val rectInWindow = android.graphics.RectF(
-            location[0] + left,
-            location[1] + top,
-            location[0] + right,
-            location[1] + bottom
+            location[0] + hit.rect.left,
+            location[1] + hit.rect.top,
+            location[0] + hit.rect.right,
+            location[1] + hit.rect.bottom
         )
         return VerticalTapResolved(
             sourceOffset = hit.sourceOffset,
@@ -4506,155 +4364,32 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
             return cachedGridModel
         }
 
-        val cellHeight = effectiveCellHeightPx()
-        val cellWidth = paint.textSize.coerceAtLeast(1f)
-        val fallback = buildFallbackGridModel(viewHeight, cellHeight, cellWidth)
-        val computed = runCatching {
-            val lineRanges = computeVerticalLineRangesReflective(viewHeight)
-            val lineCount = lineRanges.size.coerceAtLeast(0)
-            if (lineCount <= 0) {
-                fallback
-            } else {
-                val cells = ArrayList<VerticalGridCell>(content.length)
-                var logical = 0
-                var maxRows = 0
-                for (column in 0 until lineCount) {
-                    val range = lineRanges[column]
-                    val lineStart = range.first.coerceIn(0, content.length)
-                    val lineEnd = range.last.coerceIn(lineStart, content.length)
-                    var row = 0
-                    for (sourceOffset in lineStart until lineEnd) {
-                        val ch = content[sourceOffset]
-                        if (ch == '\n' || ch == '\r') continue
-                        cells.add(
-                            VerticalGridCell(
-                                sourceOffset = sourceOffset,
-                                logical = logical++,
-                                row = row++,
-                                column = column
-                            )
-                        )
-                    }
-                    maxRows = maxOf(maxRows, row)
-                }
-                if (cells.isEmpty()) {
-                    fallback
-                } else {
-                    VerticalGridModel(
-                        cells = cells,
-                        columnCount = lineCount.coerceAtLeast(1),
-                        maxRows = maxRows.coerceAtLeast(1),
-                        cellWidth = cellWidth,
-                        cellHeight = cellHeight
-                    )
-                }
-            }
-        }.getOrElse { fallback }
+        val layout = VerticalSubtitleLayoutEngine.build(
+            content,
+            paint,
+            viewHeight,
+            effectiveCellHeightPx()
+        ) ?: return null
+        val computed = VerticalGridModel(
+            cells = layout.cells.map { cell ->
+                VerticalGridCell(
+                    sourceOffset = cell.sourceOffset,
+                    logical = cell.logical,
+                    row = cell.row,
+                    column = cell.column
+                )
+            },
+            columnCount = layout.columnCount,
+            maxRows = layout.maxRows,
+            cellWidth = layout.cellWidth,
+            cellHeight = layout.cellHeight
+        )
 
         cachedGridModel = computed
         cachedGridHeight = viewHeight
         cachedGridText = content
         cachedGridTextSize = paint.textSize
         return computed
-    }
-
-    private fun computeVerticalLineRangesReflective(viewHeight: Int): List<IntRange> {
-        return try {
-            val lineBreakerClass = Class.forName("androidx.text.vertical.LineBreaker")
-            val orientationClass = Class.forName("androidx.text.vertical.TextOrientation")
-            val resultClass = Class.forName("androidx.text.vertical.LineBreaker\$Result")
-
-            val instanceField = lineBreakerClass.getDeclaredField("INSTANCE").apply { isAccessible = true }
-            val lineBreaker = instanceField.get(null)
-            val mixedField = orientationClass.getDeclaredField("Mixed").apply { isAccessible = true }
-            val mixedOrientation = mixedField.get(null)
-
-            val breakMethod = lineBreakerClass.getDeclaredMethod(
-                "breakTextIntoLines",
-                CharSequence::class.java,
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
-                TextPaint::class.java,
-                Float::class.javaPrimitiveType,
-                orientationClass
-            ).apply { isAccessible = true }
-
-            val result = breakMethod.invoke(
-                lineBreaker,
-                content,
-                0,
-                content.length,
-                paint,
-                viewHeight.toFloat(),
-                mixedOrientation
-            ) ?: return emptyList()
-
-            val getLineCount = resultClass.getDeclaredMethod("getLineCount").apply { isAccessible = true }
-            val getLineStart = resultClass.getDeclaredMethod("getLineStart", Int::class.javaPrimitiveType).apply { isAccessible = true }
-            val getLineEnd = resultClass.getDeclaredMethod("getLineEnd", Int::class.javaPrimitiveType).apply { isAccessible = true }
-
-            val lineCount = (getLineCount.invoke(result) as? Int ?: 0).coerceAtLeast(0)
-            if (lineCount <= 0) return emptyList()
-
-            buildList(lineCount) {
-                for (line in 0 until lineCount) {
-                    val start = (getLineStart.invoke(result, line) as? Int ?: 0).coerceAtLeast(0)
-                    val end = (getLineEnd.invoke(result, line) as? Int ?: start).coerceAtLeast(start)
-                    add(start..end)
-                }
-            }
-        } catch (_: Throwable) {
-            emptyList()
-        }
-    }
-
-    private fun buildFallbackGridModel(viewHeight: Int, cellHeight: Float, cellWidth: Float): VerticalGridModel {
-        val mapper = buildIndexMapping(content)
-        if (mapper.isEmpty()) {
-            return VerticalGridModel(
-                cells = emptyList(),
-                columnCount = 1,
-                maxRows = 1,
-                cellWidth = cellWidth,
-                cellHeight = cellHeight
-            )
-        }
-        val rows = resolveRowsPerColumn(mapper.size, cellHeight, viewHeight)
-        val columns = ceil(mapper.size.toFloat() / rows.toFloat()).toInt().coerceAtLeast(1)
-        val cells = ArrayList<VerticalGridCell>(mapper.size)
-        var logicalIndex = 0
-        for (logical in mapper.indices) {
-            val sourceOffset = mapper[logical]
-            if (sourceOffset < 0) continue
-            val column = logical / rows
-            val row = logical % rows
-            if (column !in 0 until columns) continue
-            cells.add(
-                VerticalGridCell(
-                    sourceOffset = sourceOffset,
-                    logical = logicalIndex++,
-                    row = row,
-                    column = column
-                )
-            )
-        }
-        val maxRows = cells.maxOfOrNull { it.row + 1 } ?: 1
-        return VerticalGridModel(
-            cells = cells,
-            columnCount = columns,
-            maxRows = maxRows,
-            cellWidth = cellWidth,
-            cellHeight = cellHeight
-        )
-    }
-
-    private fun buildIndexMapping(text: String): IntArray {
-        if (text.isEmpty()) return IntArray(0)
-        val indices = ArrayList<Int>(text.length)
-        text.forEachIndexed { index, ch ->
-            indices.add(if (ch == '\n') -1 else index)
-        }
-        return indices.toIntArray()
     }
 
     private fun drawSelectionBackground(canvas: android.graphics.Canvas) {
@@ -4670,58 +4405,33 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         val end = range.last.coerceAtLeast(range.first)
         val selectedCellsForDebug = ArrayList<String>(8)
         val selectedRectsInWindow = ArrayList<Rect>(8)
-        val selectedRowsByColumn = linkedMapOf<Int, MutableList<Int>>()
+        val layout = obtainVerticalLayout(height) ?: return
+        val selectionRects = VerticalSubtitleLayoutEngine.selectionRects(start..end, width, height, layout, paint)
         val location = IntArray(2)
         getLocationInWindow(location)
         for (cell in model.cells) {
             val sourceIndex = cell.sourceOffset
             if (sourceIndex < start || sourceIndex > end) continue
-            val column = cell.column
-            val row = cell.row
-            if (column !in 0 until model.columnCount) continue
-            selectedRowsByColumn.getOrPut(column) { ArrayList(4) }.add(row)
             if (selectedCellsForDebug.size < 24) {
                 val ch = content.getOrNull(sourceIndex)?.toString().orEmpty()
                 selectedCellsForDebug.add(
-                    "s=$sourceIndex('$ch')->L${cell.logical}(r$row,c$column)"
+                    "s=$sourceIndex('$ch')->L${cell.logical}(r${cell.row},c${cell.column})"
                 )
             }
         }
 
-        selectedRowsByColumn.forEach { (column, rowsInColumn) ->
-            if (rowsInColumn.isEmpty()) return@forEach
-            val sortedRows = rowsInColumn.distinct().sorted()
-            var runStart = sortedRows.first()
-            var previous = runStart
-            fun flushRun(startRow: Int, endRow: Int) {
-                val left = (width - (column + 1) * model.cellWidth).coerceAtLeast(0f)
-                val top = (startRow * model.cellHeight).coerceAtLeast(0f)
-                val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
-                val bottom = ((endRow + 1) * model.cellHeight).coerceAtMost(height.toFloat())
-                canvas.drawRect(left, top, right, bottom, highlightPaint)
-                if (selectedRectsInWindow.size < 128) {
-                    selectedRectsInWindow.add(
-                        Rect(
-                            left = location[0] + left,
-                            top = location[1] + top,
-                            right = location[0] + right,
-                            bottom = location[1] + bottom
-                        )
+        selectionRects.forEach { rect ->
+            canvas.drawRect(rect.left, rect.top, rect.right, rect.bottom, highlightPaint)
+            if (selectedRectsInWindow.size < 128) {
+                selectedRectsInWindow.add(
+                    Rect(
+                        left = location[0] + rect.left,
+                        top = location[1] + rect.top,
+                        right = location[0] + rect.right,
+                        bottom = location[1] + rect.bottom
                     )
-                }
+                )
             }
-
-            for (i in 1 until sortedRows.size) {
-                val row = sortedRows[i]
-                if (row == previous + 1) {
-                    previous = row
-                } else {
-                    flushRun(runStart, previous)
-                    runStart = row
-                    previous = row
-                }
-            }
-            flushRun(runStart, previous)
         }
 
         publishSelectionAnchor(selectedRectsInWindow, start..end)
@@ -4776,7 +4486,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
 
     private fun drawVerticalLayoutText(canvas: android.graphics.Canvas) {
         val layout = obtainVerticalLayout(height) ?: return
-        layout.draw(canvas, width.toFloat(), 0f)
+        VerticalSubtitleLayoutEngine.draw(canvas, paint, layout, width, height)
     }
 
     private fun publishSelectionAnchor(rects: List<Rect>, range: IntRange) {
@@ -4841,17 +4551,6 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         return paint.textSize.coerceAtLeast(1f)
     }
 
-    private fun resolveRowsPerColumn(mapperSize: Int, cellHeight: Float, viewHeight: Int): Int {
-        val hintRows = rowsPerColumn.coerceAtLeast(2)
-        if (mapperSize <= 0) return hintRows
-        val rowsByHeight = if (viewHeight > 0 && cellHeight > 0f) {
-            floor(viewHeight / cellHeight).toInt().coerceAtLeast(2)
-        } else {
-            hintRows
-        }
-        return rowsByHeight.coerceAtMost(mapperSize.coerceAtLeast(2))
-    }
-
     private fun logLayoutMetricsIfNeeded() {
         val model = buildGridModel(height)
         val dynamicRows = model?.maxRows ?: rowsPerColumn.coerceAtLeast(2)
@@ -4889,6 +4588,8 @@ private fun normalizeVerticalPunctuation(text: String): String {
     val out = StringBuilder(text.length)
     text.forEach { ch ->
         val mapped = when (ch) {
+            '\u3001' -> '\uFE11' // ︑
+            '\u3002' -> '\uFE12' // ︒
             ',' -> '\uFE10' // ︐
             '.' -> '\uFE12' // ︒
             ':' -> '\uFE13' // ︓
@@ -4937,10 +4638,78 @@ private fun formatRangeForLog(range: IntRange?): String {
     return range?.let { "${it.first}..${it.last}" } ?: "null"
 }
 
+private fun ReaderSelectionData.anchorRectForSourceRange(
+    startOffset: Int,
+    endExclusive: Int,
+): ReaderSelectionRect {
+    val matchingRects = textRects
+        .filter { it.endOffset > startOffset && it.startOffset < endExclusive }
+        .map { it.rect }
+        .filter { it.width > 0.0 && it.height > 0.0 }
+    if (matchingRects.isEmpty()) return rect
+
+    val clickedCenterX = rect.x + rect.width / 2.0
+    val clickedCenterY = rect.y + rect.height / 2.0
+    val verticalGroups = matchingRects
+        .sortedWith(compareBy<ReaderSelectionRect> { it.x }.thenBy { it.y })
+        .fold(mutableListOf<MutableList<ReaderSelectionRect>>()) { groups, item ->
+            val group = groups.firstOrNull { existing ->
+                val first = existing.first()
+                abs(first.x - item.x) < 2.0 && abs(first.width - item.width) < 3.0
+            }
+            if (group != null) {
+                group.add(item)
+            } else {
+                groups.add(mutableListOf(item))
+            }
+            groups
+        }
+    val clickedGroup = verticalGroups.firstOrNull { group ->
+        group.any { item ->
+            clickedCenterX >= item.x - 1.0 &&
+                clickedCenterX <= item.x + item.width + 1.0 &&
+                clickedCenterY >= item.y - 1.0 &&
+                clickedCenterY <= item.y + item.height + 1.0
+        }
+    } ?: verticalGroups.minByOrNull { group ->
+        val first = group.first()
+        abs((first.x + first.width / 2.0) - clickedCenterX)
+    } ?: return rect
+    return clickedGroup.mergeSelectionRects()
+}
+
+private fun List<ReaderSelectionRect>.mergeSelectionRects(): ReaderSelectionRect {
+    val left = minOf { it.x }
+    val top = minOf { it.y }
+    val right = maxOf { it.x + it.width }
+    val bottom = maxOf { it.y + it.height }
+    return ReaderSelectionRect(
+        x = left,
+        y = top,
+        width = right - left,
+        height = bottom - top,
+    )
+}
+
 private fun ReaderLookupAnchor?.boundingRectOrNull(): Rect? {
     val rects = this?.rects?.filter { !it.isEmpty } ?: return null
     if (rects.isEmpty()) return null
     return mergeRects(rects)
+}
+
+private fun ReaderLookupAnchor?.toSelectionRects(density: Float): List<ReaderSelectionRect> {
+    val densityScale = density.coerceAtLeast(0.1f)
+    return this?.rects
+        ?.filter { !it.isEmpty }
+        ?.map { rect ->
+            ReaderSelectionRect(
+                x = (rect.left / densityScale).toDouble(),
+                y = (rect.top / densityScale).toDouble(),
+                width = ((rect.right - rect.left) / densityScale).coerceAtLeast(1f).toDouble(),
+                height = ((rect.bottom - rect.top) / densityScale).coerceAtLeast(1f).toDouble()
+            )
+        }
+        .orEmpty()
 }
 
 private fun ReaderLookupAnchor?.expandForSelectionText(
@@ -5004,27 +4773,6 @@ private fun findSentenceBoundsLikeHoshi(
     return SentenceBounds(start, endExclusive)
 }
 
-private fun extractFullSentenceLikeHoshi(
-    text: String,
-    anchorText: String?,
-    anchorIndexHint: Int? = null
-): String {
-    val source = text.trim()
-    if (source.isBlank()) return ""
-    val anchor = anchorText?.trim().orEmpty()
-    val anchorIndex = when {
-        anchorIndexHint != null -> anchorIndexHint.coerceIn(0, source.lastIndex)
-        anchor.isNotBlank() -> source.indexOf(anchor).takeIf { it >= 0 } ?: 0
-        else -> 0
-    }
-    val bounds = findSentenceBoundsLikeHoshi(source, anchorIndex)
-    val sentence = source.substring(
-        bounds.start.coerceAtLeast(0),
-        bounds.endExclusive.coerceIn(bounds.start, source.length)
-    ).trim()
-    return sentence.ifBlank { source }
-}
-
 private fun extractFullSentenceLikeHoshiFromCues(
     cues: List<ReaderSubtitleCue>,
     cueIndex: Int,
@@ -5079,6 +4827,47 @@ private fun extractFullSentenceLikeHoshiFromCues(
     )
 }
 
+internal fun createHoshiReaderSelectionFromCueTap(
+    cueText: String,
+    cueIndex: Int,
+    cues: List<ReaderSubtitleCue>,
+    offset: Int,
+    anchorRect: Rect,
+    density: Float = 1f
+): ReaderSelectionData {
+    val safeOffset = offset.coerceIn(0, cueText.lastIndex.coerceAtLeast(0))
+    val scanSelection = selectLookupScanText(
+        text = cueText,
+        charOffset = safeOffset,
+        maxLength = HOSHI_LOOKUP_SCAN_MAX_LENGTH
+    )
+    val scanStart = scanSelection?.range?.first ?: safeOffset
+    val scanEnd = scanSelection?.range?.last?.plus(1) ?: (scanStart + HOSHI_LOOKUP_SCAN_MAX_LENGTH).coerceAtMost(cueText.length)
+    val densityScale = density.coerceAtLeast(0.1f)
+    val selectedText = cueText
+        .substring(scanStart, scanEnd)
+        .trim()
+        .ifBlank { cueText.trim() }
+    val sentenceSelection = extractFullSentenceLikeHoshiFromCues(
+        cues = cues,
+        cueIndex = cueIndex.coerceIn(0, cues.lastIndex.coerceAtLeast(0)),
+        anchorText = null,
+        selectedRangeInCue = null,
+        rawAnchorOffsetInCue = safeOffset
+    )
+    return ReaderSelectionData(
+        text = selectedText,
+        sentence = sentenceSelection.text.ifBlank { cueText.trim() },
+        rect = ReaderSelectionRect(
+            x = (anchorRect.left / densityScale).toDouble(),
+            y = (anchorRect.top / densityScale).toDouble(),
+            width = ((anchorRect.right - anchorRect.left) / densityScale).coerceAtLeast(1f).toDouble(),
+            height = ((anchorRect.bottom - anchorRect.top) / densityScale).coerceAtLeast(1f).toDouble()
+        ),
+        normalizedOffset = 0,
+        sentenceOffset = scanSelection?.range?.first ?: scanStart
+    )
+}
 
 private fun addLookupDefinitionToAnki(
     context: Context,
@@ -5088,6 +4877,7 @@ private fun addLookupDefinitionToAnki(
     bookTitle: String?,
     entry: DictionaryEntry,
     definition: String,
+    glossaryFirstHtml: String? = null,
     dictionaryCss: String?,
     groupedDictionaries: List<GroupedLookupDictionary> = emptyList(),
     popupSelectionText: String? = null,
@@ -5103,6 +4893,7 @@ private fun addLookupDefinitionToAnki(
         bookTitle = bookTitle,
         entry = entry,
         definition = definition,
+        glossaryFirstHtml = glossaryFirstHtml,
         dictionaryCss = dictionaryCss,
         groupedDictionaries = groupedDictionaries,
         popupSelectionText = popupSelectionText,
@@ -5280,33 +5071,6 @@ private fun appendParsedSrtBlock(
     if (cueText.isBlank()) return
 
     out += ReaderSubtitleCue(startMs = start, endMs = end, text = cueText)
-}
-
-internal fun formatAnkiFailure(error: Throwable): String {
-    val head = error.javaClass.simpleName.ifBlank { "Error" }
-    val message = error.message?.trim().orEmpty()
-    val cause = error.cause
-    val causeText = if (cause == null) {
-        ""
-    } else {
-        val causeMessage = cause.message?.trim().orEmpty()
-        if (causeMessage.isBlank()) {
-            " | cause=${cause.javaClass.simpleName}"
-        } else {
-            " | cause=${cause.javaClass.simpleName}: $causeMessage"
-        }
-    }
-    val topFrame = error.stackTrace.firstOrNull()
-    val frameText = if (topFrame == null) {
-        ""
-    } else {
-        " @${topFrame.fileName ?: "Unknown"}:${topFrame.lineNumber}"
-    }
-    return if (message.isBlank()) {
-        "$head$frameText$causeText"
-    } else {
-        "$head: $message$causeText"
-    }
 }
 
 internal inline fun <T> withAnkiStep(step: String, block: () -> T): T {
@@ -5519,15 +5283,6 @@ private fun buildBookReaderPlaybackKey(
         "title=$title|srt=${srtUri?.toString().orEmpty()}"
     }
     return buildDictionaryCacheKey(stableSource, title.ifBlank { "book" })
-}
-
-private fun buildLegacyBookReaderPlaybackKey(
-    title: String,
-    audioUri: Uri?,
-    srtUri: Uri?
-): String {
-    val raw = "title=$title|audio=${audioUri?.toString().orEmpty()}|srt=${srtUri?.toString().orEmpty()}"
-    return buildDictionaryCacheKey(raw, title.ifBlank { "book" })
 }
 
 private fun normalizeBookReaderPlaybackPosition(positionMs: Long, durationMs: Long): Long {

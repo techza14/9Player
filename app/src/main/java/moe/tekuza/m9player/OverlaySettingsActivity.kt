@@ -20,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
@@ -98,7 +99,10 @@ private fun OverlaySettingsScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Card(modifier = Modifier.fillMaxWidth()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = hoshiCardBackgroundColor())
+            ) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -160,6 +164,24 @@ private fun OverlaySettingsScreen(onBack: () -> Unit) {
                         }
                     }
                     if (currentOverlayMode != FloatingOverlayMode.OFF) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = stringResource(R.string.audiobook_overlay_show_on_reader_exit),
+                                modifier = Modifier.weight(1f).padding(end = 12.dp)
+                            )
+                            Switch(
+                                checked = config.floatingOverlayShowOnReaderExit,
+                                onCheckedChange = { checked ->
+                                    saveAudiobookFloatingOverlayShowOnReaderExit(context, checked)
+                                    refreshConfig()
+                                }
+                            )
+                        }
+                        Text(stringResource(R.string.audiobook_overlay_show_on_reader_exit_help))
                         Text(
                             if (overlayGranted) {
                                 stringResource(R.string.audiobook_overlay_permission_granted)

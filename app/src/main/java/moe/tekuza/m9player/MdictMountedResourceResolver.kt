@@ -13,19 +13,6 @@ import java.util.Locale
 
 private const val MDICT_MOUNTED_SCHEME = "mdictres"
 
-internal fun buildMountedMdictResourceUri(cacheKey: String, rawPath: String): String {
-    val safeCacheKey = cacheKey.trim().ifBlank { "mounted" }
-    val normalizedPath = rawPath
-        .trim()
-        .replace('\\', '/')
-        .trimStart('/')
-    val encodedPath = normalizedPath
-        .split('/')
-        .filter { it.isNotBlank() }
-        .joinToString("/") { Uri.encode(it) }
-    return "$MDICT_MOUNTED_SCHEME://$safeCacheKey/$encodedPath"
-}
-
 internal data class MountedMdictResource(
     val mimeType: String,
     val inputStream: InputStream

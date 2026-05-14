@@ -26,6 +26,7 @@ import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.os.SystemClock
 import android.widget.FrameLayout
@@ -40,12 +41,13 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
+import androidx.appcompat.widget.AppCompatTextView
 import androidx.core.text.HtmlCompat
-import androidx.text.vertical.VerticalTextLayout
 import java.util.Locale
 import android.webkit.WebView
 import android.webkit.WebResourceResponse
 import android.widget.Toast
+import de.manhhao.hoshi.LookupResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -53,7 +55,22 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import moe.tekuza.m9player.hoshi.features.dictionary.DictionarySettings
+import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupAssets
+import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupHtml
+import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupOptions
+import moe.tekuza.m9player.hoshi.features.dictionary.PopupLookupResultsHolder
+import moe.tekuza.m9player.hoshi.features.dictionary.PopupMessageWebViewClient
+import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewBridge
+import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbackHolder
+import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbacks
+import moe.tekuza.m9player.hoshi.features.dictionary.currentDictionaryStyles
+import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
+import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
@@ -61,6 +78,9 @@ import kotlin.math.roundToInt
 private fun hasOverlayPermission(context: Context): Boolean {
     return Settings.canDrawOverlays(context)
 }
+
+private fun Context.isSystemDarkMode(): Boolean =
+    (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
 internal fun startAudiobookFloatingOverlayService(context: Context) {
     if (!hasOverlayPermission(context)) return
@@ -118,6 +138,257 @@ private fun normalizeFloatingVerticalPunctuationText(text: String): String {
     return if (changed) out.toString() else text
 }
 
+private fun buildFloatingVerticalSubtitleHtml(text: String, color: Int, textSizeSp: Float): String {
+    val safeText = escapeFloatingSubtitleHtml(text)
+    val colorCss = androidColorToCssRgba(color)
+    val outlineCss = floatingSubtitleOutlineCss()
+    val safeSize = textSizeSp.coerceIn(8f, 96f)
+    val sourceJson = JSONObject.quote(text)
+    return """
+        <!doctype html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <style>
+                html, body {
+                    margin: 0;
+                    padding: 0;
+                    width: 100%;
+                    height: 100%;
+                    overflow: hidden;
+                    background: transparent;
+                    color: $colorCss;
+                    font-size: ${safeSize}px;
+                    line-height: 1.45;
+                    text-shadow: $outlineCss;
+                    -webkit-text-size-adjust: 100%;
+                    text-size-adjust: 100%;
+                    -webkit-user-select: none;
+                    user-select: none;
+                }
+                body {
+                    box-sizing: border-box;
+                    padding: 4px 10px;
+                    writing-mode: vertical-rl;
+                    text-orientation: mixed;
+                    display: flex;
+                    align-items: flex-end;
+                    justify-content: flex-start;
+                    font-family: sans-serif;
+                    position: relative;
+                }
+                #subtitle {
+                    white-space: pre-wrap;
+                    overflow-wrap: anywhere;
+                    word-break: break-word;
+                    max-width: 100%;
+                    max-height: 100%;
+                    overflow: hidden;
+                    position: relative;
+                    z-index: 1;
+                }
+                .nine-subtitle-highlight-box {
+                    position: fixed;
+                    pointer-events: none;
+                    background-color: rgba(161, 161, 170, 0.35);
+                    z-index: 0;
+                }
+            </style>
+        </head>
+        <body>
+            <div id="subtitle">$safeText</div>
+            <script>
+                window.nineSubtitleText = $sourceJson;
+                function nineSubtitleTextNode() {
+                    var root = document.getElementById('subtitle');
+                    return root && root.firstChild && root.firstChild.nodeType === Node.TEXT_NODE ? root.firstChild : null;
+                }
+                function nineSubtitleRoot() {
+                    return document.getElementById('subtitle');
+                }
+                function nineSubtitleFontSizePx() {
+                    var root = nineSubtitleRoot() || document.body;
+                    return parseFloat(window.getComputedStyle(root).fontSize || '0') || 0;
+                }
+                function nineSubtitleNormalizeRect(raw) {
+                    var fontSize = nineSubtitleFontSizePx();
+                    var rect = {
+                        left: raw.left,
+                        top: raw.top,
+                        right: raw.right,
+                        bottom: raw.bottom,
+                        width: raw.width,
+                        height: raw.height
+                    };
+                    if (fontSize > 0) {
+                        var glyphWidth = Math.min(rect.width, Math.max(1, fontSize * 1.16));
+                        var center = (rect.left + rect.right) / 2 + fontSize * 0.02;
+                        rect.left = center - glyphWidth / 2;
+                        rect.right = center + glyphWidth / 2;
+                        rect.width = rect.right - rect.left;
+                    }
+                    return rect;
+                }
+                function nineSubtitleRectsForRange(start, endExclusive) {
+                    var node = nineSubtitleTextNode();
+                    if (!node) return [];
+                    var text = node.textContent || '';
+                    var safeStart = Math.max(0, Math.min(start || 0, text.length));
+                    var safeEnd = Math.max(safeStart, Math.min(endExclusive || safeStart, text.length));
+                    var rects = [];
+                    var offset = safeStart;
+                    while (offset < safeEnd) {
+                        var char = String.fromCodePoint(text.codePointAt(offset));
+                        var next = Math.min(offset + char.length, safeEnd);
+                        var range = document.createRange();
+                        range.setStart(node, offset);
+                        range.setEnd(node, next);
+                        Array.from(range.getClientRects()).forEach(function(raw) {
+                            if (raw.width <= 0 || raw.height <= 0) return;
+                            rects.push(nineSubtitleNormalizeRect(raw));
+                        });
+                        offset = next;
+                    }
+                    return rects;
+                }
+                function nineSubtitleClearHighlights() {
+                    document.querySelectorAll('.nine-subtitle-highlight-box').forEach(function(node) {
+                        node.remove();
+                    });
+                }
+                window.nineSubtitleSetContent = function(nextText, nextColor, nextSize) {
+                    var root = nineSubtitleRoot();
+                    if (!root) return;
+                    window.nineSubtitleText = nextText || '';
+                    root.textContent = window.nineSubtitleText;
+                    document.documentElement.style.color = nextColor;
+                    document.body.style.color = nextColor;
+                    document.documentElement.style.fontSize = nextSize + 'px';
+                    document.body.style.fontSize = nextSize + 'px';
+                    nineSubtitleClearHighlights();
+                };
+                function nineSubtitleRangeForOffset(offset) {
+                    var node = nineSubtitleTextNode();
+                    if (!node) return null;
+                    var safe = Math.max(0, Math.min(offset, node.textContent.length - 1));
+                    var range = document.createRange();
+                    range.setStart(node, safe);
+                    range.setEnd(node, safe + 1);
+                    return range;
+                }
+                function nineSubtitleHitOffset(x, y) {
+                    var node = nineSubtitleTextNode();
+                    if (!node) return -1;
+                    var text = node.textContent || '';
+                    var best = -1;
+                    var bestDistance = Number.MAX_VALUE;
+                    var fontSize = nineSubtitleFontSizePx();
+                    for (var i = 0; i < text.length;) {
+                        var char = String.fromCodePoint(text.codePointAt(i));
+                        var next = i + char.length;
+                        var range = document.createRange();
+                        range.setStart(node, i);
+                        range.setEnd(node, next);
+                        var rects = Array.from(range.getClientRects());
+                        for (var j = 0; j < rects.length; j++) {
+                            var r = nineSubtitleNormalizeRect(rects[j]);
+                            if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i;
+                            var cx = Math.max(r.left, Math.min(x, r.right));
+                            var cy = Math.max(r.top, Math.min(y, r.bottom));
+                            var dx = x - cx;
+                            var dy = y - cy;
+                            var dist = dx * dx + dy * dy;
+                            if (dist < bestDistance) {
+                                bestDistance = dist;
+                                best = i;
+                            }
+                        }
+                        i = next;
+                    }
+                    var threshold = Math.max(18, fontSize * 1.8);
+                    return bestDistance <= threshold * threshold ? best : -1;
+                }
+                window.nineSubtitleSelectAt = function(x, y) {
+                    var offset = nineSubtitleHitOffset(x, y);
+                    if (offset < 0) return null;
+                    var range = nineSubtitleRangeForOffset(offset);
+                    if (!range) return null;
+                    var rect = Array.from(range.getClientRects()).map(nineSubtitleNormalizeRect).find(function(r) {
+                        return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+                    }) || nineSubtitleNormalizeRect(range.getBoundingClientRect());
+                    var payload = {
+                        offset: offset,
+                        x: rect.left,
+                        y: rect.top,
+                        left: rect.left,
+                        top: rect.top,
+                        width: rect.width,
+                        height: rect.height
+                    };
+                    return JSON.stringify(payload);
+                };
+                window.nineSubtitleHighlight = function(start, endExclusive) {
+                    nineSubtitleClearHighlights();
+                    nineSubtitleRectsForRange(start, endExclusive).forEach(function(rect) {
+                        var box = document.createElement('div');
+                        box.className = 'nine-subtitle-highlight-box';
+                        box.style.left = rect.left + 'px';
+                        box.style.top = rect.top + 'px';
+                        box.style.width = rect.width + 'px';
+                        box.style.height = rect.height + 'px';
+                        document.body.appendChild(box);
+                    });
+                };
+            </script>
+        </body>
+        </html>
+    """.trimIndent()
+}
+
+private fun floatingSubtitleOutlineCss(): String =
+    listOf(
+        "-0.6px -0.6px 0 rgba(0,0,0,0.35)",
+        "0.6px -0.6px 0 rgba(0,0,0,0.35)",
+        "-0.6px 0.6px 0 rgba(0,0,0,0.35)",
+        "0.6px 0.6px 0 rgba(0,0,0,0.35)"
+    ).joinToString(", ")
+
+private fun escapeFloatingSubtitleHtml(value: String): String =
+    buildString(value.length + 16) {
+        value.forEach { ch ->
+            when (ch) {
+                '&' -> append("&amp;")
+                '<' -> append("&lt;")
+                '>' -> append("&gt;")
+                '"' -> append("&quot;")
+                '\'' -> append("&#39;")
+                else -> append(ch)
+            }
+        }
+    }
+
+private fun androidColorToCssRgba(color: Int): String {
+    val alpha = android.graphics.Color.alpha(color) / 255f
+    return String.format(
+        Locale.US,
+        "rgba(%d,%d,%d,%.3f)",
+        android.graphics.Color.red(color),
+        android.graphics.Color.green(color),
+        android.graphics.Color.blue(color),
+        alpha.coerceIn(0f, 1f)
+    )
+}
+
+private fun decodeFloatingEvaluateJavascriptJson(raw: String?): String? {
+    val value = raw?.trim().orEmpty()
+    if (value.isBlank() || value == "null" || value == "undefined") return null
+    return if (value.startsWith('"')) {
+        runCatching { JSONObject("""{"value":$value}""").optString("value") }.getOrNull()
+    } else {
+        value
+    }
+}
+
 class AudiobookFloatingOverlayService : Service() {
 companion object {
         const val ACTION_SHOW = "moe.tekuza.m9player.action.SHOW_FLOATING_OVERLAY"
@@ -147,6 +418,7 @@ companion object {
     private var subtitleFrameView: FrameLayout? = null
     private var subtitleTextView: TextView? = null
     private var subtitleOutlineTextView: TextView? = null
+    private var subtitleVerticalWebView: FloatingVerticalSubtitleWebView? = null
     private var subtitleControlsRow: LinearLayout? = null
     private var subtitleSettingsPanel: LinearLayout? = null
     private var subtitleSettingsInlineHost: LinearLayout? = null
@@ -169,14 +441,22 @@ companion object {
     private var subtitlePlaybackSpeed: Float = 1f
     private var lookupRequestNonce: Long = 0L
     private var cachedLookupDictionaries: List<LoadedDictionary>? = null
+    private var cachedLookupDictionariesVersion: Long = -1L
     private val floatingLookupSession = ReaderLookupSession()
     private val floatingLookupCardPositions = mutableMapOf<Int, IntOffset>()
     private val floatingLookupHostViews = mutableMapOf<Int, View>()
     private val floatingLookupHostSignatures = mutableMapOf<Int, Int>()
     private val floatingLookupRepositionJobs = mutableMapOf<Int, Job>()
     private val floatingLookupHostSizeListeners = mutableMapOf<Int, View.OnLayoutChangeListener>()
+    private val floatingHoshiLookupWebViews = mutableMapOf<Int, WebView>()
+    private val floatingHoshiLookupHtmlByLayer = mutableMapOf<Int, String>()
     private val floatingAnkiDuplicateByKey = mutableMapOf<String, Boolean>()
+    private val floatingAnkiDuplicateNoteIdsByKey = mutableMapOf<String, List<Long>>()
     private val floatingAnkiCheckingByKey = mutableSetOf<String>()
+    private val floatingHoshiLookupAssets: LookupPopupAssets by lazy { LookupPopupAssets.load(this) }
+    private val floatingHoshiLookupSession: HoshiLookupSession by lazy {
+        HoshiLookupSession(this, dictionariesProvider = { loadFloatingLookupDictionaries() })
+    }
 
     private data class FloatingDefinitionWebViewTag(
         val bridge: DefinitionLookupBridge,
@@ -188,6 +468,255 @@ companion object {
 
         override fun onInterceptTouchEvent(ev: MotionEvent?): Boolean {
             return interceptAllTouches || super.onInterceptTouchEvent(ev)
+        }
+    }
+
+    private class FloatingHoshiLookupWebView(context: Context) : WebView(context) {
+        var maxLookupHeightPx: Int = 1
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            super.onMeasure(
+                widthMeasureSpec,
+                MeasureSpec.makeMeasureSpec(maxLookupHeightPx, MeasureSpec.AT_MOST)
+            )
+        }
+    }
+
+    private data class FloatingHoshiLookupWebViewTag(
+        val callbackHolder: PopupWebViewCallbackHolder,
+        val resultsHolder: PopupLookupResultsHolder
+    )
+
+    private inner class FloatingVerticalSubtitleWebView(context: Context) : WebView(context) {
+        private var content: String = ""
+        private var textColor: Int = Color.WHITE
+        private var textSizeSp: Float = 28f
+        private var selectedRange: IntRange? = null
+        private var lastAnchorRect: Rect? = null
+        private var pageLoaded: Boolean = false
+
+        init {
+            setBackgroundColor(Color.TRANSPARENT)
+            overScrollMode = WebView.OVER_SCROLL_NEVER
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
+            isLongClickable = false
+            isHapticFeedbackEnabled = false
+            isSoundEffectsEnabled = false
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = false
+            settings.allowFileAccess = false
+            settings.allowContentAccess = false
+            settings.blockNetworkLoads = true
+            webViewClient = object : android.webkit.WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    pageLoaded = true
+                    pushContentToPage()
+                    applySelectedRange()
+                    super.onPageFinished(view, url)
+                }
+            }
+            loadDataWithBaseURL(
+                "https://nine.local/floating-subtitle/",
+                buildFloatingVerticalSubtitleHtml(content, textColor, textSizeSp),
+                "text/html",
+                "UTF-8",
+                null
+            )
+        }
+
+        fun bindText(text: String, color: Int, sizeSp: Float) {
+            val changed = content != text || textColor != color || textSizeSp != sizeSp
+            content = text
+            textColor = color
+            textSizeSp = sizeSp
+            updateEstimatedSize(text, sizeSp)
+            if (changed) {
+                lastAnchorRect = null
+                pushContentToPage()
+            } else {
+                applySelectedRange()
+            }
+        }
+
+        fun applyTypography(color: Int, sizeSp: Float) {
+            if (content.isBlank()) {
+                textColor = color
+                textSizeSp = sizeSp
+                return
+            }
+            bindText(content, color, sizeSp)
+        }
+
+        private fun pushContentToPage() {
+            if (!pageLoaded) {
+                return
+            }
+            val colorCss = androidColorToCssRgba(textColor)
+            val safeSize = textSizeSp.coerceIn(8f, 96f)
+            val script = """
+                window.nineSubtitleSetContent &&
+                window.nineSubtitleSetContent(${JSONObject.quote(content)}, ${JSONObject.quote(colorCss)}, $safeSize);
+            """.trimIndent()
+            evaluateJavascript(script) {
+                applySelectedRange()
+            }
+        }
+
+        private fun updateEstimatedSize(text: String, sizeSp: Float) {
+            val metrics = resources.displayMetrics
+            val density = metrics.density
+            val scaledDensity = metrics.scaledDensity
+            val visibleChars = text.count { it != '\n' && it != '\r' }.coerceAtLeast(1)
+            val horizontalPadding = 20f * density
+            val verticalPadding = 8f * density
+            val columnWidth = (sizeSp * scaledDensity * 1.24f).coerceAtLeast(1f)
+            val rowHeight = (sizeSp * scaledDensity * 1.45f).coerceAtLeast(1f)
+            val maxHeight = (metrics.heightPixels * 0.72f).roundToInt().coerceAtLeast(1)
+            val rows = ((maxHeight - verticalPadding) / rowHeight)
+                .toInt()
+                .coerceAtLeast(1)
+            val contentColumns = kotlin.math.ceil(visibleChars / rows.toDouble()).toInt().coerceAtLeast(1)
+            val maxDraggableWidth = (metrics.widthPixels * 0.48f).roundToInt().coerceAtLeast(1)
+            val maxColumns = kotlin.math.floor((maxDraggableWidth - horizontalPadding) / columnWidth)
+                .toInt()
+                .coerceAtLeast(1)
+            val columns = contentColumns.coerceAtMost(maxColumns)
+            val desiredWidth = (columns * columnWidth + horizontalPadding)
+                .roundToInt()
+                .coerceIn((44f * density).roundToInt(), maxDraggableWidth)
+            val desiredHeight = (rows * rowHeight + verticalPadding)
+                .roundToInt()
+                .coerceIn((96f * density).roundToInt(), maxHeight)
+            val current = layoutParams
+            if (current == null || current.width != desiredWidth || current.height != desiredHeight) {
+                layoutParams = FrameLayout.LayoutParams(desiredWidth, desiredHeight, Gravity.CENTER)
+            }
+        }
+
+        fun setSelectedSourceRange(range: IntRange?) {
+            selectedRange = range
+            applySelectedRange()
+        }
+
+        fun selectAt(x: Float, y: Float) {
+            val density = resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
+            val cssX = x / density
+            val cssY = y / density
+            evaluateJavascript("window.nineSubtitleSelectAt && window.nineSubtitleSelectAt($cssX, $cssY);") { result ->
+                val payloadText = decodeFloatingEvaluateJavascriptJson(result)
+                    ?.takeIf { it.isNotBlank() && it != "null" }
+                    ?: run {
+                        Log.d(
+                            FLOATING_SUBTITLE_HIT_LOG_TAG,
+                            "verticalWebTap miss x=$x y=$y css=$cssX,$cssY result=${result.orEmpty().take(80)}"
+                        )
+                        return@evaluateJavascript
+                    }
+                val payload = runCatching { JSONObject(payloadText) }.getOrNull()
+                    ?: run {
+                        Log.d(
+                            FLOATING_SUBTITLE_HIT_LOG_TAG,
+                            "verticalWebTap invalidJson payload=${payloadText.take(120)}"
+                        )
+                        return@evaluateJavascript
+                    }
+                val offset = payload.optInt("offset", -1)
+                if (offset < 0) {
+                    Log.d(
+                        FLOATING_SUBTITLE_HIT_LOG_TAG,
+                        "verticalWebTap invalidPayload payload=${payloadText.take(120)}"
+                    )
+                    return@evaluateJavascript
+                }
+                handleVerticalSubtitleTapPayload(offset, payload)
+            }
+        }
+
+        fun cachedAnchorForRange(range: IntRange): Rect? {
+            val anchor = lastAnchorRect ?: return null
+            return if (selectedRange == range || selectedRange == null) anchor else null
+        }
+
+        fun resolveAnchorRectsForRange(range: IntRange, callback: (List<Rect>) -> Unit) {
+            if (range.first < 0 || range.last < range.first) {
+                callback(emptyList())
+                return
+            }
+            val script = """
+                (function() {
+                    try {
+                        if (!window.nineSubtitleRectsForRange) return '[]';
+                        return JSON.stringify(window.nineSubtitleRectsForRange(${range.first}, ${range.last + 1}));
+                    } catch (e) {
+                        return '[]';
+                    }
+                })();
+            """.trimIndent()
+            evaluateJavascript(script) { result ->
+                val payloadText = decodeFloatingEvaluateJavascriptJson(result).orEmpty()
+                val payload = runCatching { JSONArray(payloadText) }.getOrNull()
+                if (payload == null || payload.length() == 0) {
+                    callback(emptyList())
+                    return@evaluateJavascript
+                }
+                val location = IntArray(2)
+                getLocationOnScreen(location)
+                val density = resources.displayMetrics.density.toDouble().takeIf { it > 0.0 } ?: 1.0
+                val rects = buildList {
+                    for (index in 0 until payload.length()) {
+                        val item = payload.optJSONObject(index) ?: continue
+                        val left = item.optDouble("left", 0.0) * density
+                        val top = item.optDouble("top", 0.0) * density
+                        val right = item.optDouble("right", left) * density
+                        val bottom = item.optDouble("bottom", top) * density
+                        if (right <= left || bottom <= top) continue
+                        add(
+                            Rect(
+                                left = location[0] + left.toFloat(),
+                                top = location[1] + top.toFloat(),
+                                right = location[0] + right.toFloat(),
+                                bottom = location[1] + bottom.toFloat()
+                            )
+                        )
+                    }
+                }
+                callback(rects)
+            }
+        }
+
+        private fun applySelectedRange() {
+            val range = selectedRange
+            if (range == null || range.first < 0 || range.last < range.first) {
+                evaluateJavascript("window.nineSubtitleClearHighlights && window.nineSubtitleClearHighlights();", null)
+                return
+            }
+            evaluateJavascript(
+                "window.nineSubtitleHighlight && window.nineSubtitleHighlight(${range.first}, ${range.last + 1});",
+                null
+            )
+        }
+
+        private fun handleVerticalSubtitleTapPayload(offset: Int, rectPayload: JSONObject) {
+            val location = IntArray(2)
+            getLocationOnScreen(location)
+            val density = resources.displayMetrics.density.toDouble().takeIf { it > 0.0 } ?: 1.0
+            val x = (rectPayload.optDouble("x", rectPayload.optDouble("left", 0.0))) * density
+            val y = (rectPayload.optDouble("y", rectPayload.optDouble("top", 0.0))) * density
+            val width = rectPayload.optDouble("width", 1.0) * density
+            val height = rectPayload.optDouble("height", 1.0) * density
+            val anchor = Rect(
+                left = location[0] + x.toFloat(),
+                top = location[1] + y.toFloat(),
+                right = location[0] + (x + width).toFloat(),
+                bottom = location[1] + (y + height).toFloat()
+            )
+            Log.d(
+                FLOATING_SUBTITLE_HIT_LOG_TAG,
+                "verticalWebTap offset=$offset rect=${anchor.left},${anchor.top},${anchor.right},${anchor.bottom} view=${width}x$height density=$density"
+            )
+            lastAnchorRect = anchor
+            performFloatingLookup(offset.coerceAtLeast(0), anchor)
         }
     }
 
@@ -215,19 +744,14 @@ companion object {
         }
     }
 
-    private class VerticalLayoutTextView(context: Context) : TextView(context) {
+    private class VerticalLayoutTextView(context: Context) : AppCompatTextView(context) {
         private var verticalEnabled: Boolean = false
-        private var cachedLayout: VerticalTextLayout? = null
-        private var cachedHeight: Int = -1
-        private var cachedText: String = ""
-        private var cachedTextSize: Float = Float.NaN
-        private var cachedTextColor: Int = Color.TRANSPARENT
-        private var cachedTypeface: Typeface? = null
         private var selectedSourceRange: IntRange? = null
-        private var cachedGridModel: VerticalGridModel? = null
-        private var cachedGridHeight: Int = -1
-        private var cachedGridText: String = ""
-        private var cachedGridTextSize: Float = Float.NaN
+        private var cachedLayout: VerticalSubtitleLayout? = null
+        private var cachedLayoutHeight: Int = -1
+        private var cachedLayoutText: String = ""
+        private var cachedLayoutTextSize: Float = Float.NaN
+        private var cachedLayoutTypeface: Typeface? = null
 
         data class VerticalTapResolved(
             val sourceOffset: Int,
@@ -236,28 +760,15 @@ companion object {
             val rectInWindow: android.graphics.RectF
         )
 
-        private data class VerticalGridCell(
-            val sourceOffset: Int,
-            val row: Int,
-            val column: Int
-        )
-
-        private data class VerticalGridModel(
-            val cells: List<VerticalGridCell>,
-            val columnCount: Int,
-            val maxRows: Int,
-            val cellWidth: Float,
-            val cellHeight: Float
-        )
-
         fun setVerticalLayoutEnabled(enabled: Boolean) {
             if (verticalEnabled == enabled) return
             verticalEnabled = enabled
-            clearVerticalCache()
-            clearGridCache()
+            clearLayoutCache()
             requestLayout()
             invalidate()
         }
+
+        fun isVerticalLayoutEnabled(): Boolean = verticalEnabled
 
 
         fun setSelectedSourceRange(range: IntRange?) {
@@ -268,21 +779,17 @@ companion object {
 
         fun resolveVerticalTap(x: Float, y: Float): VerticalTapResolved? {
             if (!verticalEnabled) return null
-            val model = buildGridModel(height) ?: return null
-            if (model.cells.isEmpty()) return null
+            val layout = buildVerticalLayout(height) ?: return null
             val contentX = x + scrollX
             val contentY = y + scrollY
-            val hit = model.cells.firstOrNull { cell ->
-                val left = (width - (cell.column + 1) * model.cellWidth).coerceAtLeast(0f)
-                val top = (cell.row * model.cellHeight).coerceAtLeast(0f)
-                val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
-                val bottom = (top + model.cellHeight).coerceAtMost(height.toFloat())
-                contentX >= left && contentX <= right && contentY >= top && contentY <= bottom
-            } ?: return null
-            val left = (width - (hit.column + 1) * model.cellWidth).coerceAtLeast(0f)
-            val top = (hit.row * model.cellHeight).coerceAtLeast(0f)
-            val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
-            val bottom = (top + model.cellHeight).coerceAtMost(height.toFloat())
+            val hit = VerticalSubtitleLayoutEngine.hitTest(
+                contentX,
+                contentY,
+                width,
+                height,
+                layout,
+                TextPaint(paint)
+            ) ?: return null
             val location = IntArray(2)
             getLocationOnScreen(location)
             return VerticalTapResolved(
@@ -290,10 +797,10 @@ companion object {
                 row = hit.row,
                 column = hit.column,
                 rectInWindow = android.graphics.RectF(
-                    location[0] + left - scrollX,
-                    location[1] + top - scrollY,
-                    location[0] + right - scrollX,
-                    location[1] + bottom - scrollY
+                    location[0] + hit.rect.left - scrollX,
+                    location[1] + hit.rect.top - scrollY,
+                    location[0] + hit.rect.right - scrollX,
+                    location[1] + hit.rect.bottom - scrollY
                 )
             )
         }
@@ -309,57 +816,23 @@ companion object {
 
         fun computeSelectionRects(range: IntRange): List<Rect> {
             if (!verticalEnabled) return emptyList()
-            val model = buildGridModel(height) ?: return emptyList()
-            if (model.cells.isEmpty()) return emptyList()
-            val start = minOf(range.first, range.last)
-            val end = maxOf(range.first, range.last)
-            val selectedRowsByColumn = linkedMapOf<Int, MutableList<Int>>()
-            for (cell in model.cells) {
-                if (cell.sourceOffset !in start..end) continue
-                selectedRowsByColumn.getOrPut(cell.column) { ArrayList(4) }.add(cell.row)
-            }
-            if (selectedRowsByColumn.isEmpty()) return emptyList()
+            val layout = buildVerticalLayout(height) ?: return emptyList()
             val location = IntArray(2)
             getLocationOnScreen(location)
-            val rects = ArrayList<Rect>(selectedRowsByColumn.size)
-            selectedRowsByColumn.forEach { (column, rowsInColumn) ->
-                val sortedRows = rowsInColumn.distinct().sorted()
-                if (sortedRows.isEmpty()) return@forEach
-                var runStart = sortedRows.first()
-                var previous = runStart
-                fun flushRun(startRow: Int, endRow: Int) {
-                    val left = (width - (column + 1) * model.cellWidth).coerceAtLeast(0f)
-                    val top = (startRow * model.cellHeight).coerceAtLeast(0f)
-                    val right = (left + model.cellWidth).coerceAtMost(width.toFloat())
-                    val bottom = ((endRow + 1) * model.cellHeight).coerceAtMost(height.toFloat())
-                    rects.add(
-                        Rect(
-                            left = location[0] + left - scrollX,
-                            top = location[1] + top - scrollY,
-                            right = location[0] + right - scrollX,
-                            bottom = location[1] + bottom - scrollY
-                        )
-                    )
-                }
-                for (i in 1 until sortedRows.size) {
-                    val row = sortedRows[i]
-                    if (row == previous + 1) {
-                        previous = row
-                    } else {
-                        flushRun(runStart, previous)
-                        runStart = row
-                        previous = row
-                    }
-                }
-                flushRun(runStart, previous)
+            return VerticalSubtitleLayoutEngine.selectionRects(range, width, height, layout, TextPaint(paint)).map { rect ->
+                Rect(
+                    left = location[0] + rect.left - scrollX,
+                    top = location[1] + rect.top - scrollY,
+                    right = location[0] + rect.right - scrollX,
+                    bottom = location[1] + rect.bottom - scrollY
+                )
             }
-            return rects
         }
 
         fun getVerticalContentWidthPx(): Int {
             if (!verticalEnabled) return width.coerceAtLeast(1)
-            val model = buildGridModel(height) ?: return width.coerceAtLeast(1)
-            return ceil((model.columnCount * model.cellWidth).toDouble()).toInt().coerceAtLeast(1)
+            val layout = buildVerticalLayout(height) ?: return width.coerceAtLeast(1)
+            return ceil(layout.contentWidth().toDouble()).toInt().coerceAtLeast(1)
         }
 
         fun getVerticalContentHeightPx(): Int {
@@ -373,28 +846,30 @@ companion object {
 
         override fun setText(text: CharSequence?, type: BufferType?) {
             super.setText(text, type)
-            clearVerticalCache()
-            clearGridCache()
+            clearLayoutCache()
         }
 
         override fun setTextColor(color: Int) {
             super.setTextColor(color)
-            clearVerticalCache()
+            invalidate()
+        }
+
+        override fun setPaintFlags(flags: Int) {
+            super.setPaintFlags(flags)
+            clearLayoutCache()
             invalidate()
         }
 
         override fun setTypeface(tf: Typeface?) {
             super.setTypeface(tf)
-            clearVerticalCache()
-            clearGridCache()
+            clearLayoutCache()
             requestLayout()
             invalidate()
         }
 
         override fun setTextSize(size: Float) {
             super.setTextSize(size)
-            clearVerticalCache()
-            clearGridCache()
+            clearLayoutCache()
             requestLayout()
             invalidate()
         }
@@ -410,8 +885,8 @@ companion object {
             } else {
                 (textSize * 12f).roundToInt().coerceAtLeast(1)
             }
-            val desiredWidth = buildGridModel(measuredHeight)?.let {
-                ceil((it.columnCount * it.cellWidth).toDouble()).toInt().coerceAtLeast(1)
+            val desiredWidth = buildVerticalLayout(measuredHeight)?.let {
+                ceil(it.contentWidth().toDouble()).toInt().coerceAtLeast(1)
             } ?: 1
             val measuredWidth = resolveSize(desiredWidth, widthMeasureSpec)
             setMeasuredDimension(measuredWidth, resolveSize(measuredHeight, heightMeasureSpec))
@@ -423,253 +898,62 @@ companion object {
                 return
             }
             drawSelectionBackground(canvas)
-            val layout = obtainVerticalLayout(height) ?: return
+            val layout = buildVerticalLayout(height) ?: return
             canvas.save()
             canvas.translate(-scrollX.toFloat(), -scrollY.toFloat())
-            layout.draw(canvas, width.toFloat(), 0f)
+            VerticalSubtitleLayoutEngine.draw(canvas, TextPaint(paint), layout, width, height)
             canvas.restore()
         }
 
-        private fun obtainVerticalLayout(targetHeight: Int): VerticalTextLayout? {
+        private fun buildVerticalLayout(targetHeight: Int): VerticalSubtitleLayout? {
             val current = normalizeFloatingVerticalPunctuationText(text?.toString().orEmpty())
             if (current.isBlank() || targetHeight <= 0) return null
-            val effectiveTargetHeight = targetHeight
             if (cachedLayout != null &&
-                cachedHeight == effectiveTargetHeight &&
-                cachedText == current &&
-                cachedTextSize == textSize &&
-                cachedTextColor == currentTextColor &&
-                cachedTypeface == typeface
+                cachedLayoutHeight == targetHeight &&
+                cachedLayoutText == current &&
+                cachedLayoutTextSize == textSize &&
+                cachedLayoutTypeface == typeface
             ) {
                 return cachedLayout
             }
-            val paint = TextPaint(this.paint).apply {
+            val layoutPaint = TextPaint(paint).apply {
                 color = currentTextColor
                 typeface = this@VerticalLayoutTextView.typeface
                 textSize = this@VerticalLayoutTextView.textSize
                 isAntiAlias = true
             }
-            cachedLayout = VerticalTextLayout(
+            cachedLayout = VerticalSubtitleLayoutEngine.build(
                 current,
-                0,
-                current.length,
-                paint,
-                effectiveTargetHeight.toFloat()
+                layoutPaint,
+                targetHeight,
+                textSize.coerceAtLeast(1f)
             )
-            cachedHeight = effectiveTargetHeight
-            cachedText = current
-            cachedTextSize = textSize
-            cachedTextColor = currentTextColor
-            cachedTypeface = typeface
+            cachedLayoutHeight = targetHeight
+            cachedLayoutText = current
+            cachedLayoutTextSize = textSize
+            cachedLayoutTypeface = typeface
             return cachedLayout
-        }
-
-        private fun buildGridModel(viewHeight: Int): VerticalGridModel? {
-            val current = normalizeFloatingVerticalPunctuationText(text?.toString().orEmpty())
-            if (current.isBlank() || viewHeight <= 0) return null
-            if (cachedGridModel != null &&
-                cachedGridHeight == viewHeight &&
-                cachedGridText == current &&
-                cachedGridTextSize == textSize
-            ) {
-                return cachedGridModel
-            }
-            val cellHeight = textSize.coerceAtLeast(1f)
-            val cellWidth = textSize.coerceAtLeast(1f)
-            val fallback = buildFallbackGridModel(current, viewHeight, cellHeight, cellWidth)
-            val computed = runCatching {
-                val lineRanges = computeVerticalLineRangesReflective(current, viewHeight)
-                val lineCount = lineRanges.size.coerceAtLeast(0)
-                if (lineCount <= 0) {
-                    fallback
-                } else {
-                    val cells = ArrayList<VerticalGridCell>(current.length)
-                    var maxRows = 0
-                    for (column in 0 until lineCount) {
-                        val range = lineRanges[column]
-                        val lineStart = range.first.coerceIn(0, current.length)
-                        val lineEnd = range.last.coerceIn(lineStart, current.length)
-                        var row = 0
-                        for (sourceOffset in lineStart until lineEnd) {
-                            val ch = current[sourceOffset]
-                            if (ch == '\n' || ch == '\r') continue
-                            cells.add(
-                                VerticalGridCell(
-                                    sourceOffset = sourceOffset,
-                                    row = row++,
-                                    column = column
-                                )
-                            )
-                        }
-                        maxRows = maxOf(maxRows, row)
-                    }
-                    if (cells.isEmpty()) {
-                        fallback
-                    } else {
-                        VerticalGridModel(
-                            cells = cells,
-                            columnCount = lineCount.coerceAtLeast(1),
-                            maxRows = maxRows.coerceAtLeast(1),
-                            cellWidth = cellWidth,
-                            cellHeight = cellHeight
-                        )
-                    }
-                }
-            }.getOrElse { fallback }
-            cachedGridModel = computed
-            cachedGridHeight = viewHeight
-            cachedGridText = current
-            cachedGridTextSize = textSize
-            return computed
-        }
-
-        private fun computeVerticalLineRangesReflective(current: String, viewHeight: Int): List<IntRange> {
-            return try {
-                val lineBreakerClass = Class.forName("androidx.text.vertical.LineBreaker")
-                val orientationClass = Class.forName("androidx.text.vertical.TextOrientation")
-                val resultClass = Class.forName("androidx.text.vertical.LineBreaker\$Result")
-                val instanceField = lineBreakerClass.getDeclaredField("INSTANCE").apply { isAccessible = true }
-                val lineBreaker = instanceField.get(null)
-                val mixedField = orientationClass.getDeclaredField("Mixed").apply { isAccessible = true }
-                val mixedOrientation = mixedField.get(null)
-                val breakMethod = lineBreakerClass.getDeclaredMethod(
-                    "breakTextIntoLines",
-                    CharSequence::class.java,
-                    Int::class.javaPrimitiveType,
-                    Int::class.javaPrimitiveType,
-                    TextPaint::class.java,
-                    Float::class.javaPrimitiveType,
-                    orientationClass
-                ).apply { isAccessible = true }
-                val result = breakMethod.invoke(
-                    lineBreaker,
-                    current,
-                    0,
-                    current.length,
-                    TextPaint(paint).apply {
-                        color = currentTextColor
-                        typeface = this@VerticalLayoutTextView.typeface
-                        textSize = this@VerticalLayoutTextView.textSize
-                    },
-                    viewHeight.toFloat(),
-                    mixedOrientation
-                ) ?: return emptyList()
-                val getLineCount = resultClass.getDeclaredMethod("getLineCount").apply { isAccessible = true }
-                val getLineStart = resultClass.getDeclaredMethod("getLineStart", Int::class.javaPrimitiveType).apply { isAccessible = true }
-                val getLineEnd = resultClass.getDeclaredMethod("getLineEnd", Int::class.javaPrimitiveType).apply { isAccessible = true }
-                val lineCount = (getLineCount.invoke(result) as? Int ?: 0).coerceAtLeast(0)
-                if (lineCount <= 0) return emptyList()
-                buildList(lineCount) {
-                    for (line in 0 until lineCount) {
-                        val start = (getLineStart.invoke(result, line) as? Int ?: 0).coerceAtLeast(0)
-                        val end = (getLineEnd.invoke(result, line) as? Int ?: start).coerceAtLeast(start)
-                        add(start..end)
-                    }
-                }
-            } catch (_: Throwable) {
-                emptyList()
-            }
-        }
-
-        private fun buildFallbackGridModel(
-            current: String,
-            viewHeight: Int,
-            cellHeight: Float,
-            cellWidth: Float
-        ): VerticalGridModel {
-            val mapper = buildIndexMapping(current)
-            if (mapper.isEmpty()) {
-                return VerticalGridModel(emptyList(), 1, 1, cellWidth, cellHeight)
-            }
-            val rows = maxOf(1, floor(viewHeight / cellHeight).toInt())
-            val columns = ceil(mapper.size.toFloat() / rows.toFloat()).toInt().coerceAtLeast(1)
-            val cells = ArrayList<VerticalGridCell>(mapper.size)
-            for (logical in mapper.indices) {
-                val sourceOffset = mapper[logical]
-                if (sourceOffset < 0) continue
-                cells.add(
-                    VerticalGridCell(
-                        sourceOffset = sourceOffset,
-                        row = logical % rows,
-                        column = logical / rows
-                    )
-                )
-            }
-            val maxRows = cells.maxOfOrNull { it.row + 1 } ?: 1
-            return VerticalGridModel(
-                cells = cells,
-                columnCount = columns,
-                maxRows = maxRows,
-                cellWidth = cellWidth,
-                cellHeight = cellHeight
-            )
-        }
-
-        private fun buildIndexMapping(current: String): IntArray {
-            if (current.isEmpty()) return IntArray(0)
-            val indices = ArrayList<Int>(current.length)
-            current.forEachIndexed { index, ch ->
-                indices.add(if (ch == '\n') -1 else index)
-            }
-            return indices.toIntArray()
         }
 
         private fun drawSelectionBackground(canvas: Canvas) {
             val range = selectedSourceRange ?: return
-            val model = buildGridModel(height) ?: return
-            if (model.cells.isEmpty()) return
             val highlightPaint = Paint().apply {
                 color = android.graphics.Color.argb(0x66, 0xA0, 0xA0, 0xA0)
                 style = Paint.Style.FILL
                 isAntiAlias = true
             }
-            val start = minOf(range.first, range.last)
-            val end = maxOf(range.first, range.last)
-            val selectedRowsByColumn = linkedMapOf<Int, MutableList<Int>>()
-            for (cell in model.cells) {
-                if (cell.sourceOffset !in start..end) continue
-                selectedRowsByColumn.getOrPut(cell.column) { ArrayList(4) }.add(cell.row)
-            }
-            selectedRowsByColumn.forEach { (column, rowsInColumn) ->
-                val sortedRows = rowsInColumn.distinct().sorted()
-                if (sortedRows.isEmpty()) return@forEach
-                var runStart = sortedRows.first()
-                var previous = runStart
-                fun flushRun(startRow: Int, endRow: Int) {
-                    val left = (width - (column + 1) * model.cellWidth).coerceAtLeast(0f) - scrollX
-                    val top = (startRow * model.cellHeight).coerceAtLeast(0f) - scrollY
-                    val right = left + model.cellWidth
-                    val bottom = top + ((endRow - startRow + 1) * model.cellHeight)
-                    canvas.drawRect(left, top, right, bottom, highlightPaint)
-                }
-                for (i in 1 until sortedRows.size) {
-                    val row = sortedRows[i]
-                    if (row == previous + 1) {
-                        previous = row
-                    } else {
-                        flushRun(runStart, previous)
-                        runStart = row
-                        previous = row
-                    }
-                }
-                flushRun(runStart, previous)
+            val layout = buildVerticalLayout(height) ?: return
+            VerticalSubtitleLayoutEngine.selectionRects(range, width, height, layout, TextPaint(paint)).forEach { rect ->
+                canvas.drawRect(rect.left - scrollX, rect.top - scrollY, rect.right - scrollX, rect.bottom - scrollY, highlightPaint)
             }
         }
 
-        private fun clearVerticalCache() {
+        private fun clearLayoutCache() {
             cachedLayout = null
-            cachedHeight = -1
-            cachedText = ""
-            cachedTextSize = Float.NaN
-            cachedTextColor = Color.TRANSPARENT
-            cachedTypeface = null
-        }
-
-        private fun clearGridCache() {
-            cachedGridModel = null
-            cachedGridHeight = -1
-            cachedGridText = ""
-            cachedGridTextSize = Float.NaN
+            cachedLayoutHeight = -1
+            cachedLayoutText = ""
+            cachedLayoutTextSize = Float.NaN
+            cachedLayoutTypeface = null
         }
 
     }
@@ -772,6 +1056,7 @@ companion object {
         stopSubtitleTicker()
         serviceScope.cancel()
         removeOverlay()
+        destroyFloatingHoshiLookupWebViews()
         super.onDestroy()
     }
 
@@ -810,8 +1095,8 @@ companion object {
                     addView(buildSubtitlePanel(settings))
                 }
                 val params = createOverlayLayoutParams(
-                    x = 0,
-                    y = settings.floatingOverlaySubtitleY.coerceAtLeast(0)
+                    x = settings.floatingOverlaySubtitleX.coerceAtLeast(0),
+                    y = initialSubtitleOverlayY(settings, density)
                 )
                 wm.addView(container, params)
                 rootView = container
@@ -863,6 +1148,15 @@ companion object {
         }
     }
 
+    private fun initialSubtitleOverlayY(settings: AudiobookSettingsConfig, density: Float): Int {
+        val savedY = settings.floatingOverlaySubtitleY.coerceAtLeast(0)
+        if (settings.floatingOverlaySubtitleWritingMode != FloatingSubtitleWritingMode.VERTICAL_RTL) {
+            return savedY
+        }
+        val upperY = (36f * density).roundToInt().coerceAtLeast(0)
+        return savedY.coerceAtMost(upperY)
+    }
+
     private fun buildSubtitlePanel(settings: AudiobookSettingsConfig): LinearLayout {
         val density = resources.displayMetrics.density
         val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
@@ -886,19 +1180,33 @@ companion object {
         val subtitleGestureDetector = GestureDetector(
             this,
             object : GestureDetector.SimpleOnGestureListener() {
+                override fun onDown(e: MotionEvent): Boolean {
+                    Log.d(
+                        FLOATING_SUBTITLE_HIT_LOG_TAG,
+                        "subtitleGesture onDown x=${e.x} y=${e.y} visible=${subtitleTextView?.visibility == View.VISIBLE}"
+                    )
+                    return true
+                }
+
                 override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                    Log.d(
+                        FLOATING_SUBTITLE_HIT_LOG_TAG,
+                        "subtitleGesture onSingleTapConfirmed x=${e.x} y=${e.y} visible=${subtitleTextView?.visibility == View.VISIBLE}"
+                    )
                     handleSubtitleSingleTap(e)
                     return true
                 }
 
                 override fun onDoubleTap(e: MotionEvent): Boolean {
+                    Log.d(
+                        FLOATING_SUBTITLE_HIT_LOG_TAG,
+                        "subtitleGesture onDoubleTap x=${e.x} y=${e.y} visible=${subtitleTextView?.visibility == View.VISIBLE}"
+                    )
                     subtitleControlsVisible = !subtitleControlsVisible
                     subtitleSettingsExpanded = false
                     updateSubtitleControlsVisibility(loadAudiobookSettingsConfig(this@AudiobookFloatingOverlayService))
                     return true
                 }
-
-                override fun onDown(e: MotionEvent): Boolean = true
             }
         )
 
@@ -935,17 +1243,36 @@ companion object {
                     gestureDetector = subtitleGestureDetector,
                     dragAllowed = { !subtitleOverlayLocked },
                     verticalOnly = !verticalWriting,
-                    horizontalOnly = verticalWriting,
+                    horizontalOnly = false,
                     layoutParamsProvider = { windowLayoutParams },
                     hostViewProvider = { rootView },
-                    onPersistPosition = { _, y ->
-                        saveAudiobookFloatingOverlaySubtitlePosition(this@AudiobookFloatingOverlayService, y)
+                    horizontalBoundsProvider = { floatingSubtitleHorizontalBounds() },
+                    onPersistPosition = { x, y ->
+                        saveAudiobookFloatingOverlaySubtitlePosition(this@AudiobookFloatingOverlayService, x, y)
                     }
                 )
             )
             setVerticalLayoutEnabled(verticalWriting)
         }
         subtitleTextView = subtitleText
+        val subtitleVerticalWeb = FloatingVerticalSubtitleWebView(this).apply {
+            visibility = if (verticalWriting) View.VISIBLE else View.GONE
+            setOnTouchListener(
+                OverlayDragTouchListener(
+                    gestureDetector = subtitleGestureDetector,
+                    dragAllowed = { !subtitleOverlayLocked },
+                    verticalOnly = false,
+                    horizontalOnly = false,
+                    layoutParamsProvider = { windowLayoutParams },
+                    hostViewProvider = { rootView },
+                    horizontalBoundsProvider = { floatingSubtitleHorizontalBounds() },
+                    onPersistPosition = { x, y ->
+                        saveAudiobookFloatingOverlaySubtitlePosition(this@AudiobookFloatingOverlayService, x, y)
+                    }
+                )
+            )
+        }
+        subtitleVerticalWebView = subtitleVerticalWeb
         applySubtitleTypography(settings)
         val subtitleFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -967,6 +1294,7 @@ companion object {
                     FrameLayout.LayoutParams.WRAP_CONTENT
                 )
             )
+            addView(subtitleVerticalWeb)
         }
         subtitleFrameView = subtitleFrame
         val controls = LinearLayout(this).apply {
@@ -989,11 +1317,12 @@ companion object {
                     gestureDetector = null,
                     dragAllowed = { !subtitleOverlayLocked },
                     verticalOnly = !verticalWriting,
-                    horizontalOnly = verticalWriting,
+                    horizontalOnly = false,
                     layoutParamsProvider = { windowLayoutParams },
                     hostViewProvider = { rootView },
-                    onPersistPosition = { _, y ->
-                        saveAudiobookFloatingOverlaySubtitlePosition(this@AudiobookFloatingOverlayService, y)
+                    horizontalBoundsProvider = { floatingSubtitleHorizontalBounds() },
+                    onPersistPosition = { x, y ->
+                        saveAudiobookFloatingOverlaySubtitlePosition(this@AudiobookFloatingOverlayService, x, y)
                     }
                 )
             )
@@ -1544,9 +1873,19 @@ companion object {
     }
 
     private fun handleSubtitleSingleTap(event: MotionEvent) {
-        val subtitle = subtitleTextView ?: return
         val settings = loadAudiobookSettingsConfig(this)
         val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
+        val webSubtitle = subtitleVerticalWebView
+        val subtitle = subtitleTextView
+        Log.d(
+            FLOATING_SUBTITLE_HIT_LOG_TAG,
+            "subtitleTap vertical=$verticalWriting x=${event.x} y=${event.y} subtitleVisible=${subtitle?.visibility == View.VISIBLE || webSubtitle?.visibility == View.VISIBLE}"
+        )
+        if (verticalWriting && webSubtitle != null) {
+            webSubtitle.selectAt(event.x, event.y)
+            return
+        }
+        if (subtitle == null) return
         if (verticalWriting && subtitle is VerticalLayoutTextView) {
             val resolved = subtitle.resolveVerticalTap(event.x, event.y) ?: return
             subtitle.logVerticalTapDebug(FLOATING_SUBTITLE_HIT_LOG_TAG, event.x, event.y, resolved)
@@ -1569,12 +1908,16 @@ companion object {
         val offset = layout.getOffsetForHorizontal(line, x)
         val initialRange = IntRange(offset, offset)
         val initialAnchorRect = computeSubtitleAnchorRects(subtitle, initialRange).firstOrNull()
+        Log.d(
+            FLOATING_SUBTITLE_HIT_LOG_TAG,
+            "subtitleAnchor initialRange=${initialRange.first}..${initialRange.last} initialAnchor=${initialAnchorRect?.let { "${it.left},${it.top},${it.right},${it.bottom}" } ?: "none"} layoutLines=${layout.lineCount} subtitleSize=${subtitle.width}x${subtitle.height}"
+        )
         performFloatingLookup(offset, initialAnchorRect)
     }
 
     private fun setSubtitleTextWidthMode(matchParent: Boolean) {
         val widthMode = if (matchParent) FrameLayout.LayoutParams.MATCH_PARENT else FrameLayout.LayoutParams.WRAP_CONTENT
-        listOfNotNull(subtitleTextView, subtitleOutlineTextView).forEach { tv ->
+        listOfNotNull<View>(subtitleTextView, subtitleOutlineTextView).forEach { tv ->
             val lp = (tv.layoutParams as? FrameLayout.LayoutParams) ?: return@forEach
             if (lp.width != widthMode) {
                 lp.width = widthMode
@@ -1585,7 +1928,7 @@ companion object {
 
     private fun setSubtitleTextExactWidth(widthPx: Int) {
         val safeWidth = widthPx.coerceAtLeast(1)
-        listOfNotNull(subtitleTextView, subtitleOutlineTextView).forEach { tv ->
+        listOfNotNull<View>(subtitleTextView, subtitleOutlineTextView).forEach { tv ->
             val lp = (tv.layoutParams as? FrameLayout.LayoutParams) ?: return@forEach
             if (lp.width != safeWidth) {
                 lp.width = safeWidth
@@ -1597,11 +1940,13 @@ companion object {
     private fun setSubtitleTranslationX(dx: Float) {
         subtitleTextView?.translationX = dx
         subtitleOutlineTextView?.translationX = dx
+        subtitleVerticalWebView?.translationX = dx
     }
 
     private fun setSubtitleTranslationY(dy: Float) {
         subtitleTextView?.translationY = dy
         subtitleOutlineTextView?.translationY = dy
+        subtitleVerticalWebView?.translationY = dy
     }
 
     private fun setSubtitleFrameHeight(heightPx: Int?) {
@@ -1664,6 +2009,7 @@ companion object {
     private fun updateSubtitleText(text: String?) {
         val subtitle = subtitleTextView ?: return
         val outline = subtitleOutlineTextView
+        val verticalWeb = subtitleVerticalWebView
         val settings = loadAudiobookSettingsConfig(this)
         val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
         val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleTimeline()
@@ -1687,11 +2033,39 @@ companion object {
             outline?.scrollTo(0, 0)
             outline?.translationX = 0f
             outline?.translationY = 0f
+            verticalWeb?.visibility = View.GONE
+            verticalWeb?.translationX = 0f
+            verticalWeb?.translationY = 0f
+            verticalWeb?.setSelectedSourceRange(null)
             stopSubtitleTicker()
             hideFloatingLookup()
             rootView?.post { alignOverlayWindow(force = true) }
             return
         }
+        if (verticalWriting && verticalWeb != null) {
+            subtitle.animate().cancel()
+            subtitle.text = ""
+            subtitle.visibility = View.GONE
+            outline?.text = ""
+            outline?.visibility = View.GONE
+            verticalWeb.bindText(normalized, settings.floatingOverlaySubtitleColor, settings.floatingOverlaySubtitleSizeSp.toFloat())
+            verticalWeb.visibility = View.VISIBLE
+            verticalWeb.alpha = 1f
+            verticalWeb.translationX = 0f
+            verticalWeb.translationY = 0f
+            verticalWeb.setSelectedSourceRange(floatingLookupSession.getOrNull(0)?.selectedRange)
+            subtitleTickerBasePositionMs = BookReaderFloatingBridge.currentPlaybackPositionMs()
+            subtitleTickerBaseRealtimeMs = SystemClock.uptimeMillis()
+            verticalWeb.post {
+                alignOverlayWindow(force = true)
+                updateSubtitleAutoScroll()
+                if (BookReaderFloatingBridge.isPlaying()) {
+                    startSubtitleTicker()
+                }
+            }
+            return
+        }
+        verticalWeb?.visibility = View.GONE
         if (subtitle.text?.toString() == displayText && subtitle.visibility == View.VISIBLE) {
             // Same cue text can still require a different scroll offset (playhead moved, pause/resume,
             // or overlay refresh). Recompute instead of keeping stale translated position.
@@ -1733,9 +2107,6 @@ companion object {
     private fun updateSubtitleAutoScroll(positionMs: Long = BookReaderFloatingBridge.currentPlaybackPositionMs()) {
         val subtitle = subtitleTextView ?: return
         val outline = subtitleOutlineTextView
-        if (subtitle.visibility != View.VISIBLE) return
-        val text = subtitle.text?.toString().orEmpty()
-        if (text.isBlank()) return
         val settings = loadAudiobookSettingsConfig(this)
         if (!settings.floatingOverlaySubtitleEnabled) return
         val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
@@ -1743,36 +2114,25 @@ companion object {
         val shouldLog = now - lastSubtitleScrollLogAtMs >= 300L
 
         if (verticalWriting) {
+            val web = subtitleVerticalWebView
+            if (web?.visibility != View.VISIBLE) return
             setSubtitleTranslationX(0f)
-            subtitle.setSingleLine(false)
-            subtitle.maxLines = Int.MAX_VALUE
-            subtitle.ellipsize = null
-            subtitle.setHorizontallyScrolling(false)
-            subtitle.gravity = Gravity.CENTER_HORIZONTAL
-            subtitle.textAlignment = View.TEXT_ALIGNMENT_CENTER
-            outline?.setSingleLine(false)
-            outline?.maxLines = Int.MAX_VALUE
-            outline?.ellipsize = null
-            outline?.setHorizontallyScrolling(false)
-            outline?.gravity = Gravity.CENTER_HORIZONTAL
-            outline?.textAlignment = View.TEXT_ALIGNMENT_CENTER
-            // Vertical subtitle scrolling has been removed: always keep normal wrapped vertical layout.
             setSubtitleFrameHeight(null)
             setSubtitleTextWidthMode(matchParent = false)
-            if (subtitle.scrollX != 0 || subtitle.scrollY != 0) subtitle.scrollTo(0, 0)
-            if (outline != null && (outline.scrollX != 0 || outline.scrollY != 0)) outline.scrollTo(0, 0)
             setSubtitleTranslationY(0f)
-            subtitle.requestLayout()
-            outline?.requestLayout()
             if (shouldLog) {
                 Log.d(
                     FLOATING_SUBTITLE_SCROLL_LOG_TAG,
-                    "vertical-static pos=$positionMs textLen=${text.length}"
+                    "vertical-web-static pos=$positionMs view=${web.width}x${web.height}"
                 )
                 lastSubtitleScrollLogAtMs = now
             }
             return
         }
+
+        if (subtitle.visibility != View.VISIBLE) return
+        val text = subtitle.text?.toString().orEmpty()
+        if (text.isBlank()) return
 
         if (!settings.floatingOverlaySubtitleScrollEnabled) {
             setSubtitleTextWidthMode(matchParent = true)
@@ -1887,23 +2247,32 @@ companion object {
     }
 
     private fun applySubtitleSelectionHighlight(selectedRange: IntRange?) {
-        val subtitle = subtitleTextView ?: return
+        val subtitle = subtitleTextView
         val outline = subtitleOutlineTextView
+        val verticalWeb = subtitleVerticalWebView
         val settings = loadAudiobookSettingsConfig(this)
         val baseText = BookReaderFloatingBridge.currentSubtitle()?.trim().orEmpty()
         if (baseText.isBlank()) {
-            subtitle.text = ""
+            subtitle?.text = ""
             outline?.text = ""
+            verticalWeb?.setSelectedSourceRange(null)
             return
         }
         if (settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
-            val display = normalizeFloatingVerticalPunctuationText(baseText)
+            verticalWeb?.bindText(baseText, settings.floatingOverlaySubtitleColor, settings.floatingOverlaySubtitleSizeSp.toFloat())
+            verticalWeb?.setSelectedSourceRange(selectedRange)
+            verticalWeb?.visibility = View.VISIBLE
             (subtitle as? VerticalLayoutTextView)?.setSelectedSourceRange(selectedRange)
             (outline as? VerticalLayoutTextView)?.setSelectedSourceRange(selectedRange)
-            subtitle.text = display
-            outline?.text = display
+            subtitle?.text = ""
+            subtitle?.visibility = View.GONE
+            outline?.text = ""
+            outline?.visibility = View.GONE
             return
         }
+        if (subtitle == null) return
+        verticalWeb?.setSelectedSourceRange(null)
+        verticalWeb?.visibility = View.GONE
         (subtitle as? VerticalLayoutTextView)?.setSelectedSourceRange(null)
         (outline as? VerticalLayoutTextView)?.setSelectedSourceRange(null)
         if (selectedRange == null || selectedRange.first !in baseText.indices) {
@@ -1934,7 +2303,7 @@ companion object {
     ): String {
         if (mode == FloatingSubtitleWritingMode.HORIZONTAL) return text
         val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
-            return normalized
+        return normalized
             .lines()
             .joinToString("\n\n") { line ->
                 line.map { ch ->
@@ -1974,13 +2343,41 @@ companion object {
         if (force || params.x != targetX) {
             params.x = targetX
             runCatching { wm.updateViewLayout(root, params) }
-            saveAudiobookFloatingOverlaySubtitlePosition(this, params.y.coerceAtLeast(0))
+            saveAudiobookFloatingOverlaySubtitlePosition(this, params.x.coerceAtLeast(0), params.y.coerceAtLeast(0))
         }
     }
 
+    private fun floatingSubtitleHorizontalBounds(): IntRange {
+        val screenWidth = resources.displayMetrics.widthPixels
+        val audiobookSettings = loadAudiobookSettingsConfig(this)
+        if (audiobookSettings.floatingOverlaySubtitleWritingMode != FloatingSubtitleWritingMode.VERTICAL_RTL) {
+            val rootWidth = rootView?.width?.takeIf { it > 0 } ?: rootView?.measuredWidth?.takeIf { it > 0 } ?: 0
+            return 0..(screenWidth - rootWidth).coerceAtLeast(0)
+        }
+        val controlsWidth = subtitleControlsRow?.width?.takeIf { it > 0 }
+            ?: subtitleControlsRow?.measuredWidth?.takeIf { it > 0 }
+            ?: 0
+        val subtitleWidth = subtitleVerticalWebView?.width?.takeIf { it > 0 }
+            ?: subtitleVerticalWebView?.measuredWidth?.takeIf { it > 0 }
+            ?: subtitleFrameView?.width?.takeIf { it > 0 }
+            ?: subtitleFrameView?.measuredWidth?.takeIf { it > 0 }
+            ?: 0
+        val visibleWidth = (controlsWidth + subtitleWidth)
+            .takeIf { it > 0 }
+            ?: rootView?.width?.takeIf { it > 0 }
+            ?: rootView?.measuredWidth?.takeIf { it > 0 }
+            ?: 0
+        return 0..(screenWidth - visibleWidth).coerceAtLeast(0)
+    }
+
     private fun computeSubtitleAnchorRects(subtitle: TextView, range: IntRange): List<Rect> {
-        if (subtitle is VerticalLayoutTextView) {
-            return subtitle.computeSelectionRects(range)
+        if (subtitle is VerticalLayoutTextView && subtitle.isVerticalLayoutEnabled()) {
+            val rects = subtitle.computeSelectionRects(range)
+            Log.d(
+                FLOATING_SUBTITLE_HIT_LOG_TAG,
+                "subtitleAnchor vertical range=${range.first}..${range.last} rects=${rects.size} subtitleSize=${subtitle.width}x${subtitle.height}"
+            )
+            return rects
         }
         val layout = subtitle.layout ?: return emptyList()
         val text = subtitle.text ?: return emptyList()
@@ -1993,7 +2390,7 @@ companion object {
         subtitle.getLocationOnScreen(location)
         val leftPadding = location[0].toFloat() + subtitle.totalPaddingLeft
         val topPadding = location[1].toFloat() + subtitle.totalPaddingTop
-        return buildList {
+        val rects = buildList {
             for (line in startLine..endLine) {
                 val lineStart = maxOf(safeStart, layout.getLineStart(line))
                 val lineEndExclusive = minOf(safeEndExclusive, layout.getLineEnd(line))
@@ -2015,104 +2412,174 @@ companion object {
                 )
             }
         }
+        Log.d(
+            FLOATING_SUBTITLE_HIT_LOG_TAG,
+            "subtitleAnchor horizontal range=${range.first}..${range.last} safe=${safeStart}..${safeEndExclusive - 1} lines=${startLine}..${endLine} rects=${rects.size} layoutLines=${layout.lineCount} subtitleSize=${subtitle.width}x${subtitle.height}"
+        )
+        rects.forEachIndexed { index, rect ->
+            Log.d(
+                FLOATING_SUBTITLE_HIT_LOG_TAG,
+                "subtitleAnchor rect[$index]=${rect.left},${rect.top},${rect.right},${rect.bottom}"
+            )
+        }
+        return rects
     }
 
     private fun performFloatingLookup(offset: Int, initialAnchorRect: Rect?) {
         val subtitleText = BookReaderFloatingBridge.currentSubtitle()?.trim()?.takeIf { it.isNotEmpty() } ?: return
-        val settings = loadAudiobookSettingsConfig(this)
-        pausePlaybackForFloatingLookupIfNeeded(settings)
-        val selection = selectLookupScanText(subtitleText, offset) ?: run {
+        val audiobookSettings = loadAudiobookSettingsConfig(this)
+        pausePlaybackForFloatingLookupIfNeeded(audiobookSettings)
+        Log.d(
+            FLOATING_LOOKUP_TAP_LOG_TAG,
+            "floating lookup request offset=$offset subtitleLen=${subtitleText.length} anchor=${initialAnchorRect?.let { "${it.left},${it.top},${it.right},${it.bottom}" } ?: "none"}"
+        )
+        val selection = selectLookupScanText(
+            text = subtitleText,
+            charOffset = offset,
+            stopAtParticleBoundary = false
+        ) ?: run {
+            Log.d(
+                FLOATING_LOOKUP_TAP_LOG_TAG,
+                "floating lookup aborted no_selection offset=$offset subtitleLen=${subtitleText.length}"
+            )
             hideFloatingLookup()
             return
         }
         val term = selection.text.trim().takeIf { it.isNotBlank() } ?: run {
+            Log.d(
+                FLOATING_LOOKUP_TAP_LOG_TAG,
+                "floating lookup aborted blank_term offset=$offset subtitleLen=${subtitleText.length}"
+            )
             hideFloatingLookup()
             return
         }
+        Log.d(
+            FLOATING_LOOKUP_TAP_LOG_TAG,
+            "floating lookup start offset=$offset term='${term.take(24)}' range=${selection.range.first}..${selection.range.last} subtitleLen=${subtitleText.length}"
+        )
         val requestNonce = lookupRequestNonce + 1L
         lookupRequestNonce = requestNonce
         serviceScope.launch {
             val dictionaries = withContext(Dispatchers.IO) {
-                cachedLookupDictionaries ?: loadAvailableDictionaries(this@AudiobookFloatingOverlayService).also {
-                    cachedLookupDictionaries = it
-                }
+                loadFloatingLookupDictionaries()
             }
             if (lookupRequestNonce != requestNonce) return@launch
             if (dictionaries.isEmpty()) {
                 hideFloatingLookup()
                 return@launch
             }
+            val anchorForSelection = initialAnchorRect ?: Rect(
+                left = resources.displayMetrics.widthPixels * 0.5f,
+                top = resources.displayMetrics.heightPixels * 0.45f,
+                right = resources.displayMetrics.widthPixels * 0.5f + 1f,
+                bottom = resources.displayMetrics.heightPixels * 0.45f + 1f
+            )
+            val hoshiSelection = createFloatingHoshiSelection(
+                selectedText = term,
+                subtitleText = subtitleText,
+                selectedRange = selection.range,
+                anchorRect = anchorForSelection
+            )
             val result = withContext(Dispatchers.Default) {
                 runCatching {
-                    computeTapLookupResultsWithWinningCandidate(
-                        context = this@AudiobookFloatingOverlayService,
-                        dictionaries = dictionaries,
-                        query = term
+                    floatingHoshiLookupSession.createPopup(
+                        selection = hoshiSelection,
+                        options = floatingHoshiLookupOptions(audiobookSettings),
                     )
                 }
             }
             if (lookupRequestNonce != requestNonce) return@launch
-            result.onSuccess { computed ->
-                val hits = computed?.hits.orEmpty()
-                if (hits.isEmpty()) {
+            result.onSuccess { popup ->
+                val hoshiResults = popup?.first?.state?.results.orEmpty()
+                Log.d(
+                    FLOATING_LOOKUP_TAP_LOG_TAG,
+                    "floating hoshi lookup result hits=${hoshiResults.size} requestNonce=$requestNonce"
+                )
+                if (hoshiResults.isEmpty()) {
+                    Log.d(
+                        FLOATING_LOOKUP_TAP_LOG_TAG,
+                        "floating lookup result empty term='${term.take(24)}' requestNonce=$requestNonce"
+                    )
+                    applySubtitleSelectionHighlight(null)
                     hideFloatingLookup()
                     return@onSuccess
                 }
-                val matchedLength = hits.firstOrNull { it.matchedLength > 0 }?.matchedLength
-                    ?: computed?.query?.length
+                val matchedLength = popup?.second
+                    ?: hoshiResults.firstOrNull()?.matched?.length
                     ?: term.length
                     ?: 1
                 val trimmedRange = trimSelectionRangeByMatchedLength(selection.range, matchedLength) ?: selection.range
                 val finalSelectionText = subtitleText.substring(trimmedRange.first, trimmedRange.last + 1)
+                val verticalWriting = loadAudiobookSettingsConfig(this@AudiobookFloatingOverlayService)
+                    .floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
+                fun finishRender(selectionRects: List<Rect>) {
+                    if (lookupRequestNonce != requestNonce) return
+                    val anchorRects = initialAnchorRect?.let { listOf(it) }
+                        ?: selectionRects.firstOrNull()?.let { listOf(it) }
+                        ?: emptyList()
+                    Log.d(
+                        FLOATING_LOOKUP_TAP_LOG_TAG,
+                        "floating lookup anchor resolved trimmed=${trimmedRange.first}..${trimmedRange.last} anchorRects=${anchorRects.size} avoidRects=${selectionRects.size} subtitleView=${subtitleTextView?.width ?: -1}x${subtitleTextView?.height ?: -1}"
+                    )
+                    val groupedResults = groupFloatingHoshiResults(hoshiResults, dictionaries).take(3)
+                    val dictionaryStyles = popup?.first?.state?.dictionaryStyles ?: currentDictionaryStyles()
+                    val estimatedAnchorY = anchorRects.maxOfOrNull { it.bottom } ?: (resources.displayMetrics.heightPixels * 0.56f)
+                    val shouldPlaceBelow = estimatedAnchorY <= (resources.displayMetrics.heightPixels / 2f)
+                    val layer = buildFloatingLookupLayer(
+                        term = finalSelectionText,
+                        popupSentence = BookReaderFloatingBridge.currentSubtitle(),
+                        sourceTerm = null,
+                        groupedResults = groupedResults,
+                        selectedRange = trimmedRange,
+                        anchor = anchorRects.takeIf { it.isNotEmpty() }?.let { ReaderLookupAnchor(rects = it) },
+                        avoidAnchor = selectionRects.takeIf { it.isNotEmpty() }?.let { ReaderLookupAnchor(rects = it) },
+                        placeBelow = shouldPlaceBelow,
+                        preferSidePlacement = false,
+                        hoshiResults = hoshiResults,
+                        hoshiDictionaryStyles = dictionaryStyles
+                    )
+                    // New root lookup after scrolling should not reuse stale card positions.
+                    floatingLookupCardPositions.clear()
+                    floatingLookupSession.clear()
+                    floatingLookupSession.push(layer)
+                    applySubtitleSelectionHighlight(trimmedRange)
+                    recordStatisticsLookup(
+                        this@AudiobookFloatingOverlayService,
+                        BookReaderFloatingBridge.currentBookKey()
+                    )
+                    Log.d(
+                        FLOATING_LOOKUP_TAP_LOG_TAG,
+                        "floating lookup render term='${finalSelectionText.take(24)}' matched=$matchedLength anchorRects=${anchorRects.size} placeBelow=$shouldPlaceBelow grouped=${groupedResults.size}"
+                    )
+                    renderFloatingLookupResults(layer)
+                }
+                if (verticalWriting) {
+                    val verticalWeb = subtitleVerticalWebView
+                    if (verticalWeb != null) {
+                        verticalWeb.resolveAnchorRectsForRange(trimmedRange) { resolvedRects ->
+                            finishRender(
+                                resolvedRects.takeIf { it.isNotEmpty() }
+                                    ?: initialAnchorRect?.let { listOf(it) }
+                                    ?: emptyList()
+                            )
+                        }
+                        return@onSuccess
+                    }
+                }
                 val anchorRects = subtitleTextView
                     ?.let { computeSubtitleAnchorRects(it, trimmedRange) }
                     ?.takeIf { it.isNotEmpty() }
                     ?: initialAnchorRect?.let { listOf(it) }
                     ?: emptyList()
-                val groupedResults = groupLookupResultsByTerm(
-                    results = hits,
-                    dictionaryCssByName = dictionaries.associate { it.name to it.stylesCss },
-                    dictionaryPriorityByName = dictionaries.mapIndexed { index, dictionary -> dictionary.name to index }.toMap()
-                ).take(3)
-                val estimatedAnchorY = anchorRects.maxOfOrNull { it.bottom } ?: (resources.displayMetrics.heightPixels * 0.56f)
-                val shouldPlaceBelow = estimatedAnchorY <= (resources.displayMetrics.heightPixels / 2f)
-                val layer = buildFloatingLookupLayer(
-                    term = finalSelectionText,
-                    popupSentence = BookReaderFloatingBridge.currentSubtitle(),
-                    sourceTerm = null,
-                    groupedResults = groupedResults,
-                    selectedRange = trimmedRange,
-                    anchor = anchorRects.takeIf { it.isNotEmpty() }?.let { ReaderLookupAnchor(rects = it) },
-                    placeBelow = shouldPlaceBelow,
-                    preferSidePlacement = false
-                )
-                // New root lookup after scrolling should not reuse stale card positions.
-                floatingLookupCardPositions.clear()
-                floatingLookupSession.clear()
-                floatingLookupSession.push(layer)
-                applySubtitleSelectionHighlight(trimmedRange)
-                renderFloatingLookupResults(layer)
+                finishRender(anchorRects)
             }.onFailure {
+                Log.d(
+                    FLOATING_LOOKUP_TAP_LOG_TAG,
+                    "floating hoshi lookup failed term='${term.take(24)}' error='${it.message.orEmpty().take(80)}'"
+                )
                 renderFloatingLookupError(it.message ?: getString(R.string.bookreader_lookup_failed))
             }
         }
-    }
-
-    private fun renderFloatingLookupLoading(term: String) {
-        applySubtitleSelectionHighlight(floatingLookupSession.getOrNull(0)?.selectedRange)
-        clearFloatingLookupHosts()
-        val layerIndex = floatingLookupSession.lastIndex.coerceAtLeast(0)
-        val layer = buildFloatingLookupLayer(term = term, popupSentence = null, groupedResults = emptyList())
-        val sizeSpec = computeFloatingLookupPopupSizeSpec(
-            windowSize = IntSize(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels),
-            anchor = layer.anchor,
-            placeBelow = layer.placeBelow,
-            preferSidePlacement = layer.preferSidePlacement
-        )
-        val card = createFloatingLookupCard(layerIndex, layer, FloatingCardMode.Loading, sizeSpec.contentMaxHeightPx).apply {
-            layoutParams = FrameLayout.LayoutParams(sizeSpec.widthPx, FrameLayout.LayoutParams.WRAP_CONTENT)
-        }
-        showFloatingLookupHost(layerIndex, layer, card)
     }
 
     private fun renderFloatingLookupError(message: String) {
@@ -2132,15 +2599,134 @@ companion object {
         showFloatingLookupHost(layerIndex, layer, card)
     }
 
+    private fun floatingHoshiLookupOptions(settings: AudiobookSettingsConfig): LookupPopupOptions =
+        LookupPopupOptions(
+            isVertical = false,
+            isFullWidth = false,
+            width = 320,
+            height = 250,
+            swipeToDismiss = true,
+            swipeThreshold = 40,
+            topInset = 0.0,
+            bottomInset = 0.0,
+            dictionarySettings = DictionarySettings(),
+            darkMode = isSystemDarkMode(),
+            eInkMode = false,
+            audioSettings = settings,
+            showRangeSelection = settings.lookupRangeSelectionEnabled,
+            showPlayAudio = settings.lookupPlaybackAudioEnabled,
+            popupActionBar = true,
+        )
+
+    private fun createFloatingHoshiSelection(
+        selectedText: String,
+        subtitleText: String,
+        selectedRange: IntRange,
+        anchorRect: Rect,
+        sentenceOverride: String? = null
+    ): ReaderSelectionData {
+        val densityScale = resources.displayMetrics.density.coerceAtLeast(0.1f)
+        val sourceText = subtitleText.trim().ifBlank { selectedText.trim() }
+        val safeStart = selectedRange.first.coerceIn(0, sourceText.length.coerceAtLeast(1) - 1)
+        val safeEndExclusive = (selectedRange.last + 1).coerceIn(safeStart + 1, sourceText.length.coerceAtLeast(safeStart + 1))
+        val cueSnapshot = BookReaderFloatingBridge.currentCue()
+        val fullSentence = sentenceOverride
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: cueSnapshot?.fullSentenceText?.trim()?.takeIf { it.isNotBlank() }
+            ?: sourceText
+        val sentenceOffset = when {
+            fullSentence === sourceText -> safeStart
+            fullSentence == sourceText -> safeStart
+            else -> {
+                val inSentence = fullSentence.indexOf(sourceText).takeIf { it >= 0 } ?: 0
+                (inSentence + safeStart).coerceIn(0, fullSentence.length.coerceAtLeast(1) - 1)
+            }
+        }
+        val scanText = selectedText.trim().ifBlank {
+            sourceText.substring(safeStart, safeEndExclusive).trim()
+        }.ifBlank { sourceText }
+        return ReaderSelectionData(
+            text = scanText,
+            sentence = fullSentence,
+            rect = ReaderSelectionRect(
+                x = (anchorRect.left / densityScale).toDouble(),
+                y = (anchorRect.top / densityScale).toDouble(),
+                width = ((anchorRect.right - anchorRect.left) / densityScale).coerceAtLeast(1f).toDouble(),
+                height = ((anchorRect.bottom - anchorRect.top) / densityScale).coerceAtLeast(1f).toDouble()
+            ),
+            normalizedOffset = 0,
+            sentenceOffset = sentenceOffset
+        )
+    }
+
+    private fun groupFloatingHoshiResults(
+        results: List<LookupResult>,
+        dictionaries: List<LoadedDictionary>
+    ): List<GroupedLookupResult> {
+        val dictionaryOrder = dictionaries.mapIndexed { index, dictionary -> dictionary.name to index }.toMap()
+        val dictionaryCssByName = dictionaries.associate { it.name to it.stylesCss }
+        val dictionaryCacheKeyByName = dictionaries.associateBy { it.name.trim().lowercase(Locale.ROOT) }
+        val converted = results.mapIndexedNotNull { index, result ->
+            val glossaries = result.term.glossaries
+            val definitions = glossaries
+                .mapNotNull { glossary -> glossaryRawToDefinitionHtmlSql(glossary.glossary).takeIf { it.isNotBlank() } }
+            val normalizedPitch = result.term.pitches
+                .firstOrNull()
+                ?.pitchPositions
+                ?.joinToString(",")
+                ?.ifBlank { null }
+            val normalizedFrequency = result.term.frequencies
+                .firstOrNull()
+                ?.frequencies
+                ?.firstOrNull()
+                ?.displayValue
+                ?.ifBlank { null }
+            if (definitions.isEmpty() && normalizedPitch == null && normalizedFrequency == null) {
+                return@mapIndexedNotNull null
+            }
+            val dictionaryName = glossaries.firstOrNull()?.dictName?.ifBlank { null }
+                ?: dictionaries.firstOrNull()?.name.orEmpty()
+            val entry = DictionaryEntry(
+                term = result.term.expression,
+                reading = result.term.reading.ifBlank { null },
+                definitions = definitions,
+                pitch = normalizedPitch,
+                frequency = normalizedFrequency,
+                dictionary = dictionaryName
+            )
+            val order = dictionaryOrder[dictionaryName] ?: dictionaryOrder.size
+            DictionarySearchResult(
+                entry = entry,
+                score = 100 + (dictionaryOrder.size - order) * 2 - (index / 8),
+                matchedLength = result.matched.length.coerceAtLeast(1),
+                sourceCacheKey = dictionaryCacheKeyByName[dictionaryName.trim().lowercase(Locale.ROOT)]?.cacheKey.orEmpty()
+            )
+        }
+        return groupLookupResultsByTerm(
+            results = converted,
+            dictionaryCssByName = dictionaryCssByName,
+            dictionaryPriorityByName = dictionaryOrder
+        )
+    }
+
     private fun renderFloatingLookupResults(layer: ReaderLookupLayer) {
         applySubtitleSelectionHighlight(floatingLookupSession.getOrNull(0)?.selectedRange)
         if (floatingLookupSession.size == 0) {
+            Log.d(
+                FLOATING_LOOKUP_LOG_TAG,
+                "renderFloatingLookupResults skipped reason=empty_session"
+            )
             clearFloatingLookupHosts()
             return
         }
         val windowSize = IntSize(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
         val activeIndex = floatingLookupSession.lastIndex
         val activeLayer = floatingLookupSession.getOrNull(activeIndex) ?: return
+        Log.d(
+            FLOATING_LOOKUP_LOG_TAG,
+            "renderFloatingLookupResults start activeIndex=$activeIndex sessionSize=${floatingLookupSession.size} anchor=${activeLayer.anchor?.rects?.size ?: 0} placeBelow=${activeLayer.placeBelow} preferSide=${activeLayer.preferSidePlacement}"
+        )
         val cards = floatingLookupSession.layers.mapIndexed { index, item ->
             val sizeSpec = computeFloatingLookupPopupSizeSpec(
                 windowSize = windowSize,
@@ -2148,42 +2734,47 @@ companion object {
                 placeBelow = item.placeBelow,
                 preferSidePlacement = item.preferSidePlacement
             )
-            val card = createFloatingLookupCard(
-                layerIndex = index,
-                layer = item,
-                mode = FloatingCardMode.Results,
-                maxLookupHeightPx = sizeSpec.contentMaxHeightPx
-            ).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    sizeSpec.widthPx,
-                    FrameLayout.LayoutParams.WRAP_CONTENT
-                )
-            }
-            Triple(index, item, card)
+            FloatingLookupRenderItem(index, item, sizeSpec)
         }
+        Log.d(
+            FLOATING_LOOKUP_LOG_TAG,
+            "renderFloatingLookupResults cards=${cards.size} activeIndex=$activeIndex"
+        )
         renderFloatingLookupWindows(cards)
-        maybeAutoPlayFloatingLookup(activeIndex, activeLayer)
     }
 
     private fun renderFloatingLookupWindows(
-        cards: List<Triple<Int, ReaderLookupLayer, View>>
+        cards: List<FloatingLookupRenderItem>
     ) {
         if (cards.isEmpty()) return
         val layout = floatingLayoutConfig()
         val activeIndex = floatingLookupSession.lastIndex
-        val orderedCards = cards.sortedBy { it.first }
-        val visibleLayers = orderedCards.map { it.first }.toSet()
+        val orderedCards = cards.sortedBy { it.layerIndex }
+        val visibleLayers = orderedCards.map { it.layerIndex }.toSet()
         floatingLookupHostViews.keys
             .filterNot { it in visibleLayers }
             .toList()
             .forEach { removeFloatingLookupHost(it) }
 
-        orderedCards.forEach { (layerIndex, layer, card) ->
+        orderedCards.forEach { item ->
+            val layerIndex = item.layerIndex
+            val layer = item.layer
             val signature = floatingHostSignature(layer)
             val existingHost = floatingLookupHostViews[layerIndex]
             val existingSignature = floatingLookupHostSignatures[layerIndex]
             val reuseHost = existingHost != null && existingSignature == signature
             val host = if (reuseHost) existingHost else {
+                val card = createFloatingLookupCard(
+                    layerIndex = layerIndex,
+                    layer = layer,
+                    mode = FloatingCardMode.Results,
+                    maxLookupHeightPx = item.sizeSpec.contentMaxHeightPx
+                ).apply {
+                    layoutParams = FrameLayout.LayoutParams(
+                        item.sizeSpec.widthPx,
+                        FrameLayout.LayoutParams.WRAP_CONTENT
+                    )
+                }
                 FloatingLookupHostLayout(this).apply {
                     clipChildren = false
                     clipToPadding = false
@@ -2191,7 +2782,7 @@ companion object {
                 }
             }
             updateFloatingLookupHostInteraction(host, layerIndex, allowDefinitionLookup = true)
-            val preferredWidth = card.layoutParams?.width?.takeIf { it > 0 }
+            val preferredWidth = item.sizeSpec.widthPx.takeIf { it > 0 }
                 ?: (320 * resources.displayMetrics.density).toInt()
             ensureFloatingHostMeasured(host, preferredWidth)
             val popupSize = IntSize(host.measuredWidth, host.measuredHeight)
@@ -2225,6 +2816,10 @@ companion object {
                 }
                 return@forEach
             }
+            Log.d(
+                FLOATING_LOOKUP_LOG_TAG,
+                "showCandidate layer=$layerIndex popupSize=${popupSize.width}x${popupSize.height} anchor=${layer.anchor?.rects?.size ?: 0} placeBelow=${layer.placeBelow} preferSide=${layer.preferSidePlacement} candidate=${candidate.x},${candidate.y}"
+            )
             val shown = showFloatingLookupHost(
                 layerIndex = layerIndex,
                 layer = layer,
@@ -2486,24 +3081,25 @@ companion object {
         val density = resources.displayMetrics.density
         return FloatingLayoutConfig(
             panelSize = IntSize(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels),
-            gapPx = (10 * density).toInt(),
+            gapPx = (4 * density).toInt(),
             screenPaddingPx = (12 * density).toInt()
         )
     }
 
-    private fun rectBounds(rects: List<IntRect>): IntRect? {
-        if (rects.isEmpty()) return null
-        return IntRect(
-            left = rects.minOf { it.left },
-            top = rects.minOf { it.top },
-            right = rects.maxOf { it.right },
-            bottom = rects.maxOf { it.bottom }
-        )
-    }
-
     private fun buildFloatingAvoidRects(layerIndex: Int, gapPx: Int): List<IntRect> {
-        // Single-layer lookup mode: no cross-layer avoidance needed.
-        return emptyList()
+        return floatingLookupSession.getOrNull(layerIndex)
+            ?.avoidAnchor
+            ?.rects
+            ?.filter { !it.isEmpty }
+            ?.map { rect ->
+                IntRect(
+                    left = rect.left.toInt(),
+                    top = rect.top.toInt(),
+                    right = rect.right.toInt(),
+                    bottom = rect.bottom.toInt()
+                )
+            }
+            .orEmpty()
     }
 
     private fun evaluateFloatingPlacement(
@@ -2557,6 +3153,10 @@ companion object {
     }
 
     private fun clearFloatingLookupHosts() {
+        Log.d(
+            FLOATING_LOOKUP_LOG_TAG,
+            "clearFloatingLookupHosts active=${floatingLookupHostViews.size} positions=${floatingLookupCardPositions.size}"
+        )
         val wm = windowManager
         if (wm != null) {
             floatingLookupHostViews.values.forEach { host ->
@@ -2571,6 +3171,27 @@ companion object {
         floatingLookupHostViews.clear()
         floatingLookupHostSignatures.clear()
         floatingLookupHostSizeListeners.clear()
+    }
+
+    private fun loadFloatingLookupDictionaries(): List<LoadedDictionary> {
+        val version = loadDictionaryDataVersion(this)
+        val cached = cachedLookupDictionaries
+        if (cached != null && cachedLookupDictionariesVersion == version) {
+            return cached
+        }
+        return loadAvailableDictionaries(this).also {
+            cachedLookupDictionaries = it
+            cachedLookupDictionariesVersion = version
+        }
+    }
+
+    private fun destroyFloatingHoshiLookupWebViews() {
+        floatingHoshiLookupWebViews.values.forEach { webView ->
+            (webView.parent as? ViewGroup)?.removeView(webView)
+            runCatching { webView.destroy() }
+        }
+        floatingHoshiLookupWebViews.clear()
+        floatingHoshiLookupHtmlByLayer.clear()
     }
 
     private fun removeFloatingLookupHost(layerIndex: Int) {
@@ -2829,113 +3450,11 @@ companion object {
         return result.filter { it.start <= it.end }
     }
 
-    private fun buildFloatingPopupCandidates(
-        anchorLeft: Int,
-        anchorRight: Int,
-        anchorTop: Int,
-        anchorBottom: Int,
-        popupContentSize: IntSize,
-        maxX: Int,
-        maxY: Int,
-        preferSidePlacement: Boolean,
-        placeBelow: Boolean,
-        gapPx: Int,
-        screenPaddingPx: Int,
-        requireFit: Boolean
-    ): List<IntOffset> {
-        fun candidate(offset: IntOffset): IntOffset? {
-            if (!requireFit) return offset
-            return offset.takeIf {
-                it.x in screenPaddingPx..maxX && it.y in screenPaddingPx..maxY
-            }
-        }
-
-        val anchorCenterX = (anchorLeft + anchorRight) / 2
-        val anchorCenterY = (anchorTop + anchorBottom) / 2
-        val alignedX = anchorLeft.coerceIn(screenPaddingPx, maxX)
-        val alignedY = anchorTop.coerceIn(screenPaddingPx, maxY)
-
-        fun clampX(value: Int): Int = value.coerceIn(screenPaddingPx, maxX)
-        fun clampY(value: Int): Int = value.coerceIn(screenPaddingPx, maxY)
-
-        val verticalXOffsets = listOf(
-            anchorLeft,
-            anchorCenterX - (popupContentSize.width / 2),
-            anchorRight - popupContentSize.width,
-            anchorLeft - (popupContentSize.width / 4),
-            anchorRight - ((popupContentSize.width * 3) / 4),
-            anchorCenterX - (popupContentSize.width / 3),
-            anchorCenterX - ((popupContentSize.width * 2) / 3)
-        ).map(::clampX).distinct()
-
-        val sideYOffsets = listOf(
-            anchorTop,
-            anchorCenterY - (popupContentSize.height / 2),
-            anchorBottom - popupContentSize.height,
-            anchorTop - (popupContentSize.height / 4),
-            anchorBottom - ((popupContentSize.height * 3) / 4),
-            anchorCenterY - (popupContentSize.height / 3),
-            anchorCenterY - ((popupContentSize.height * 2) / 3)
-        ).map(::clampY).distinct()
-
-        val belowY = anchorBottom + gapPx
-        val aboveY = anchorTop - popupContentSize.height - gapPx
-        val rightX = anchorRight + gapPx
-        val leftX = anchorLeft - popupContentSize.width - gapPx
-
-        val verticalCandidates = if (placeBelow) {
-            verticalXOffsets.flatMap { x ->
-                listOf(
-                    IntOffset(x, belowY),
-                    IntOffset(x, aboveY)
-                )
-            }
-        } else {
-            verticalXOffsets.flatMap { x ->
-                listOf(
-                    IntOffset(x, aboveY),
-                    IntOffset(x, belowY)
-                )
-            }
-        }
-        val sideCandidates = sideYOffsets.flatMap { y ->
-            listOf(
-                IntOffset(rightX, y),
-                IntOffset(leftX, y)
-            )
-        }
-        val ordered = if (preferSidePlacement) {
-            sideCandidates + verticalCandidates
-        } else {
-            verticalCandidates + sideCandidates
-        }
-        return ordered.mapNotNull(::candidate)
-    }
-
     private fun computeFloatingLookupGuardPadding(
         gapPx: Int,
         screenPaddingPx: Int
     ): Int {
-        return maxOf(gapPx * 2, screenPaddingPx)
-    }
-
-    private fun floatingCandidateDirection(
-        sourceRect: IntRect,
-        candidate: IntOffset,
-        popupContentSize: IntSize
-    ): FloatingPopupDirection {
-        val candidateRect = IntRect(
-            left = candidate.x,
-            top = candidate.y,
-            right = candidate.x + popupContentSize.width,
-            bottom = candidate.y + popupContentSize.height
-        )
-        return when {
-            candidateRect.left >= sourceRect.right -> FloatingPopupDirection.RIGHT
-            candidateRect.right <= sourceRect.left -> FloatingPopupDirection.LEFT
-            candidateRect.top >= sourceRect.bottom -> FloatingPopupDirection.BELOW
-            else -> FloatingPopupDirection.ABOVE
-        }
+        return 0
     }
 
     private fun expandFloatingRect(rect: IntRect, padding: Int): IntRect {
@@ -2945,10 +3464,6 @@ companion object {
             right = rect.right + padding,
             bottom = rect.bottom + padding
         )
-    }
-
-    private fun floatingRectsOverlap(a: IntRect, b: IntRect): Boolean {
-        return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
     }
 
     private fun floatingRectDistance(a: IntRect, b: IntRect): Int {
@@ -3043,10 +3558,15 @@ companion object {
     }
 
     private fun hideFloatingLookup() {
+        Log.d(
+            FLOATING_LOOKUP_LOG_TAG,
+            "hideFloatingLookup session=${floatingLookupSession.size} hosts=${floatingLookupHostViews.size} positions=${floatingLookupCardPositions.size} paused=$playbackPausedByFloatingLookup"
+        )
         lookupRequestNonce += 1L
         floatingLookupSession.clear()
         floatingLookupCardPositions.clear()
         floatingAnkiDuplicateByKey.clear()
+        floatingAnkiDuplicateNoteIdsByKey.clear()
         floatingAnkiCheckingByKey.clear()
         applySubtitleSelectionHighlight(null)
         clearFloatingLookupHosts()
@@ -3069,7 +3589,6 @@ companion object {
 
     private sealed interface FloatingCardMode {
         data object Results : FloatingCardMode
-        data object Loading : FloatingCardMode
         data class Error(val message: String) : FloatingCardMode
     }
 
@@ -3077,6 +3596,12 @@ companion object {
         val widthPx: Int,
         val contentMaxHeightPx: Int,
         val preferredDirection: FloatingPopupDirection
+    )
+
+    private data class FloatingLookupRenderItem(
+        val layerIndex: Int,
+        val layer: ReaderLookupLayer,
+        val sizeSpec: FloatingLookupPopupSizeSpec
     )
 
     private enum class FloatingPopupDirection {
@@ -3142,6 +3667,7 @@ companion object {
         val isPreviousLayer = layerIndex == floatingLookupSession.lastIndex - 1
         val allowDefinitionLookup = isTopLayer || isPreviousLayer
         val allowCardTapReturn = !isTopLayer
+        val useHoshiWebView = mode == FloatingCardMode.Results && layer.hoshiResults.isNotEmpty()
         val actionState = buildLookupCardActionState(
             sourceTerm = layer.sourceTerm,
             layerIndex = layerIndex,
@@ -3156,14 +3682,19 @@ companion object {
         }
         content.addView(createLookupHeader(layerIndex))
         when (mode) {
-            FloatingCardMode.Loading -> {
-                content.addView(createLookupTitle(layer.selectionText.orEmpty(), reading = null, palette = palette))
-                content.addView(createLookupBodyText(getString(R.string.common_querying), topMarginDp = 8f, palette = palette))
-            }
             is FloatingCardMode.Error -> {
                 content.addView(createLookupBodyText(mode.message, topMarginDp = 0f, palette = palette))
             }
             FloatingCardMode.Results -> {
+                if (layer.hoshiResults.isNotEmpty()) {
+                    content.addView(
+                        createFloatingHoshiLookupWebView(
+                            layerIndex = layerIndex,
+                            layer = layer,
+                            maxLookupHeightPx = maxLookupHeightPx
+                        )
+                    )
+                } else {
                 val presentation = buildLookupPresentation(layer)
                 presentation.forEachIndexed { index, groupedPresentation ->
                     val grouped = groupedPresentation.groupedResult
@@ -3237,24 +3768,29 @@ companion object {
                         }
                     }
                 }
+                }
             }
         }
-        val scrollView = object : ScrollView(this) {
-            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                super.onMeasure(
-                    widthMeasureSpec,
-                    MeasureSpec.makeMeasureSpec(maxLookupHeightPx, MeasureSpec.AT_MOST)
-                )
+        val lookupContentView: View = if (useHoshiWebView) {
+            content
+        } else {
+            object : ScrollView(this) {
+                override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                    super.onMeasure(
+                        widthMeasureSpec,
+                        MeasureSpec.makeMeasureSpec(maxLookupHeightPx, MeasureSpec.AT_MOST)
+                    )
+                }
+            }.apply {
+                overScrollMode = View.OVER_SCROLL_NEVER
+                isVerticalScrollBarEnabled = false
+                addView(content)
             }
-        }.apply {
-            overScrollMode = View.OVER_SCROLL_NEVER
-            isVerticalScrollBarEnabled = false
-            addView(content)
         }
 
         val cardContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(scrollView)
+            addView(lookupContentView)
             addView(createLookupFooter(palette))
         }
 
@@ -3385,6 +3921,7 @@ companion object {
         groupedResults: List<GroupedLookupResult>,
         sourceTerm: String? = null,
         anchor: ReaderLookupAnchor? = null,
+        avoidAnchor: ReaderLookupAnchor? = null,
         placeBelow: Boolean = true,
         preferSidePlacement: Boolean = false,
         selectedRange: IntRange? = null,
@@ -3392,7 +3929,9 @@ companion object {
         highlightedDefinitionRects: List<Rect> = emptyList(),
         highlightedDefinitionNodePathJson: String? = null,
         highlightedDefinitionOffset: Int? = null,
-        highlightedDefinitionLength: Int? = null
+        highlightedDefinitionLength: Int? = null,
+        hoshiResults: List<LookupResult> = emptyList(),
+        hoshiDictionaryStyles: Map<String, String> = emptyMap()
     ): ReaderLookupLayer {
         return buildLookupLayerFromGroupedResults(
             groupedResults = groupedResults,
@@ -3403,6 +3942,7 @@ companion object {
             cueIndex = null,
             anchorOffset = null,
             anchor = anchor,
+            avoidAnchor = avoidAnchor,
             placeBelow = placeBelow,
             preferSidePlacement = preferSidePlacement,
             selectedRange = selectedRange,
@@ -3415,7 +3955,9 @@ companion object {
             highlightedDefinitionLength = highlightedDefinitionLength,
             collapsedSections = emptyMap(),
             autoPlayNonce = System.nanoTime(),
-            autoPlayedKey = null
+            autoPlayedKey = null,
+            hoshiResults = hoshiResults,
+            hoshiDictionaryStyles = hoshiDictionaryStyles
         )
     }
 
@@ -3459,14 +4001,17 @@ companion object {
         inline: Boolean = false
     ): LinearLayout {
         val density = resources.displayMetrics.density
-        val duplicateConfig = loadAnkiDuplicateConfig(this)
-        val allowAddWhenDuplicate = duplicateConfig.action.equals("add", ignoreCase = true)
         val duplicateCheckText = layer.selectionText?.trim()?.takeIf { it.isNotBlank() } ?: grouped.term
         val duplicateKey = normalizeAnkiDuplicateKey(duplicateCheckText)
         ensureFloatingLookupDuplicateState(layerIndex, duplicateKey)
         val hasDuplicateState = floatingAnkiDuplicateByKey.containsKey(duplicateKey)
         val duplicateInAnki = floatingAnkiDuplicateByKey[duplicateKey] == true
+        val duplicateNoteIds = floatingAnkiDuplicateNoteIdsByKey[duplicateKey].orEmpty()
         val checkingDuplicate = floatingAnkiCheckingByKey.contains(duplicateKey) || !hasDuplicateState
+        val duplicateConfig = loadAnkiDuplicateConfig(this)
+        val preventDuplicateAdd = duplicateInAnki &&
+            duplicateConfig.enabled &&
+            !duplicateConfig.action.equals("add", ignoreCase = true)
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END or if (inline) Gravity.TOP else Gravity.CENTER_VERTICAL
@@ -3499,9 +4044,17 @@ companion object {
                     exportFloatingLookupToAnki(grouped, layerIndex, layer)
                 }.apply {
                     (layoutParams as? LinearLayout.LayoutParams)?.marginEnd = 0
-                    isEnabled = (!duplicateInAnki || allowAddWhenDuplicate) && !checkingDuplicate
+                    isEnabled = !preventDuplicateAdd && !checkingDuplicate
                     alpha = if (isEnabled) 1f else 0.55f
                 })
+                if (duplicateInAnki && duplicateNoteIds.isNotEmpty()) {
+                    addView(createActionIconButton(R.drawable.ic_search) {
+                        openAnkiDuplicateNotesInBrowser(this@AudiobookFloatingOverlayService, duplicateNoteIds)
+                    }.apply {
+                        contentDescription = "View duplicate / 查看重复"
+                        alpha = 1f
+                    })
+                }
             }
         }
     }
@@ -3512,13 +4065,180 @@ companion object {
         if (floatingAnkiCheckingByKey.contains(duplicateKey)) return
         floatingAnkiCheckingByKey.add(duplicateKey)
         serviceScope.launch {
-            val duplicated = withContext(Dispatchers.IO) {
-                hasAnkiDuplicateByFirstFieldAsync(this@AudiobookFloatingOverlayService, duplicateKey)
+            val noteIds = withContext(Dispatchers.IO) {
+                findAnkiDuplicateNoteIdsByFirstFieldAsync(this@AudiobookFloatingOverlayService, duplicateKey)
             }
-            floatingAnkiDuplicateByKey[duplicateKey] = duplicated
+            floatingAnkiDuplicateByKey[duplicateKey] = noteIds.isNotEmpty()
+            floatingAnkiDuplicateNoteIdsByKey[duplicateKey] = noteIds
             floatingAnkiCheckingByKey.remove(duplicateKey)
             floatingLookupSession.getOrNull(layerIndex)?.let(::renderFloatingLookupResults)
         }
+    }
+
+    private fun createFloatingHoshiLookupWebView(
+        layerIndex: Int,
+        layer: ReaderLookupLayer,
+        maxLookupHeightPx: Int
+    ): View {
+        val audiobookSettings = loadAudiobookSettingsConfig(this)
+        val html = LookupPopupHtml.render(
+            results = layer.hoshiResults,
+            assets = floatingHoshiLookupAssets,
+            dictionaryStyles = layer.hoshiDictionaryStyles,
+            settings = DictionarySettings(),
+            audioSettings = audiobookSettings,
+            showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
+            showRangeSelection = false,
+            showCloseAllButton = false,
+            swipeToDismiss = true,
+            swipeThreshold = 40,
+            backgroundColorCss = "transparent",
+            darkMode = isSystemDarkMode(),
+            eInkMode = false,
+            hideUntilContentReady = true,
+        )
+        var popupWebView: WebView? = null
+        val existingWebView = floatingHoshiLookupWebViews[layerIndex] as? FloatingHoshiLookupWebView
+        val existingTag = existingWebView?.tag as? FloatingHoshiLookupWebViewTag
+        val callbackHolder = existingTag?.callbackHolder ?: PopupWebViewCallbackHolder(PopupWebViewCallbacks())
+        val resultsHolder = existingTag?.resultsHolder ?: PopupLookupResultsHolder(emptyList())
+        val callbacks = PopupWebViewCallbacks(
+            onSwipeDismiss = { closeFloatingLookupLayer(layerIndex) },
+            onTapOutside = {},
+            onImageTap = { src ->
+                Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "floating hoshi imageTap src=$src")
+                popupWebView?.evaluateJavascript(
+                    "if(window.showImagePreview){window.showImagePreview(${JSONObject.quote(src)}, '');}",
+                    null
+                )
+            },
+            onMineEntry = { content -> exportFloatingHoshiLookupEntryToAnki(content, layer) },
+            onDuplicateCheck = { expression ->
+                runBlocking {
+                    withContext(Dispatchers.IO) {
+                        checkAnkiDuplicateByFirstFieldAsync(this@AudiobookFloatingOverlayService, expression)
+                    }
+                }
+            },
+            onViewDuplicate = { noteIds ->
+                openAnkiDuplicateNotesInBrowser(this@AudiobookFloatingOverlayService, noteIds)
+            },
+            onPlayWordAudio = { _url, term, reading ->
+                if (!term.isNullOrBlank()) {
+                    playLookupAudioForTerm(
+                        context = this@AudiobookFloatingOverlayService,
+                        term = term,
+                        reading = reading,
+                        settings = audiobookSettings
+                    )
+                }
+            },
+            onCloseAll = { hideFloatingLookup() },
+            onTextSelected = { selection -> pushFloatingHoshiRecursiveLookup(layerIndex, selection) },
+            onLookupRedirect = { query ->
+                floatingHoshiLookupSession.lookup(
+                    query,
+                    moe.tekuza.m9player.hoshi.features.dictionary.DictionarySettings().maxResults,
+                    moe.tekuza.m9player.hoshi.features.dictionary.DictionarySettings().scanLength,
+                )
+            },
+            onLookupRedirected = { selection, _ -> pushFloatingHoshiRecursiveLookup(layerIndex, selection) },
+            onContentReady = { scheduleFloatingLookupHostReposition(layerIndex, delayMs = 0L, reason = "hoshiContentReady") }
+        )
+        callbackHolder.callbacks = callbacks
+        resultsHolder.results = layer.hoshiResults
+        val webView = existingWebView ?: FloatingHoshiLookupWebView(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+            overScrollMode = WebView.OVER_SCROLL_IF_CONTENT_SCROLLS
+            isVerticalScrollBarEnabled = true
+            isHorizontalScrollBarEnabled = true
+            isLongClickable = false
+            isHapticFeedbackEnabled = false
+            isSoundEffectsEnabled = false
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.allowFileAccess = true
+            settings.allowFileAccessFromFileURLs = true
+            settings.allowUniversalAccessFromFileURLs = true
+            settings.allowContentAccess = true
+            settings.blockNetworkLoads = true
+            settings.blockNetworkImage = false
+            settings.loadsImagesAutomatically = true
+            settings.offscreenPreRaster = true
+            settings.builtInZoomControls = false
+            settings.displayZoomControls = false
+            settings.setSupportZoom(false)
+            webViewClient = PopupMessageWebViewClient(
+                callbackHolder = callbackHolder,
+                assets = floatingHoshiLookupAssets
+            )
+            addJavascriptInterface(
+                PopupWebViewBridge(
+                    webView = this,
+                    callbackHolder = callbackHolder,
+                    lookupResultsHolder = resultsHolder
+                ),
+                "HoshiPopup"
+            )
+            tag = FloatingHoshiLookupWebViewTag(callbackHolder, resultsHolder)
+            floatingHoshiLookupWebViews[layerIndex] = this
+        }
+        popupWebView = webView
+        (webView.parent as? ViewGroup)?.removeView(webView)
+        (webView as? FloatingHoshiLookupWebView)?.maxLookupHeightPx = maxLookupHeightPx
+        webView.requestLayout()
+        if (floatingHoshiLookupHtmlByLayer[layerIndex] != html) {
+            floatingHoshiLookupHtmlByLayer[layerIndex] = html
+            webView.scrollTo(0, 0)
+            webView.loadDataWithBaseURL("https://hoshi.local/popup/", html, "text/html", "utf-8", null)
+        }
+        return webView
+    }
+
+    private fun pushFloatingHoshiRecursiveLookup(
+        sourceLayerIndex: Int,
+        selection: ReaderSelectionData
+    ): Int? {
+        val version = loadDictionaryDataVersion(this)
+        val dictionaries = cachedLookupDictionaries
+            ?.takeIf { it.isNotEmpty() && cachedLookupDictionariesVersion == version }
+            ?: loadFloatingLookupDictionaries().takeIf { it.isNotEmpty() }
+            ?: return null
+        val settings = loadAudiobookSettingsConfig(this)
+        val popup = floatingHoshiLookupSession.createPopup(
+            selection = selection,
+            options = floatingHoshiLookupOptions(settings).copy(showRangeSelection = false),
+        ) ?: return null
+        val hoshiResults = popup.first.state.results
+        val groupedResults = groupFloatingHoshiResults(hoshiResults, dictionaries).take(3)
+        val density = resources.displayMetrics.density.coerceAtLeast(0.1f)
+        val rect = selection.rect
+        val anchorRect = Rect(
+            left = (rect.x * density).toFloat(),
+            top = (rect.y * density).toFloat(),
+            right = ((rect.x + rect.width) * density).toFloat(),
+            bottom = ((rect.y + rect.height) * density).toFloat()
+        )
+        val estimatedAnchorY = anchorRect.bottom
+        val shouldPlaceBelow = estimatedAnchorY <= (resources.displayMetrics.heightPixels / 2f)
+        val currentLayer = floatingLookupSession.getOrNull(sourceLayerIndex)
+        truncateFloatingLookupLayersTo(sourceLayerIndex, render = false)
+        floatingLookupSession.push(
+            buildFloatingLookupLayer(
+                term = hoshiResults.firstOrNull()?.matched?.takeIf { it.isNotBlank() } ?: selection.text,
+                popupSentence = selection.sentence,
+                sourceTerm = currentLayer?.selectionText,
+                groupedResults = groupedResults,
+                anchor = ReaderLookupAnchor(listOf(anchorRect)),
+                placeBelow = shouldPlaceBelow,
+                preferSidePlacement = false,
+                selectedRange = currentLayer?.selectedRange,
+                hoshiResults = hoshiResults,
+                hoshiDictionaryStyles = popup.first.state.dictionaryStyles
+            )
+        )
+        floatingLookupSession.getOrNull(floatingLookupSession.lastIndex)?.let(::renderFloatingLookupResults)
+        return popup.second
     }
 
     private fun createLookupDefinitionWebView(
@@ -3596,6 +4316,10 @@ companion object {
                             downY = event.y
                             moved = false
                             swipeCloseTriggered = false
+                            Log.d(
+                                FLOATING_LOOKUP_TAP_LOG_TAG,
+                                "definitionTouch down layer=$layerIndex key=$definitionKey x=${event.x} y=${event.y}"
+                            )
                         }
                         MotionEvent.ACTION_MOVE -> {
                             val dx = event.x - downX
@@ -3618,6 +4342,10 @@ companion object {
                         }
                         MotionEvent.ACTION_UP -> {
                             if (swipeCloseTriggered) return true
+                            Log.d(
+                                FLOATING_LOOKUP_TAP_LOG_TAG,
+                                "definitionTouch up layer=$layerIndex key=$definitionKey moved=$moved x=${event.x} y=${event.y}"
+                            )
                             if (!moved) {
                                 val effectiveScale = this@apply.scale.takeIf { it.isFinite() && it > 0f } ?: 1f
                                 val clientX = event.x / effectiveScale
@@ -3882,11 +4610,19 @@ companion object {
             textSize = settings.floatingOverlaySubtitleSizeSp.toFloat()
             setTextColor(settings.floatingOverlaySubtitleColor)
             typeface = customTypeface ?: Typeface.DEFAULT
+            visibility = if (verticalWriting) View.GONE else visibility
             if (verticalWriting) {
                 setShadowLayer(0f, 0f, 0f, 0)
             } else {
                 setShadowLayer(0f, 0f, 0f, 0)
             }
+        }
+        subtitleVerticalWebView?.apply {
+            visibility = if (verticalWriting) visibility else View.GONE
+            applyTypography(
+                settings.floatingOverlaySubtitleColor,
+                settings.floatingOverlaySubtitleSizeSp.toFloat()
+            )
         }
         subtitleOutlineTextView?.apply {
             textSize = settings.floatingOverlaySubtitleSizeSp.toFloat()
@@ -3960,6 +4696,23 @@ companion object {
             layoutParams = LinearLayout.LayoutParams(sizePx, sizePx)
             scaleType = ImageView.ScaleType.CENTER
             setPadding(sizePx / 5, sizePx / 5, sizePx / 5, sizePx / 5)
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun createActionIconButton(iconRes: Int, onClick: () -> Unit): ImageButton {
+        val density = resources.displayMetrics.density
+        val widthPx = (44 * density).toInt()
+        val heightPx = (34 * density).toInt()
+        return ImageButton(this).apply {
+            setImageResource(iconRes)
+            background = createRoundedBackground(0x22151515, cornerDp = 14f, strokeColor = 0x22FFFFFF)
+            setColorFilter(0xFFFFFFFF.toInt())
+            layoutParams = LinearLayout.LayoutParams(widthPx, heightPx).apply {
+                marginEnd = (8 * density).toInt()
+            }
+            scaleType = ImageView.ScaleType.CENTER
+            setPadding(widthPx / 4, heightPx / 5, widthPx / 4, heightPx / 5)
             setOnClickListener { onClick() }
         }
     }
@@ -4130,6 +4883,7 @@ companion object {
         subtitleFrameView = null
         subtitleTextView = null
         subtitleOutlineTextView = null
+        subtitleVerticalWebView = null
         subtitleControlsRow = null
         subtitleSettingsPanel = null
         subtitleSettingsInlineHost = null
@@ -4188,9 +4942,7 @@ companion object {
             lookupRequestNonce = requestNonce
             val currentLayer = floatingLookupSession.getOrNull(sourceLayerIndex) ?: return@launch
             val dictionaries = withContext(Dispatchers.IO) {
-                cachedLookupDictionaries ?: loadAvailableDictionaries(this@AudiobookFloatingOverlayService).also {
-                    cachedLookupDictionaries = it
-                }
+                loadFloatingLookupDictionaries()
             }
             Log.d(
                 FLOATING_LOOKUP_TAP_LOG_TAG,
@@ -4201,30 +4953,40 @@ companion object {
                 hideFloatingLookup()
                 return@launch
             }
+            val anchorRect = tapData.screenRect ?: tapData.screenCharRects.firstOrNull() ?: Rect(
+                left = resources.displayMetrics.widthPixels * 0.5f,
+                top = resources.displayMetrics.heightPixels * 0.45f,
+                right = resources.displayMetrics.widthPixels * 0.5f + 1f,
+                bottom = resources.displayMetrics.heightPixels * 0.45f + 1f
+            )
+            val recursiveText = tapData.scanText.ifBlank { tapData.text }.ifBlank { term }
+            val hoshiSelection = createFloatingHoshiSelection(
+                selectedText = term,
+                subtitleText = recursiveText,
+                selectedRange = 0 until term.length.coerceAtLeast(1),
+                anchorRect = anchorRect,
+                sentenceOverride = tapData.sentence.trim().ifBlank { recursiveText }
+            )
             val result = withContext(Dispatchers.Default) {
                 runCatching {
-                    executeRecursiveLookupQuery(
-                        context = this@AudiobookFloatingOverlayService,
-                        dictionaries = dictionaries,
-                        term = term,
-                        tapSource = tapData.tapSource,
-                        sourceDictionaryName = lookupDictionaryNameFromDefinitionKey(definitionKey),
-                        sourceDictionaryCacheKey = tapData.lookupDictionaryCacheKey
+                    floatingHoshiLookupSession.createPopup(
+                        selection = hoshiSelection,
+                        options = floatingHoshiLookupOptions(settings),
                     )
                 }
             }
             if (lookupRequestNonce != requestNonce) return@launch
-            result.onSuccess { queryResult ->
-                val hits = queryResult.hits
-                val matchedLength = hits.firstOrNull { it.matchedLength > 0 }?.matchedLength
-                    ?: queryResult.term.length
+            result.onSuccess { popup ->
+                val hoshiResults = popup?.first?.state?.results.orEmpty()
+                val matchedLength = popup?.second
+                    ?: hoshiResults.firstOrNull()?.matched?.length
                     ?: term.length
                     ?: 1
                 Log.d(
                     FLOATING_LOOKUP_TAP_LOG_TAG,
-                    "recursive result hits=${hits.size} term=$term matched=$matchedLength tapSource=${tapData.tapSource}"
+                    "recursive hoshi result hits=${hoshiResults.size} term=$term matched=$matchedLength tapSource=${tapData.tapSource}"
                 )
-                if (hits.isEmpty()) {
+                if (hoshiResults.isEmpty()) {
                     if (isEntryLikeTap) {
                         Log.d(
                             FLOATING_LOOKUP_TAP_LOG_TAG,
@@ -4289,11 +5051,8 @@ companion object {
                     resolvedAnchorFromRects != null -> "resolvedRects"
                     else -> "none"
                 }
-                val groupedResults = groupLookupResultsByTerm(
-                    results = hits,
-                    dictionaryCssByName = dictionaries.associate { it.name to it.stylesCss },
-                    dictionaryPriorityByName = dictionaries.mapIndexed { index, dictionary -> dictionary.name to index }.toMap()
-                ).take(3)
+                val groupedResults = groupFloatingHoshiResults(hoshiResults, dictionaries).take(3)
+                val dictionaryStyles = popup?.first?.state?.dictionaryStyles ?: currentDictionaryStyles()
                 truncateFloatingLookupLayersTo(sourceLayerIndex, render = false)
                 Log.d(
                     FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG,
@@ -4323,8 +5082,10 @@ companion object {
                     groupedResults = groupedResults,
                     anchor = popupAnchorRects?.let { ReaderLookupAnchor(it) },
                     placeBelow = shouldPlaceBelow,
-                    preferSidePlacement = true,
-                    selectedRange = currentLayer.selectedRange
+                    preferSidePlacement = false,
+                    selectedRange = currentLayer.selectedRange,
+                    hoshiResults = hoshiResults,
+                    hoshiDictionaryStyles = dictionaryStyles
                 )
                 // Single-visible-card mode with history stack: keep previous layers for back navigation.
                 floatingLookupSession.push(layer)
@@ -4433,32 +5194,85 @@ companion object {
         return ankiExportResultMessage(this, classifyAnkiExportFailure(this, error))
     }
 
-    private fun maybeAutoPlayFloatingLookup(layerIndex: Int, layer: ReaderLookupLayer) {
+    private fun exportFloatingHoshiLookupEntryToAnki(content: String, layer: ReaderLookupLayer): Boolean {
+        Log.d("AnkiExportDebug", "floatingHoshiExport rawContentLen=${content.length} rawPrefix=${content.take(120)}")
+        val payload = runCatching { JSONObject(content) }.getOrNull() ?: return false
+        val expression = payload.optString("expression").trim().ifBlank {
+            payload.optString("matched").trim()
+        }
+        if (expression.isBlank()) return false
+        val cueSnapshot = BookReaderFloatingBridge.currentCue() ?: return false
         val settings = loadAudiobookSettingsConfig(this)
-        if (!settings.lookupPlaybackAudioEnabled || !settings.lookupPlaybackAudioAutoPlay) return
-        val target = layer.groupedResults.firstOrNull() ?: return
-        val key = "${layer.autoPlayNonce}|${target.term}|${target.reading.orEmpty()}"
-        if (layer.autoPlayedKey == key) return
-        floatingLookupSession.replaceAt(layerIndex) { current ->
-            current.copy(autoPlayedKey = key)
+        val reading = payload.optString("reading").trim().takeIf { it.isNotBlank() }
+        val glossary = payload.optString("glossary").trim().ifBlank {
+            payload.optString("glossaryFirst").trim().ifBlank { expression }
         }
-        playLookupAudioForTerm(
-            context = this,
-            term = target.term,
-            reading = target.reading,
-            settings = settings
-        ) { error ->
-            Toast.makeText(this, error.take(160), Toast.LENGTH_SHORT).show()
+        val frequency = payload.optString("frequenciesHtml").trim().ifBlank {
+            payload.optString("freqHarmonicRank").trim()
         }
+        val pitch = payload.optString("pitchCategories").trim().ifBlank {
+            payload.optString("pitchPositions").trim()
+        }
+        val dictionaryName = payload.optString("selectedDictionary").trim()
+        val sentence = cueSnapshot.fullSentenceText ?: cueSnapshot.text
+        val exportResult = runBlocking {
+            withContext(Dispatchers.IO) {
+                val preparedLookupAudio = prepareLookupAudioForAnkiExport(
+                    context = this@AudiobookFloatingOverlayService,
+                    term = expression,
+                    reading = reading,
+                    settings = settings
+                )
+                try {
+                    addLookupDefinitionToAnkiShared(
+                        context = this@AudiobookFloatingOverlayService,
+                        cueText = cueSnapshot.text,
+                        cueStartMs = cueSnapshot.fullSentenceStartMs ?: cueSnapshot.startMs,
+                        cueEndMs = cueSnapshot.fullSentenceEndMs ?: cueSnapshot.endMs,
+                        audioUri = cueSnapshot.audioUri?.let { runCatching { Uri.parse(it) }.getOrNull() },
+                        lookupAudioUri = preparedLookupAudio?.uri,
+                        bookTitle = cueSnapshot.bookTitle,
+                        entry = DictionaryEntry(
+                            term = expression,
+                            reading = reading,
+                            definitions = listOf(glossary),
+                            pitch = pitch.ifBlank { null },
+                            frequency = frequency.ifBlank { null },
+                            dictionary = dictionaryName.ifBlank { expression }
+                        ),
+                        definition = glossary,
+                        glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
+                        dictionaryCss = layer.hoshiDictionaryStyles[dictionaryName],
+                        groupedDictionaries = emptyList(),
+                        popupSelectionText = payload.optString("popupSelectionText").trim().takeIf { it.isNotBlank() }
+                            ?: layer.selectionText,
+                        sentenceOverride = sentence,
+                        lookupTermOverride = expression
+                    )
+                } finally {
+                    preparedLookupAudio?.cleanup?.invoke()
+                }
+            }
+        }
+        val message = ankiExportResultMessage(this, exportResult)
+        if (message.isNotBlank() && exportResult !is AnkiExportResult.DuplicateSkipped) {
+            Toast.makeText(
+                this,
+                message.take(220),
+                if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+            ).show()
+        }
+        return exportResult == AnkiExportResult.Added || exportResult is AnkiExportResult.DuplicateSkipped
     }
 
     private fun rebuildOverlay() {
         val settings = loadAudiobookSettingsConfig(this)
+        val subtitleX = windowLayoutParams?.x ?: settings.floatingOverlaySubtitleX
         val subtitleY = windowLayoutParams?.y ?: settings.floatingOverlaySubtitleY
         val bubbleX = bubbleWindowLayoutParams?.x ?: settings.floatingOverlayBubbleX
         val bubbleY = bubbleWindowLayoutParams?.y ?: settings.floatingOverlayBubbleY
         removeOverlay()
-        saveAudiobookFloatingOverlaySubtitlePosition(this, subtitleY)
+        saveAudiobookFloatingOverlaySubtitlePosition(this, subtitleX, subtitleY)
         saveAudiobookFloatingOverlayBubblePosition(this, bubbleX, bubbleY)
         ensureOverlayVisible()
     }

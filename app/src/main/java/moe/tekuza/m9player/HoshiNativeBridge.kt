@@ -7,6 +7,8 @@ internal data class HoshiImportResult(
     val success: Boolean,
     val title: String,
     val termCount: Long,
+    val metaCount: Long,
+    val mediaCount: Long,
     val dictPath: String,
     val errors: List<String>
 )
@@ -53,6 +55,8 @@ internal object HoshiNativeBridge {
                 success = false,
                 title = "",
                 termCount = 0L,
+                metaCount = 0L,
+                mediaCount = 0L,
                 dictPath = "",
                 errors = listOf("Native hoshidicts library not loaded")
             )
@@ -64,6 +68,8 @@ internal object HoshiNativeBridge {
                 success = false,
                 title = "",
                 termCount = 0L,
+                metaCount = 0L,
+                mediaCount = 0L,
                 dictPath = "",
                 errors = listOf(throwable.message ?: "native import failed")
             )
@@ -131,6 +137,8 @@ internal object HoshiNativeBridge {
                 success = json.optBoolean("success", false),
                 title = json.optString("title").trim(),
                 termCount = json.optLong("termCount", 0L).coerceAtLeast(0L),
+                metaCount = json.optLong("metaCount", 0L).coerceAtLeast(0L),
+                mediaCount = json.optLong("mediaCount", 0L).coerceAtLeast(0L),
                 dictPath = json.optString("dictPath").trim(),
                 errors = errors
             )
@@ -139,6 +147,8 @@ internal object HoshiNativeBridge {
                 success = false,
                 title = "",
                 termCount = 0L,
+                metaCount = 0L,
+                mediaCount = 0L,
                 dictPath = "",
                 errors = listOf("Invalid native import result")
             )

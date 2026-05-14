@@ -1,5 +1,8 @@
 package moe.tekuza.m9player
 
+import android.content.Context
+import android.os.SystemClock
+
 object BookReaderFloatingBridge {
     data class CueSnapshot(
         val text: String,
@@ -79,6 +82,18 @@ object BookReaderFloatingBridge {
     private var playbackSpeedSnapshot: Float = 1f
     @Volatile
     private var cueLoopEnabledSnapshot: Boolean = false
+    @Volatile
+    private var statisticsContext: Context? = null
+    @Volatile
+    private var currentBookKeySnapshot: String? = null
+    private var lastListeningRealtimeMs: Long? = null
+    private var pendingListeningMs: Long = 0L
+
+    private data class ListeningStat(
+        val context: Context,
+        val bookKey: String,
+        val elapsedMs: Long
+    )
 
     fun attach(controller: Controller) {
         synchronized(this) {
@@ -95,8 +110,10 @@ object BookReaderFloatingBridge {
     }
 
     fun detach(controller: Controller) {
+        val listeningStat: ListeningStat?
         synchronized(this) {
             if (this.controller === controller) {
+                listeningStat = flushListeningStatLocked()
                 this.controller = null
                 playingSnapshot = false
                 favoriteSnapshot = false
@@ -104,8 +121,13 @@ object BookReaderFloatingBridge {
                 cueSnapshot = null
                 subtitleTrackAvailableSnapshot = false
                 cueLoopEnabledSnapshot = false
+                currentBookKeySnapshot = null
+                resetListeningStatLocked()
+            } else {
+                listeningStat = null
             }
         }
+        listeningStat?.let { recordStatisticsListening(it.context, it.bookKey, it.elapsedMs) }
         notifyPlaybackState(playingSnapshot)
         notifyFavoriteState(favoriteSnapshot)
         notifySubtitle(subtitleSnapshot)
@@ -193,10 +215,18 @@ object BookReaderFloatingBridge {
 
     fun notifyPlaybackState(isPlaying: Boolean) {
         val snapshot: List<PlaybackStateListener>
+        val listeningStat: ListeningStat?
         synchronized(this) {
             playingSnapshot = isPlaying
+            listeningStat = if (isPlaying) {
+                lastListeningRealtimeMs = SystemClock.elapsedRealtime()
+                null
+            } else {
+                flushListeningStatLocked()
+            }
             snapshot = listeners.toList()
         }
+        listeningStat?.let { recordStatisticsListening(it.context, it.bookKey, it.elapsedMs) }
         snapshot.forEach { it.onPlaybackStateChanged(isPlaying) }
     }
 
@@ -210,6 +240,20 @@ object BookReaderFloatingBridge {
     fun currentPlaybackPositionMs(): Long = playbackPositionSnapshot
     fun currentPlaybackSpeed(): Float = playbackSpeedSnapshot
     fun isCueLoopEnabled(): Boolean = cueLoopEnabledSnapshot
+    fun currentBookKey(): String? = currentBookKeySnapshot
+
+    fun setCurrentBookKey(context: Context, bookKey: String?) {
+        val normalized = bookKey?.trim()?.takeIf { it.isNotBlank() }
+        val listeningStat: ListeningStat?
+        synchronized(this) {
+            val changed = currentBookKeySnapshot != normalized
+            listeningStat = if (changed) flushListeningStatLocked() else null
+            statisticsContext = context.applicationContext
+            currentBookKeySnapshot = normalized
+            if (changed) resetListeningStatLocked()
+        }
+        listeningStat?.let { recordStatisticsListening(it.context, it.bookKey, it.elapsedMs) }
+    }
 
     fun setCurrentAudioUri(audioUri: String?) {
         synchronized(this) {
@@ -271,11 +315,51 @@ object BookReaderFloatingBridge {
     fun notifyPlaybackPosition(positionMs: Long) {
         val normalized = positionMs.coerceAtLeast(0L)
         val snapshot: List<PlaybackPositionListener>
+        val listeningStat: ListeningStat?
         synchronized(this) {
             playbackPositionSnapshot = normalized
             snapshot = playbackPositionListeners.toList()
+            listeningStat = accumulateListeningStatLocked(SystemClock.elapsedRealtime())
         }
+        listeningStat?.let { recordStatisticsListening(it.context, it.bookKey, it.elapsedMs) }
         snapshot.forEach { it.onPlaybackPositionChanged(normalized) }
+    }
+
+    private fun accumulateListeningStatLocked(nowMs: Long): ListeningStat? {
+        val context = statisticsContext
+        val bookKey = currentBookKeySnapshot
+        if (!playingSnapshot || context == null || bookKey.isNullOrBlank()) {
+            resetListeningStatLocked()
+            return null
+        }
+        val last = lastListeningRealtimeMs
+        if (last == null) {
+            lastListeningRealtimeMs = nowMs
+            return null
+        }
+        val elapsed = (nowMs - last).coerceIn(0L, 10_000L)
+        lastListeningRealtimeMs = nowMs
+        if (elapsed <= 0L) return null
+        pendingListeningMs += elapsed
+        if (pendingListeningMs < 2_500L) return null
+        val stat = ListeningStat(context, bookKey, pendingListeningMs)
+        pendingListeningMs = 0L
+        return stat
+    }
+
+    private fun flushListeningStatLocked(): ListeningStat? {
+        val context = statisticsContext
+        val bookKey = currentBookKeySnapshot
+        val elapsed = pendingListeningMs
+        pendingListeningMs = 0L
+        lastListeningRealtimeMs = null
+        if (context == null || bookKey.isNullOrBlank() || elapsed <= 0L) return null
+        return ListeningStat(context, bookKey, elapsed)
+    }
+
+    private fun resetListeningStatLocked() {
+        lastListeningRealtimeMs = null
+        pendingListeningMs = 0L
     }
 
     fun notifyPlaybackSpeed(speed: Float) {

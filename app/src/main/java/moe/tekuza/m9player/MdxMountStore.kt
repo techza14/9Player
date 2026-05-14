@@ -52,6 +52,7 @@ internal fun saveMdxMountState(context: Context, state: MdxMountState) {
         .putString(KEY_ENTRIES_JSON, json.toString())
         .apply()
     invalidateDictionaryLookupCaches()
+    bumpDictionaryDataVersion(context)
     prebuildMountedMdxIndexesAsync(context.applicationContext, normalized)
 }
 

@@ -72,6 +72,28 @@ internal fun ImportGuideDialog(
 }
 
 @Composable
+internal fun AutoUpdateFirstPromptDialog(
+    onSkip: () -> Unit,
+    onEnable: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text(stringResource(R.string.update_first_prompt_title)) },
+        text = { Text(stringResource(R.string.update_first_prompt_message)) },
+        dismissButton = {
+            OutlinedButton(onClick = onSkip) {
+                Text(stringResource(R.string.update_first_prompt_skip))
+            }
+        },
+        confirmButton = {
+            Button(onClick = onEnable) {
+                Text(stringResource(R.string.update_first_prompt_enable))
+            }
+        }
+    )
+}
+
+@Composable
 internal fun ClearCollectionsDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit

@@ -2,6 +2,7 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import android.util.LruCache
 import android.webkit.WebResourceResponse
 import java.io.ByteArrayInputStream
@@ -95,29 +96,50 @@ internal fun loadDictionaryMediaPayload(
     context: Context,
     requestUri: Uri
 ): DictionaryMediaPayload? {
-    val scheme = requestUri.scheme?.lowercase(Locale.ROOT).orEmpty()
-    if (scheme != "dictres" && scheme != "mdictres") return null
-    val key = requestUri.toString()
+    val mappedUri = mapDictionaryMediaRequestUri(requestUri) ?: return null
+    val key = mappedUri.toString()
+    Log.d("BookLookupTap", "media load request uri=$requestUri mapped=$mappedUri key=$key")
     return DictionaryMediaByteCache.getOrLoad(key) {
-        val bundled = openBundledDictionaryResource(context, requestUri)
+        val bundled = openBundledDictionaryResource(context, mappedUri)
         if (bundled != null) {
             bundled.inputStream.use { input ->
                 val bytes = input.readBytes()
+                Log.d(
+                    "BookLookupTap",
+                    "media load bundled hit uri=$mappedUri mime=${bundled.mimeType} bytes=${bytes.size}"
+                )
                 return@getOrLoad DictionaryMediaPayload(
                     mimeType = DictionaryMediaByteCache.normalizeMime(bundled.mimeType),
                     bytes = bytes
                 )
             }
         }
-        val mounted = openMountedMdictResource(context, requestUri) ?: return@getOrLoad null
+        val mounted = openMountedMdictResource(context, mappedUri) ?: return@getOrLoad null
         mounted.inputStream.use { input ->
             val bytes = input.readBytes()
+            Log.d(
+                "BookLookupTap",
+                "media load mounted hit uri=$mappedUri mime=${mounted.mimeType} bytes=${bytes.size}"
+            )
             DictionaryMediaPayload(
                 mimeType = DictionaryMediaByteCache.normalizeMime(mounted.mimeType),
                 bytes = bytes
             )
         }
     }
+}
+
+private fun mapDictionaryMediaRequestUri(requestUri: Uri): Uri? {
+    val scheme = requestUri.scheme?.lowercase(Locale.ROOT).orEmpty()
+    if (scheme == "dictres" || scheme == "mdictres") return requestUri
+    if (scheme != "https" && scheme != "http") return null
+    if (requestUri.host != "hoshi.local") return null
+    if (requestUri.path != "/image") return null
+
+    val dictionary = requestUri.getQueryParameter("dictionary").orEmpty().trim()
+    val mediaPath = requestUri.getQueryParameter("path").orEmpty().trim()
+    if (dictionary.isBlank() || mediaPath.isBlank()) return null
+    return Uri.parse("dictres://$dictionary/${Uri.encode(mediaPath)}")
 }
 
 internal fun clearDictionaryMediaPayloadCache() {
@@ -127,6 +149,7 @@ internal fun clearDictionaryMediaPayloadCache() {
 internal fun buildDictionaryWebResourceResponse(
     payload: DictionaryMediaPayload
 ): WebResourceResponse {
+    Log.d("BookLookupTap", "media response mime=${payload.mimeType} bytes=${payload.bytes.size}")
     val encoding = if (payload.mimeType.startsWith("text/", ignoreCase = true)) "utf-8" else null
     val headers = mutableMapOf(
         "Cache-Control" to "public, max-age=31536000, immutable"

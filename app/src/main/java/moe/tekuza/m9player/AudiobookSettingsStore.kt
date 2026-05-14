@@ -7,6 +7,8 @@ private const val AUDIOBOOK_SETTINGS_PREFS = "audiobook_settings_prefs"
 private const val AUDIOBOOK_SKIP_MILLIS_KEY = "audiobook_skip_millis"
 private const val AUDIOBOOK_FLOATING_OVERLAY_ENABLED_KEY = "audiobook_floating_overlay_enabled"
 private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_ENABLED_KEY = "audiobook_floating_overlay_subtitle_enabled"
+private const val AUDIOBOOK_FLOATING_OVERLAY_SHOW_ON_READER_EXIT_KEY = "audiobook_floating_overlay_show_on_reader_exit"
+private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_X_KEY = "audiobook_floating_overlay_subtitle_x"
 private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_Y_KEY = "audiobook_floating_overlay_subtitle_y"
 private const val AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_X_KEY = "audiobook_floating_overlay_bubble_x"
 private const val AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_Y_KEY = "audiobook_floating_overlay_bubble_y"
@@ -80,6 +82,7 @@ internal data class AudiobookSettingsConfig(
     val seekStepMillis: Long = DEFAULT_AUDIOBOOK_SKIP_MILLIS,
     val floatingOverlayEnabled: Boolean = false,
     val floatingOverlaySubtitleEnabled: Boolean = false,
+    val floatingOverlayShowOnReaderExit: Boolean = false,
     val pausePlaybackOnLookup: Boolean = true,
     val activeCueDisplayAtTop: Boolean = false,
     val lookupPlaybackAudioEnabled: Boolean = false,
@@ -98,6 +101,7 @@ internal data class AudiobookSettingsConfig(
     val floatingOverlaySubtitleScrollEnabled: Boolean = true,
     val floatingOverlaySubtitleWritingMode: FloatingSubtitleWritingMode = FloatingSubtitleWritingMode.HORIZONTAL,
     val bookSubtitleWritingMode: FloatingSubtitleWritingMode = FloatingSubtitleWritingMode.HORIZONTAL,
+    val floatingOverlaySubtitleX: Int = 0,
     val floatingOverlaySubtitleY: Int = 0,
     val floatingOverlayBubbleX: Int = 24,
     val floatingOverlayBubbleY: Int = 0
@@ -129,6 +133,10 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
         floatingOverlayEnabled = prefs.getBoolean(AUDIOBOOK_FLOATING_OVERLAY_ENABLED_KEY, false),
         floatingOverlaySubtitleEnabled = prefs.getBoolean(
             AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_ENABLED_KEY,
+            false
+        ),
+        floatingOverlayShowOnReaderExit = prefs.getBoolean(
+            AUDIOBOOK_FLOATING_OVERLAY_SHOW_ON_READER_EXIT_KEY,
             false
         ),
         pausePlaybackOnLookup = prefs.getBoolean(AUDIOBOOK_PAUSE_ON_LOOKUP_KEY, true),
@@ -171,6 +179,7 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
         bookSubtitleWritingMode = FloatingSubtitleWritingMode.fromStorage(
             prefs.getString(AUDIOBOOK_BOOK_SUBTITLE_WRITING_MODE_KEY, null)
         ),
+        floatingOverlaySubtitleX = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_X_KEY, 0),
         floatingOverlaySubtitleY = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_Y_KEY, 0),
         floatingOverlayBubbleX = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_X_KEY, 24),
         floatingOverlayBubbleY = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_Y_KEY, 0)
@@ -198,17 +207,10 @@ internal fun saveAudiobookSeekStepMillis(context: Context, millis: Long) {
         .apply()
 }
 
-internal fun saveAudiobookFloatingOverlayEnabled(context: Context, enabled: Boolean) {
+internal fun saveAudiobookFloatingOverlayShowOnReaderExit(context: Context, enabled: Boolean) {
     context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
         .edit()
-        .putBoolean(AUDIOBOOK_FLOATING_OVERLAY_ENABLED_KEY, enabled)
-        .apply()
-}
-
-internal fun saveAudiobookFloatingOverlaySubtitleEnabled(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
-        .putBoolean(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_ENABLED_KEY, enabled)
+        .putBoolean(AUDIOBOOK_FLOATING_OVERLAY_SHOW_ON_READER_EXIT_KEY, enabled)
         .apply()
 }
 
@@ -237,6 +239,14 @@ internal fun saveAudiobookActiveCueDisplayAtTop(context: Context, enabled: Boole
 internal fun saveAudiobookFloatingOverlaySubtitlePosition(context: Context, y: Int) {
     context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
         .edit()
+        .putInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_Y_KEY, y)
+        .apply()
+}
+
+internal fun saveAudiobookFloatingOverlaySubtitlePosition(context: Context, x: Int, y: Int) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_X_KEY, x)
         .putInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_Y_KEY, y)
         .apply()
 }

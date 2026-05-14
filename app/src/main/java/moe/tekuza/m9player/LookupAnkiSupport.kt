@@ -13,6 +13,7 @@ internal fun addLookupDefinitionToAnkiShared(
     bookTitle: String?,
     entry: DictionaryEntry,
     definition: String,
+    glossaryFirstHtml: String? = null,
     dictionaryCss: String?,
     groupedDictionaries: List<GroupedLookupDictionary> = emptyList(),
     popupSelectionText: String? = null,
@@ -49,6 +50,7 @@ internal fun addLookupDefinitionToAnkiShared(
         definitions = listOf(definition),
         dictionaryName = entry.dictionary,
         dictionaryCss = dictionaryCss,
+        glossaryFirstHtml = glossaryFirstHtml,
         glossaryByDictionary = groupedDictionaries
             .map { dictionaryGroup ->
                 MinedDictionaryGlossary(

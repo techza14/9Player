@@ -9,7 +9,8 @@ internal data class GlossaryHtmlItem(
 internal fun renderYomitanGlossaryHtml(
     items: List<GlossaryHtmlItem>,
     includeDictionaryLabel: Boolean = true,
-    includeParityCss: Boolean = true
+    includeParityCss: Boolean = true,
+    wrapItemsInList: Boolean = true
 ): String {
     val normalizedItems = items.mapNotNull { item ->
         val defs = item.definitions
@@ -45,52 +46,49 @@ internal fun renderYomitanGlossaryHtml(
         .joinToString(separator = "\n")
         .let { css -> if (css.isBlank()) "" else "<style>$css</style>" }
 
-    val itemsHtml = normalizedItems.joinToString(separator = "") { item ->
+    val itemsHtml = normalizedItems.joinToString(separator = if (wrapItemsInList) "" else "<br>") { item ->
         val dictionaryLabel = item.dictionaryName
         val dictionaryAttr = resolveDictionaryAttr(dictionaryLabel)
         val safeAttr = escapeHtmlAttributeShared(dictionaryAttr)
         val safeLabel = escapeHtmlTextShared(dictionaryLabel)
         val definitions = item.definitions
         if (definitions.size <= 1) {
-            val leadingLabel = if (includeDictionaryLabel && dictionaryLabel.isNotBlank()) {
-                "<i>($safeLabel)</i> "
-            } else {
-                ""
-            }
             val def = definitions.firstOrNull().orEmpty()
             buildGlossaryListItem(
                 dictionaryAttr = safeAttr,
-                leadingLabel = leadingLabel,
-                definition = def
+                leadingLabel = "",
+                definition = def,
+                wrapInListItem = wrapItemsInList
             )
         } else {
             definitions.mapIndexed { index, def ->
-                val leadingLabel = if (includeDictionaryLabel) {
-                    if (dictionaryLabel.isNotBlank()) {
-                        if (index == 0) "<i>(${index + 1}, $safeLabel)</i> " else "<i>(${index + 1})</i> "
-                    } else {
-                        "<i>(${index + 1})</i> "
-                    }
-                } else {
-                    ""
-                }
                 buildGlossaryListItem(
                     dictionaryAttr = safeAttr,
-                    leadingLabel = leadingLabel,
-                    definition = def
+                    leadingLabel = "",
+                    definition = def,
+                    wrapInListItem = wrapItemsInList
                 )
             }.joinToString(separator = "")
         }
     }
 
-    return """
-        <div style="text-align: left;" class="yomitan-glossary">
-            <ol>
+    return if (wrapItemsInList) {
+        """
+            <div style="text-align: left;" class="yomitan-glossary">
+                <ol>
+                    $itemsHtml
+                </ol>
+                $styleBlock
+            </div>
+        """.trimIndent()
+    } else {
+        """
+            <div style="text-align: left;" class="yomitan-glossary">
                 $itemsHtml
-            </ol>
-            $styleBlock
-        </div>
-    """.trimIndent()
+                $styleBlock
+            </div>
+        """.trimIndent()
+    }
 }
 
 internal fun normalizeStructuredContentLikeHoshi(raw: String): String {
@@ -99,8 +97,6 @@ internal fun normalizeStructuredContentLikeHoshi(raw: String): String {
     if (!trimmed.contains("data-sc", ignoreCase = true)) return trimmed
 
     var out = trimmed
-    out = normalizeDataScAttributeNames(out)
-    out = stripNonDashedDataScAttrs(out)
     out = addGlossClass(out, "span", "gloss-sc-span")
     out = addGlossClass(out, "div", "gloss-sc-div")
     out = addGlossClass(out, "table", "gloss-sc-table")
@@ -122,25 +118,6 @@ internal fun normalizeStructuredContentLikeHoshi(raw: String): String {
     )
 
     return if (out.contains("class=\"structured-content\"")) out else "<span class=\"structured-content\">$out</span>"
-}
-
-private fun normalizeDataScAttributeNames(html: String): String {
-    var out = html
-    // 1) Normalize ascii data-sc keys: data-sc-dic_item -> data-sc-dic-item
-    out = out.replace(
-        Regex("""(\sdata-sc-)([A-Za-z0-9_:-]+)(\s*=\s*"[^"]*")""")
-    ) { m ->
-        val prefix = m.groupValues[1]
-        val key = m.groupValues[2].replace('_', '-')
-        val suffix = m.groupValues[3]
-        "$prefix$key$suffix"
-    }
-    // 2) Drop dashed CJK variants (e.g. data-sc-標準), keep canonical data-sc標準.
-    out = out.replace(
-        Regex("""\sdata-sc-[^\x00-\x7F][^\s=]*\s*=\s*"[^"]*""""),
-        ""
-    )
-    return out
 }
 
 internal fun scopeDictionaryCssLikeHoshi(rawCss: String, dictionaryName: String): String {
@@ -460,12 +437,6 @@ private fun addGlossClass(html: String, tag: String, token: String): String {
     }
 }
 
-private fun stripNonDashedDataScAttrs(html: String): String {
-    // Remove attributes like data-scbody/data-scclass/data-schtml, keep canonical dashed form.
-    val nonDashed = Regex("\\sdata-sc(?!-)[A-Za-z0-9_:.]+\\s*=\\s*\"[^\"]*\"", RegexOption.IGNORE_CASE)
-    return html.replace(nonDashed, "")
-}
-
 private fun applyHoshiTableInlineStyles(html: String): String {
     val tableStyle = "table-layout:auto;border-collapse:collapse;"
     val cellStyle = "border-style:solid;padding:0.25em;vertical-align:top;border-width:1px;border-color:currentColor;"
@@ -479,16 +450,37 @@ private fun applyHoshiTableInlineStyles(html: String): String {
 private fun buildGlossaryListItem(
     dictionaryAttr: String,
     leadingLabel: String,
-    definition: String
+    definition: String,
+    wrapInListItem: Boolean = true
 ): String {
     val wrappedContent = if (definition.trimStart().startsWith("<li", ignoreCase = true)) {
-        "<ol>$definition</ol>"
+        if (wrapInListItem) {
+            "<ol>$definition</ol>"
+        } else {
+            extractInnerListItemHtml(definition)
+        }
     } else {
         "<span>$definition</span>"
     }
-    return """
-        <li data-dictionary="$dictionaryAttr">
-            $leadingLabel$wrappedContent
-        </li>
-    """.trimIndent()
+    return if (wrapInListItem) {
+        """
+            <li data-dictionary="$dictionaryAttr">
+                $leadingLabel$wrappedContent
+            </li>
+        """.trimIndent()
+    } else {
+        """
+            <div data-dictionary="$dictionaryAttr">
+                $leadingLabel$wrappedContent
+            </div>
+        """.trimIndent()
+    }
+}
+
+private fun extractInnerListItemHtml(html: String): String {
+    val trimmed = html.trim()
+    val openTagEnd = trimmed.indexOf('>')
+    val closeTagStart = trimmed.lastIndexOf("</li>", ignoreCase = true)
+    if (openTagEnd < 0 || closeTagStart <= openTagEnd) return trimmed
+    return trimmed.substring(openTagEnd + 1, closeTagStart).trim()
 }

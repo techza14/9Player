@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
@@ -160,7 +161,8 @@ private fun ControllerSettingsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { selectScheme(GamepadControlScheme.SCHEME_1) }
+                    .clickable { selectScheme(GamepadControlScheme.SCHEME_1) },
+                colors = CardDefaults.cardColors(containerColor = hoshiCardBackgroundColor())
             ) {
                 Row(
                     modifier = Modifier
@@ -184,7 +186,8 @@ private fun ControllerSettingsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { selectScheme(GamepadControlScheme.SCHEME_2) }
+                    .clickable { selectScheme(GamepadControlScheme.SCHEME_2) },
+                colors = CardDefaults.cardColors(containerColor = hoshiCardBackgroundColor())
             ) {
                 Row(
                     modifier = Modifier
@@ -208,7 +211,8 @@ private fun ControllerSettingsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { selectScheme(GamepadControlScheme.CUSTOM) }
+                    .clickable { selectScheme(GamepadControlScheme.CUSTOM) },
+                colors = CardDefaults.cardColors(containerColor = hoshiCardBackgroundColor())
             ) {
                 Row(
                     modifier = Modifier
@@ -229,7 +233,10 @@ private fun ControllerSettingsScreen(
             }
 
             if (config.scheme == GamepadControlScheme.CUSTOM) {
-                Card(modifier = Modifier.fillMaxWidth()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = hoshiCardBackgroundColor())
+                ) {
                     Column(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)

@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <queries>
         <package android:name="com.ichi2.anki" />
@@ -41,21 +43,27 @@
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
+            android:name=".DictionarySettingsActivity"
+            android:exported="false"
+            android:label="@string/settings_dictionary_title"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Tset" />
+        <activity
             android:name=".AudiobookSettingsActivity"
             android:exported="false"
-            android:label="有声书"
+            android:label="@string/settings_audiobook_title"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
             android:name=".OverlaySettingsActivity"
             android:exported="false"
-            android:label="悬浮窗"
+            android:label="@string/settings_overlay_title"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
             android:name=".FloatingOverlayPreviewActivity"
             android:exported="false"
-            android:label="悬浮窗预览"
+            android:label="@string/settings_overlay_preview_title"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <service
@@ -77,25 +85,37 @@
         <activity
             android:name=".AudiobookUiSettingsActivity"
             android:exported="false"
-            android:label="有声书UI"
+            android:label="@string/settings_audiobook_ui_title"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
             android:name=".MdxMountSettingsActivity"
             android:exported="false"
-            android:label="MDX"
+            android:label="@string/settings_mdx_title"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
             android:name=".OtherSettingsActivity"
             android:exported="false"
-            android:label="其他"
+            android:label="@string/settings_other_title"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Tset" />
+        <activity
+            android:name=".StatisticsDemoActivity"
+            android:exported="false"
+            android:label="@string/settings_statistics_title"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Tset" />
+        <activity
+            android:name=".UpdateSettingsActivity"
+            android:exported="false"
+            android:label="@string/settings_update_title"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
             android:name=".FontSettingsActivity"
             android:exported="false"
-            android:label="字体"
+            android:label="@string/settings_font_title"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
@@ -127,6 +147,7 @@
             android:exported="true"
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
     </application>
 
 </manifest>

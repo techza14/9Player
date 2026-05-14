@@ -24,14 +24,6 @@ internal class ReaderLookupSession {
         _layers += layer
     }
 
-    fun pop(): ReaderLookupLayer? = _layers.removeLastOrNull()
-
-    fun replaceTop(transform: (ReaderLookupLayer) -> ReaderLookupLayer) {
-        val index = _layers.lastIndex
-        if (index < 0) return
-        _layers[index] = transform(_layers[index])
-    }
-
     fun replaceAt(index: Int, transform: (ReaderLookupLayer) -> ReaderLookupLayer) {
         if (index !in _layers.indices) return
         _layers[index] = transform(_layers[index])

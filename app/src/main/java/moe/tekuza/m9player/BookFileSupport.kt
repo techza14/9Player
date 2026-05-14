@@ -69,11 +69,6 @@ internal fun buildReaderBookPlaybackKey(book: ReaderBook): String {
     return buildDictionaryCacheKey(stableSource, book.title.ifBlank { "book" })
 }
 
-internal fun buildLegacyReaderBookPlaybackKey(book: ReaderBook): String {
-    val raw = "title=${book.title}|audio=${book.audioUri}|srt=${book.srtUri?.toString().orEmpty()}"
-    return buildDictionaryCacheKey(raw, book.title.ifBlank { "book" })
-}
-
 internal suspend fun loadReaderBookPlaybackSnapshotsForBooks(
     context: Context,
     books: List<ReaderBook>

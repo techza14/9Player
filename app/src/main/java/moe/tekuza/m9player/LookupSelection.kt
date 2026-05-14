@@ -12,7 +12,8 @@ internal data class LookupScanSelection(
 internal fun selectLookupScanText(
     text: String,
     charOffset: Int,
-    maxLength: Int = HOSHI_LOOKUP_SCAN_MAX_LENGTH
+    maxLength: Int = HOSHI_LOOKUP_SCAN_MAX_LENGTH,
+    stopAtParticleBoundary: Boolean = true
 ): LookupScanSelection? {
     if (text.isBlank() || maxLength <= 0) return null
 
@@ -24,7 +25,7 @@ internal fun selectLookupScanText(
     while (endExclusive < text.length && (endExclusive - anchor) < maxLength) {
         val ch = text[endExclusive]
         if (isLookupScanBoundary(ch)) break
-        if (endExclusive > anchor && isParticleBoundary(text, endExclusive)) break
+        if (stopAtParticleBoundary && endExclusive > anchor && isParticleBoundary(text, endExclusive)) break
         endExclusive += 1
     }
     if (endExclusive <= anchor) return null

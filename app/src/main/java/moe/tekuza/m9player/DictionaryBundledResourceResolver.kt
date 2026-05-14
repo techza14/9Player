@@ -15,19 +15,6 @@ internal data class BundledDictionaryResource(
     val inputStream: InputStream
 )
 
-internal fun buildBundledDictionaryResourceUri(cacheKey: String, rawPath: String): String {
-    val safeCacheKey = cacheKey.trim().ifBlank { "dict" }
-    val normalizedPath = rawPath
-        .trim()
-        .replace('\\', '/')
-        .trimStart('/')
-    val encodedPath = normalizedPath
-        .split('/')
-        .filter { it.isNotBlank() }
-        .joinToString("/") { Uri.encode(it) }
-    return "$DICT_BUNDLED_RES_SCHEME://$safeCacheKey/$encodedPath"
-}
-
 internal fun openBundledDictionaryResource(
     context: Context,
     requestUri: Uri

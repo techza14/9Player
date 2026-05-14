@@ -178,28 +178,6 @@ internal fun loadAnkiCatalog(context: Context): AnkiCatalog {
     )
 }
 
-internal fun defaultFieldTemplate(fieldName: String): String {
-    val lowered = fieldName.lowercase(Locale.ROOT)
-    return when {
-        lowered.contains("sentence") && (lowered.contains("furigana") || lowered.contains("kana")) -> "{sentence-furigana}"
-        lowered.contains("sentence") -> "{sentence}"
-        lowered.contains("book") || lowered.contains("title") -> "{book-title}"
-        lowered.contains("word") || lowered.contains("term") || lowered.contains("expression") -> "{expression}"
-        lowered.contains("reading") || lowered.contains("kana") || lowered.contains("furigana") -> "{reading}"
-        lowered.contains("meaning") || lowered.contains("definition") || lowered.contains("gloss") -> "{glossary}"
-        lowered.contains("pitch") -> "{pitch-accent-positions}"
-        lowered.contains("freq") || lowered.contains("frequency") -> "{frequencies}"
-        lowered.contains("audio") || lowered.contains("sound") -> {
-            if (lowered.contains("cut") || lowered.contains("clip")) "{cut-audio}" else "{audio}"
-        }
-        else -> ""
-    }
-}
-
-internal fun defaultTemplatesForFields(fields: List<String>): Map<String, String> {
-    return fields.associateWith(::defaultFieldTemplate)
-}
-
 internal fun hasAnyAnkiFieldTemplate(templates: Map<String, String>): Boolean {
     return templates.values.any { it.trim().isNotBlank() }
 }
@@ -405,20 +383,49 @@ internal suspend fun exportToAnkiDroidApiResultAsync(
 internal suspend fun hasAnkiDuplicateByFirstFieldAsync(
     context: Context,
     firstFieldValue: String
-): Boolean = withContext(Dispatchers.IO) {
+): Boolean = findAnkiDuplicateNoteIdsByFirstFieldAsync(context, firstFieldValue).isNotEmpty()
+
+internal suspend fun findAnkiDuplicateNoteIdsByFirstFieldAsync(
+    context: Context,
+    firstFieldValue: String
+): List<Long> = withContext(Dispatchers.IO) {
     val key = normalizeAnkiDuplicateKey(firstFieldValue)
-    if (key.isBlank()) return@withContext false
+    if (key.isBlank()) return@withContext emptyList()
     if (detectAnkiAvailability(context, requirePermission = true) != AnkiAvailabilityState.READY) {
-        return@withContext false
+        return@withContext emptyList()
     }
     runCatching {
         val persisted = loadPersistedAnkiConfig(context)
-        if (persisted.modelName.isBlank()) return@runCatching false
+        if (persisted.modelName.isBlank()) return@runCatching emptyList()
         val api = AddContentApi(context)
-        val model = findModel(api, persisted.modelName) ?: return@runCatching false
+        val model = findModel(api, persisted.modelName) ?: return@runCatching emptyList()
         val duplicateNotes = api.findDuplicateNotes(model.id, listOf(key))
-        duplicateNotes != null && duplicateNotes.size() > 0
-    }.getOrDefault(false)
+        val duplicateIndex = duplicateNotes?.indexOfKey(0) ?: -1
+        if (duplicateIndex < 0) {
+            emptyList()
+        } else {
+            duplicateNotes.valueAt(duplicateIndex)
+                .orEmpty()
+                .map { it.id }
+                .filter { it > 0L }
+                .distinct()
+        }
+    }.getOrDefault(emptyList())
+}
+
+internal suspend fun checkAnkiDuplicateByFirstFieldAsync(
+    context: Context,
+    firstFieldValue: String
+): AnkiDuplicateCheckResult = withContext(Dispatchers.IO) {
+    val duplicateConfig = loadAnkiDuplicateConfig(context)
+    if (!duplicateConfig.enabled) {
+        return@withContext AnkiDuplicateCheckResult()
+    }
+    val noteIds = findAnkiDuplicateNoteIdsByFirstFieldAsync(context, firstFieldValue)
+    AnkiDuplicateCheckResult(
+        noteIds = noteIds,
+        allowAdd = duplicateConfig.action.equals("add", ignoreCase = true)
+    )
 }
 
 internal fun prepareAnkiExportResult(
@@ -537,12 +544,12 @@ private fun buildAnkiVariables(
         emptyList()
     }
     val glossaryFirst = if (requiredMarkers.needs("glossary-first-brief", "glossary-brief")) {
-        allDefinitions.firstOrNull().orEmpty()
+        buildGlossaryBriefHtml(allDefinitions)
     } else {
         ""
     }
     val glossaryNoDictionary = if (requiredMarkers.needs("glossary-no-dictionary")) {
-        allDefinitions.joinToString("<br>")
+        buildGlossaryNoDictionaryHtml(allDefinitions)
     } else {
         ""
     }
@@ -551,31 +558,54 @@ private fun buildAnkiVariables(
     } else {
         ""
     }
-    val singleGlossaryHtml = if (requiredMarkers.needsAny(SINGLE_GLOSSARY_VARIABLES) ||
-        requiredMarkers.needs("glossary-first")
-    ) {
+    val singleGlossaryHtml = if (requiredMarkers.needsAny(SINGLE_GLOSSARY_VARIABLES)) {
         primaryGlossarySource?.let { source ->
             buildStyledGlossary(
                 definitions = source.definitions,
                 dictionaryName = source.dictionaryName,
-                dictionaryCss = source.dictionaryCss
+                dictionaryCss = source.dictionaryCss,
+                wrapItemsInList = false
             )
         }.orEmpty()
     } else {
         ""
     }
     val singleGlossaryFirst = if (requiredMarkers.needs("single-glossary-brief")) {
-        primaryGlossarySource?.definitions?.firstOrNull().orEmpty()
+        buildGlossaryBriefHtml(primaryGlossarySource?.definitions.orEmpty())
     } else {
         ""
     }
     val singleGlossaryNoDictionary = if (requiredMarkers.needs("single-glossary-no-dictionary", "glossary-first-no-dictionary")) {
-        primaryGlossarySource?.definitions?.joinToString("<br>").orEmpty()
+        buildGlossaryNoDictionaryHtml(primaryGlossarySource?.definitions.orEmpty())
     } else {
         ""
     }
-    // Hoshi parity: glossary-first is the first dictionary's full glossary HTML.
-    val styledGlossaryFirst = singleGlossaryHtml
+    // glossary-first is the first glossary item of the primary dictionary,
+    // but it still needs the dictionary-scoped styling wrapper.
+    val styledGlossaryFirst = primaryGlossarySource?.let { source ->
+        val firstItemHtml = buildGlossaryFirstItemHtml(source.definitions)
+        if (firstItemHtml.isBlank()) {
+            ""
+        } else {
+            buildStyledGlossary(
+                definitions = listOf(firstItemHtml),
+                dictionaryName = source.dictionaryName,
+                dictionaryCss = source.dictionaryCss,
+                wrapItemsInList = false
+            )
+        }
+    }.orEmpty()
+    Log.d(
+        ANKI_EXPORT_DEBUG_TAG,
+        "glossary templates primary=${primaryGlossarySource?.dictionaryName.orEmpty()} " +
+            "cssLen=${primaryGlossarySource?.dictionaryCss?.length ?: 0} " +
+            "rawGlossaryFirstLen=${card.glossaryFirstHtml?.length ?: 0} " +
+            "glossaryLen=${glossaryHtml.length} glossaryHasScope=${glossaryHtml.contains("data-dictionary=")} " +
+            "glossaryFirstLen=${styledGlossaryFirst.length} glossaryFirstHasScope=${styledGlossaryFirst.contains("data-dictionary=")} " +
+            "glossaryFirstBriefLen=${glossaryFirst.length} glossaryFirstBriefHasScope=${glossaryFirst.contains("data-dictionary=")} " +
+            "singleGlossaryLen=${singleGlossaryHtml.length} singleGlossaryHasScope=${singleGlossaryHtml.contains("data-dictionary=")} " +
+            "singleGlossaryNoDictLen=${singleGlossaryNoDictionary.length}"
+    )
     val cutAudio = if (includeCutAudio && requiredMarkers.needs("cut-audio")) {
         attachAudio(api, context, card).orEmpty()
     } else {
@@ -627,7 +657,7 @@ private fun buildAnkiVariables(
         "definition" to glossaryHtml,
         "glossary" to glossaryHtml,
         "glossary-no-dictionary" to glossaryNoDictionary,
-        "glossary-first" to styledGlossaryFirst,
+        "glossary-first" to card.glossaryFirstHtml?.trim().orEmpty().ifBlank { styledGlossaryFirst },
         "glossary-first-brief" to glossaryFirst,
         "glossary-first-no-dictionary" to singleGlossaryNoDictionary,
         "single-glossary" to singleGlossaryHtml,
@@ -661,16 +691,17 @@ private fun buildAnkiVariables(
             variables[templateSingleGlossaryKey("single-glossary", normalizedName)] = buildStyledGlossary(
                 definitions = source.definitions,
                 dictionaryName = source.dictionaryName,
-                dictionaryCss = source.dictionaryCss
+                dictionaryCss = source.dictionaryCss,
+                wrapItemsInList = false
             )
         }
         if (requiredMarkers.needs("single-glossary-brief") || requiredMarkers.singleGlossaryTokens.contains(normalizedName)) {
             variables[templateSingleGlossaryKey("single-glossary-brief", normalizedName)] =
-                source.definitions.firstOrNull().orEmpty()
+                buildGlossaryBriefHtml(source.definitions)
         }
         if (requiredMarkers.needs("single-glossary-no-dictionary") || requiredMarkers.singleGlossaryTokens.contains(normalizedName)) {
             variables[templateSingleGlossaryKey("single-glossary-no-dictionary", normalizedName)] =
-                source.definitions.joinToString("<br>")
+                buildGlossaryNoDictionaryHtml(source.definitions)
         }
     }
     }
@@ -985,7 +1016,10 @@ private fun buildMinedCardGlossarySources(card: MinedCard): List<MinedCardGlossa
     if (mapped.isNotEmpty()) {
         Log.d(
             ANKI_EXPORT_DEBUG_TAG,
-            "sources using glossaryByDictionary count=${mapped.size} names=${mapped.joinToString("|") { it.dictionaryName }}"
+            "sources using glossaryByDictionary count=${mapped.size} " +
+                "names=${mapped.joinToString("|") { it.dictionaryName }} " +
+                "cssLens=${mapped.joinToString("|") { it.dictionaryCss?.length?.toString().orEmpty() }} " +
+                "defs=${mapped.joinToString("|") { it.definitions.size.toString() }}"
         )
         return mapped
     }
@@ -1002,7 +1036,8 @@ private fun buildMinedCardGlossarySources(card: MinedCard): List<MinedCardGlossa
     )
     Log.d(
         ANKI_EXPORT_DEBUG_TAG,
-        "sources fallback dict=${fallback.first().dictionaryName} defs=${fallbackDefinitions.size}"
+        "sources fallback dict=${fallback.first().dictionaryName} defs=${fallbackDefinitions.size} " +
+            "cssLen=${fallback.first().dictionaryCss?.length ?: 0}"
     )
     return fallback
 }
@@ -1013,13 +1048,31 @@ private fun selectPrimaryGlossarySource(
 ): MinedCardGlossarySource? {
     if (sources.isEmpty()) return null
     val preferred = normalizeDictionaryToken(card.dictionaryName.orEmpty())
-    if (preferred.isBlank()) return sources.firstOrNull()
-    return sources.firstOrNull { normalizeDictionaryToken(it.dictionaryName) == preferred }
+    val selected = if (preferred.isBlank()) {
+        sources.firstOrNull()
+    } else {
+        sources.firstOrNull { normalizeDictionaryToken(it.dictionaryName) == preferred }
         ?: sources.firstOrNull()
+    }
+    Log.d(
+        ANKI_EXPORT_DEBUG_TAG,
+        "primary source selected preferred=${preferred.ifBlank { "<blank>" }} " +
+            "selected=${selected?.dictionaryName.orEmpty()} " +
+            "selectedCssLen=${selected?.dictionaryCss?.length ?: 0} " +
+            "selectedDefs=${selected?.definitions?.size ?: 0} " +
+            "sourceCount=${sources.size}"
+    )
+    return selected
 }
 
 private fun buildStyledGlossaryFromSources(sources: List<MinedCardGlossarySource>): String {
     if (sources.isEmpty()) return ""
+    Log.d(
+        ANKI_EXPORT_DEBUG_TAG,
+        "buildStyledGlossaryFromSources count=${sources.size} " +
+            "names=${sources.joinToString("|") { it.dictionaryName }} " +
+            "cssLens=${sources.joinToString("|") { it.dictionaryCss?.length?.toString().orEmpty() }}"
+    )
     return renderYomitanGlossaryHtml(
         items = sources.map { source ->
             GlossaryHtmlItem(
@@ -1029,7 +1082,8 @@ private fun buildStyledGlossaryFromSources(sources: List<MinedCardGlossarySource
             )
         },
         includeDictionaryLabel = true,
-        includeParityCss = true
+        includeParityCss = true,
+        wrapItemsInList = false
     )
 }
 
@@ -1067,8 +1121,14 @@ private fun resolveAudioDisplayName(context: Context, uri: Uri?): String? {
 private fun buildStyledGlossary(
     definitions: List<String>,
     dictionaryName: String?,
-    dictionaryCss: String?
+    dictionaryCss: String?,
+    wrapItemsInList: Boolean = true
 ): String {
+    Log.d(
+        ANKI_EXPORT_DEBUG_TAG,
+        "buildStyledGlossary dict=${dictionaryName.orEmpty()} defs=${definitions.size} " +
+            "cssLen=${dictionaryCss?.length ?: 0} wrapItemsInList=$wrapItemsInList"
+    )
     return renderYomitanGlossaryHtml(
         items = listOf(
             GlossaryHtmlItem(
@@ -1078,14 +1138,97 @@ private fun buildStyledGlossary(
             )
         ),
         includeDictionaryLabel = true,
-        includeParityCss = true
+        includeParityCss = true,
+        wrapItemsInList = wrapItemsInList
     )
+}
+
+internal fun buildGlossaryFirstItemHtml(definitions: List<String>): String {
+    val firstDefinition = definitions.firstOrNull()?.trim().orEmpty()
+    if (firstDefinition.isBlank()) return ""
+    val extracted = extractFirstGlossaryListItemHtml(firstDefinition)
+        ?: if (firstDefinition.trimStart().startsWith("<li", ignoreCase = true)) {
+            firstDefinition
+        } else {
+            firstDefinition
+        }
+    return removeLeadingGlossaryIndex(extractInnerListItemHtml(extracted))
+}
+
+internal fun buildGlossaryBriefHtml(definitions: List<String>): String {
+    return definitions.firstOrNull()
+        ?.let { buildGlossaryFirstItemHtml(listOf(it)) }
+        .orEmpty()
+}
+
+internal fun buildGlossaryNoDictionaryHtml(definitions: List<String>): String {
+    return definitions.joinToString("<br>") { definition ->
+        removeLeadingGlossaryDictionaryLabel(buildGlossaryFirstItemHtml(listOf(definition)))
+    }
 }
 
 private fun sanitizeAnkiDefinitionHtml(raw: String): String {
     val trimmed = raw.trim()
     if (trimmed.isBlank()) return ""
-    return trimmed
+    return removeLeadingGlossaryIndex(trimmed)
+}
+
+private fun removeLeadingGlossaryIndex(html: String): String {
+    return html.replace(
+        Regex("""(<i>\()\s*\d+\s*,\s*""", RegexOption.IGNORE_CASE),
+        "$1"
+    )
+}
+
+private fun removeLeadingGlossaryDictionaryLabel(html: String): String {
+    return html.replaceFirst(
+        Regex("""^<i>\([^<]*\)</i>\s*""", RegexOption.IGNORE_CASE),
+        ""
+    )
+}
+
+private fun extractFirstGlossaryListItemHtml(raw: String): String? {
+    val startSearchIndex = raw.indexOf("<ol", ignoreCase = true).let { olIndex ->
+        if (olIndex >= 0) {
+            val olClose = raw.indexOf('>', olIndex)
+            if (olClose >= 0) olClose + 1 else 0
+        } else {
+            0
+        }
+    }
+    val tagRegex = Regex("</?li\\b", RegexOption.IGNORE_CASE)
+    var match: MatchResult? = tagRegex.find(raw, startSearchIndex) ?: return null
+    var depth = 0
+    var startIndex = -1
+    while (match != null) {
+        val tagStart = match.range.first
+        val tagText = match.value
+        val tagEnd = raw.indexOf('>', match.range.last + 1)
+        if (tagEnd < 0) return null
+        val isClosing = tagText.startsWith("</", ignoreCase = true)
+        if (!isClosing) {
+            if (depth == 0) {
+                startIndex = tagStart
+            }
+            depth++
+        } else if (depth > 0) {
+            depth--
+            if (depth == 0 && startIndex >= 0) {
+                return raw.substring(startIndex, tagEnd + 1)
+            }
+        }
+        match = tagRegex.find(raw, tagEnd + 1)
+    }
+    return null
+}
+
+private fun extractInnerListItemHtml(html: String): String {
+    val trimmed = html.trim()
+    if (!trimmed.startsWith("<li", ignoreCase = true)) return trimmed
+    val openTagEnd = trimmed.indexOf('>')
+    val closeTagStart = trimmed.lastIndexOf("</li>", ignoreCase = true)
+    if (openTagEnd < 0 || closeTagStart <= openTagEnd) return trimmed
+    return trimmed.substring(openTagEnd + 1, closeTagStart).trim()
 }
 
 internal fun classifyAnkiExportFailure(

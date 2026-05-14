@@ -2,9 +2,11 @@ package moe.tekuza.m9player
 
 import android.content.ActivityNotFoundException
 import android.content.ClipData
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import androidx.core.content.ContextCompat
 import com.ichi2.anki.api.AddContentApi
 import java.util.Locale
@@ -18,6 +20,14 @@ internal enum class AnkiAvailabilityState {
     API_UNAVAILABLE,
     PERMISSION_MISSING,
     READY
+}
+
+internal data class AnkiDuplicateCheckResult(
+    val noteIds: List<Long> = emptyList(),
+    val allowAdd: Boolean = false
+) {
+    val duplicate: Boolean get() = noteIds.isNotEmpty()
+    val preventAdd: Boolean get() = duplicate && !allowAdd
 }
 
 internal fun exportToAnkiDroid(context: Context, card: MinedCard) {
@@ -164,6 +174,51 @@ internal fun openAnkiDroidApp(context: Context): Boolean {
         )
         true
     }.getOrDefault(false)
+}
+
+internal fun buildAnkiDuplicateNoteSearchQuery(noteIds: List<Long>): String {
+    return noteIds
+        .filter { it > 0L }
+        .distinct()
+        .joinToString(" or ") { noteId -> "nid:$noteId" }
+}
+
+internal fun openAnkiDuplicateNotesInBrowser(context: Context, noteIds: List<Long>): Boolean {
+    val query = buildAnkiDuplicateNoteSearchQuery(noteIds)
+    if (query.isBlank()) return false
+    val targetPackage = resolveAnkiPackageName(context)
+        ?: installedAnkiPackageCandidates().firstOrNull { packageName ->
+            context.packageManager.getLaunchIntentForPackage(packageName) != null
+        }
+        ?: return false
+
+    val cardBrowserIntent = Intent().apply {
+        component = ComponentName(targetPackage, "com.ichi2.anki.CardBrowser")
+        putExtra("search_query", query)
+        putExtra("all_decks", true)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    if (tryStartIntent(context, cardBrowserIntent)) return true
+
+    val deepLinkIntent = Intent(
+        Intent.ACTION_VIEW,
+        Uri.parse("anki://x-callback-url/browser")
+            .buildUpon()
+            .appendQueryParameter("search", query)
+            .build()
+    ).apply {
+        setPackage(targetPackage)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    if (tryStartIntent(context, deepLinkIntent)) return true
+
+    val processTextIntent = Intent(Intent.ACTION_PROCESS_TEXT).apply {
+        type = "text/plain"
+        component = ComponentName(targetPackage, "com.ichi2.anki.CardBrowserContextMenuAction")
+        putExtra(Intent.EXTRA_PROCESS_TEXT, query)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    return tryStartIntent(context, processTextIntent)
 }
 
 internal fun createAnkiPermissionRequestIntent(context: Context): Intent? {
