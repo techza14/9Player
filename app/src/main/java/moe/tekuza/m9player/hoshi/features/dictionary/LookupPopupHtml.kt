@@ -155,7 +155,9 @@ internal object LookupPopupHtml {
                             swipeDismiss: { postMessage: function() { window.HoshiAndroidPopup.postMessage('swipeDismiss'); } },
                             rangeSelection: { postMessage: function() { window.HoshiAndroidPopup.postMessage('rangeSelection'); } },
                             playWordAudio: { postMessage: function(content) { window.HoshiAndroidPopup.postMessage('playWordAudio', content); } },
+                            shellReady: { postMessage: function() { window.HoshiPopup.shellReady(); } },
                             contentReady: { postMessage: function() { window.HoshiAndroidPopup.postMessage('contentReady'); } },
+                            contentReadyToDraw: { postMessage: function() { window.HoshiAndroidPopup.postMessage('contentReadyToDraw'); } },
                             mineEntry: { postMessage: async function(content) { return window.HoshiPopup.mineEntry(JSON.stringify(content)); } },
                             duplicateCheck: { postMessage: async function(expression) { return window.HoshiPopup.duplicateCheck(expression); } },
                             viewDuplicate: { postMessage: function(noteIds) { return window.HoshiPopup.viewDuplicate(JSON.stringify(noteIds || [])); } },
@@ -247,17 +249,42 @@ internal object LookupPopupHtml {
                     (function() {
                         var container = document.getElementById('entries-container');
                         var posted = false;
+                        var observer = null;
                         function postReady() {
-                        if (posted) return;
-                        posted = true;
-                        requestAnimationFrame(function() {
+                            if (posted) return;
+                            posted = true;
                             requestAnimationFrame(function() {
-                                document.documentElement.setAttribute('data-hoshi-content-ready', 'true');
-                                webkit.messageHandlers.contentReady.postMessage(null);
+                                requestAnimationFrame(function() {
+                                    document.documentElement.setAttribute('data-hoshi-content-ready', 'true');
+                                    webkit.messageHandlers.contentReadyToDraw.postMessage(null);
+                                });
                             });
-                        });
-                    }
+                        }
+                        window.hoshiPopupObserveContentReady = function() {
+                            posted = false;
+                            if (observer) {
+                                observer.disconnect();
+                                observer = null;
+                            }
+                            if (!container || !window.entryCount) {
+                                postReady();
+                                return;
+                            }
+                            observer = new MutationObserver(function() {
+                                if (container.querySelector('.entry')) {
+                                    postReady();
+                                    observer.disconnect();
+                                    observer = null;
+                                }
+                            });
+                            observer.observe(container, { childList: true, subtree: true });
+                            if (container.querySelector('.entry')) {
+                                postReady();
+                            }
+                        };
                         window.addEventListener('hoshiPopupRendered', postReady, { once: true });
+                        webkit.messageHandlers.shellReady.postMessage(null);
+                        window.hoshiPopupObserveContentReady();
                         window.renderPopup();
                     })();
                 </script>

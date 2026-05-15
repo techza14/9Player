@@ -39,7 +39,6 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
-import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.Dispatchers
@@ -156,7 +155,6 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private var pendingAudioRestorePositionMs: Long = 0L
     private var pendingAudioRestoreDurationMs: Long = 0L
     private var lastSavedPlaybackPositionMs: Long = Long.MIN_VALUE
-    private var useSharedPlaybackSession: Boolean = false
     private val sharedPlaybackStateListener = object : BookReaderFloatingBridge.PlaybackStateListener {
         override fun onPlaybackStateChanged(isPlaying: Boolean) {
             runOnUiThread { updateAudioControlLabels() }
@@ -165,7 +163,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private val sharedPlaybackPositionListener = object : BookReaderFloatingBridge.PlaybackPositionListener {
         override fun onPlaybackPositionChanged(positionMs: Long) {
             runOnUiThread {
-                if (useSharedPlaybackSession && isAudioPlaying()) {
+                if (audioUri != null && isAudioPlaying()) {
                     syncToAudioPosition()
                 }
             }
@@ -221,6 +219,22 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private var loadedDocumentCharsetName: String? = null
 
     private fun readerString(resId: Int): String = getString(resId)
+
+    private fun bridgeCanReturnToPlayer(): Boolean {
+        return BookReaderFloatingBridge.hasController() &&
+            BookReaderFloatingBridge.currentAudioUri() == audioUri?.toString()
+    }
+
+    private fun publishReaderPlaybackBridgeSnapshot(notifyState: Boolean = false) {
+        val uriText = audioUri?.toString()
+        BookReaderFloatingBridge.setCurrentAudioUri(uriText)
+        currentReaderPlaybackKey()?.let { BookReaderFloatingBridge.setCurrentBookKey(this, it) }
+        BookReaderFloatingBridge.notifyPlaybackSpeed(currentAudioPlaybackSpeed())
+        currentAudioPositionMs()?.let { BookReaderFloatingBridge.notifyPlaybackPosition(it) }
+        if (notifyState) {
+            BookReaderFloatingBridge.notifyPlaybackState(isAudioPlaying())
+        }
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         restoreReaderSettings()
@@ -313,9 +327,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
-        if (!useSharedPlaybackSession) {
-            persistAudioPlaybackSnapshot()
-        }
+        persistAudioPlaybackSnapshot()
         persistReaderSettings()
         super.onPause()
     }
@@ -1289,7 +1301,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.reader_no_audio, Toast.LENGTH_SHORT).show()
             return
         }
-        if (useSharedPlaybackSession) {
+        if (bridgeCanReturnToPlayer()) {
             BookReaderFloatingBridge.returnToPlayer()
             finish()
             return
@@ -1316,7 +1328,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     private fun returnToPlayerIfShared(): Boolean {
-        if (!useSharedPlaybackSession) return false
+        if (!bridgeCanReturnToPlayer()) return false
         BookReaderFloatingBridge.returnToPlayer()
         finish()
         return true
@@ -2172,8 +2184,6 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
 
     private fun initAudioPlayerIfNeeded() {
         val uri = audioUri ?: return
-        val uriText = uri.toString()
-        useSharedPlaybackSession = BookReaderFloatingBridge.currentAudioUri() == uriText
         val playbackKey = currentReaderPlaybackKey()
         val restoredSnapshot = playbackKey?.let { key ->
             loadBookReaderPlaybackSnapshotOrNull(this, key)
@@ -2183,18 +2193,13 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             restoredSnapshot != null -> restoredSnapshot.positionMs
             else -> 0L
         }.coerceAtLeast(0L)
-        if (useSharedPlaybackSession) {
-            player = null
-            if (restoredPositionMs > 0L && kotlin.math.abs(BookReaderFloatingBridge.currentPlaybackPositionMs() - restoredPositionMs) > 800L) {
-                BookReaderFloatingBridge.seekToPosition(restoredPositionMs)
-            }
-        } else {
-            player = ExoPlayer.Builder(this).build().apply {
-                setMediaItem(MediaItem.fromUri(uri))
-                prepare()
-                seekTo(restoredPositionMs)
-            }
-        }
+        player = BookReaderPlaybackSession.prepareAudioIfNeeded(
+            context = this,
+            audioUri = uri,
+            restorePositionMs = restoredPositionMs,
+            forceSeekOnSameAudio = false
+        )
+        publishReaderPlaybackBridgeSnapshot(notifyState = true)
         updateAudioControlLabels()
         startSyncLoop()
     }
@@ -2229,14 +2234,6 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     private fun toggleAudioPlayback() {
-        if (useSharedPlaybackSession) {
-            BookReaderFloatingBridge.togglePlayPause()
-            updateAudioControlLabels()
-            if (isAudioPlaying()) {
-                syncToAudioPosition(allowPageJump = true)
-            }
-            return
-        }
         val currentPlayer = player
         if (currentPlayer == null) {
             Toast.makeText(this, R.string.reader_no_audio, Toast.LENGTH_SHORT).show()
@@ -2247,6 +2244,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         } else {
             currentPlayer.play()
         }
+        publishReaderPlaybackBridgeSnapshot(notifyState = true)
         updateAudioControlLabels()
         if (currentPlayer.isPlaying) {
             syncToAudioPosition(allowPageJump = true)
@@ -2280,7 +2278,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
 
     private fun seekToAdjacentCue(delta: Int) {
         val currentPlayer = player
-        if (!useSharedPlaybackSession && currentPlayer == null) {
+        if (currentPlayer == null) {
             Toast.makeText(this, R.string.reader_no_audio, Toast.LENGTH_SHORT).show()
             return
         }
@@ -2312,49 +2310,29 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         } else {
             (baseIndex + 1).coerceIn(0, cues.lastIndex)
         }
-        if (useSharedPlaybackSession) {
-            BookReaderFloatingBridge.seekToPosition(cues[targetIndex].startMs)
-        } else {
-            currentPlayer?.seekTo(cues[targetIndex].startMs)
-        }
+        currentPlayer.seekTo(cues[targetIndex].startMs)
         activeCueIndex = -1
-        if (!useSharedPlaybackSession) {
-            persistAudioPlaybackSnapshot()
-        }
+        publishReaderPlaybackBridgeSnapshot(notifyState = false)
+        persistAudioPlaybackSnapshot()
         syncToAudioPosition(allowPageJump = true)
     }
 
     private fun currentAudioPositionMs(): Long? {
-        return if (useSharedPlaybackSession) {
-            BookReaderFloatingBridge.currentPlaybackPositionMs().coerceAtLeast(0L)
-        } else {
-            player?.currentPosition?.coerceAtLeast(0L)
-        }
+        return player?.currentPosition?.coerceAtLeast(0L)
     }
 
     private fun isAudioPlaying(): Boolean {
-        return if (useSharedPlaybackSession) {
-            BookReaderFloatingBridge.isPlaying()
-        } else {
-            player?.isPlaying == true
-        }
+        return player?.isPlaying == true
     }
 
     private fun currentAudioPlaybackSpeed(): Float {
-        return if (useSharedPlaybackSession) {
-            BookReaderFloatingBridge.currentPlaybackSpeed()
-        } else {
-            player?.playbackParameters?.speed ?: 1f
-        }
+        return player?.playbackParameters?.speed ?: 1f
     }
 
     private fun setAudioPlaybackSpeed(speed: Float) {
         val normalized = speed.coerceIn(0.5f, 3.0f)
-        if (useSharedPlaybackSession) {
-            BookReaderFloatingBridge.setPlaybackSpeed(normalized)
-        } else {
-            player?.playbackParameters = PlaybackParameters(normalized)
-        }
+        player?.playbackParameters = PlaybackParameters(normalized)
+        BookReaderFloatingBridge.notifyPlaybackSpeed(normalized)
     }
 
     private fun currentReaderPlaybackKey(): String? {
@@ -2367,7 +2345,6 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     private fun persistAudioPlaybackSnapshot(allowZeroPositionWrite: Boolean = false) {
-        if (useSharedPlaybackSession) return
         val currentPlayer = player ?: return
         val playbackKey = currentReaderPlaybackKey() ?: return
         val durationMs = if (currentPlayer.duration > 0L) currentPlayer.duration else pendingAudioRestoreDurationMs
@@ -2846,19 +2823,17 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                 delay(350L)
                 audioStopAtMs?.let { stopAt ->
                     if (System.currentTimeMillis() >= stopAt) {
-                        if (useSharedPlaybackSession) {
-                            BookReaderFloatingBridge.setPlaying(false)
-                        } else {
-                            player?.pause()
-                        }
+                        player?.pause()
+                        BookReaderFloatingBridge.notifyPlaybackState(false)
                         audioStopAtMs = null
                     }
                 }
                 val now = System.currentTimeMillis()
-                if (!useSharedPlaybackSession && now - lastProgressSaveAt >= 2_500L) {
+                if (now - lastProgressSaveAt >= 2_500L) {
                     persistAudioPlaybackSnapshot()
                     lastProgressSaveAt = now
                 }
+                publishReaderPlaybackBridgeSnapshot(notifyState = false)
                 updateAudioControlLabels()
                 if (isAudioPlaying()) {
                     syncToAudioPosition(allowPageJump = true)
@@ -2906,12 +2881,9 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     override fun onDestroy() {
         reloadBookJob?.cancel()
         syncJob?.cancel()
-        if (!useSharedPlaybackSession) {
-            persistAudioPlaybackSnapshot()
-        }
+        persistAudioPlaybackSnapshot()
         BookReaderFloatingBridge.removePlaybackStateListener(sharedPlaybackStateListener)
         BookReaderFloatingBridge.removePlaybackPositionListener(sharedPlaybackPositionListener)
-        player?.release()
         player = null
         super.onDestroy()
     }

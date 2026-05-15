@@ -322,9 +322,6 @@ class BookReaderActivity : AppCompatActivity() {
             if (activeReaderRef?.get() === this) {
                 activeReaderRef = null
             }
-            if (BookReaderFloatingBridge.currentAudioUri() == currentAudioUriForBridge) {
-                BookReaderFloatingBridge.setCurrentAudioUri(null)
-            }
         }
         super.onDestroy()
     }
@@ -683,10 +680,7 @@ private fun BookReaderScreen(
     val scope = rememberCoroutineScope()
     var playbackFadeJob by remember { mutableStateOf<Job?>(null) }
     val player = remember(context) {
-        ExoPlayer.Builder(context)
-            .setSeekBackIncrementMs(10_000L)
-            .setSeekForwardIncrementMs(10_000L)
-            .build()
+        BookReaderPlaybackSession.acquirePlayer(context)
     }
     fun setLookupPlaybackState(play: Boolean) {
         playbackFadeJob?.cancel()
@@ -782,9 +776,6 @@ private fun BookReaderScreen(
         coverModeEnabled = false
     }
 
-    DisposableEffect(player) {
-        onDispose { player.release() }
-    }
     DisposableEffect(notificationController) {
         onDispose { notificationController.release() }
     }
@@ -921,14 +912,21 @@ private fun BookReaderScreen(
             playbackRestoreCompleted = true
             return@LaunchedEffect
         }
-        val savedPositionMs = withContext(Dispatchers.IO) {
-            loadBookReaderPlaybackSnapshotOrNull(context, playbackPositionKey)?.positionMs ?: 0L
+        val sameSharedAudio = BookReaderPlaybackSession.currentAudioUri() == selectedAudio.toString()
+        val restoredPositionMs = if (sameSharedAudio) {
+            player.currentPosition.coerceAtLeast(0L)
+        } else {
+            withContext(Dispatchers.IO) {
+                loadBookReaderPlaybackSnapshotOrNull(context, playbackPositionKey)?.positionMs ?: 0L
+            }.coerceAtLeast(0L)
         }
-        val restoredPositionMs = savedPositionMs.coerceAtLeast(0L)
-        player.setMediaItem(MediaItem.fromUri(selectedAudio))
-        player.prepare()
-        player.seekTo(restoredPositionMs)
-        positionMs = restoredPositionMs
+        BookReaderPlaybackSession.prepareAudioIfNeeded(
+            context = context,
+            audioUri = selectedAudio,
+            restorePositionMs = restoredPositionMs,
+            forceSeekOnSameAudio = false
+        )
+        positionMs = player.currentPosition.coerceAtLeast(0L)
         playbackRestoreCompleted = true
     }
 

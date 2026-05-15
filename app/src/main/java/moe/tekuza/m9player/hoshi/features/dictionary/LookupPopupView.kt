@@ -35,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.RectangleShape
@@ -208,9 +209,9 @@ internal fun LookupPopupView(
             modifier = Modifier
                 .width(frame.width.dp)
                 .height(frame.height.dp)
+                .alpha(if (contentReady) 1f else 0f)
                 .clip(popupShape)
-                .background(popupBackground)
-                .then(if (contentReady) Modifier else Modifier),
+                .background(popupBackground),
             shape = popupShape,
             color = popupBackground,
             border = BorderStroke(1.dp, popupBorder),
@@ -362,6 +363,7 @@ private fun LookupPopupWebView(
     val callbackHolder = remember { PopupWebViewCallbackHolder(callbacks) }
     callbackHolder.callbacks = callbacks
     val lookupResultsHolder = remember { PopupLookupResultsHolder(results) }
+    val contentReadyGate = remember { PopupContentReadyGate() }
     val offsetState = remember {
         PopupWebViewOffsetState(
             selectionOffsetX = selectionOffsetX,
@@ -372,6 +374,7 @@ private fun LookupPopupWebView(
     var appliedClearSelectionSignal by remember { mutableStateOf(clearSelectionSignal) }
     var appliedBackSignal by remember { mutableStateOf(backSignal) }
     var appliedForwardSignal by remember { mutableStateOf(forwardSignal) }
+    var shellReady by remember { mutableStateOf(false) }
     AndroidView(
         modifier = modifier
             .fillMaxSize()
@@ -388,6 +391,8 @@ private fun LookupPopupWebView(
                         callbackHolder = callbackHolder,
                         lookupResultsHolder = lookupResultsHolder,
                         offsetState = offsetState,
+                        contentReadyGate = contentReadyGate,
+                        onShellReady = { shellReady = true },
                     ),
                     "HoshiPopup",
                 )
@@ -402,6 +407,8 @@ private fun LookupPopupWebView(
             if (loadedHtml != html) {
                 lookupResultsHolder.results = results
                 loadedHtml = html
+                shellReady = false
+                contentReadyGate.reset()
                 webView.loadDataWithBaseURL(
                     "https://hoshi.local/popup/",
                     html,
@@ -409,6 +416,9 @@ private fun LookupPopupWebView(
                     "UTF-8",
                     null,
                 )
+            }
+            if (shellReady) {
+                lookupResultsHolder.results = results
             }
             if (appliedClearSelectionSignal != clearSelectionSignal) {
                 appliedClearSelectionSignal = clearSelectionSignal

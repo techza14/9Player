@@ -243,6 +243,7 @@ object BookReaderFloatingBridge {
     fun currentPlaybackSpeed(): Float = playbackSpeedSnapshot
     fun isCueLoopEnabled(): Boolean = cueLoopEnabledSnapshot
     fun currentBookKey(): String? = currentBookKeySnapshot
+    fun hasController(): Boolean = controller != null
 
     fun setCurrentBookKey(context: Context, bookKey: String?) {
         val normalized = bookKey?.trim()?.takeIf { it.isNotBlank() }
