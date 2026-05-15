@@ -1,0 +1,291 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/reader_menu_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <View
+        android:id="@+id/reader_menu_scrim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <LinearLayout
+        android:id="@+id/reader_title_bar"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:layout_gravity="top"
+        android:background="@drawable/reader_toolbar_bg"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="8dp"
+        android:paddingEnd="4dp">
+
+        <TextView
+            android:id="@+id/reader_back"
+            android:layout_width="52dp"
+            android:layout_height="match_parent"
+            android:background="@drawable/reader_menu_touch"
+            android:gravity="center"
+            android:text="‹"
+            android:textColor="#2C241B"
+            android:textSize="34sp" />
+
+        <TextView
+            android:id="@+id/reader_toolbar_title"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:gravity="center_vertical"
+            android:singleLine="true"
+            android:textColor="#2C241B"
+            android:textSize="22sp" />
+
+        <TextView
+            android:id="@+id/reader_import"
+            android:layout_width="58dp"
+            android:layout_height="match_parent"
+            android:background="@drawable/reader_menu_touch"
+            android:gravity="center"
+            android:text="导入"
+            android:textColor="#2C241B"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/reader_encoding"
+            android:layout_width="82dp"
+            android:layout_height="match_parent"
+            android:background="@drawable/reader_menu_touch"
+            android:gravity="center"
+            android:text="设置编码"
+            android:textColor="#2C241B"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/reader_overflow"
+            android:layout_width="46dp"
+            android:layout_height="match_parent"
+            android:background="@drawable/reader_menu_touch"
+            android:gravity="center"
+            android:text="⋮"
+            android:textColor="#2C241B"
+            android:textSize="30sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/reader_brightness"
+        android:layout_width="52dp"
+        android:layout_height="260dp"
+        android:layout_gravity="start|center_vertical"
+        android:layout_marginStart="16dp"
+        android:background="@drawable/reader_brightness_bg"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <ImageView
+            android:id="@+id/reader_brightness_auto"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:src="@drawable/reader_ic_brightness_auto"
+            android:tint="#FFFFFF" />
+
+        <SeekBar
+            android:id="@+id/reader_brightness_seek"
+            android:layout_width="180dp"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:max="255"
+            android:progress="160"
+            android:rotation="-90" />
+
+        <ImageView
+            android:id="@+id/reader_brightness_position"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:src="@drawable/reader_ic_swap_horiz"
+            android:tint="#FFFFFF" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/reader_bottom_menu"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:id="@+id/reader_floating_buttons"
+            android:layout_width="match_parent"
+            android:layout_height="80dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp">
+
+            <ImageButton
+                android:id="@+id/reader_search"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:background="@drawable/reader_fab_bg"
+                android:padding="15dp"
+                android:src="@drawable/ic_search"
+                android:tint="#2C241B" />
+
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <ImageButton
+                android:id="@+id/reader_replace"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:background="@drawable/reader_fab_bg"
+                android:padding="15dp"
+                android:src="@drawable/reader_ic_find_replace"
+                android:tint="#2C241B" />
+
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <ImageButton
+                android:id="@+id/reader_night"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:background="@drawable/reader_fab_bg"
+                android:padding="15dp"
+                android:src="@drawable/reader_ic_brightness"
+                android:tint="#2C241B" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/reader_bottom_panel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/reader_menu_panel_bg"
+            android:orientation="vertical"
+            android:paddingTop="5dp"
+            android:paddingBottom="7dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="46dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp">
+
+                <TextView
+                    android:id="@+id/reader_prev_chapter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:background="@drawable/reader_menu_touch"
+                    android:gravity="center"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="上一章"
+                    android:textColor="#2C241B"
+                    android:textSize="14sp" />
+
+                <SeekBar
+                    android:id="@+id/reader_page_seek"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:id="@+id/reader_next_chapter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:background="@drawable/reader_menu_touch"
+                    android:gravity="center"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="下一章"
+                    android:textColor="#2C241B"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="58dp"
+                android:gravity="center"
+                android:orientation="horizontal">
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <LinearLayout
+                    android:id="@+id/reader_catalog"
+                    style="@style/ReaderLegadoMenuItem">
+                    <ImageView
+                        style="@style/ReaderLegadoMenuIcon"
+                        android:src="@drawable/reader_ic_toc" />
+                    <TextView
+                        style="@style/ReaderLegadoMenuText"
+                        android:text="目录" />
+                </LinearLayout>
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="2" />
+
+                <LinearLayout
+                    android:id="@+id/reader_listen"
+                    style="@style/ReaderLegadoMenuItem">
+                    <ImageView
+                        style="@style/ReaderLegadoMenuIcon"
+                        android:src="@drawable/reader_ic_read_aloud" />
+                    <TextView
+                        android:id="@+id/reader_listen_text"
+                        style="@style/ReaderLegadoMenuText"
+                        android:text="听书" />
+                </LinearLayout>
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="2" />
+
+                <LinearLayout
+                    android:id="@+id/reader_style"
+                    style="@style/ReaderLegadoMenuItem">
+                    <ImageView
+                        style="@style/ReaderLegadoMenuIcon"
+                        android:src="@drawable/reader_ic_interface_setting" />
+                    <TextView
+                        style="@style/ReaderLegadoMenuText"
+                        android:text="界面" />
+                </LinearLayout>
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="2" />
+
+                <LinearLayout
+                    android:id="@+id/reader_setting"
+                    style="@style/ReaderLegadoMenuItem">
+                    <ImageView
+                        style="@style/ReaderLegadoMenuIcon"
+                        android:src="@drawable/reader_ic_settings" />
+                    <TextView
+                        style="@style/ReaderLegadoMenuText"
+                        android:text="设置" />
+                </LinearLayout>
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

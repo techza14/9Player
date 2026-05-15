@@ -13,6 +13,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Space
@@ -72,6 +74,9 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
     private var syncJob: Job? = null
     private var preferredCharsetName: String? = null
+    private var searchQuery: String? = null
+    private var searchHitPages: List<Int> = emptyList()
+    private var searchHitIndex: Int = -1
     private val openBookDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@registerForActivityResult
         keepReadPermission(this, uri)
@@ -239,21 +244,71 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     private fun buildReadMenu(): View {
-        return FrameLayout(this).apply {
-            addView(View(this@LegadoReaderPrototypeActivity).apply {
-                setBackgroundColor(Color.TRANSPARENT)
-                setOnClickListener {
-                    audioControlPanel.visibility = View.GONE
-                    moreSettingsPanel.visibility = View.GONE
-                    readMenu.visibility = View.GONE
-                }
-            }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        return layoutInflater.inflate(R.layout.view_m9_legado_read_menu, null, false).apply {
+            findViewById<View>(R.id.reader_menu_scrim).setOnClickListener {
+                audioControlPanel.visibility = View.GONE
+                moreSettingsPanel.visibility = View.GONE
+                readMenu.visibility = View.GONE
+            }
+            findViewById<TextView>(R.id.reader_back).setOnClickListener { finish() }
+            findViewById<TextView>(R.id.reader_toolbar_title).also {
+                toolbarTitleText = it
+                it.text = currentReaderTitle()
+            }
+            findViewById<TextView>(R.id.reader_import).setOnClickListener {
+                openBookDocument.launch(arrayOf("application/epub+zip", "text/plain", "application/octet-stream"))
+            }
+            findViewById<TextView>(R.id.reader_encoding).setOnClickListener {
+                showEncodingMenu(it)
+            }
+            findViewById<TextView>(R.id.reader_overflow).setOnClickListener {
+                showOverflowMenu(it)
+            }
+            findViewById<ImageButton>(R.id.reader_search).setOnClickListener {
+                showSearchDialog()
+            }
+            findViewById<ImageButton>(R.id.reader_replace).setOnClickListener {
+                showSasayakiMatchDialog()
+            }
+            findViewById<ImageButton>(R.id.reader_night).setOnClickListener {
+                Toast.makeText(this@LegadoReaderPrototypeActivity, "夜间主题稍后接入", Toast.LENGTH_SHORT).show()
+            }
+            findViewById<TextView>(R.id.reader_prev_chapter).setOnClickListener { moveChapter(-1) }
+            findViewById<TextView>(R.id.reader_next_chapter).setOnClickListener { moveChapter(1) }
+            findViewById<SeekBar>(R.id.reader_page_seek).also { seek ->
+                chapterSeekBar = seek
+                seek.max = 0
+                seek.progress = 0
+                seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        if (fromUser && pages.isNotEmpty()) {
+                            pageIndex = progress.coerceIn(0, pages.lastIndex)
+                            activeCueIndex = -1
+                            renderCurrentPage()
+                        }
+                    }
 
-            addView(buildTitleBar(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(58), Gravity.TOP))
-            addView(buildBrightnessBar(), FrameLayout.LayoutParams(dp(52), dp(260), Gravity.START or Gravity.CENTER_VERTICAL).apply {
-                leftMargin = dp(16)
-            })
-            addView(buildBottomMenu(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+                })
+            }
+            findViewById<LinearLayout>(R.id.reader_catalog).setOnClickListener {
+                showCatalogDialog()
+            }
+            findViewById<LinearLayout>(R.id.reader_listen).setOnClickListener {
+                toggleAudioControlPanel()
+            }
+            findViewById<TextView>(R.id.reader_listen_text).also {
+                listenActionText = it
+            }
+            findViewById<LinearLayout>(R.id.reader_style).setOnClickListener {
+                showStyleDialog()
+            }
+            findViewById<LinearLayout>(R.id.reader_setting).setOnClickListener {
+                audioControlPanel.visibility = View.GONE
+                moreSettingsPanel.visibility =
+                    if (moreSettingsPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            }
         }
     }
 
@@ -378,33 +433,18 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     private fun buildAudioControlPanel(): View {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(MENU_BG)
-            setPadding(dp(18), dp(14), dp(18), dp(18))
+        return layoutInflater.inflate(R.layout.dialog_m9_read_aloud, null, false).apply {
             elevation = dp(8).toFloat()
             isClickable = true
             setOnClickListener { }
-
-            addView(text("听书", 16f, MENU_TEXT).apply {
-                gravity = Gravity.CENTER
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(34)))
-
-            addView(LinearLayout(this@LegadoReaderPrototypeActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-                addView(audioControlButton("上一句").apply {
-                    setOnClickListener { seekToAdjacentCue(-1) }
-                }, LinearLayout.LayoutParams(0, dp(58), 1f))
-                addView(audioControlButton("播放").apply {
-                    audioPlayPauseText = this
-                    textSize = 18f
-                    setOnClickListener { toggleAudioPlayback() }
-                }, LinearLayout.LayoutParams(0, dp(58), 1.2f))
-                addView(audioControlButton("下一句").apply {
-                    setOnClickListener { seekToAdjacentCue(1) }
-                }, LinearLayout.LayoutParams(0, dp(58), 1f))
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(66)))
+            findViewById<TextView>(R.id.audio_prev_sentence_text).setOnClickListener { seekToAdjacentCue(-1) }
+            findViewById<ImageButton>(R.id.audio_play_prev).setOnClickListener { seekToAdjacentCue(-1) }
+            findViewById<TextView>(R.id.audio_play_pause).also {
+                audioPlayPauseText = it
+                it.setOnClickListener { toggleAudioPlayback() }
+            }
+            findViewById<ImageButton>(R.id.audio_play_next).setOnClickListener { seekToAdjacentCue(1) }
+            findViewById<TextView>(R.id.audio_next_sentence_text).setOnClickListener { seekToAdjacentCue(1) }
         }
     }
 
@@ -538,6 +578,96 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         if (::toolbarTitleText.isInitialized) toolbarTitleText.text = title
     }
 
+    private fun showSearchDialog() {
+        val input = EditText(this).apply {
+            setSingleLine(true)
+            hint = "搜索正文"
+            setText(searchQuery.orEmpty())
+            setSelection(text.length)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("搜索")
+            .setView(input)
+            .setPositiveButton("搜索") { _, _ ->
+                startSearch(input.text.toString().trim())
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun startSearch(query: String) {
+        if (query.isBlank()) return
+        val hits = pages.mapIndexedNotNull { index, page ->
+            index.takeIf { page.text.contains(query, ignoreCase = true) }
+        }
+        if (hits.isEmpty()) {
+            Toast.makeText(this, "没有搜索结果", Toast.LENGTH_SHORT).show()
+            return
+        }
+        searchQuery = query
+        searchHitPages = hits
+        searchHitIndex = 0
+        pageIndex = hits.first()
+        activeCueIndex = -1
+        renderCurrentPage()
+        Toast.makeText(this, "1 / ${hits.size}", Toast.LENGTH_SHORT).show()
+        readMenu.visibility = View.GONE
+    }
+
+    private fun showCatalogDialog() {
+        val chapters = document?.chapters.orEmpty()
+        if (chapters.isEmpty()) {
+            Toast.makeText(this, "目录还没有加载完成", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("目录")
+            .setItems(chapters.mapIndexed { index, chapter ->
+                "${index + 1}. ${chapter.title.ifBlank { "Chapter ${index + 1}" }}"
+            }.toTypedArray()) { _, which ->
+                val next = pages.indexOfFirst { it.chapterIndex == which }
+                if (next >= 0) {
+                    pageIndex = next
+                    activeCueIndex = -1
+                    renderCurrentPage()
+                    readMenu.visibility = View.GONE
+                }
+            }
+            .show()
+    }
+
+    private fun showStyleDialog() {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+        }
+        val sizeLabel = text("字体大小：${pageTextView.textSize / resources.displayMetrics.scaledDensity}", 14f, MENU_TEXT)
+        val sizeSeek = SeekBar(this).apply {
+            max = 20
+            progress = ((pageTextView.textSize / resources.displayMetrics.scaledDensity).toInt() - 14).coerceIn(0, max)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) {
+                        val sp = 14 + progress
+                        pageTextView.textSize = sp.toFloat()
+                        sizeLabel.text = "字体大小：$sp"
+                        loadDisplayedBook()
+                    }
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        container.addView(sizeLabel, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(38)))
+        container.addView(sizeSeek, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48)))
+        AlertDialog.Builder(this)
+            .setTitle("界面")
+            .setView(container)
+            .setPositiveButton("完成", null)
+            .show()
+    }
+
     private fun loadDisplayedBook() {
         val pageWidth = pageTextView.width.takeIf { it > 0 } ?: (resources.displayMetrics.widthPixels - dp(44))
         val pageHeight = pageTextView.height.takeIf { it > 0 } ?: (resources.displayMetrics.heightPixels - dp(220))
@@ -605,20 +735,43 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         }
         val match = cueMatchesByCueIndex[activeCueIndex]
         val highlight = highlightPageText(page, match)
-        pageTextView.text = if (highlight != null) {
+        val searchHighlight = searchQuery
+            ?.takeIf { searchHitPages.getOrNull(searchHitIndex) == pageIndex }
+            ?.let { query ->
+                page.text.indexOf(query, ignoreCase = true)
+                    .takeIf { it >= 0 }
+                    ?.let { it to (it + query.length) }
+            }
+        pageTextView.text = if (highlight != null || searchHighlight != null) {
             val span = SpannableString(page.text)
-            span.setSpan(
-                BackgroundColorSpan(0x66E53935),
-                highlight.first,
-                highlight.second,
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
-            span.setSpan(
-                ForegroundColorSpan(READER_TEXT),
-                highlight.first,
-                highlight.second,
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
+            highlight?.let {
+                span.setSpan(
+                    BackgroundColorSpan(0x66E53935),
+                    it.first,
+                    it.second,
+                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                span.setSpan(
+                    ForegroundColorSpan(READER_TEXT),
+                    it.first,
+                    it.second,
+                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            }
+            searchHighlight?.let {
+                span.setSpan(
+                    BackgroundColorSpan(0xAAFFD54F.toInt()),
+                    it.first,
+                    it.second,
+                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                span.setSpan(
+                    ForegroundColorSpan(Color.BLACK),
+                    it.first,
+                    it.second,
+                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            }
             span
         } else {
             page.text
@@ -689,7 +842,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private fun updateAudioControlLabels() {
         val isPlaying = player?.isPlaying == true
         if (::listenActionText.isInitialized) {
-            listenActionText.text = if (isPlaying) "◇\n暂停" else "◇\n听书"
+            listenActionText.text = if (isPlaying) "暂停" else "听书"
         }
         if (::audioPlayPauseText.isInitialized) {
             audioPlayPauseText.text = if (isPlaying) "暂停" else "播放"
