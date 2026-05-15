@@ -39,6 +39,8 @@
     <string name="settings_section_advanced">詳細</string>
     <string name="settings_section_about">情報</string>
     <string name="settings_audiobook_title">オーディオブック</string>
+    <string name="settings_reader_prototype_title">リーダー試作画面</string>
+    <string name="settings_reader_prototype_subtitle">静的な Legado 風読書 UI</string>
     <string name="settings_control_mode_title">コントロールモード</string>
     <string name="settings_audiobook_ui_title">オーディオブックUI</string>
     <string name="settings_audiobook_ui_subtitle">字幕方向ごとの再生画面レイアウト</string>

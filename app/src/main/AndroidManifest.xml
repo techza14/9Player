@@ -31,6 +31,12 @@
             android:value="true" />
 
         <activity
+            android:name=".LegadoReaderPrototypeActivity"
+            android:exported="false"
+            android:label="@string/settings_reader_prototype_title"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Tset" />
+        <activity
             android:name=".BookReaderActivity"
             android:exported="false"
             android:label="Book Reader"

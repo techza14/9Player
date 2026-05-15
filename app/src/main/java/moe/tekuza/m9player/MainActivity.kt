@@ -2753,6 +2753,7 @@ private fun ReaderSyncScreen() {
                         selectedAppLanguageLabel = selectedAppLanguage.displayLabel(context),
                         versionName = resolveAppVersionName(context),
                         onAudiobookClick = { context.startActivity(Intent(context, AudiobookSettingsActivity::class.java)) },
+                        onReaderPrototypeClick = { context.startActivity(Intent(context, LegadoReaderPrototypeActivity::class.java)) },
                         onControlModeClick = { context.startActivity(Intent(context, ControlModeSettingsActivity::class.java)) },
                         onAudiobookUiClick = { context.startActivity(Intent(context, AudiobookUiSettingsActivity::class.java)) },
                         onFontClick = { context.startActivity(Intent(context, FontSettingsActivity::class.java)) },
