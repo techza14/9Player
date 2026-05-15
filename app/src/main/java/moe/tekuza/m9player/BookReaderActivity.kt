@@ -722,6 +722,16 @@ private fun BookReaderScreen(
                 }
                 audiobookSettings = updated
                 if (!uiTestMode && playbackRestoreCompleted && playbackPositionKey.isNotBlank()) {
+                    val currentAudioUriText = audioUri?.toString()
+                    val sharedAudioUri = BookReaderFloatingBridge.currentAudioUri()
+                    if (
+                        currentAudioUriText != null &&
+                        currentAudioUriText == sharedAudioUri
+                    ) {
+                        positionMs = player.currentPosition.coerceAtLeast(0L)
+                        durationMs = if (player.duration > 0L) player.duration else durationMs.coerceAtLeast(0L)
+                        return
+                    }
                     val snapshot = loadBookReaderPlaybackSnapshotOrNull(context, playbackPositionKey)
                     val targetPosition = snapshot?.positionMs?.coerceAtLeast(0L) ?: 0L
                     val currentPosition = player.currentPosition.coerceAtLeast(0L)
@@ -2105,6 +2115,10 @@ private fun BookReaderScreen(
                 positionMs = target
             }
 
+            override fun setPlaybackSpeed(speed: Float) {
+                playbackSpeed = speed.coerceIn(0.5f, 3.0f)
+            }
+
             override fun seekPrevious() {
                 latestSeekPrevious()
             }
@@ -2150,7 +2164,15 @@ private fun BookReaderScreen(
                 latestToggleFavorite()
             }
 
-            override fun showReader() {
+            override fun returnToPlayer() {
+                val current = player.currentPosition.coerceAtLeast(0L)
+                val total = if (player.duration > 0L) player.duration else durationMs.coerceAtLeast(0L)
+                saveBookReaderPlaybackPosition(
+                    context = context,
+                    bookKey = playbackPositionKey,
+                    positionMs = if (playbackCompleted) 0L else normalizeBookReaderPlaybackPosition(current, total),
+                    durationMs = total
+                )
                 val intent = Intent(context, BookReaderActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                     addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)

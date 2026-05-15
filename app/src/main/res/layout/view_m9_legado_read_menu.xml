@@ -42,16 +42,6 @@
             android:textSize="22sp" />
 
         <TextView
-            android:id="@+id/reader_import"
-            android:layout_width="58dp"
-            android:layout_height="match_parent"
-            android:background="@drawable/reader_menu_touch"
-            android:gravity="center"
-            android:text="导入"
-            android:textColor="#2C241B"
-            android:textSize="15sp" />
-
-        <TextView
             android:id="@+id/reader_encoding"
             android:layout_width="82dp"
             android:layout_height="match_parent"
@@ -129,9 +119,12 @@
                 android:layout_width="56dp"
                 android:layout_height="56dp"
                 android:background="@drawable/reader_fab_bg"
+                android:contentDescription="搜索"
+                android:elevation="2dp"
                 android:padding="15dp"
                 android:src="@drawable/ic_search"
-                android:tint="#2C241B" />
+                android:tint="#2C241B"
+                android:translationZ="2dp" />
 
             <Space
                 android:layout_width="0dp"
@@ -143,9 +136,12 @@
                 android:layout_width="56dp"
                 android:layout_height="56dp"
                 android:background="@drawable/reader_fab_bg"
+                android:contentDescription="替"
+                android:elevation="2dp"
                 android:padding="15dp"
                 android:src="@drawable/reader_ic_find_replace"
-                android:tint="#2C241B" />
+                android:tint="#2C241B"
+                android:translationZ="2dp" />
 
             <Space
                 android:layout_width="0dp"
@@ -157,9 +153,12 @@
                 android:layout_width="56dp"
                 android:layout_height="56dp"
                 android:background="@drawable/reader_fab_bg"
+                android:contentDescription="播放条"
+                android:elevation="2dp"
                 android:padding="15dp"
                 android:src="@drawable/reader_ic_play_24dp"
-                android:tint="#2C241B" />
+                android:tint="#2C241B"
+                android:translationZ="2dp" />
 
             <Space
                 android:layout_width="0dp"
@@ -171,9 +170,12 @@
                 android:layout_width="56dp"
                 android:layout_height="56dp"
                 android:background="@drawable/reader_fab_bg"
+                android:contentDescription="夜间模式"
+                android:elevation="2dp"
                 android:padding="15dp"
                 android:src="@drawable/reader_ic_brightness"
-                android:tint="#2C241B" />
+                android:tint="#2C241B"
+                android:translationZ="2dp" />
         </LinearLayout>
 
         <LinearLayout

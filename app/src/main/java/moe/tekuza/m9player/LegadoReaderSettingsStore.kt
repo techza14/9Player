@@ -27,7 +27,9 @@ internal data class LegadoReaderPersistedState(
     val readBodyToLh: Boolean = true,
     val hideNavigationBar: Boolean = false,
     val showBrightnessView: Boolean = true,
-    val volumeKeyPage: Boolean = true,
+    val brightnessAuto: Boolean = true,
+    val brightnessValue: Int = 160,
+    val brightnessPanelOnRight: Boolean = false,
     val showReadTitleAddition: Boolean = true,
     val useZhLayout: Boolean = true,
     val textFullJustify: Boolean = true,
@@ -36,7 +38,6 @@ internal data class LegadoReaderPersistedState(
     val progressByChapter: Boolean = true,
     val keepScreenOn: Boolean = false,
     val mouseWheelPage: Boolean = true,
-    val volumeKeyPageOnPlay: Boolean = false,
     val keyPageOnLongPress: Boolean = false,
     val noAnimScrollPage: Boolean = false,
     val previewImageByClick: Boolean = false,
@@ -79,7 +80,9 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         readBodyToLh = json.optBoolean("readBodyToLh", true),
         hideNavigationBar = json.optBoolean("hideNavigationBar", false),
         showBrightnessView = json.optBoolean("showBrightnessView", true),
-        volumeKeyPage = json.optBoolean("volumeKeyPage", true),
+        brightnessAuto = json.optBoolean("brightnessAuto", true),
+        brightnessValue = json.optInt("brightnessValue", 160),
+        brightnessPanelOnRight = json.optBoolean("brightnessPanelOnRight", false),
         showReadTitleAddition = json.optBoolean("showReadTitleAddition", true),
         useZhLayout = json.optBoolean("useZhLayout", true),
         textFullJustify = json.optBoolean("textFullJustify", true),
@@ -91,7 +94,6 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         progressByChapter = json.optBoolean("progressByChapter", true),
         keepScreenOn = json.optBoolean("keepScreenOn", false),
         mouseWheelPage = json.optBoolean("mouseWheelPage", true),
-        volumeKeyPageOnPlay = json.optBoolean("volumeKeyPageOnPlay", false),
         keyPageOnLongPress = json.optBoolean("keyPageOnLongPress", false),
         noAnimScrollPage = json.optBoolean("noAnimScrollPage", false),
         previewImageByClick = json.optBoolean("previewImageByClick", false),
@@ -125,7 +127,9 @@ internal fun saveLegadoReaderPersistedState(context: Context, state: LegadoReade
         put("readBodyToLh", state.readBodyToLh)
         put("hideNavigationBar", state.hideNavigationBar)
         put("showBrightnessView", state.showBrightnessView)
-        put("volumeKeyPage", state.volumeKeyPage)
+        put("brightnessAuto", state.brightnessAuto)
+        put("brightnessValue", state.brightnessValue)
+        put("brightnessPanelOnRight", state.brightnessPanelOnRight)
         put("showReadTitleAddition", state.showReadTitleAddition)
         put("useZhLayout", state.useZhLayout)
         put("textFullJustify", state.textFullJustify)
@@ -134,7 +138,6 @@ internal fun saveLegadoReaderPersistedState(context: Context, state: LegadoReade
         put("progressByChapter", state.progressByChapter)
         put("keepScreenOn", state.keepScreenOn)
         put("mouseWheelPage", state.mouseWheelPage)
-        put("volumeKeyPageOnPlay", state.volumeKeyPageOnPlay)
         put("keyPageOnLongPress", state.keyPageOnLongPress)
         put("noAnimScrollPage", state.noAnimScrollPage)
         put("previewImageByClick", state.previewImageByClick)

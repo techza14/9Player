@@ -272,6 +272,7 @@
     <string name="error_audiobook_folder_not_directory">選択したオーディオブックのパスはフォルダではありません。</string>
     <string name="error_audio_delete_failed">元の音声ファイルの削除に失敗したため、そのまま保持しました。</string>
     <string name="error_srt_delete_failed">元の SRT ファイルの削除に失敗したため、そのまま保持しました。</string>
+    <string name="error_ebook_delete_failed">元の ebook ファイルの削除に失敗したため、そのまま保持しました。</string>
     <string name="error_create_folder_failed">フォルダを作成できません：%1$s</string>
     <string name="error_create_aud_folder_failed">新しい Aud フォルダを作成できません。</string>
     <string name="error_create_target_file_failed">対象フォルダにファイルを作成できません：%1$s</string>

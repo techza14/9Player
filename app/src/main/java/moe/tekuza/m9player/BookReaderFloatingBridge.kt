@@ -21,13 +21,14 @@ object BookReaderFloatingBridge {
         fun isCueLoopEnabled(): Boolean
         fun togglePlayPause()
         fun setPlaying(play: Boolean)
-        fun seekToPosition(positionMs: Long)
+        fun seekToPosition(targetPositionMs: Long)
+        fun setPlaybackSpeed(speed: Float)
         fun seekPrevious()
         fun seekNext()
         fun replayCurrentCue()
         fun toggleCueLoop()
         fun toggleFavorite()
-        fun showReader()
+        fun returnToPlayer()
         fun lookupCurrentSubtitleAt(offset: Int)
     }
 
@@ -399,8 +400,12 @@ object BookReaderFloatingBridge {
         controller?.setPlaying(play)
     }
 
-    fun seekToPosition(positionMs: Long) {
-        controller?.seekToPosition(positionMs.coerceAtLeast(0L))
+    fun seekToPosition(targetPositionMs: Long) {
+        controller?.seekToPosition(targetPositionMs.coerceAtLeast(0L))
+    }
+
+    fun setPlaybackSpeed(speed: Float) {
+        controller?.setPlaybackSpeed(speed)
     }
 
     fun seekPrevious() {
@@ -426,8 +431,8 @@ object BookReaderFloatingBridge {
         controller?.toggleFavorite()
     }
 
-    fun showReader() {
-        controller?.showReader()
+    fun returnToPlayer() {
+        controller?.returnToPlayer()
     }
 
     fun lookupCurrentSubtitleAt(offset: Int) {

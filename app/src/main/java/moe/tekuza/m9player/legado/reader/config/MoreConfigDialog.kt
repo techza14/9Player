@@ -13,13 +13,11 @@ internal data class MoreConfigState(
     val readBodyToLh: Boolean = true,
     val hideNavigationBar: Boolean = false,
     val showBrightnessView: Boolean = true,
-    val volumeKeyPage: Boolean = true,
     val showReadTitleAddition: Boolean = true,
     val useZhLayout: Boolean = true,
     val textFullJustify: Boolean = true,
     val textBottomJustify: Boolean = true,
     val mouseWheelPage: Boolean = true,
-    val volumeKeyPageOnPlay: Boolean = false,
     val keyPageOnLongPress: Boolean = false,
     val noAnimScrollPage: Boolean = false,
     val previewImageByClick: Boolean = false,
@@ -36,13 +34,11 @@ internal class MoreConfigDialog @JvmOverloads constructor(
     var onHideNavigationBarChanged: ((Boolean) -> Unit)? = null
     var onReadBodyToLhChanged: ((Boolean) -> Unit)? = null
     var onShowBrightnessViewChanged: ((Boolean) -> Unit)? = null
-    var onVolumeKeyPageChanged: ((Boolean) -> Unit)? = null
     var onShowReadTitleAdditionChanged: ((Boolean) -> Unit)? = null
     var onUseZhLayoutChanged: ((Boolean) -> Unit)? = null
     var onTextFullJustifyChanged: ((Boolean) -> Unit)? = null
     var onTextBottomJustifyChanged: ((Boolean) -> Unit)? = null
     var onMouseWheelPageChanged: ((Boolean) -> Unit)? = null
-    var onVolumeKeyPageOnPlayChanged: ((Boolean) -> Unit)? = null
     var onKeyPageOnLongPressChanged: ((Boolean) -> Unit)? = null
     var onNoAnimScrollPageChanged: ((Boolean) -> Unit)? = null
     var onPreviewImageByClickChanged: ((Boolean) -> Unit)? = null
@@ -68,13 +64,11 @@ internal class MoreConfigDialog @JvmOverloads constructor(
         bindSwitch(R.id.more_read_body_to_lh, state.readBodyToLh, onReadBodyToLhChanged)
         bindSwitch(R.id.more_hide_navigation_bar, state.hideNavigationBar, onHideNavigationBarChanged)
         bindSwitch(R.id.more_show_brightness_view, state.showBrightnessView, onShowBrightnessViewChanged)
-        bindSwitch(R.id.more_volume_key_page, state.volumeKeyPage, onVolumeKeyPageChanged)
         bindSwitch(R.id.more_show_read_title_addition, state.showReadTitleAddition, onShowReadTitleAdditionChanged)
         bindSwitch(R.id.more_use_zh_layout, state.useZhLayout, onUseZhLayoutChanged)
         bindSwitch(R.id.more_text_full_justify, state.textFullJustify, onTextFullJustifyChanged)
         bindSwitch(R.id.more_text_bottom_justify, state.textBottomJustify, onTextBottomJustifyChanged)
         bindSwitch(R.id.more_mouse_wheel_page, state.mouseWheelPage, onMouseWheelPageChanged)
-        bindSwitch(R.id.more_volume_key_page_on_play, state.volumeKeyPageOnPlay, onVolumeKeyPageOnPlayChanged)
         bindSwitch(R.id.more_key_page_on_long_press, state.keyPageOnLongPress, onKeyPageOnLongPressChanged)
         bindSwitch(R.id.more_no_anim_scroll_page, state.noAnimScrollPage, onNoAnimScrollPageChanged)
         bindSwitch(R.id.more_preview_image_by_click, state.previewImageByClick, onPreviewImageByClickChanged)

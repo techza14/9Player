@@ -139,27 +139,6 @@
         <LinearLayout style="@style/ReaderMoreRow">
             <TextView
                 style="@style/ReaderMoreLabel"
-                android:text="音量键翻页" />
-            <Switch
-                android:id="@+id/more_volume_key_page"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:checked="true" />
-        </LinearLayout>
-
-        <LinearLayout style="@style/ReaderMoreRow">
-            <TextView
-                style="@style/ReaderMoreLabel"
-                android:text="播放时音量键翻页" />
-            <Switch
-                android:id="@+id/more_volume_key_page_on_play"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
-        </LinearLayout>
-
-        <LinearLayout style="@style/ReaderMoreRow">
-            <TextView
-                style="@style/ReaderMoreLabel"
                 android:text="按键长按翻页" />
             <Switch
                 android:id="@+id/more_key_page_on_long_press"

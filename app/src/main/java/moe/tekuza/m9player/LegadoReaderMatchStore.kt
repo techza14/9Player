@@ -138,25 +138,3 @@ internal fun saveLegadoReaderMatchSnapshot(
         "save matches=${snapshot.matches.size} totalCues=${snapshot.totalCues} unmatched=${snapshot.unmatched} key=${storeKey.take(48)}"
     )
 }
-
-internal fun clearLegadoReaderMatchSnapshot(context: Context, storeKey: String? = null) {
-    val prefs = context.getSharedPreferences(LEGADO_READER_MATCH_PREFS, Context.MODE_PRIVATE)
-    if (storeKey.isNullOrBlank()) {
-        prefs.edit().remove(LEGADO_READER_MATCH_KEY).apply()
-        Log.d(LEGADO_READER_MATCH_LOG_TAG, "clear all snapshots")
-        return
-    }
-    val root = prefs.getString(LEGADO_READER_MATCH_KEY, null)
-        ?.let { runCatching { JSONObject(it) }.getOrNull() }
-        ?: run {
-            Log.d(LEGADO_READER_MATCH_LOG_TAG, "clear skipped missing root key=${storeKey.take(48)}")
-            return
-        }
-    val snapshots = root.optJSONObject("snapshots") ?: run {
-        Log.d(LEGADO_READER_MATCH_LOG_TAG, "clear skipped missing snapshots key=${storeKey.take(48)}")
-        return
-    }
-    snapshots.remove(storeKey)
-    prefs.edit().putString(LEGADO_READER_MATCH_KEY, root.toString()).apply()
-    Log.d(LEGADO_READER_MATCH_LOG_TAG, "clear snapshot key=${storeKey.take(48)}")
-}

@@ -270,6 +270,7 @@
     <string name="error_audiobook_folder_not_directory">所選有聲書路徑不是資料夾。</string>
     <string name="error_audio_delete_failed">音訊原始檔刪除失敗，已保留原檔。</string>
     <string name="error_srt_delete_failed">SRT 原始檔刪除失敗，已保留原檔。</string>
+    <string name="error_ebook_delete_failed">Ebook 原始檔刪除失敗，已保留原檔。</string>
     <string name="error_create_folder_failed">無法建立資料夾：%1$s</string>
     <string name="error_create_aud_folder_failed">無法建立新的 Aud 資料夾。</string>
     <string name="error_create_target_file_failed">無法在目標資料夾建立檔案：%1$s</string>

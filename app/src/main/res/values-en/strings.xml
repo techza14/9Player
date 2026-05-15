@@ -270,6 +270,7 @@
     <string name="error_audiobook_folder_not_directory">The selected audiobook path is not a folder.</string>
     <string name="error_audio_delete_failed">Failed to delete the original audio file; it was kept.</string>
     <string name="error_srt_delete_failed">Failed to delete the original SRT file; it was kept.</string>
+    <string name="error_ebook_delete_failed">Failed to delete the original ebook file; it was kept.</string>
     <string name="error_create_folder_failed">Unable to create folder: %1$s</string>
     <string name="error_create_aud_folder_failed">Unable to create a new Aud folder.</string>
     <string name="error_create_target_file_failed">Unable to create target file in folder: %1$s</string>

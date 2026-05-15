@@ -1267,15 +1267,17 @@ private fun ReaderSyncScreen() {
                             audioSourceUri = pickedAudio,
                             audioSourceName = pickedAudioName,
                             srtSourceUri = pickedSrt,
-                            srtSourceName = pickedSrtName
+                            srtSourceName = pickedSrtName,
+                            ebookSourceUri = pickedEbook,
+                            ebookSourceName = pickedEbookName
                         )
                         val book = buildReaderBook(
                             audio = relocated.audioUri,
                             audioDisplayName = relocated.audioName,
                             srt = relocated.srtUri,
                             srtDisplayName = relocated.srtName,
-                            ebook = pickedEbook,
-                            ebookDisplayName = pickedEbookName,
+                            ebook = relocated.ebookUri,
+                            ebookDisplayName = relocated.ebookName,
                             ebookFormat = pickedEbookFormat
                         )
                         val warning = relocated.moveWarnings.takeIf { it.isNotEmpty() }?.joinToString(" ")
@@ -3692,6 +3694,8 @@ private data class RelocatedBookFiles(
     val audioName: String,
     val srtUri: Uri?,
     val srtName: String?,
+    val ebookUri: Uri?,
+    val ebookName: String?,
     val moveWarnings: List<String>
 )
 
@@ -3720,7 +3724,9 @@ private fun relocateSelectedBookFilesToAudFolder(
     audioSourceUri: Uri,
     audioSourceName: String?,
     srtSourceUri: Uri?,
-    srtSourceName: String?
+    srtSourceName: String?,
+    ebookSourceUri: Uri?,
+    ebookSourceName: String?
 ): RelocatedBookFiles {
     val root = DocumentFile.fromTreeUri(context, rootFolderUri)
         ?: error(context.getString(R.string.error_audiobook_folder_inaccessible))
@@ -3748,6 +3754,17 @@ private fun relocateSelectedBookFilesToAudFolder(
             preferredDisplayName = srtDisplayName
         )
     }
+    val copiedEbook = ebookSourceUri?.let { sourceUri ->
+        val ebookDisplayName = ebookSourceName?.trim().takeUnless { it.isNullOrBlank() }
+            ?: queryDisplayName(contentResolver, sourceUri)
+        copyUriIntoFolder(
+            context = context,
+            contentResolver = contentResolver,
+            parentFolder = audFolder,
+            sourceUri = sourceUri,
+            preferredDisplayName = ebookDisplayName
+        )
+    }
 
     val warnings = mutableListOf<String>()
     if (!deleteSourceUri(context, contentResolver, audioSourceUri)) {
@@ -3756,6 +3773,9 @@ private fun relocateSelectedBookFilesToAudFolder(
     if (srtSourceUri != null && !deleteSourceUri(context, contentResolver, srtSourceUri)) {
         warnings += context.getString(R.string.error_srt_delete_failed)
     }
+    if (ebookSourceUri != null && !deleteSourceUri(context, contentResolver, ebookSourceUri)) {
+        warnings += context.getString(R.string.error_ebook_delete_failed)
+    }
 
     return RelocatedBookFiles(
         folderName = audFolder.name?.ifBlank { "Aud" } ?: "Aud",
@@ -3763,6 +3783,8 @@ private fun relocateSelectedBookFilesToAudFolder(
         audioName = copiedAudio.displayName,
         srtUri = copiedSrt?.uri,
         srtName = copiedSrt?.displayName,
+        ebookUri = copiedEbook?.uri,
+        ebookName = copiedEbook?.displayName,
         moveWarnings = warnings
     )
 }
