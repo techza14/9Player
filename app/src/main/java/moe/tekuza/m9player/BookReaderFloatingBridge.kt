@@ -21,6 +21,7 @@ object BookReaderFloatingBridge {
         fun isCueLoopEnabled(): Boolean
         fun togglePlayPause()
         fun setPlaying(play: Boolean)
+        fun seekToPosition(positionMs: Long)
         fun seekPrevious()
         fun seekNext()
         fun replayCurrentCue()
@@ -396,6 +397,10 @@ object BookReaderFloatingBridge {
 
     fun setPlaying(play: Boolean) {
         controller?.setPlaying(play)
+    }
+
+    fun seekToPosition(positionMs: Long) {
+        controller?.seekToPosition(positionMs.coerceAtLeast(0L))
     }
 
     fun seekPrevious() {

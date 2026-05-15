@@ -153,6 +153,20 @@
                 android:layout_weight="1" />
 
             <ImageButton
+                android:id="@+id/reader_playback_bar"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:background="@drawable/reader_fab_bg"
+                android:padding="15dp"
+                android:src="@drawable/reader_ic_play_24dp"
+                android:tint="#2C241B" />
+
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <ImageButton
                 android:id="@+id/reader_night"
                 android:layout_width="56dp"
                 android:layout_height="56dp"

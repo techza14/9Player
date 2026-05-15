@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/more_config_scroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/reader_menu_panel_bg"
+    android:overScrollMode="ifContentScrolls">
+
+    <LinearLayout
+        android:id="@+id/more_config_root"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <LinearLayout
+            android:id="@+id/more_screen_orientation"
+            style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="屏幕方向" />
+            <TextView
+                android:id="@+id/more_screen_orientation_value"
+                style="@style/ReaderMoreValue"
+                android:text="跟随系统" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/more_keep_light"
+            style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="屏幕超时" />
+            <TextView
+                android:id="@+id/more_keep_light_value"
+                style="@style/ReaderMoreValue"
+                android:text="默认" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="隐藏状态栏" />
+            <Switch
+                android:id="@+id/more_hide_status_bar"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="扩展到刘海" />
+            <Switch
+                android:id="@+id/more_read_body_to_lh"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="隐藏导航栏" />
+            <Switch
+                android:id="@+id/more_hide_navigation_bar"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/more_double_page"
+            style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="平板/横屏双页" />
+            <TextView
+                android:id="@+id/more_double_page_value"
+                style="@style/ReaderMoreValue"
+                android:text="全局单页" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/more_progress_behavior"
+            style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="进度条行为" />
+            <TextView
+                android:id="@+id/more_progress_behavior_value"
+                style="@style/ReaderMoreValue"
+                android:text="调整本章页数" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="使用自定义中文分行" />
+            <Switch
+                android:id="@+id/more_use_zh_layout"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="文字两端对齐" />
+            <Switch
+                android:id="@+id/more_text_full_justify"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="文字底部对齐" />
+            <Switch
+                android:id="@+id/more_text_bottom_justify"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="鼠标滚轮翻页" />
+            <Switch
+                android:id="@+id/more_mouse_wheel_page"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="音量键翻页" />
+            <Switch
+                android:id="@+id/more_volume_key_page"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="播放时音量键翻页" />
+            <Switch
+                android:id="@+id/more_volume_key_page_on_play"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="按键长按翻页" />
+            <Switch
+                android:id="@+id/more_key_page_on_long_press"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/more_page_touch_slop"
+            style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="滑动翻页阈值" />
+            <TextView
+                android:id="@+id/more_page_touch_slop_value"
+                style="@style/ReaderMoreValue"
+                android:text="8" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="显示亮度调节控件" />
+            <Switch
+                android:id="@+id/more_show_brightness_view"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="禁用滚动点击动画" />
+            <Switch
+                android:id="@+id/more_no_anim_scroll_page"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="点击预览图片" />
+            <Switch
+                android:id="@+id/more_preview_image_by_click"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="启用绘制优化" />
+            <Switch
+                android:id="@+id/more_optimize_render"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/more_click_regional_config"
+            style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="点击区域设置" />
+            <TextView
+                style="@style/ReaderMoreValue"
+                android:text="默认" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="禁用返回键" />
+            <Switch
+                android:id="@+id/more_disable_return_key"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/more_custom_page_key"
+            style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="自定义翻页按键" />
+            <TextView
+                style="@style/ReaderMoreValue"
+                android:text="默认" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="展示顶部工具栏附加区域" />
+            <Switch
+                android:id="@+id/more_show_read_title_addition"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="工具栏样式跟随页面" />
+            <Switch
+                android:id="@+id/more_read_bar_style_follow_page"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

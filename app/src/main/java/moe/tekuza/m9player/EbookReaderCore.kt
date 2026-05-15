@@ -4,9 +4,6 @@ import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.text.Html
-import android.text.Layout
-import android.text.StaticLayout
-import android.text.TextPaint
 import android.util.Xml
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -29,35 +26,15 @@ internal data class EbookDocument(
 internal data class EbookChapter(
     val title: String,
     val text: String,
-    val sourcePath: String? = null
+    val sourcePath: String? = null,
+    val images: Map<Int, EbookImageRef> = emptyMap()
 )
 
-internal data class EbookPage(
-    val chapterIndex: Int,
-    val pageInChapter: Int,
-    val chapterPageCount: Int,
-    val globalIndex: Int,
-    val totalPages: Int,
-    val charStart: Int,
-    val charEnd: Int,
-    val title: String,
-    val text: String
-) {
-    val progressText: String
-        get() {
-            if (totalPages <= 0) return "0.0%"
-            val percent = ((globalIndex + 1).toDouble() / totalPages.toDouble() * 100.0)
-                .coerceIn(0.0, 100.0)
-            return String.format(Locale.US, "%.1f%%", percent)
-        }
-}
-
-internal data class EbookReaderLayout(
-    val contentWidthPx: Int,
-    val contentHeightPx: Int,
-    val textSizePx: Float,
-    val lineSpacingPx: Float,
-    val paragraphSpacingPx: Float
+internal data class EbookImageRef(
+    val path: String,
+    val altText: String,
+    val mediaType: String?,
+    val bytes: ByteArray
 )
 
 internal data class EbookSrtCue(
@@ -103,62 +80,6 @@ internal suspend fun loadEbookDocument(
                 loadTxtDocument(context.contentResolver, book.uri, displayTitle, preferredCharsetName)
             }
         }
-    }
-}
-
-internal fun paginateEbookDocument(
-    document: EbookDocument,
-    layout: EbookReaderLayout
-): List<EbookPage> {
-    val safeWidth = layout.contentWidthPx.coerceAtLeast(1)
-    val safeHeight = layout.contentHeightPx.coerceAtLeast(1)
-    val paint = TextPaint(TextPaint.ANTI_ALIAS_FLAG).apply {
-        textSize = layout.textSizePx
-    }
-
-    val pending = mutableListOf<EbookPage>()
-    document.chapters.forEachIndexed { chapterIndex, chapter ->
-        val text = chapter.text.normalizeReaderWhitespace()
-        val ranges = splitChapterIntoMeasuredPageRanges(
-            text = text,
-            paint = paint,
-            widthPx = safeWidth,
-            heightPx = safeHeight,
-            lineSpacingPx = layout.lineSpacingPx
-        )
-        ranges.forEachIndexed { pageInChapter, range ->
-            val start = range.first.coerceIn(0, text.length)
-            val endExclusive = (range.last + 1).coerceIn(start, text.length)
-            pending += EbookPage(
-                chapterIndex = chapterIndex,
-                pageInChapter = pageInChapter,
-                chapterPageCount = ranges.size,
-                globalIndex = pending.size,
-                totalPages = 0,
-                charStart = start,
-                charEnd = endExclusive,
-                title = chapter.title,
-                text = text.substring(start, endExclusive)
-            )
-        }
-    }
-    val total = pending.size.coerceAtLeast(1)
-    return pending.mapIndexed { index, page ->
-        page.copy(globalIndex = index, totalPages = total)
-    }.ifEmpty {
-        listOf(
-            EbookPage(
-                chapterIndex = 0,
-                pageInChapter = 0,
-                chapterPageCount = 1,
-                globalIndex = 0,
-                totalPages = 1,
-                charStart = 0,
-                charEnd = 0,
-                title = document.title,
-                text = "没有可显示的文本。"
-            )
-        )
     }
 }
 
@@ -295,14 +216,6 @@ private fun resolveCueMatch(
     )
 }
 
-internal fun findEbookPageForMatch(pages: List<EbookPage>, match: EbookCueMatch): Int {
-    return pages.indexOfFirst { page ->
-        page.chapterIndex == match.chapterIndex &&
-            match.rawStart >= page.charStart &&
-            match.rawStart < page.charEnd
-    }.takeIf { it >= 0 } ?: pages.indexOfFirst { it.chapterIndex == match.chapterIndex }.coerceAtLeast(0)
-}
-
 internal fun findEbookCueIndexAtTime(cues: List<EbookSrtCue>, timeMs: Long): Int {
     if (cues.isEmpty()) return -1
     var low = 0
@@ -317,14 +230,6 @@ internal fun findEbookCueIndexAtTime(cues: List<EbookSrtCue>, timeMs: Long): Int
         }
     }
     return (low - 1).coerceIn(-1, cues.lastIndex)
-}
-
-internal fun highlightPageText(page: EbookPage, match: EbookCueMatch?): Pair<Int, Int>? {
-    if (match == null || match.chapterIndex != page.chapterIndex) return null
-    val start = (match.rawStart - page.charStart).coerceIn(0, page.text.length)
-    val end = (match.rawEnd - page.charStart).coerceIn(start, page.text.length)
-    if (end <= start) return null
-    return start to end
 }
 
 private fun loadTxtDocument(
@@ -374,25 +279,29 @@ private fun loadEpubDocument(
     val opf = parseOpf(opfText)
     val basePath = opfPath.substringBeforeLast('/', missingDelimiterValue = "")
     val title = opf.title.ifBlank { fallbackTitle }
+    val epubImages = buildEpubImageMap(entries, opf.manifest, basePath)
     val chapters = opf.spineIds.mapNotNull { id ->
         val item = opf.manifest[id] ?: return@mapNotNull null
         val path = resolveEpubPath(basePath, item.href)
         val bytes = entries[path] ?: return@mapNotNull null
         val html = bytes.decodeTextFile(preferredCharsetName)
-        val text = htmlToReaderText(html)
-        if (text.isBlank()) return@mapNotNull null
+        val content = htmlToReaderContent(html, path.substringBeforeLast('/', missingDelimiterValue = ""), epubImages)
+        if (content.text.isBlank()) return@mapNotNull null
         EbookChapter(
             title = extractHtmlTitle(html).ifBlank { title },
-            text = text,
-            sourcePath = path
+            text = content.text,
+            sourcePath = path,
+            images = content.images
         )
     }.ifEmpty {
         htmlEntries(entries).map { (path, bytes) ->
             val html = bytes.decodeTextFile(preferredCharsetName)
+            val content = htmlToReaderContent(html, path.substringBeforeLast('/', missingDelimiterValue = ""), epubImages)
             EbookChapter(
                 title = extractHtmlTitle(html).ifBlank { File(path).nameWithoutExtension },
-                text = htmlToReaderText(html),
-                sourcePath = path
+                text = content.text,
+                sourcePath = path,
+                images = content.images
             )
         }.filter { it.text.isNotBlank() }
     }
@@ -408,12 +317,15 @@ private fun fallbackHtmlEpub(
     fallbackTitle: String,
     preferredCharsetName: String?
 ): EbookDocument {
+    val epubImages = buildEpubImageMap(entries, emptyMap(), "")
     val chapters = htmlEntries(entries).map { (path, bytes) ->
         val html = bytes.decodeTextFile(preferredCharsetName)
+        val content = htmlToReaderContent(html, path.substringBeforeLast('/', missingDelimiterValue = ""), epubImages)
         EbookChapter(
             title = extractHtmlTitle(html).ifBlank { File(path).nameWithoutExtension },
-            text = htmlToReaderText(html),
-            sourcePath = path
+            text = content.text,
+            sourcePath = path,
+            images = content.images
         )
     }.filter { it.text.isNotBlank() }
     return EbookDocument(fallbackTitle, "EPUB", chapters.ifEmpty { listOf(EbookChapter(fallbackTitle, "")) })
@@ -512,42 +424,6 @@ private fun splitTxtChapters(text: String): List<EbookChapter> {
         }
     }
     return chapters
-}
-
-private fun splitChapterIntoMeasuredPageRanges(
-    text: String,
-    paint: TextPaint,
-    widthPx: Int,
-    heightPx: Int,
-    lineSpacingPx: Float
-): List<IntRange> {
-    if (text.isEmpty()) return listOf(0 until 0)
-    val staticLayout = StaticLayout.Builder
-        .obtain(text, 0, text.length, paint, widthPx.coerceAtLeast(1))
-        .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-        .setIncludePad(true)
-        .setLineSpacing(lineSpacingPx, 1f)
-        .build()
-    val ranges = mutableListOf<IntRange>()
-    var line = 0
-    while (line < staticLayout.lineCount) {
-        val startOffset = staticLayout.getLineStart(line)
-        val pageTop = staticLayout.getLineTop(line)
-        val pageBottom = pageTop + heightPx
-        var endLine = line
-        while (
-            endLine < staticLayout.lineCount &&
-            staticLayout.getLineBottom(endLine) <= pageBottom
-        ) {
-            endLine += 1
-        }
-        if (endLine == line) endLine = (line + 1).coerceAtMost(staticLayout.lineCount)
-        var endOffset = staticLayout.getLineEnd(endLine - 1).coerceAtLeast(startOffset)
-        if (endOffset == startOffset && endOffset < text.length) endOffset += 1
-        ranges += startOffset until endOffset
-        line = endLine
-    }
-    return ranges
 }
 
 private fun parseEbookSrtText(raw: String): List<EbookSrtCue> {
@@ -650,8 +526,59 @@ private fun Int.isReaderMatchableCodePoint(): Boolean =
         else -> false
     }
 
-private fun htmlToReaderText(html: String): String {
+internal const val EBOOK_IMAGE_MARKER: Char = '\uFFFC'
+
+private data class HtmlImageTag(
+    val src: String,
+    val altText: String
+)
+
+private data class ReaderHtmlContent(
+    val text: String,
+    val images: Map<Int, EbookImageRef>
+)
+
+private fun buildEpubImageMap(
+    entries: Map<String, ByteArray>,
+    manifest: Map<String, OpfItem>,
+    opfBasePath: String
+): Map<String, Pair<String?, ByteArray>> {
+    val images = linkedMapOf<String, Pair<String?, ByteArray>>()
+    manifest.values.forEach { item ->
+        val mediaType = item.mediaType.orEmpty()
+        if (mediaType.startsWith("image/", ignoreCase = true)) {
+            val path = resolveEpubPath(opfBasePath, item.href)
+            entries[path]?.let { bytes -> images[path] = item.mediaType to bytes }
+        }
+    }
+    entries.forEach { (path, bytes) ->
+        if (path.isEpubImagePath()) {
+            images.putIfAbsent(path, path.mediaTypeFromExtension() to bytes)
+        }
+    }
+    return images
+}
+
+private fun htmlToReaderContent(
+    html: String,
+    htmlBasePath: String,
+    imageResources: Map<String, Pair<String?, ByteArray>>
+): ReaderHtmlContent {
     var body = Regex("(?is)<body[^>]*>(.*?)</body>").find(html)?.groupValues?.getOrNull(1) ?: html
+    val imageTags = mutableListOf<HtmlImageTag>()
+    body = Regex("(?is)<img\\b[^>]*>").replace(body) { match ->
+        val tag = match.value
+        val src = tag.htmlAttribute("src")
+        if (src.isBlank()) {
+            ""
+        } else {
+            imageTags += HtmlImageTag(
+                src = src,
+                altText = tag.htmlAttribute("alt").ifBlank { tag.htmlAttribute("title") }
+            )
+            "<br/>$EBOOK_IMAGE_MARKER<br/>"
+        }
+    }
     body = body
         .replace(Regex("(?is)<rt[^>]*>.*?</rt>"), "")
         .replace(Regex("(?is)<rp[^>]*>.*?</rp>"), "")
@@ -660,9 +587,25 @@ private fun htmlToReaderText(html: String): String {
         .replace(Regex("(?i)</p\\s*>"), "\n\n")
         .replace(Regex("(?i)</h[1-6]\\s*>"), "\n\n")
         .replace(Regex("(?i)</div\\s*>"), "\n")
-    return Html.fromHtml(body, Html.FROM_HTML_MODE_LEGACY)
+    val text = Html.fromHtml(body, Html.FROM_HTML_MODE_LEGACY)
         .toString()
         .normalizeReaderWhitespace()
+    val images = linkedMapOf<Int, EbookImageRef>()
+    var searchStart = 0
+    imageTags.forEach { tag ->
+        val markerPosition = text.indexOf(EBOOK_IMAGE_MARKER, searchStart)
+        if (markerPosition < 0) return@forEach
+        searchStart = markerPosition + 1
+        val imagePath = resolveEpubPath(htmlBasePath, tag.src)
+        val resource = imageResources[imagePath] ?: return@forEach
+        images[markerPosition] = EbookImageRef(
+            path = imagePath,
+            altText = tag.altText,
+            mediaType = resource.first,
+            bytes = resource.second
+        )
+    }
+    return ReaderHtmlContent(text = text, images = images)
 }
 
 private fun extractHtmlTitle(html: String): String {
@@ -724,6 +667,35 @@ private fun resolveEpubPath(basePath: String, href: String): String {
         }
     }
     return out.joinToString("/")
+}
+
+private fun String.htmlAttribute(name: String): String {
+    val pattern = Regex("""(?is)\b${Regex.escape(name)}\s*=\s*(['"])(.*?)\1""")
+    return pattern.find(this)?.groupValues?.getOrNull(2)
+        ?.let { value ->
+            runCatching { URLDecoder.decode(value.substringBefore('#'), "UTF-8") }
+                .getOrElse { value.substringBefore('#') }
+        }
+        .orEmpty()
+}
+
+private fun String.isEpubImagePath(): Boolean {
+    val lower = lowercase(Locale.US).substringBefore('?').substringBefore('#')
+    return lower.endsWith(".png") ||
+        lower.endsWith(".jpg") ||
+        lower.endsWith(".jpeg") ||
+        lower.endsWith(".webp") ||
+        lower.endsWith(".gif")
+}
+
+private fun String.mediaTypeFromExtension(): String? {
+    return when (lowercase(Locale.US).substringBefore('?').substringBefore('#').substringAfterLast('.')) {
+        "png" -> "image/png"
+        "jpg", "jpeg" -> "image/jpeg"
+        "webp" -> "image/webp"
+        "gif" -> "image/gif"
+        else -> null
+    }
 }
 
 private fun String.filteredReaderCodePoints(): List<Int> =

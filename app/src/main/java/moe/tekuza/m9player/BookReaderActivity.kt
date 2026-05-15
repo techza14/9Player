@@ -721,6 +721,15 @@ private fun BookReaderScreen(
                     )
                 }
                 audiobookSettings = updated
+                if (!uiTestMode && playbackRestoreCompleted && playbackPositionKey.isNotBlank()) {
+                    val snapshot = loadBookReaderPlaybackSnapshotOrNull(context, playbackPositionKey)
+                    val targetPosition = snapshot?.positionMs?.coerceAtLeast(0L) ?: 0L
+                    val currentPosition = player.currentPosition.coerceAtLeast(0L)
+                    if (kotlin.math.abs(targetPosition - currentPosition) > 800L) {
+                        player.seekTo(targetPosition)
+                        positionMs = targetPosition
+                    }
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -2090,6 +2099,12 @@ private fun BookReaderScreen(
                 setLookupPlaybackState(play)
             }
 
+            override fun seekToPosition(targetPositionMs: Long) {
+                val target = targetPositionMs.coerceAtLeast(0L)
+                player.seekTo(target)
+                positionMs = target
+            }
+
             override fun seekPrevious() {
                 latestSeekPrevious()
             }
@@ -2551,6 +2566,21 @@ private fun BookReaderScreen(
                                     text = { Text(stringResource(R.string.bookreader_open_ebook_reader)) },
                                     onClick = {
                                         topActionsExpanded = false
+                                        val immediatePositionMs = positionMs.coerceAtLeast(0L)
+                                        val immediateDurationMs = durationMs.coerceAtLeast(0L)
+                                        if (audioUri != null && immediateDurationMs > 0L) {
+                                            scope.launch(Dispatchers.IO) {
+                                                saveBookReaderPlaybackPosition(
+                                                    context = context,
+                                                    bookKey = buildBookReaderPlaybackKey(title, audioUri, srtUri),
+                                                    positionMs = normalizeBookReaderPlaybackPosition(
+                                                        immediatePositionMs,
+                                                        immediateDurationMs
+                                                    ),
+                                                    durationMs = immediateDurationMs
+                                                )
+                                            }
+                                        }
                                         context.startActivity(
                                             Intent(context, LegadoReaderPrototypeActivity::class.java).apply {
                                                 putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_TITLE, title)
@@ -2563,6 +2593,8 @@ private fun BookReaderScreen(
                                                 }
                                                 audioUri?.let {
                                                     putExtra(LegadoReaderPrototypeActivity.EXTRA_AUDIO_URI, it.toString())
+                                                    putExtra(LegadoReaderPrototypeActivity.EXTRA_AUDIO_POSITION_MS, immediatePositionMs)
+                                                    putExtra(LegadoReaderPrototypeActivity.EXTRA_AUDIO_DURATION_MS, immediateDurationMs)
                                                 }
                                                 srtUri?.let {
                                                     putExtra(LegadoReaderPrototypeActivity.EXTRA_SRT_URI, it.toString())
