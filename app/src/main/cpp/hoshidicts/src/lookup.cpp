@@ -3,6 +3,7 @@
 #include <utf8.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <ranges>
 #include <sstream>
@@ -48,6 +49,35 @@ bool freq_sort_order(const LookupResult& a, const LookupResult& b, const std::ve
   }
 
   return false;
+}
+
+bool is_kana_codepoint(uint32_t cp) {
+  return (cp >= 0x3040 && cp <= 0x309F) || (cp >= 0x30A0 && cp <= 0x30FF) || cp == 0x30FC;
+}
+
+bool is_all_kana_lookup(const std::string& text) {
+  bool has_kana = false;
+  for (auto it = text.begin(); it != text.end();) {
+    uint32_t cp = utf8::next(it, text.end());
+    if (cp == 0x20 || cp == 0x3000) {
+      continue;
+    }
+    if (!is_kana_codepoint(cp)) {
+      return false;
+    }
+    has_kana = true;
+  }
+  return has_kana;
+}
+
+int kana_lookup_priority(const LookupResult& result, const std::string& query) {
+  if (result.term.expression == query) {
+    return 0;
+  }
+  if (is_all_kana_lookup(result.term.expression)) {
+    return 1;
+  }
+  return 2;
 }
 }
 
@@ -114,8 +144,9 @@ std::vector<LookupResult> Lookup::lookup(const std::string& lookup_string, int m
     results.push_back(std::move(value));
   }
   const auto freq_dict_order = query_.get_freq_dict_order();
+  const bool kana_lookup = is_all_kana_lookup(lookup_string);
   auto middle_iter = std::ranges::next(results.begin(), max_results, results.end());
-  std::ranges::partial_sort(results, middle_iter, [&freq_dict_order](const auto& a, const auto& b) {
+  std::ranges::partial_sort(results, middle_iter, [&freq_dict_order, &lookup_string, kana_lookup](const auto& a, const auto& b) {
     auto len_a = utf8::distance(a.matched.begin(), a.matched.end());
     auto len_b = utf8::distance(b.matched.begin(), b.matched.end());
     if (len_a != len_b) {
@@ -132,6 +163,14 @@ std::vector<LookupResult> Lookup::lookup(const std::string& lookup_string, int m
     auto process_len_b = b.process.size();
     if (process_len_a != process_len_b) {
       return process_len_a < process_len_b;
+    }
+
+    if (kana_lookup) {
+      const int priority_a = kana_lookup_priority(a, lookup_string);
+      const int priority_b = kana_lookup_priority(b, lookup_string);
+      if (priority_a != priority_b) {
+        return priority_a < priority_b;
+      }
     }
 
     return freq_sort_order(a, b, freq_dict_order);
