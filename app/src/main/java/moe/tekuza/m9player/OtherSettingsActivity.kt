@@ -13,11 +13,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
@@ -43,6 +49,8 @@ private fun OtherSettingsScreen(
     onBack: () -> Unit,
     onOpenMdx: () -> Unit
 ) {
+    val context = LocalContext.current
+    var ebookEnabled by remember { mutableStateOf(loadEbookFeatureEnabled(context)) }
     SettingsScaffold(
         title = stringResource(R.string.settings_other_title),
         onBack = onBack
@@ -58,6 +66,16 @@ private fun OtherSettingsScreen(
                 icon = Icons.Outlined.FolderCopy,
                 title = stringResource(R.string.settings_mdx_title),
                 onClick = onOpenMdx,
+                showDivider = true
+            )
+            SettingsSwitchItem(
+                title = stringResource(R.string.settings_ebook_title),
+                subtitle = stringResource(R.string.settings_ebook_subtitle),
+                checked = ebookEnabled,
+                onCheckedChange = { enabled ->
+                    ebookEnabled = enabled
+                    saveEbookFeatureEnabled(context, enabled)
+                },
                 showDivider = false
             )
         }
@@ -102,6 +120,50 @@ private fun SettingsLikeItem(
                     )
                 }
             }
+        }
+        if (showDivider) {
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp),
+                color = androidx.compose.ui.graphics.Color.Transparent
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsSwitchItem(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    subtitle: String? = null,
+    showDivider: Boolean = true
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Text(text = title, style = MaterialTheme.typography.bodyLarge)
+                if (!subtitle.isNullOrBlank()) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
         }
         if (showDivider) {
             HorizontalDivider(

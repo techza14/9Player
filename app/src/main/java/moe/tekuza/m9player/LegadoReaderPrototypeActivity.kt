@@ -11,6 +11,8 @@ import android.widget.SeekBar
 import android.widget.Space
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.PopupMenu
 import androidx.core.view.ViewCompat
@@ -28,11 +30,36 @@ private val LEGADO_READER_PROTOTYPE_PARAGRAPHS = listOf(
 class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private lateinit var readMenu: View
     private lateinit var moreSettingsPanel: View
+    private lateinit var pageTitleText: TextView
+    private lateinit var toolbarTitleText: TextView
+    private var importedBook: LocalReaderBook? = null
+    private val openBookDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        keepReadPermission(this, uri)
+        val displayName = queryDisplayName(contentResolver, uri)
+        val format = inferLocalReaderBookFormat(displayName, contentResolver.getType(uri))
+        if (format == null) {
+            Toast.makeText(this, "请选择 EPUB 或 TXT 文件", Toast.LENGTH_SHORT).show()
+            return@registerForActivityResult
+        }
+        val book = LocalReaderBook(
+            title = localReaderBookTitleFromDisplayName(displayName),
+            uri = uri,
+            format = format,
+            importedAtMs = System.currentTimeMillis()
+        )
+        saveLastLocalReaderBook(this, book)
+        importedBook = book
+        updateDisplayedBookTitle()
+        Toast.makeText(this, "已导入 ${book.title}", Toast.LENGTH_SHORT).show()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        importedBook = loadLastLocalReaderBook(this)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(buildLegadoReaderShell())
+        updateDisplayedBookTitle()
     }
 
     private fun buildLegadoReaderShell(): View {
@@ -87,7 +114,8 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         return LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             addView(
-                text(LEGADO_READER_PROTOTYPE_TITLE, 12f, READER_TIP).apply {
+                text(currentReaderTitle(), 12f, READER_TIP).apply {
+                    pageTitleText = this
                     maxLines = 1
                 },
                 LinearLayout.LayoutParams(0, dp(36), 1f)
@@ -148,7 +176,13 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             setBackgroundColor(MENU_BG)
 
             addView(actionText("<", 28f).apply { setOnClickListener { finish() } }, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.MATCH_PARENT))
-            addView(text(LEGADO_READER_PROTOTYPE_TITLE, 18f, MENU_TEXT), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            addView(text(currentReaderTitle(), 18f, MENU_TEXT).apply {
+                toolbarTitleText = this
+                maxLines = 1
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            addView(actionText("导入", 14f).apply {
+                setOnClickListener { openBookDocument.launch(arrayOf("application/epub+zip", "text/plain", "application/octet-stream")) }
+            }, LinearLayout.LayoutParams(dp(54), LinearLayout.LayoutParams.MATCH_PARENT))
             addView(actionText("设置编码", 14f), LinearLayout.LayoutParams(dp(76), LinearLayout.LayoutParams.MATCH_PARENT))
             addView(actionText("⋮", 28f).apply {
                 setOnClickListener { showOverflowMenu(this) }
@@ -325,6 +359,16 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             includeFontPadding = true
         }
+    }
+
+    private fun currentReaderTitle(): String {
+        return importedBook?.title ?: LEGADO_READER_PROTOTYPE_TITLE
+    }
+
+    private fun updateDisplayedBookTitle() {
+        val title = currentReaderTitle()
+        if (::pageTitleText.isInitialized) pageTitleText.text = title
+        if (::toolbarTitleText.isInitialized) toolbarTitleText.text = title
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()

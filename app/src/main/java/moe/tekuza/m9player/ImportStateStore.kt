@@ -19,7 +19,10 @@ internal data class PersistedReaderBook(
     val audioUri: String,
     val audioName: String,
     val srtUri: String?,
-    val srtName: String?
+    val srtName: String?,
+    val ebookUri: String? = null,
+    val ebookName: String? = null,
+    val ebookFormat: String? = null
 )
 
 internal data class PersistedImports(
@@ -102,6 +105,9 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         if (audioUri.isBlank()) continue
         val audioName = item.optString("audioName").trim().ifBlank { "Unknown audio" }
         val srtName = item.optString("srtName").trim().ifBlank { null }
+        val ebookUri = item.optString("ebookUri").trim().ifBlank { null }
+        val ebookName = item.optString("ebookName").trim().ifBlank { null }
+        val ebookFormat = item.optString("ebookFormat").trim().ifBlank { null }
         val title = item.optString("title").trim().ifBlank { audioName.substringBeforeLast('.') }
         books += PersistedReaderBook(
             id = id.ifBlank { "$audioUri|${srtUri.orEmpty()}" },
@@ -109,7 +115,10 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
             audioUri = audioUri,
             audioName = audioName,
             srtUri = srtUri,
-            srtName = srtName
+            srtName = srtName,
+            ebookUri = ebookUri,
+            ebookName = ebookName,
+            ebookFormat = ebookFormat
         )
     }
 
@@ -150,6 +159,9 @@ internal fun savePersistedImports(context: Context, state: PersistedImports) {
                         put("audioName", book.audioName)
                         put("srtUri", book.srtUri ?: "")
                         put("srtName", book.srtName ?: "")
+                        put("ebookUri", book.ebookUri ?: "")
+                        put("ebookName", book.ebookName ?: "")
+                        put("ebookFormat", book.ebookFormat ?: "")
                     })
                 }
             }

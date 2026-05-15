@@ -111,6 +111,10 @@ internal fun loadStatisticsReport(context: Context): StatisticsReport {
             audioName = persistedBook.audioName,
             srtUri = srtUri,
             srtName = persistedBook.srtName,
+            ebookUri = persistedBook.ebookUri?.trim()?.takeIf { it.isNotBlank() }
+                ?.let { runCatching { Uri.parse(it) }.getOrNull() },
+            ebookName = persistedBook.ebookName,
+            ebookFormat = persistedBook.ebookFormat,
             coverUri = null
         )
         val bookKey = buildReaderBookPlaybackKey(readerBook)

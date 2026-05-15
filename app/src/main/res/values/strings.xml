@@ -50,6 +50,8 @@
     <string name="settings_controller_title">手柄</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX(制作中)</string>
+    <string name="settings_ebook_title">ebook</string>
+    <string name="settings_ebook_subtitle">允许给已选择音频的书籍绑定 TXT/EPUB。</string>
     <string name="settings_other_title">实验性功能</string>
     <string name="settings_statistics_title">统计</string>
     <string name="settings_statistics_subtitle">听书时长、进度和文本密度</string>
@@ -237,6 +239,9 @@
     <string name="status_books_deleted_with_failures">已删书 %1$d 本；%2$d 个文件删除失败，%3$d 个文件夹删除失败。</string>
     <string name="status_pick_audiobook_folder_first">请先选择有声书文件夹。</string>
     <string name="status_pick_audio_first">请选择音频文件。</string>
+    <string name="status_pick_audio_before_ebook">请先选择音频，再添加 ebook。</string>
+    <string name="status_pick_audio_srt_before_ebook">请先选择音频和 SRT，再添加 ebook。</string>
+    <string name="status_pick_ebook_file">请选择 TXT 或 EPUB 文件。</string>
     <string name="status_book_added">已添加书籍：%1$s。</string>
     <string name="status_book_saved_to">已存入：%1$s。</string>
     <string name="status_book_keep_original">保留原文件位置。</string>
@@ -293,6 +298,10 @@
     <string name="add_book_pick_audio">选择音频/m4b</string>
     <string name="add_book_srt_label">SRT（可选）: %1$s</string>
     <string name="add_book_pick_srt">选择字幕 SRT（可选）</string>
+    <string name="add_book_ebook_label">ebook（可选）: %1$s</string>
+    <string name="add_book_pick_ebook">选择 TXT/EPUB</string>
+    <string name="add_book_ebook_requires_audio">先选择音频后才能添加 ebook。</string>
+    <string name="add_book_ebook_requires_audio_srt">先选择音频和 SRT 后才能添加 ebook。</string>
     <string name="lookup_audio_enable_first">请先在设置 &gt; 有声书开启查词播放音频。</string>
     <string name="lookup_audio_empty_term">当前词条为空，无法播放。</string>
     <string name="lookup_audio_android_db_missing">未导入 android.db。</string>

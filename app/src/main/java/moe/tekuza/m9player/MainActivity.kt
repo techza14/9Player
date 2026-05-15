@@ -332,6 +332,9 @@ internal data class ReaderBook(
     val audioName: String,
     val srtUri: Uri?,
     val srtName: String?,
+    val ebookUri: Uri?,
+    val ebookName: String?,
+    val ebookFormat: String?,
     val coverUri: Uri?
 )
 
@@ -381,8 +384,12 @@ private fun ReaderSyncScreen() {
     var addBookAudioName by remember { mutableStateOf<String?>(null) }
     var addBookSrtUri by remember { mutableStateOf<Uri?>(null) }
     var addBookSrtName by remember { mutableStateOf<String?>(null) }
+    var addBookEbookUri by remember { mutableStateOf<Uri?>(null) }
+    var addBookEbookName by remember { mutableStateOf<String?>(null) }
+    var addBookEbookFormat by remember { mutableStateOf<String?>(null) }
     var addBookFolderUri by remember { mutableStateOf<Uri?>(null) }
     var addBookFolderName by remember { mutableStateOf<String?>(null) }
+    var ebookFeatureEnabled by remember { mutableStateOf(loadEbookFeatureEnabled(context)) }
     var autoMoveToAudiobookFolder by remember { mutableStateOf(true) }
     var importOnboardingCompleted by remember { mutableStateOf(false) }
     var importGuideVisible by remember { mutableStateOf(false) }
@@ -662,6 +669,9 @@ private fun ReaderSyncScreen() {
                                     audioName = targetBook.audioName,
                                     srtUri = returnedSrt,
                                     srtName = updatedSrtName,
+                                    ebookUri = targetBook.ebookUri,
+                                    ebookName = targetBook.ebookName,
+                                    ebookFormat = targetBook.ebookFormat,
                                     coverUri = targetBook.coverUri
                                 )
                                 val wasSelected = selectedBookId == targetBook.id
@@ -683,7 +693,10 @@ private fun ReaderSyncScreen() {
                                         audioUri = book.audioUri.toString(),
                                         audioName = book.audioName,
                                         srtUri = book.srtUri?.toString(),
-                                        srtName = book.srtName
+                                        srtName = book.srtName,
+                                        ebookUri = book.ebookUri?.toString(),
+                                        ebookName = book.ebookName,
+                                        ebookFormat = book.ebookFormat
                                     )
                                 }
                                 savePersistedImports(
@@ -848,7 +861,10 @@ private fun ReaderSyncScreen() {
                 audioUri = audioKey,
                 audioName = book.audioName,
                 srtUri = mergedSrt,
-                srtName = mergedSrtName
+                srtName = mergedSrtName,
+                ebookUri = book.ebookUri?.toString(),
+                ebookName = book.ebookName,
+                ebookFormat = book.ebookFormat
             )
         }
         val previousSelectedSrt = previous.srtUri?.takeIf { it.isNotBlank() }
@@ -1003,7 +1019,10 @@ private fun ReaderSyncScreen() {
         audio: Uri,
         audioDisplayName: String?,
         srt: Uri?,
-        srtDisplayName: String?
+        srtDisplayName: String?,
+        ebook: Uri? = null,
+        ebookDisplayName: String? = null,
+        ebookFormat: String? = null
     ): ReaderBook {
         val resolvedAudioName = audioDisplayName?.takeIf { it.isNotBlank() }
             ?: queryDisplayName(contentResolver, audio)
@@ -1030,6 +1049,9 @@ private fun ReaderSyncScreen() {
             audioName = resolvedAudioName,
             srtUri = srt,
             srtName = resolvedSrtName,
+            ebookUri = ebook,
+            ebookName = ebookDisplayName,
+            ebookFormat = ebookFormat,
             coverUri = coverUri
         )
     }
@@ -1206,6 +1228,9 @@ private fun ReaderSyncScreen() {
         val pickedSrt = addBookSrtUri
         val pickedAudioName = addBookAudioName
         val pickedSrtName = addBookSrtName
+        val pickedEbook = addBookEbookUri
+        val pickedEbookName = addBookEbookName
+        val pickedEbookFormat = addBookEbookFormat
         scope.launch {
             srtLoading = true
             srtError = null
@@ -1225,7 +1250,10 @@ private fun ReaderSyncScreen() {
                             audio = relocated.audioUri,
                             audioDisplayName = relocated.audioName,
                             srt = relocated.srtUri,
-                            srtDisplayName = relocated.srtName
+                            srtDisplayName = relocated.srtName,
+                            ebook = pickedEbook,
+                            ebookDisplayName = pickedEbookName,
+                            ebookFormat = pickedEbookFormat
                         )
                         val warning = relocated.moveWarnings.takeIf { it.isNotEmpty() }?.joinToString(" ")
                         Triple(book, relocated.folderName, warning)
@@ -1234,7 +1262,10 @@ private fun ReaderSyncScreen() {
                             audio = pickedAudio,
                             audioDisplayName = pickedAudioName,
                             srt = pickedSrt,
-                            srtDisplayName = pickedSrtName
+                            srtDisplayName = pickedSrtName,
+                            ebook = pickedEbook,
+                            ebookDisplayName = pickedEbookName,
+                            ebookFormat = pickedEbookFormat
                         )
                         Triple(book, null, null)
                     }
@@ -1248,6 +1279,9 @@ private fun ReaderSyncScreen() {
                 addBookAudioName = null
                 addBookSrtUri = null
                 addBookSrtName = null
+                addBookEbookUri = null
+                addBookEbookName = null
+                addBookEbookFormat = null
                 exportStatus = buildString {
                     append(context.getString(R.string.status_book_added, book.title))
                     if (!folderName.isNullOrBlank()) {
@@ -1453,6 +1487,7 @@ private fun ReaderSyncScreen() {
             ?: addBookFolderUri?.let { uri ->
                 queryTreeDisplayName(context, contentResolver, uri)
             }
+        ebookFeatureEnabled = loadEbookFeatureEnabled(context)
         autoMoveToAudiobookFolder = persisted.autoMoveToAudiobookFolder
         importOnboardingCompleted = persisted.importOnboardingCompleted
         importGuideVisible = !persisted.importOnboardingCompleted
@@ -1472,6 +1507,7 @@ private fun ReaderSyncScreen() {
                     persisted.books.forEach { savedBook ->
                         val audio = runCatching { Uri.parse(savedBook.audioUri) }.getOrNull()
                         val srt = savedBook.srtUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                        val ebook = savedBook.ebookUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
                         if (audio == null) {
                             failedBooks += savedBook.title.ifBlank { savedBook.audioName }
                             return@forEach
@@ -1481,7 +1517,10 @@ private fun ReaderSyncScreen() {
                                 audio = audio,
                                 audioDisplayName = savedBook.audioName,
                                 srt = srt,
-                                srtDisplayName = savedBook.srtName
+                                srtDisplayName = savedBook.srtName,
+                                ebook = ebook,
+                                ebookDisplayName = savedBook.ebookName,
+                                ebookFormat = savedBook.ebookFormat
                             )
                             val persistedTitle = savedBook.title.trim()
                             if (persistedTitle.isNotBlank()) {
@@ -2033,6 +2072,9 @@ private fun ReaderSyncScreen() {
         keepReadPermission(context, uri)
         addBookAudioUri = uri
         addBookAudioName = queryDisplayName(contentResolver, uri)
+        addBookEbookUri = null
+        addBookEbookName = null
+        addBookEbookFormat = null
     }
 
     val pickBookSrtLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -2040,6 +2082,24 @@ private fun ReaderSyncScreen() {
         keepReadPermission(context, uri)
         addBookSrtUri = uri
         addBookSrtName = queryDisplayName(contentResolver, uri)
+    }
+
+    val pickBookEbookLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        if (addBookAudioUri == null || addBookSrtUri == null) {
+            exportStatus = context.getString(R.string.status_pick_audio_srt_before_ebook)
+            return@rememberLauncherForActivityResult
+        }
+        keepReadPermission(context, uri)
+        val displayName = queryDisplayName(contentResolver, uri)
+        val format = inferLocalReaderBookFormat(displayName, contentResolver.getType(uri))
+        if (format == null) {
+            exportStatus = context.getString(R.string.status_pick_ebook_file)
+            return@rememberLauncherForActivityResult
+        }
+        addBookEbookUri = uri
+        addBookEbookName = displayName
+        addBookEbookFormat = format
     }
 
     val pickBookFolderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -2051,6 +2111,9 @@ private fun ReaderSyncScreen() {
         addBookAudioName = null
         addBookSrtUri = null
         addBookSrtName = null
+        addBookEbookUri = null
+        addBookEbookName = null
+        addBookEbookFormat = null
         persistImportState()
     }
 
@@ -2102,6 +2165,7 @@ private fun ReaderSyncScreen() {
                         }
                         FloatingActionButton(
                             onClick = {
+                                ebookFeatureEnabled = loadEbookFeatureEnabled(context)
                                 addBookDialogVisible = true
                             }
                         ) {
@@ -2920,6 +2984,9 @@ private fun ReaderSyncScreen() {
                 audioName = addBookAudioName,
                 audioUri = addBookAudioUri,
                 srtName = addBookSrtName,
+                ebookEnabled = ebookFeatureEnabled,
+                ebookName = addBookEbookName,
+                ebookUri = addBookEbookUri,
                 autoMoveToAudiobookFolder = autoMoveToAudiobookFolder,
                 srtLoading = srtLoading,
                 onPickFolder = { pickBookFolderLauncher.launch(null) },
@@ -2930,6 +2997,9 @@ private fun ReaderSyncScreen() {
                     addBookAudioName = null
                     addBookSrtUri = null
                     addBookSrtName = null
+                    addBookEbookUri = null
+                    addBookEbookName = null
+                    addBookEbookFormat = null
                     persistImportState()
                 },
                 onPickAudio = {
@@ -2955,6 +3025,11 @@ private fun ReaderSyncScreen() {
                 onPickSrt = {
                     pickBookSrtLauncher.launch(
                         arrayOf("application/x-subrip")
+                    )
+                },
+                onPickEbook = {
+                    pickBookEbookLauncher.launch(
+                        arrayOf("application/epub+zip", "text/plain", "application/octet-stream")
                     )
                 },
                 onDismiss = { addBookDialogVisible = false },

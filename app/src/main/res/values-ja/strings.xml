@@ -47,6 +47,8 @@
     <string name="settings_controller_title">コントローラー</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX（制作中）</string>
+    <string name="settings_ebook_title">ebook</string>
+    <string name="settings_ebook_subtitle">音声を選択した後に TXT/EPUB を紐付けます。</string>
     <string name="settings_other_title">実験的機能</string>
     <string name="settings_statistics_title">統計</string>
     <string name="settings_statistics_subtitle">再生時間、進捗、テキスト密度</string>
@@ -234,6 +236,9 @@
     <string name="status_books_deleted_with_failures">%1$d 冊を削除しました。ファイル削除失敗 %2$d 件、フォルダ削除失敗 %3$d 件。</string>
     <string name="status_pick_audiobook_folder_first">先にオーディオブックフォルダを選択してください。</string>
     <string name="status_pick_audio_first">音声ファイルを選択してください。</string>
+    <string name="status_pick_audio_before_ebook">先に音声を選択してから ebook を追加してください。</string>
+    <string name="status_pick_audio_srt_before_ebook">先に音声と SRT を選択してから ebook を追加してください。</string>
+    <string name="status_pick_ebook_file">TXT または EPUB ファイルを選択してください。</string>
     <string name="status_book_added">書籍を追加しました：%1$s。</string>
     <string name="status_book_saved_to">保存先：%1$s。</string>
     <string name="status_book_keep_original">元のファイル位置を保持しました。</string>
@@ -287,6 +292,10 @@
     <string name="add_book_pick_audio">音声/m4bを選択</string>
     <string name="add_book_srt_label">SRT（任意）: %1$s</string>
     <string name="add_book_pick_srt">SRT字幕を選択（任意）</string>
+    <string name="add_book_ebook_label">ebook（任意）: %1$s</string>
+    <string name="add_book_pick_ebook">TXT/EPUB を選択</string>
+    <string name="add_book_ebook_requires_audio">ebook を追加するには先に音声を選択してください。</string>
+    <string name="add_book_ebook_requires_audio_srt">ebook を追加するには先に音声と SRT を選択してください。</string>
     <string name="lookup_audio_enable_first">先に設定 &gt; オーディオブックで検索音声を有効にしてください。</string>
     <string name="lookup_audio_empty_term">現在の語句が空のため再生できません。</string>
     <string name="lookup_audio_android_db_missing">android.db がインポートされていません。</string>

@@ -46,6 +46,8 @@
     <string name="settings_controller_title">Controller</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX (WIP)</string>
+    <string name="settings_ebook_title">ebook</string>
+    <string name="settings_ebook_subtitle">Allow TXT/EPUB files to be attached after audio is selected.</string>
     <string name="settings_other_title">Experimental features</string>
     <string name="settings_statistics_title">Statistics</string>
     <string name="settings_statistics_subtitle">Listening time, progress, and text density</string>
@@ -232,6 +234,9 @@
     <string name="status_books_deleted_with_failures">Deleted %1$d books; %2$d file deletions failed, %3$d folder deletions failed.</string>
     <string name="status_pick_audiobook_folder_first">Choose the audiobook folder first.</string>
     <string name="status_pick_audio_first">Choose an audio file.</string>
+    <string name="status_pick_audio_before_ebook">Choose audio before adding an ebook.</string>
+    <string name="status_pick_audio_srt_before_ebook">Choose audio and SRT before adding an ebook.</string>
+    <string name="status_pick_ebook_file">Choose a TXT or EPUB file.</string>
     <string name="status_book_added">Added book: %1$s.</string>
     <string name="status_book_saved_to">Saved to: %1$s.</string>
     <string name="status_book_keep_original">Kept original file location.</string>
@@ -285,6 +290,10 @@
     <string name="add_book_pick_audio">Choose audio/m4b</string>
     <string name="add_book_srt_label">SRT (optional): %1$s</string>
     <string name="add_book_pick_srt">Choose SRT subtitle (optional)</string>
+    <string name="add_book_ebook_label">ebook (optional): %1$s</string>
+    <string name="add_book_pick_ebook">Choose TXT/EPUB</string>
+    <string name="add_book_ebook_requires_audio">Choose audio before adding an ebook.</string>
+    <string name="add_book_ebook_requires_audio_srt">Choose audio and SRT before adding an ebook.</string>
     <string name="lookup_audio_enable_first">Enable lookup audio first in Settings &gt; Audiobooks.</string>
     <string name="lookup_audio_empty_term">The current term is empty and cannot be played.</string>
     <string name="lookup_audio_android_db_missing">android.db has not been imported.</string>

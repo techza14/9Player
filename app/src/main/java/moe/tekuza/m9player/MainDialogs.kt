@@ -160,12 +160,16 @@ internal fun AddBookDialog(
     audioName: String?,
     audioUri: Uri?,
     srtName: String?,
+    ebookEnabled: Boolean,
+    ebookName: String?,
+    ebookUri: Uri?,
     autoMoveToAudiobookFolder: Boolean,
     srtLoading: Boolean,
     onPickFolder: () -> Unit,
     onClearFolderSelection: () -> Unit,
     onPickAudio: () -> Unit,
     onPickSrt: () -> Unit,
+    onPickEbook: () -> Unit,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
@@ -217,6 +221,24 @@ internal fun AddBookDialog(
                     enabled = folderUri != null || !autoMoveToAudiobookFolder
                 ) {
                     Text(stringResource(R.string.add_book_pick_srt))
+                }
+
+                if (ebookEnabled) {
+                    Text(
+                        context.getString(
+                            R.string.add_book_ebook_label,
+                            ebookName ?: context.getString(R.string.common_not_selected)
+                        )
+                    )
+                    OutlinedButton(
+                        onClick = onPickEbook,
+                        enabled = audioUri != null && srtName != null
+                    ) {
+                        Text(stringResource(R.string.add_book_pick_ebook))
+                    }
+                    if (audioUri == null || srtName == null) {
+                        Text(stringResource(R.string.add_book_ebook_requires_audio_srt))
+                    }
                 }
             }
         },
