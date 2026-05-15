@@ -1071,7 +1071,27 @@ private fun ReaderSyncScreen() {
         }
     }
 
+    fun createLegadoReaderIntent(context: Context, book: ReaderBook): Intent {
+        return Intent(context, LegadoReaderPrototypeActivity::class.java).apply {
+            putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_TITLE, book.title)
+            book.ebookUri?.let { putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_URI, it.toString()) }
+            book.ebookName?.let { putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_NAME, it) }
+            book.ebookFormat?.let { putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_FORMAT, it) }
+            putExtra(LegadoReaderPrototypeActivity.EXTRA_AUDIO_URI, book.audioUri.toString())
+            book.srtUri?.let { putExtra(LegadoReaderPrototypeActivity.EXTRA_SRT_URI, it.toString()) }
+        }
+    }
+
     fun openReaderBook(book: ReaderBook, persist: Boolean = true) {
+        if (
+            loadEbookFeatureEnabled(context) &&
+            loadEbookDefaultToReader(context) &&
+            book.ebookUri != null
+        ) {
+            activateReaderBook(book, persist = persist)
+            context.startActivity(createLegadoReaderIntent(context, book))
+            return
+        }
         val targetAudioUri = book.audioUri.toString()
         val isSameReaderBook =
             !BookReaderFloatingBridge.isUiTestModeActive() &&
@@ -1091,6 +1111,9 @@ private fun ReaderSyncScreen() {
             putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, buildBookTitle(book.audioName, book.srtName))
             putExtra(BookReaderActivity.EXTRA_AUDIO_URI, book.audioUri.toString())
             book.srtUri?.let { putExtra(BookReaderActivity.EXTRA_SRT_URI, it.toString()) }
+            book.ebookUri?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_URI, it.toString()) }
+            book.ebookName?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_NAME, it) }
+            book.ebookFormat?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_FORMAT, it) }
             book.coverUri?.let { putExtra(BookReaderActivity.EXTRA_COVER_URI, it.toString()) }
         }
         context.startActivity(intent)

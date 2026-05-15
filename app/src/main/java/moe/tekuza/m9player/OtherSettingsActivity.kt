@@ -51,6 +51,7 @@ private fun OtherSettingsScreen(
 ) {
     val context = LocalContext.current
     var ebookEnabled by remember { mutableStateOf(loadEbookFeatureEnabled(context)) }
+    var ebookDefaultToReader by remember { mutableStateOf(loadEbookDefaultToReader(context)) }
     SettingsScaffold(
         title = stringResource(R.string.settings_other_title),
         onBack = onBack
@@ -75,6 +76,21 @@ private fun OtherSettingsScreen(
                 onCheckedChange = { enabled ->
                     ebookEnabled = enabled
                     saveEbookFeatureEnabled(context, enabled)
+                    if (!enabled) {
+                        ebookDefaultToReader = false
+                        saveEbookDefaultToReader(context, false)
+                    }
+                },
+                showDivider = true
+            )
+            SettingsSwitchItem(
+                title = stringResource(R.string.settings_ebook_default_reader_title),
+                subtitle = stringResource(R.string.settings_ebook_default_reader_subtitle),
+                checked = ebookDefaultToReader,
+                enabled = ebookEnabled,
+                onCheckedChange = { enabled ->
+                    ebookDefaultToReader = enabled
+                    saveEbookDefaultToReader(context, enabled)
                 },
                 showDivider = false
             )
@@ -136,12 +152,13 @@ private fun SettingsSwitchItem(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     subtitle: String? = null,
+    enabled: Boolean = true,
     showDivider: Boolean = true
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onCheckedChange(!checked) }
+            .clickable(enabled = enabled) { onCheckedChange(!checked) }
     ) {
         Row(
             modifier = Modifier
@@ -154,7 +171,15 @@ private fun SettingsSwitchItem(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
-                Text(text = title, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (enabled) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
                 if (!subtitle.isNullOrBlank()) {
                     Text(
                         text = subtitle,
@@ -163,7 +188,7 @@ private fun SettingsSwitchItem(
                     )
                 }
             }
-            Switch(checked = checked, onCheckedChange = onCheckedChange)
+            Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
         }
         if (showDivider) {
             HorizontalDivider(

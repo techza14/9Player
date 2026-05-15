@@ -4,6 +4,7 @@ import android.content.Context
 
 private const val EBOOK_FEATURE_PREFS = "ebook_feature_prefs"
 private const val KEY_EBOOK_ENABLED = "ebook_enabled"
+private const val KEY_EBOOK_DEFAULT_TO_READER = "ebook_default_to_reader"
 
 internal fun loadEbookFeatureEnabled(context: Context): Boolean {
     return context
@@ -16,5 +17,19 @@ internal fun saveEbookFeatureEnabled(context: Context, enabled: Boolean) {
         .getSharedPreferences(EBOOK_FEATURE_PREFS, Context.MODE_PRIVATE)
         .edit()
         .putBoolean(KEY_EBOOK_ENABLED, enabled)
+        .apply()
+}
+
+internal fun loadEbookDefaultToReader(context: Context): Boolean {
+    return context
+        .getSharedPreferences(EBOOK_FEATURE_PREFS, Context.MODE_PRIVATE)
+        .getBoolean(KEY_EBOOK_DEFAULT_TO_READER, false)
+}
+
+internal fun saveEbookDefaultToReader(context: Context, enabled: Boolean) {
+    context
+        .getSharedPreferences(EBOOK_FEATURE_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(KEY_EBOOK_DEFAULT_TO_READER, enabled)
         .apply()
 }

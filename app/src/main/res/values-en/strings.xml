@@ -48,6 +48,8 @@
     <string name="settings_mdx_title">MDX (WIP)</string>
     <string name="settings_ebook_title">ebook</string>
     <string name="settings_ebook_subtitle">Allow TXT/EPUB files to be attached after audio is selected.</string>
+    <string name="settings_ebook_default_reader_title">Open reader by default</string>
+    <string name="settings_ebook_default_reader_subtitle">Open books with an ebook attachment directly in the reader from the bookshelf.</string>
     <string name="settings_other_title">Experimental features</string>
     <string name="settings_statistics_title">Statistics</string>
     <string name="settings_statistics_subtitle">Listening time, progress, and text density</string>
@@ -419,6 +421,7 @@
     <string name="bookreader_control_mode">Control mode</string>
     <string name="bookreader_hide_controls">Hide playback bar</string>
     <string name="bookreader_show_controls">Show playback bar</string>
+    <string name="bookreader_open_ebook_reader">Reader</string>
     <string name="bookreader_controls_shown">Playback bar shown.</string>
     <string name="bookreader_controls_hidden">Playback bar hidden.</string>
     <string name="bookreader_control_mode_entered">Entered control mode.</string>

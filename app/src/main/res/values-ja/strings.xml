@@ -49,6 +49,8 @@
     <string name="settings_mdx_title">MDX（制作中）</string>
     <string name="settings_ebook_title">ebook</string>
     <string name="settings_ebook_subtitle">音声を選択した後に TXT/EPUB を紐付けます。</string>
+    <string name="settings_ebook_default_reader_title">既定でリーダーを開く</string>
+    <string name="settings_ebook_default_reader_subtitle">ebook 付きの本を本棚から開くとき、直接リーダーを開きます。</string>
     <string name="settings_other_title">実験的機能</string>
     <string name="settings_statistics_title">統計</string>
     <string name="settings_statistics_subtitle">再生時間、進捗、テキスト密度</string>
@@ -421,6 +423,7 @@
     <string name="bookreader_control_mode">コントロールモード</string>
     <string name="bookreader_hide_controls">再生バーを隠す</string>
     <string name="bookreader_show_controls">再生バーを表示</string>
+    <string name="bookreader_open_ebook_reader">リーダー</string>
     <string name="bookreader_controls_shown">再生バーを表示しました。</string>
     <string name="bookreader_controls_hidden">再生バーを隠しました。</string>
     <string name="bookreader_control_mode_entered">コントロールモードに入りました。</string>

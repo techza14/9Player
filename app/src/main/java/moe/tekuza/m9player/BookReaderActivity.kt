@@ -216,6 +216,9 @@ class BookReaderActivity : AppCompatActivity() {
 
         val audioUri = intent.getStringExtra(EXTRA_AUDIO_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
         val srtUri = intent.getStringExtra(EXTRA_SRT_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val ebookUri = intent.getStringExtra(EXTRA_EBOOK_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val ebookName = intent.getStringExtra(EXTRA_EBOOK_NAME)?.trim()?.ifBlank { null }
+        val ebookFormat = intent.getStringExtra(EXTRA_EBOOK_FORMAT)?.trim()?.ifBlank { null }
         val coverUri = intent.getStringExtra(EXTRA_COVER_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
         val uiTestMode = intent.getBooleanExtra(EXTRA_UI_TEST_MODE, false)
         isUiTestMode = uiTestMode
@@ -233,6 +236,9 @@ class BookReaderActivity : AppCompatActivity() {
                     title = title.ifBlank { "Book" },
                     audioUri = audioUri,
                     srtUri = srtUri,
+                    ebookUri = ebookUri,
+                    ebookName = ebookName,
+                    ebookFormat = ebookFormat,
                     coverUri = coverUri,
                     uiTestMode = uiTestMode,
                     contentResolver = contentResolver,
@@ -472,6 +478,9 @@ class BookReaderActivity : AppCompatActivity() {
         const val EXTRA_BOOK_TITLE = "extra_book_title"
         const val EXTRA_AUDIO_URI = "extra_audio_uri"
         const val EXTRA_SRT_URI = "extra_srt_uri"
+        const val EXTRA_EBOOK_URI = "extra_ebook_uri"
+        const val EXTRA_EBOOK_NAME = "extra_ebook_name"
+        const val EXTRA_EBOOK_FORMAT = "extra_ebook_format"
         const val EXTRA_COVER_URI = "extra_cover_uri"
         const val EXTRA_UI_TEST_MODE = "extra_ui_test_mode"
         const val EXTRA_RETURN_AUDIO_URI = "extra_return_audio_uri"
@@ -517,6 +526,9 @@ private fun BookReaderScreen(
     title: String,
     audioUri: Uri?,
     srtUri: Uri?,
+    ebookUri: Uri?,
+    ebookName: String?,
+    ebookFormat: String?,
     coverUri: Uri?,
     uiTestMode: Boolean,
     contentResolver: ContentResolver,
@@ -2534,6 +2546,32 @@ private fun BookReaderScreen(
                             expanded = topActionsExpanded,
                             onDismissRequest = { topActionsExpanded = false }
                         ) {
+                            if (ebookUri != null && !uiTestMode) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.bookreader_open_ebook_reader)) },
+                                    onClick = {
+                                        topActionsExpanded = false
+                                        context.startActivity(
+                                            Intent(context, LegadoReaderPrototypeActivity::class.java).apply {
+                                                putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_TITLE, title)
+                                                putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_URI, ebookUri.toString())
+                                                ebookName?.let {
+                                                    putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_NAME, it)
+                                                }
+                                                ebookFormat?.let {
+                                                    putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_FORMAT, it)
+                                                }
+                                                audioUri?.let {
+                                                    putExtra(LegadoReaderPrototypeActivity.EXTRA_AUDIO_URI, it.toString())
+                                                }
+                                                srtUri?.let {
+                                                    putExtra(LegadoReaderPrototypeActivity.EXTRA_SRT_URI, it.toString())
+                                                }
+                                            }
+                                        )
+                                    }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = {
                                     Text(
