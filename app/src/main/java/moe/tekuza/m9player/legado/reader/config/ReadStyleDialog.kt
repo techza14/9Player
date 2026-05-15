@@ -45,10 +45,10 @@ internal class ReadStyleDialog(
     fun show() {
         val view = activity.layoutInflater.inflate(R.layout.dialog_m9_read_style, null, false)
         bindTopButtons(view)
-        bindSeekBar(view, R.id.style_text_size_label, R.id.style_text_size, "字体大小", 14, state.textSizeSp, callback::onTextSizeChanged, callback::onTextSizeChangeFinished)
-        bindSeekBar(view, R.id.style_letter_label, R.id.style_letter_size, "字距", -50, state.letterSpacingDp, callback::onLetterSpacingChanged, callback::onLetterSpacingChangeFinished)
-        bindSeekBar(view, R.id.style_line_label, R.id.style_line_size, "行距", 0, state.lineSpacingDp, callback::onLineSpacingChanged, callback::onLineSpacingChangeFinished)
-        bindSeekBar(view, R.id.style_paragraph_label, R.id.style_paragraph_size, "段距", 0, state.paragraphSpacingDp, callback::onParagraphSpacingChanged, callback::onParagraphSpacingChangeFinished)
+        bindSeekBar(view, R.id.style_text_size_label, R.id.style_text_size, activity.getString(R.string.reader_style_text_size), 14, state.textSizeSp, callback::onTextSizeChanged, callback::onTextSizeChangeFinished)
+        bindSeekBar(view, R.id.style_letter_label, R.id.style_letter_size, activity.getString(R.string.reader_style_letter_spacing), -50, state.letterSpacingDp, callback::onLetterSpacingChanged, callback::onLetterSpacingChangeFinished)
+        bindSeekBar(view, R.id.style_line_label, R.id.style_line_size, activity.getString(R.string.reader_style_line_spacing), 0, state.lineSpacingDp, callback::onLineSpacingChanged, callback::onLineSpacingChangeFinished)
+        bindSeekBar(view, R.id.style_paragraph_label, R.id.style_paragraph_size, activity.getString(R.string.reader_style_paragraph_spacing), 0, state.paragraphSpacingDp, callback::onParagraphSpacingChanged, callback::onParagraphSpacingChangeFinished)
         view.findViewById<RadioGroup>(R.id.style_page_anim).check(
             when (state.pageAnim) {
                 M9PageAnim.COVER -> R.id.style_anim_cover

@@ -91,6 +91,15 @@ private enum class CatalogMode {
     BOOKMARKS
 }
 
+private enum class ReaderOverflowAction(val menuId: Int) {
+    PLAYER(1),
+    ADD_BOOKMARK(2),
+    REMOVE_RUBY(3),
+    REMOVE_H(4),
+    SWITCH_LAYOUT(5),
+    HELP(6)
+}
+
 class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private lateinit var readMenu: View
     private lateinit var statusBarScrim: View
@@ -210,6 +219,8 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private var pendingRestoreAnchor: ReaderPageAnchor? = null
     private var loadedDocumentBookUriText: String? = null
     private var loadedDocumentCharsetName: String? = null
+
+    private fun readerString(resId: Int): String = getString(resId)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         restoreReaderSettings()
@@ -687,7 +698,11 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             findViewById<TextView>(R.id.audio_timer_30).setOnClickListener { setAudioTimer(30) }
             findViewById<TextView>(R.id.audio_timer_off).setOnClickListener {
                 audioStopAtMs = null
-                Toast.makeText(this@LegadoReaderPrototypeActivity, "已关闭定时", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@LegadoReaderPrototypeActivity,
+                    readerString(R.string.reader_timer_closed),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
     }
@@ -767,9 +782,16 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             }
             onScreenOrientationClicked = { showScreenOrientationDialog() }
             onKeepLightClicked = { showKeepLightDialog() }
-            onDoublePageClicked = { showChoiceToastDialog("平板/横屏双页", arrayOf("全局单页", "横屏双页", "平板双页")) }
+            onDoublePageClicked = {
+                showChoiceToastDialog(
+                    readerString(R.string.double_page_horizontal),
+                    resources.getStringArray(R.array.reader_double_page_titles)
+                )
+            }
             onProgressBehaviorClicked = { showProgressBehaviorDialog() }
-            onPageTouchSlopClicked = { showNumberInputDialog("滑动翻页阈值", "8") }
+            onPageTouchSlopClicked = {
+                showNumberInputDialog(readerString(R.string.page_touch_slop_title), "8")
+            }
             onClickRegionalConfigClicked = { showClickRegionDialog() }
             onCustomPageKeyClicked = { showPageKeyDialog() }
             bind(currentMoreConfigState())
@@ -984,11 +1006,11 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
 
     private fun addCurrentBookmark() {
         val page = pages.getOrNull(pageIndex) ?: run {
-            Toast.makeText(this, "当前页还不能添加书签", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_bookmark_unavailable, Toast.LENGTH_SHORT).show()
             return
         }
         if (bookmarks.any { it.chapterIndex == page.chapterIndex && it.chapterPosition == page.charStart }) {
-            Toast.makeText(this, "该位置已经有书签", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_bookmark_exists, Toast.LENGTH_SHORT).show()
             return
         }
         val preview = page.text
@@ -1008,7 +1030,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         if (::catalogPanel.isInitialized && catalogPanel.visibility == View.VISIBLE && catalogMode == CatalogMode.BOOKMARKS) {
             bindCatalogList()
         }
-        Toast.makeText(this, "已添加书签", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, R.string.reader_bookmark_added, Toast.LENGTH_SHORT).show()
     }
 
     private fun applyBrightnessState() {
@@ -1071,14 +1093,14 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     private fun showScreenOrientationDialog() {
-        val items = arrayOf("跟随系统", "竖屏", "横屏")
+        val items = resources.getStringArray(R.array.reader_screen_direction_titles)
         val checked = when (requestedOrientation) {
             ActivityInfo.SCREEN_ORIENTATION_PORTRAIT -> 1
             ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE -> 2
             else -> 0
         }
         AlertDialog.Builder(this)
-            .setTitle("屏幕方向")
+            .setTitle(R.string.reader_title_screen_direction)
             .setSingleChoiceItems(items, checked) { dialog, which ->
                 requestedOrientation = when (which) {
                     1 -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -1091,9 +1113,9 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     private fun showKeepLightDialog() {
-        val items = arrayOf("默认", "常亮")
+        val items = resources.getStringArray(R.array.reader_keep_light_titles)
         AlertDialog.Builder(this)
-            .setTitle("屏幕超时")
+            .setTitle(R.string.reader_title_keep_light)
             .setSingleChoiceItems(items, if (keepScreenOn) 1 else 0) { dialog, which ->
                 keepScreenOn = which == 1
                 if (keepScreenOn) {
@@ -1108,9 +1130,9 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     private fun showProgressBehaviorDialog() {
-        val items = arrayOf("调整本章页数", "调整全书进度")
+        val items = resources.getStringArray(R.array.reader_progress_behavior_titles)
         AlertDialog.Builder(this)
-            .setTitle("进度条行为")
+            .setTitle(R.string.reader_title_progress_behavior)
             .setSingleChoiceItems(items, if (progressByChapter) 0 else 1) { dialog, which ->
                 progressByChapter = which == 0
                 persistReaderSettings()
@@ -1129,10 +1151,10 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle(title)
             .setView(input)
-            .setPositiveButton("确定") { _, _ ->
+            .setPositiveButton(R.string.reader_dialog_confirm) { _, _ ->
                 Toast.makeText(this, "$title：${input.text}", Toast.LENGTH_SHORT).show()
             }
-            .setNegativeButton("取消", null)
+            .setNegativeButton(R.string.reader_dialog_cancel, null)
             .show()
     }
 
@@ -1140,7 +1162,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         val group = RadioGroup(this).apply {
             orientation = RadioGroup.VERTICAL
             setPadding(dp(22), dp(8), dp(22), 0)
-            arrayOf("左/中/右默认区域", "上/中/下区域", "全屏点击下一页").forEachIndexed { index, label ->
+            resources.getStringArray(R.array.reader_click_region_titles).forEachIndexed { index, label ->
                 addView(RadioButton(this@LegadoReaderPrototypeActivity).apply {
                     id = View.generateViewId()
                     text = label
@@ -1149,9 +1171,9 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             }
         }
         AlertDialog.Builder(this)
-            .setTitle("点击区域设置")
+            .setTitle(R.string.reader_title_click_region)
             .setView(group)
-            .setPositiveButton("确定") { _, _ ->
+            .setPositiveButton(R.string.reader_dialog_confirm) { _, _ ->
                 val checkedIndex = (0 until group.childCount).indexOfFirst {
                     group.getChildAt(it).id == group.checkedRadioButtonId
                 }.coerceAtLeast(0)
@@ -1163,7 +1185,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                 readView.setClickMode(clickMode)
                 persistReaderSettings()
             }
-            .setNegativeButton("取消", null)
+            .setNegativeButton(R.string.reader_dialog_cancel, null)
             .show()
     }
 
@@ -1171,7 +1193,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(22), dp(8), dp(22), 0)
-            arrayOf("音量上键上一页", "音量下键下一页", "方向键翻页").forEach { label ->
+            resources.getStringArray(R.array.reader_page_key_titles).forEach { label ->
                 addView(CheckBox(this@LegadoReaderPrototypeActivity).apply {
                     text = label
                     isChecked = true
@@ -1179,33 +1201,39 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             }
         }
         AlertDialog.Builder(this)
-            .setTitle("自定义翻页按键")
+            .setTitle(R.string.reader_title_page_key)
             .setView(container)
-            .setPositiveButton("确定") { _, _ ->
-                Toast.makeText(this, "翻页按键配置已保存", Toast.LENGTH_SHORT).show()
+            .setPositiveButton(R.string.reader_dialog_confirm) { _, _ ->
+                Toast.makeText(this, R.string.reader_page_key_saved, Toast.LENGTH_SHORT).show()
             }
-            .setNegativeButton("取消", null)
+            .setNegativeButton(R.string.reader_dialog_cancel, null)
             .show()
     }
 
     private fun showOverflowMenu(anchor: View) {
         PopupMenu(this, anchor).apply {
-            menu.add("播放器")
-            menu.add("添加书签")
-            menu.add("删除ruby标签")
-            menu.add("删除h标签")
-            menu.add(if (readerLayoutMode == M9LayoutMode.VERTICAL) "切换横排" else "切换纵书")
-            menu.add("帮助")
+            menu.add(0, ReaderOverflowAction.PLAYER.menuId, 0, R.string.reader_menu_player)
+            menu.add(0, ReaderOverflowAction.ADD_BOOKMARK.menuId, 1, R.string.reader_menu_add_bookmark)
+            menu.add(0, ReaderOverflowAction.REMOVE_RUBY.menuId, 2, R.string.del_ruby_tag)
+            menu.add(0, ReaderOverflowAction.REMOVE_H.menuId, 3, R.string.del_h_tag)
+            menu.add(
+                0,
+                ReaderOverflowAction.SWITCH_LAYOUT.menuId,
+                4,
+                if (readerLayoutMode == M9LayoutMode.VERTICAL) R.string.reader_menu_switch_horizontal else R.string.reader_menu_switch_vertical
+            )
+            menu.add(0, ReaderOverflowAction.HELP.menuId, 5, R.string.reader_menu_help)
             setOnMenuItemClickListener { item ->
-                when (item.title.toString()) {
-                    "播放器" -> openPlayerFromReader()
-                    "添加书签" -> addCurrentBookmark()
-                    "切换纵书" -> {
-                        readerLayoutMode = M9LayoutMode.VERTICAL
-                        requestBookRelayout()
-                    }
-                    "切换横排" -> {
-                        readerLayoutMode = M9LayoutMode.HORIZONTAL
+                when (item.itemId) {
+                    ReaderOverflowAction.PLAYER.menuId -> openPlayerFromReader()
+                    ReaderOverflowAction.ADD_BOOKMARK.menuId -> addCurrentBookmark()
+                    ReaderOverflowAction.SWITCH_LAYOUT.menuId -> {
+                        readerLayoutMode =
+                            if (readerLayoutMode == M9LayoutMode.VERTICAL) {
+                                M9LayoutMode.HORIZONTAL
+                            } else {
+                                M9LayoutMode.VERTICAL
+                            }
                         requestBookRelayout()
                     }
                 }
@@ -1218,14 +1246,16 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
 
     private fun showEncodingMenu(anchor: View) {
         PopupMenu(this, anchor).apply {
-            menu.add("自动")
+            menu.add(0, 0, 0, R.string.reader_charset_auto)
             menu.add("UTF-8")
             menu.add("Shift_JIS")
             menu.add("GBK")
             menu.add("Big5")
             menu.add("UTF-16LE")
             setOnMenuItemClickListener { item ->
-                preferredCharsetName = item.title.toString().takeUnless { it == "自动" }
+                preferredCharsetName = item.title.toString().takeUnless {
+                    it == readerString(R.string.reader_charset_auto)
+                }
                 persistReaderSettings()
                 document = null
                 loadedDocumentBookUriText = null
@@ -1256,7 +1286,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
 
     private fun openPlayerFromReader() {
         val targetAudioUri = audioUri ?: run {
-            Toast.makeText(this, "这本书没有绑定音频", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_no_audio, Toast.LENGTH_SHORT).show()
             return
         }
         if (useSharedPlaybackSession) {
@@ -1316,7 +1346,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
 
     private fun startSearch(query: String) {
         if (query.isBlank()) {
-            Toast.makeText(this, "请输入搜索内容", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_search_input_required, Toast.LENGTH_SHORT).show()
             return
         }
         val lowerQuery = query.lowercase()
@@ -1349,7 +1379,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             searchHitIndex = -1
             bindSearchResultList()
             updateSearchInfo()
-            Toast.makeText(this, "没有搜索结果", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_search_no_results, Toast.LENGTH_SHORT).show()
             return
         }
         searchHits = hits
@@ -1376,13 +1406,20 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             val current = searchHits.getOrNull(searchHitIndex)
             val chapterTitle = current?.chapterTitle ?: pages.getOrNull(pageIndex)?.title ?: currentReaderTitle()
             val currentIndex = if (searchHitIndex >= 0) searchHitIndex + 1 else 0
-            searchMenu.updateInfo("搜索结果: $currentIndex/${searchHits.size} / 当前章节: $chapterTitle")
+            searchMenu.updateInfo(
+                getString(
+                    R.string.reader_search_result_current,
+                    currentIndex,
+                    searchHits.size,
+                    chapterTitle
+                )
+            )
         }
         if (::searchResultInfoView.isInitialized) {
             searchResultInfoView.text = if (searchHits.isEmpty()) {
-                "暂无结果"
+                readerString(R.string.reader_search_result_none)
             } else {
-                "搜索结果: ${searchHits.size}"
+                getString(R.string.reader_search_result_total, searchHits.size)
             }
         }
     }
@@ -1448,7 +1485,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private fun showChapterListDialog() {
         val chapters = document?.chapters.orEmpty()
         if (chapters.isEmpty()) {
-            Toast.makeText(this, "目录还没有加载完成", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_catalog_not_ready, Toast.LENGTH_SHORT).show()
             return
         }
         catalogMode = CatalogMode.CHAPTERS
@@ -1488,7 +1525,12 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
 
     private fun updateCatalogTabs() {
         if (!::catalogTitleView.isInitialized) return
-        catalogTitleView.text = if (catalogMode == CatalogMode.CHAPTERS) "目录" else "书签"
+        catalogTitleView.text =
+            if (catalogMode == CatalogMode.CHAPTERS) {
+                readerString(R.string.reader_catalog_title_chapters)
+            } else {
+                readerString(R.string.reader_catalog_title_bookmarks)
+            }
         val activeBg = accentColor()
         val inactiveBg = 0x00000000
         val activeText = if (isNightReaderTheme()) 0xFF111111.toInt() else 0xFFFFFFFF.toInt()
@@ -1497,7 +1539,12 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         catalogTabBookmarksView.backgroundTintList = ColorStateList.valueOf(if (catalogMode == CatalogMode.BOOKMARKS) activeBg else inactiveBg)
         catalogTabChaptersView.setTextColor(if (catalogMode == CatalogMode.CHAPTERS) activeText else inactiveText)
         catalogTabBookmarksView.setTextColor(if (catalogMode == CatalogMode.BOOKMARKS) activeText else inactiveText)
-        catalogSearchInputView.hint = if (catalogMode == CatalogMode.CHAPTERS) "搜索目录" else "搜索书签"
+        catalogSearchInputView.hint =
+            if (catalogMode == CatalogMode.CHAPTERS) {
+                readerString(R.string.reader_catalog_search_chapters)
+            } else {
+                readerString(R.string.reader_catalog_search_bookmarks)
+            }
     }
 
     private fun bindChapterCatalogList() {
@@ -1558,7 +1605,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                 }
                 val item = getItem(position)
                 view.text = buildString {
-                    append(item?.chapterTitle ?: "未知章节")
+                    append(item?.chapterTitle ?: readerString(R.string.reader_unknown_chapter))
                     append('\n')
                     append(item?.preview.orEmpty())
                 }
@@ -1583,7 +1630,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             }
             persistBookmarks()
             bindCatalogList()
-            Toast.makeText(this, "已删除书签", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_bookmark_deleted, Toast.LENGTH_SHORT).show()
             true
         }
     }
@@ -1643,7 +1690,11 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                 override fun onInfoClicked() {
                     Toast.makeText(
                         this@LegadoReaderPrototypeActivity,
-                        "页数 ${pages.size}，章节 ${document?.chapters?.size ?: 0}",
+                        getString(
+                            R.string.reader_info_debug,
+                            pages.size,
+                            document?.chapters?.size ?: 0
+                        ),
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -1701,9 +1752,9 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     private fun showIndentDialog() {
-        val choices = arrayOf("无缩进", "一字缩进", "两字缩进")
+        val choices = resources.getStringArray(R.array.reader_indent_titles)
         AlertDialog.Builder(this)
-            .setTitle("缩进")
+            .setTitle(R.string.reader_title_indent)
             .setSingleChoiceItems(choices, readerParagraphIndentCount) { dialog, which ->
                 readerParagraphIndentCount = which
                 dialog.dismiss()
@@ -1713,9 +1764,9 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     private fun showFontDialog() {
-        val choices = arrayOf("默认字体", "衬线字体", "等宽字体")
+        val choices = resources.getStringArray(R.array.reader_font_titles)
         AlertDialog.Builder(this)
-            .setTitle("字体")
+            .setTitle(R.string.reader_title_font)
             .setSingleChoiceItems(choices, readerTypefaceIndex) { dialog, which ->
                 readerTypefaceIndex = which
                 readerTypeface = when (which) {
@@ -1733,7 +1784,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private fun showImagePreviewDialog(image: EbookImageRef) {
         val bitmap = BitmapFactory.decodeByteArray(image.bytes, 0, image.bytes.size)
         if (bitmap == null) {
-            Toast.makeText(this, "图片无法预览", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_image_preview_unavailable, Toast.LENGTH_SHORT).show()
             return
         }
         val imageView = ImageView(this).apply {
@@ -1745,7 +1796,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle(image.altText.ifBlank { image.path.substringAfterLast('/') })
             .setView(imageView)
-            .setPositiveButton("关闭", null)
+            .setPositiveButton(R.string.close, null)
             .show()
     }
 
@@ -1754,7 +1805,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(22), dp(12), dp(22), 0)
         }
-        val label = text("边距：${readerPaddingDp}dp", 15f, MENU_TEXT)
+        val label = text(getString(R.string.reader_margin_label, readerPaddingDp), 15f, MENU_TEXT)
         val seek = SeekBar(this).apply {
             max = 40
             progress = readerPaddingDp.coerceIn(0, max)
@@ -1762,7 +1813,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                     if (fromUser) {
                         readerPaddingDp = progress
-                        label.text = "边距：${readerPaddingDp}dp"
+                        label.text = getString(R.string.reader_margin_label, readerPaddingDp)
                         readView.setReaderPadding(
                             dp(readerPaddingDp),
                             dp(34),
@@ -1782,23 +1833,23 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         container.addView(label, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(42)))
         container.addView(seek, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)))
         AlertDialog.Builder(this)
-            .setTitle("边距")
+            .setTitle(R.string.reader_title_margin)
             .setView(container)
-            .setPositiveButton("完成", null)
+            .setPositiveButton(R.string.reader_dialog_done, null)
             .show()
     }
 
     private fun showTipConfigDialog() {
-        val choices = arrayOf("显示页眉页脚", "隐藏页眉页脚")
+        val choices = resources.getStringArray(R.array.reader_info_titles)
         AlertDialog.Builder(this)
-            .setTitle("提示信息")
+            .setTitle(R.string.reader_title_info)
             .setSingleChoiceItems(choices, if (showReadTitleAddition) 0 else 1) { dialog, which ->
                 showReadTitleAddition = which == 0
                 readView.setShowHeaderFooter(showReadTitleAddition)
                 persistReaderSettings()
                 dialog.dismiss()
                 requestBookRelayout()
-                Toast.makeText(this, "页眉页脚显示状态已保存", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, R.string.reader_info_saved, Toast.LENGTH_SHORT).show()
             }
             .show()
     }
@@ -1838,7 +1889,10 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                 readView.setPage(
                     TextPage(
                         title = currentReaderTitle(),
-                        text = "打开 ebook 失败：${error.message ?: error.javaClass.simpleName}",
+                        text = getString(
+                            R.string.reader_open_ebook_failed,
+                            error.message ?: error.javaClass.simpleName
+                        ),
                         totalPages = 1
                     )
                 )
@@ -2185,7 +2239,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         }
         val currentPlayer = player
         if (currentPlayer == null) {
-            Toast.makeText(this, "这本书没有绑定音频", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_no_audio, Toast.LENGTH_SHORT).show()
             return
         }
         if (currentPlayer.isPlaying) {
@@ -2205,10 +2259,12 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private fun updateAudioControlLabels() {
         val isPlaying = isAudioPlaying()
         if (::listenActionText.isInitialized) {
-            listenActionText.text = if (isPlaying) "暂停" else "听书"
+            listenActionText.text =
+                if (isPlaying) readerString(R.string.reader_pause) else readerString(R.string.reader_listen)
         }
         if (::audioPlayPauseText.isInitialized) {
-            audioPlayPauseText.text = if (isPlaying) "暂停" else "播放"
+            audioPlayPauseText.text =
+                if (isPlaying) readerString(R.string.reader_pause) else readerString(R.string.play)
         }
         if (::playbackBarToggleButton.isInitialized) {
             playbackBarToggleButton.setImageResource(
@@ -2219,28 +2275,32 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
 
     private fun setAudioTimer(minutes: Int) {
         audioStopAtMs = System.currentTimeMillis() + minutes * 60_000L
-        Toast.makeText(this, "${minutes}分钟后暂停", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, getString(R.string.reader_stop_after_minutes, minutes), Toast.LENGTH_SHORT).show()
     }
 
     private fun seekToAdjacentCue(delta: Int) {
         val currentPlayer = player
         if (!useSharedPlaybackSession && currentPlayer == null) {
-            Toast.makeText(this, "这本书没有绑定音频", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_no_audio, Toast.LENGTH_SHORT).show()
             return
         }
         if (cues.isEmpty()) {
             if (srtUri == null) {
-                Toast.makeText(this, "这本书没有绑定 SRT", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, R.string.reader_no_srt, Toast.LENGTH_SHORT).show()
                 return
             }
             loadSrtSyncIfNeeded(force = true) { success ->
                 if (success) {
                     seekToAdjacentCue(delta)
                 } else {
-                    Toast.makeText(this, srtLoadError ?: "SRT 没有解析出字幕", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        this,
+                        srtLoadError ?: readerString(R.string.reader_srt_parse_failed),
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
-            Toast.makeText(this, "正在加载 SRT...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_srt_loading, Toast.LENGTH_SHORT).show()
             return
         }
         val position = currentAudioPositionMs() ?: 0L
@@ -2606,12 +2666,12 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private fun showSasayakiMatchDialog() {
         val loadedDocument = document
         if (loadedDocument == null || pages.isEmpty()) {
-            Toast.makeText(this, "ebook 还没有加载完成", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_ebook_not_ready, Toast.LENGTH_SHORT).show()
             return
         }
         if (cues.isEmpty()) {
             if (srtUri == null) {
-                Toast.makeText(this, "这本书没有绑定 SRT", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, R.string.reader_no_srt, Toast.LENGTH_SHORT).show()
                 return
             }
             loadSrtSyncIfNeeded(force = true) { success ->
@@ -2620,12 +2680,12 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                 } else {
                     Toast.makeText(
                         this,
-                        srtLoadError ?: "SRT 没有解析出字幕",
+                        srtLoadError ?: readerString(R.string.reader_srt_parse_failed),
                         Toast.LENGTH_LONG
                     ).show()
                 }
             }
-            Toast.makeText(this, "正在加载 SRT...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.reader_srt_loading, Toast.LENGTH_SHORT).show()
             return
         }
         val container = LinearLayout(this).apply {
@@ -2635,7 +2695,11 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         val summaryText = text(matchSummaryText(), 14f, MENU_TEXT).apply {
             gravity = Gravity.CENTER_VERTICAL
         }
-        val windowText = text("Search Window: $matchSearchWindow", 14f, MENU_TEXT)
+        val windowText = text(
+            getString(R.string.reader_match_search_window, matchSearchWindow),
+            14f,
+            MENU_TEXT
+        )
         val seekBar = SeekBar(this).apply {
             max = MATCH_SEARCH_WINDOW_MAX - MATCH_SEARCH_WINDOW_MIN
             progress = (matchSearchWindow - MATCH_SEARCH_WINDOW_MIN).coerceIn(0, max)
@@ -2643,7 +2707,10 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                     if (fromUser) {
                         matchSearchWindow = MATCH_SEARCH_WINDOW_MIN + progress
-                        windowText.text = "Search Window: $matchSearchWindow"
+                        windowText.text = getString(
+                            R.string.reader_match_search_window,
+                            matchSearchWindow
+                        )
                     }
                 }
 
@@ -2656,16 +2723,16 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         container.addView(seekBar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)))
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Match")
+            .setTitle(R.string.reader_match_title)
             .setView(container)
-            .setPositiveButton("开始匹配", null)
-            .setNegativeButton("完成", null)
+            .setPositiveButton(R.string.reader_match_start, null)
+            .setNegativeButton(R.string.reader_dialog_done, null)
             .create()
         dialog.setOnShowListener {
             val startButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
             startButton.setOnClickListener {
                 startButton.isEnabled = false
-                summaryText.text = "Matching..."
+                summaryText.text = readerString(R.string.reader_match_in_progress)
                 lifecycleScope.launch {
                     runCatching {
                         withContext(Dispatchers.Default) {
@@ -2688,7 +2755,10 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                         renderCurrentPage()
                         summaryText.text = matchSummaryText()
                     }.onFailure { error ->
-                        summaryText.text = "匹配失败：${error.message ?: error.javaClass.simpleName}"
+                        summaryText.text = getString(
+                            R.string.reader_match_failed,
+                            error.message ?: error.javaClass.simpleName
+                        )
                     }
                     startButton.isEnabled = true
                 }
@@ -2700,9 +2770,14 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     private fun matchSummaryText(): String {
         val current = matchData
         return if (current == null) {
-            "当前 SRT：${cues.size} 条，尚未匹配"
+            getString(R.string.reader_match_summary_unmatched, cues.size)
         } else {
-            "匹配率 ${current.matchRateText}，已匹配 ${current.matches.size}/${current.totalCues} 条"
+            getString(
+                R.string.reader_match_summary_matched,
+                current.matchRateText,
+                current.matches.size,
+                current.totalCues
+            )
         }
     }
 
@@ -2737,7 +2812,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                     "loadSrtSyncIfNeeded loaded cues=${loadedCues.size} uri=$uriText reset in-memory match cache"
                 )
                 srtLoadError = if (loadedCues.isEmpty()) {
-                    "SRT 没有解析出字幕，请确认文件是标准 .srt。"
+                    readerString(R.string.reader_srt_parse_failed_detail)
                 } else {
                     null
                 }
@@ -2750,7 +2825,10 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                 }
                 onComplete?.invoke(loadedCues.isNotEmpty())
             }.onFailure { error ->
-                srtLoadError = "SRT 加载失败：${error.message ?: error.javaClass.simpleName}"
+                srtLoadError = getString(
+                    R.string.reader_srt_load_failed,
+                    error.message ?: error.javaClass.simpleName
+                )
                 onComplete?.invoke(false)
             }
             srtLoading = false

@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="search">搜索</string>
+    <string name="replace">替</string>
+    <string name="setting">设置</string>
+    <string name="interface_setting">界面</string>
+    <string name="brightness">亮度</string>
+    <string name="chapter_list">目录</string>
+    <string name="next_chapter">下一章</string>
+    <string name="previous_chapter">上一章</string>
+    <string name="read_aloud">听书</string>
+    <string name="read_aloud_speed">语速</string>
+    <string name="screen_direction">屏幕方向</string>
+    <string name="screen_unspecified">跟随系统</string>
+    <string name="screen_portrait">竖屏</string>
+    <string name="screen_landscape">横屏</string>
+    <string name="keep_light">屏幕超时</string>
+    <string name="pt_hide_status_bar">隐藏状态栏</string>
+    <string name="pt_hide_navigation_bar">隐藏导航栏</string>
+    <string name="double_page_horizontal">平板/横屏双页</string>
+    <string name="read_chinese_converter">使用自定义中文分行</string>
+    <string name="mouse_wheel_page">鼠标滚轮翻页</string>
+    <string name="text_full_justify">文字两端对齐</string>
+    <string name="text_bottom_justify">文字底部对齐</string>
+    <string name="show_brightness_view">显示亮度调节控件</string>
+    <string name="no_anim_scroll_page">禁用滚动点击动画</string>
+    <string name="progress_bar_behavior">进度条行为</string>
+    <string name="click_regional_config">点击区域设置</string>
+    <string name="custom_page_key">自定义翻页按键</string>
+    <string name="show_read_title_addition">展示顶部工具栏附加区域</string>
+    <string name="read_bar_style_follow_page">工具栏样式跟随页面</string>
+    <string name="preview_image_by_click">点击预览图片</string>
+    <string name="enable_optimize_render">启用绘制优化</string>
+    <string name="del_ruby_tag">删除ruby标签</string>
+    <string name="del_h_tag">删除h标签</string>
+    <string name="key_page_on_long_press">按键长按翻页</string>
+    <string name="bookmark">书签</string>
+    <string name="all_bookmark">所有书签</string>
+    <string name="search_content">搜索正文</string>
+    <string name="night_theme">夜间模式</string>
+    <string name="page_touch_slop_title">滑动翻页阈值</string>
+    <string name="reader_encoding_set">设置编码</string>
+    <string name="reader_playback_bar">播放条</string>
+    <string name="reader_catalog_search_hint">搜索当前列表</string>
+    <string name="reader_style_weight_normal">常规</string>
+    <string name="reader_style_font">字体</string>
+    <string name="reader_style_indent">缩进</string>
+    <string name="reader_style_padding">边距</string>
+    <string name="reader_style_info">信息</string>
+    <string name="reader_style_text_size">字体大小</string>
+    <string name="reader_style_letter_spacing">字距</string>
+    <string name="reader_style_line_spacing">行距</string>
+    <string name="reader_style_paragraph_spacing">段距</string>
+    <string name="reader_style_page_anim">翻页动画</string>
+    <string name="reader_style_anim_cover">覆盖</string>
+    <string name="reader_style_anim_slide">滑动</string>
+    <string name="reader_style_anim_scroll">滚动</string>
+    <string name="reader_style_anim_none">无</string>
+    <string name="reader_style_background">阅读背景</string>
+    <string name="reader_style_sample_text">文字</string>
+    <string name="reader_keep_light_default">默认</string>
+    <string name="reader_keep_light_always">常亮</string>
+    <string name="reader_double_page_single">全局单页</string>
+    <string name="reader_double_page_landscape">横屏双页</string>
+    <string name="reader_double_page_tablet">平板双页</string>
+    <string name="reader_progress_behavior_page">调整本章页数</string>
+    <string name="reader_progress_behavior_book">调整全书进度</string>
+    <string name="read_body_to_lh">扩展到刘海</string>
+    <string name="disable_return_key">禁用返回键</string>
+    <string name="play">播放</string>
+    <string name="close">关闭</string>
+    <string name="reader_click_region_default">左/中/右默认区域</string>
+    <string name="reader_click_region_vertical">上/中/下区域</string>
+    <string name="reader_click_region_full_next">全屏点击下一页</string>
+    <string name="reader_page_key_volume_up_prev">音量上键上一页</string>
+    <string name="reader_page_key_volume_down_next">音量下键下一页</string>
+    <string name="reader_page_key_dpad">方向键翻页</string>
+    <string name="reader_menu_player">播放器</string>
+    <string name="reader_menu_add_bookmark">添加书签</string>
+    <string name="reader_menu_switch_vertical">切换纵书</string>
+    <string name="reader_menu_switch_horizontal">切换横排</string>
+    <string name="reader_menu_help">帮助</string>
+    <string name="reader_charset_auto">自动</string>
+    <string name="reader_timer_closed">已关闭定时</string>
+    <string name="reader_bookmark_unavailable">当前页还不能添加书签</string>
+    <string name="reader_bookmark_exists">该位置已经有书签</string>
+    <string name="reader_bookmark_added">已添加书签</string>
+    <string name="reader_bookmark_deleted">已删除书签</string>
+    <string name="reader_title_screen_direction">屏幕方向</string>
+    <string name="reader_title_keep_light">屏幕超时</string>
+    <string name="reader_title_progress_behavior">进度条行为</string>
+    <string name="reader_dialog_confirm">确定</string>
+    <string name="reader_dialog_cancel">取消</string>
+    <string name="reader_title_click_region">点击区域设置</string>
+    <string name="reader_title_page_key">自定义翻页按键</string>
+    <string name="reader_page_key_saved">翻页按键配置已保存</string>
+    <string name="reader_no_audio">这本书没有绑定音频</string>
+    <string name="reader_search_input_required">请输入搜索内容</string>
+    <string name="reader_search_no_results">没有搜索结果</string>
+    <string name="reader_search_result_current">搜索结果: %1$d/%2$d / 当前章节: %3$s</string>
+    <string name="reader_search_result_none">暂无结果</string>
+    <string name="reader_search_result_total">搜索结果: %1$d</string>
+    <string name="reader_catalog_not_ready">目录还没有加载完成</string>
+    <string name="reader_catalog_title_chapters">目录</string>
+    <string name="reader_catalog_title_bookmarks">书签</string>
+    <string name="reader_catalog_search_chapters">搜索目录</string>
+    <string name="reader_catalog_search_bookmarks">搜索书签</string>
+    <string name="reader_unknown_chapter">未知章节</string>
+    <string name="reader_info_debug">页数 %1$d，章节 %2$d</string>
+    <string name="reader_indent_none">无缩进</string>
+    <string name="reader_indent_one">一字缩进</string>
+    <string name="reader_indent_two">两字缩进</string>
+    <string name="reader_title_indent">缩进</string>
+    <string name="reader_font_default">默认字体</string>
+    <string name="reader_font_serif">衬线字体</string>
+    <string name="reader_font_monospace">等宽字体</string>
+    <string name="reader_title_font">字体</string>
+    <string name="reader_image_preview_unavailable">图片无法预览</string>
+    <string name="reader_margin_label">边距：%1$ddp</string>
+    <string name="reader_title_margin">边距</string>
+    <string name="reader_dialog_done">完成</string>
+    <string name="reader_info_show">显示页眉页脚</string>
+    <string name="reader_info_hide">隐藏页眉页脚</string>
+    <string name="reader_title_info">提示信息</string>
+    <string name="reader_info_saved">页眉页脚显示状态已保存</string>
+    <string name="reader_open_ebook_failed">打开 ebook 失败：%1$s</string>
+    <string name="reader_pause">暂停</string>
+    <string name="reader_listen">听书</string>
+    <string name="reader_stop_after_minutes">%1$d分钟后暂停</string>
+    <string name="reader_no_srt">这本书没有绑定 SRT</string>
+    <string name="reader_srt_parse_failed">SRT 没有解析出字幕</string>
+    <string name="reader_srt_loading">正在加载 SRT...</string>
+    <string name="reader_ebook_not_ready">ebook 还没有加载完成</string>
+    <string name="reader_match_title">Match</string>
+    <string name="reader_match_start">开始匹配</string>
+    <string name="reader_match_in_progress">Matching...</string>
+    <string name="reader_match_failed">匹配失败：%1$s</string>
+    <string name="reader_match_summary_unmatched">当前 SRT：%1$d 条，尚未匹配</string>
+    <string name="reader_match_summary_matched">匹配率 %1$s，已匹配 %2$d/%3$d 条</string>
+    <string name="reader_srt_parse_failed_detail">SRT 没有解析出字幕，请确认文件是标准 .srt。</string>
+    <string name="reader_srt_load_failed">SRT 加载失败：%1$s</string>
+    <string name="reader_match_search_window">Search Window: %1$d</string>
+
+    <string-array name="reader_screen_direction_titles">
+        <item>@string/screen_unspecified</item>
+        <item>@string/screen_portrait</item>
+        <item>@string/screen_landscape</item>
+    </string-array>
+
+    <string-array name="reader_keep_light_titles">
+        <item>@string/reader_keep_light_default</item>
+        <item>@string/reader_keep_light_always</item>
+    </string-array>
+
+    <string-array name="reader_double_page_titles">
+        <item>@string/reader_double_page_single</item>
+        <item>@string/reader_double_page_landscape</item>
+        <item>@string/reader_double_page_tablet</item>
+    </string-array>
+
+    <string-array name="reader_progress_behavior_titles">
+        <item>@string/reader_progress_behavior_page</item>
+        <item>@string/reader_progress_behavior_book</item>
+    </string-array>
+
+    <string-array name="reader_click_region_titles">
+        <item>@string/reader_click_region_default</item>
+        <item>@string/reader_click_region_vertical</item>
+        <item>@string/reader_click_region_full_next</item>
+    </string-array>
+
+    <string-array name="reader_page_key_titles">
+        <item>@string/reader_page_key_volume_up_prev</item>
+        <item>@string/reader_page_key_volume_down_next</item>
+        <item>@string/reader_page_key_dpad</item>
+    </string-array>
+
+    <string-array name="reader_indent_titles">
+        <item>@string/reader_indent_none</item>
+        <item>@string/reader_indent_one</item>
+        <item>@string/reader_indent_two</item>
+    </string-array>
+
+    <string-array name="reader_font_titles">
+        <item>@string/reader_font_default</item>
+        <item>@string/reader_font_serif</item>
+        <item>@string/reader_font_monospace</item>
+    </string-array>
+
+    <string-array name="reader_info_titles">
+        <item>@string/reader_info_show</item>
+        <item>@string/reader_info_hide</item>
+    </string-array>
+</resources>

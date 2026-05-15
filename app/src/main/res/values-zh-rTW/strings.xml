@@ -415,6 +415,10 @@
     <string name="bookreader_progress_total">總進度：%1$d%%</string>
     <string name="bookreader_progress_chapter">章節進度：%1$d%%</string>
     <string name="bookreader_progress_plain">進度：%1$d%%</string>
+    <string name="bookreader_playback_mode_normal_label">播放：正常</string>
+    <string name="bookreader_playback_mode_condensed_label">播放：濃縮</string>
+    <string name="bookreader_playback_mode_normal">正常</string>
+    <string name="bookreader_playback_mode_condensed">濃縮</string>
     <string name="bookreader_jump_by_cue">按台詞</string>
     <string name="bookreader_jump_by_duration">按時長(%1$d秒)</string>
     <string name="bookreader_sleep_timer">計時</string>

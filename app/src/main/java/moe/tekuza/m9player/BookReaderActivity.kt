@@ -569,6 +569,7 @@ private fun BookReaderScreen(
     var bottomControlsVisible by remember { mutableStateOf(true) }
     var topActionsExpanded by remember { mutableStateOf(false) }
     var speedMenuExpanded by remember { mutableStateOf(false) }
+    var playbackModeMenuExpanded by remember { mutableStateOf(false) }
     var sleepTimerDeadlineMs by remember { mutableStateOf<Long?>(null) }
     var sleepTimerOptionsVisible by remember { mutableStateOf(false) }
     var sleepCustomMinutesInput by remember { mutableStateOf("") }
@@ -876,7 +877,14 @@ private fun BookReaderScreen(
         onDispose { player.removeListener(listener) }
     }
 
-    if (!uiTestMode) LaunchedEffect(player, isPlaying, cueLoopEnabled, cueLoopWindow) {
+    if (!uiTestMode) LaunchedEffect(
+        player,
+        isPlaying,
+        cueLoopEnabled,
+        cueLoopWindow,
+        audiobookSettings.readerPlaybackMode,
+        cues
+    ) {
         if (!isPlaying) {
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = if (player.duration > 0L) player.duration else 0L
@@ -894,6 +902,12 @@ private fun BookReaderScreen(
                     if (positionMs >= loopAt || positionMs < startMs) {
                         player.seekTo(startMs)
                     }
+                }
+            } else if (audiobookSettings.readerPlaybackMode == ReaderPlaybackMode.CONDENSED) {
+                val target = findCondensedPlaybackSeekTarget(cues, positionMs)
+                if (target != null) {
+                    player.seekTo(target)
+                    positionMs = target
                 }
             }
             delay(250L)
@@ -2573,6 +2587,41 @@ private fun BookReaderScreen(
                                     }
                                 )
                             }
+                        }
+                    }
+                    Box {
+                        TextButton(
+                            enabled = hasSubtitleFile,
+                            onClick = { playbackModeMenuExpanded = true }
+                        ) {
+                            Text(
+                                when (audiobookSettings.readerPlaybackMode) {
+                                    ReaderPlaybackMode.NORMAL -> stringResource(R.string.bookreader_playback_mode_normal_label)
+                                    ReaderPlaybackMode.CONDENSED -> stringResource(R.string.bookreader_playback_mode_condensed_label)
+                                },
+                                maxLines = 1
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = playbackModeMenuExpanded,
+                            onDismissRequest = { playbackModeMenuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.bookreader_playback_mode_normal)) },
+                                onClick = {
+                                    saveAudiobookReaderPlaybackMode(context, ReaderPlaybackMode.NORMAL)
+                                    audiobookSettings = loadAudiobookSettingsConfig(context)
+                                    playbackModeMenuExpanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.bookreader_playback_mode_condensed)) },
+                                onClick = {
+                                    saveAudiobookReaderPlaybackMode(context, ReaderPlaybackMode.CONDENSED)
+                                    audiobookSettings = loadAudiobookSettingsConfig(context)
+                                    playbackModeMenuExpanded = false
+                                }
+                            )
                         }
                     }
                     Box {
@@ -5280,6 +5329,15 @@ private fun findBookDisplayCueIndexAtTime(cues: List<ReaderSubtitleCue>, timeMs:
     val current = findBookCueIndexAtTime(cues, timeMs)
     if (current >= 0) return current
     return findCueIndexAtOrBeforeTime(cues, timeMs)
+}
+
+private fun findCondensedPlaybackSeekTarget(cues: List<ReaderSubtitleCue>, timeMs: Long): Long? {
+    if (cues.isEmpty()) return null
+    if (findBookCueIndexAtTime(cues, timeMs) >= 0) return null
+    val nextIndex = findCueIndexAtOrAfterTime(cues, timeMs)
+    if (nextIndex < 0) return null
+    val target = cues[nextIndex].startMs.coerceAtLeast(0L)
+    return if (target - timeMs > 120L) target else null
 }
 
 private fun findCueIndexAtOrBeforeTime(cues: List<ReaderSubtitleCue>, timeMs: Long): Int {

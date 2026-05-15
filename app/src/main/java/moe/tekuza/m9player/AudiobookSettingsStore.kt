@@ -19,6 +19,7 @@ private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_CUSTOM_COLOR_KEY = "audiob
 private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_SCROLL_ENABLED_KEY = "audiobook_floating_overlay_subtitle_scroll_enabled"
 private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_WRITING_MODE_KEY = "audiobook_floating_overlay_subtitle_writing_mode"
 private const val AUDIOBOOK_BOOK_SUBTITLE_WRITING_MODE_KEY = "audiobook_book_subtitle_writing_mode"
+private const val AUDIOBOOK_READER_PLAYBACK_MODE_KEY = "audiobook_reader_playback_mode"
 private const val AUDIOBOOK_PAUSE_ON_LOOKUP_KEY = "audiobook_pause_on_lookup"
 private const val AUDIOBOOK_ACTIVE_CUE_AT_TOP_KEY = "audiobook_active_cue_at_top"
 private const val AUDIOBOOK_LOOKUP_AUDIO_ENABLED_KEY = "audiobook_lookup_audio_enabled"
@@ -79,6 +80,17 @@ internal enum class FloatingSubtitleWritingMode(val storageValue: String) {
     }
 }
 
+internal enum class ReaderPlaybackMode(val storageValue: String) {
+    NORMAL("normal"),
+    CONDENSED("condensed");
+
+    companion object {
+        fun fromStorage(value: String?): ReaderPlaybackMode {
+            return entries.firstOrNull { it.storageValue.equals(value, ignoreCase = true) } ?: NORMAL
+        }
+    }
+}
+
 internal data class AudiobookSettingsConfig(
     val seekStepMillis: Long = DEFAULT_AUDIOBOOK_SKIP_MILLIS,
     val floatingOverlayEnabled: Boolean = false,
@@ -103,6 +115,7 @@ internal data class AudiobookSettingsConfig(
     val floatingOverlaySubtitleScrollEnabled: Boolean = true,
     val floatingOverlaySubtitleWritingMode: FloatingSubtitleWritingMode = FloatingSubtitleWritingMode.HORIZONTAL,
     val bookSubtitleWritingMode: FloatingSubtitleWritingMode = FloatingSubtitleWritingMode.HORIZONTAL,
+    val readerPlaybackMode: ReaderPlaybackMode = ReaderPlaybackMode.NORMAL,
     val floatingOverlaySubtitleX: Int = 0,
     val floatingOverlaySubtitleY: Int = 0,
     val floatingOverlayBubbleX: Int = 24,
@@ -183,6 +196,9 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
         ),
         bookSubtitleWritingMode = FloatingSubtitleWritingMode.fromStorage(
             prefs.getString(AUDIOBOOK_BOOK_SUBTITLE_WRITING_MODE_KEY, null)
+        ),
+        readerPlaybackMode = ReaderPlaybackMode.fromStorage(
+            prefs.getString(AUDIOBOOK_READER_PLAYBACK_MODE_KEY, null)
         ),
         floatingOverlaySubtitleX = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_X_KEY, 0),
         floatingOverlaySubtitleY = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_Y_KEY, 0),
@@ -334,6 +350,16 @@ internal fun saveAudiobookBookSubtitleWritingMode(
     context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
         .edit()
         .putString(AUDIOBOOK_BOOK_SUBTITLE_WRITING_MODE_KEY, mode.storageValue)
+        .apply()
+}
+
+internal fun saveAudiobookReaderPlaybackMode(
+    context: Context,
+    mode: ReaderPlaybackMode
+) {
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(AUDIOBOOK_READER_PLAYBACK_MODE_KEY, mode.storageValue)
         .apply()
 }
 

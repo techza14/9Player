@@ -28,7 +28,7 @@
                 android:gravity="center"
                 android:paddingStart="10dp"
                 android:paddingEnd="10dp"
-                android:text="常规"
+                android:text="@string/reader_style_weight_normal"
                 android:textColor="#2C241B"
                 android:textSize="14sp" />
 
@@ -45,7 +45,7 @@
                 android:gravity="center"
                 android:paddingStart="10dp"
                 android:paddingEnd="10dp"
-                android:text="字体"
+                android:text="@string/reader_style_font"
                 android:textColor="#2C241B"
                 android:textSize="14sp" />
 
@@ -62,7 +62,7 @@
                 android:gravity="center"
                 android:paddingStart="10dp"
                 android:paddingEnd="10dp"
-                android:text="缩进"
+                android:text="@string/reader_style_indent"
                 android:textColor="#2C241B"
                 android:textSize="14sp" />
 
@@ -79,7 +79,7 @@
                 android:gravity="center"
                 android:paddingStart="10dp"
                 android:paddingEnd="10dp"
-                android:text="边距"
+                android:text="@string/reader_style_padding"
                 android:textColor="#2C241B"
                 android:textSize="14sp" />
 
@@ -96,7 +96,7 @@
                 android:gravity="center"
                 android:paddingStart="10dp"
                 android:paddingEnd="10dp"
-                android:text="信息"
+                android:text="@string/reader_style_info"
                 android:textColor="#2C241B"
                 android:textSize="14sp" />
         </LinearLayout>
@@ -120,7 +120,7 @@
             android:layout_width="match_parent"
             android:layout_height="36dp"
             android:gravity="center_vertical"
-            android:text="字距"
+            android:text="@string/reader_style_letter_spacing"
             android:textColor="#2C241B"
             android:textSize="14sp" />
 
@@ -135,7 +135,7 @@
             android:layout_width="match_parent"
             android:layout_height="36dp"
             android:gravity="center_vertical"
-            android:text="行距"
+            android:text="@string/reader_style_line_spacing"
             android:textColor="#2C241B"
             android:textSize="14sp" />
 
@@ -150,7 +150,7 @@
             android:layout_width="match_parent"
             android:layout_height="36dp"
             android:gravity="center_vertical"
-            android:text="段距"
+            android:text="@string/reader_style_paragraph_spacing"
             android:textColor="#2C241B"
             android:textSize="14sp" />
 
@@ -164,7 +164,7 @@
             android:layout_width="match_parent"
             android:layout_height="32dp"
             android:gravity="center_vertical"
-            android:text="翻页动画"
+            android:text="@string/reader_style_page_anim"
             android:textColor="#7D6E5C"
             android:textSize="12sp" />
 
@@ -179,21 +179,21 @@
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
-                android:text="覆盖" />
+                android:text="@string/reader_style_anim_cover" />
 
             <RadioButton
                 android:id="@+id/style_anim_slide"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
-                android:text="滑动" />
+                android:text="@string/reader_style_anim_slide" />
 
             <RadioButton
                 android:id="@+id/style_anim_scroll"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
-                android:text="滚动" />
+                android:text="@string/reader_style_anim_scroll" />
 
             <RadioButton
                 android:id="@+id/style_anim_none"
@@ -201,14 +201,14 @@
                 android:layout_height="match_parent"
                 android:layout_weight="1"
                 android:checked="true"
-                android:text="无" />
+                android:text="@string/reader_style_anim_none" />
         </RadioGroup>
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="32dp"
             android:gravity="center_vertical"
-            android:text="阅读背景"
+            android:text="@string/reader_style_background"
             android:textColor="#7D6E5C"
             android:textSize="12sp" />
 
@@ -227,7 +227,7 @@
                 android:layout_weight="1"
                 android:background="#F3E7CF"
                 android:gravity="center"
-                android:text="文字"
+                android:text="@string/reader_style_sample_text"
                 android:textColor="#2C241B" />
 
             <TextView
@@ -238,7 +238,7 @@
                 android:layout_weight="1"
                 android:background="#FFFFFF"
                 android:gravity="center"
-                android:text="文字"
+                android:text="@string/reader_style_sample_text"
                 android:textColor="#111111" />
 
             <TextView
@@ -249,7 +249,7 @@
                 android:layout_weight="1"
                 android:background="#D9E6D2"
                 android:gravity="center"
-                android:text="文字"
+                android:text="@string/reader_style_sample_text"
                 android:textColor="#25301F" />
 
             <TextView
@@ -259,7 +259,7 @@
                 android:layout_weight="1"
                 android:background="#1F1F1F"
                 android:gravity="center"
-                android:text="文字"
+                android:text="@string/reader_style_sample_text"
                 android:textColor="#D8D2C5" />
         </LinearLayout>
     </LinearLayout>

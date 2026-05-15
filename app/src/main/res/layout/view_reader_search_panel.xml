@@ -22,7 +22,7 @@
             android:layout_weight="1"
             android:background="@drawable/reader_menu_touch"
             android:gravity="center_vertical"
-            android:hint="搜索正文"
+            android:hint="@string/search_content"
             android:paddingStart="12dp"
             android:paddingEnd="12dp"
             android:singleLine="true"
@@ -37,7 +37,7 @@
             android:layout_marginStart="8dp"
             android:background="@drawable/reader_menu_touch"
             android:gravity="center"
-            android:text="搜索"
+            android:text="@string/search"
             android:textColor="#2C241B"
             android:textSize="14sp" />
 
