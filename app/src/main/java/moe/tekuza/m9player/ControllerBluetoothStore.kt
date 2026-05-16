@@ -26,6 +26,7 @@ private const val TARGET_CONTROLLER_PREFS = "target_controller_prefs"
 private const val TARGET_CONTROLLER_ADDRESS_KEY = "target_address"
 private const val TARGET_CONTROLLER_NAME_KEY = "target_name"
 private const val TARGET_CONTROLLER_DISABLE_BT_FALLBACK_KEY = "disable_bt_fallback"
+private val BLUETOOTH_ADDRESS_REGEX = Regex("^([0-9A-F]{2}:){5}[0-9A-F]{2}$")
 
 internal fun loadTargetControllerInfo(context: Context): TargetControllerInfo? {
     val prefs = context.getSharedPreferences(TARGET_CONTROLLER_PREFS, Context.MODE_PRIVATE)
@@ -182,6 +183,6 @@ private fun hasBluetoothConnectPermission(context: Context): Boolean {
 }
 
 private fun isBluetoothAddress(value: String): Boolean {
-    return Regex("^([0-9A-F]{2}:){5}[0-9A-F]{2}$").matches(value)
+    return BLUETOOTH_ADDRESS_REGEX.matches(value)
 }
 

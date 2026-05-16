@@ -1886,21 +1886,21 @@ private fun BookReaderScreen(
         if (uiTestMode) return
         val cueIndex = cues.indexOf(cue).takeIf { it >= 0 }
         val anchorBounds = anchor.boundingRectOrNull()
-        Log.d(
-            BOOK_LOOKUP_SELECTION_LOG_TAG,
+        logDebug(BOOK_LOOKUP_SELECTION_LOG_TAG) {
             "hoshi tap redirect cueIndex=$cueIndex offset=$offset anchor=${formatRectForLog(anchorBounds)}"
-        )
+        }
+        if (anchorBounds == null) {
+            logDebug(BOOK_LOOKUP_ANCHOR_LOG_TAG) {
+                "lookup skipped reason=missing_anchor cueIndex=$cueIndex offset=$offset"
+            }
+            return
+        }
         val selection = createHoshiReaderSelectionFromCueTap(
             cueText = cue.text,
             cueIndex = cueIndex ?: 0,
             cues = cues,
             offset = offset,
-            anchorRect = anchorBounds ?: Rect(
-                left = view.width * 0.5f,
-                top = view.height * 0.5f,
-                right = view.width * 0.5f + 1f,
-                bottom = view.height * 0.5f + 1f
-            ),
+            anchorRect = anchorBounds,
             density = rootDensity.density
         )
         triggerHoshiPopupLookup(selection, cue)
@@ -4396,9 +4396,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        val model = buildGridModel(height) ?: return true
-        if (model.cells.isEmpty()) return true
-        val resolved = resolveOffsetForEvent(event.x, event.y, model) ?: return true
+        val resolved = resolveOffsetForEvent(event.x, event.y) ?: return true
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -4446,15 +4444,8 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         val rectInWindow: android.graphics.RectF
     )
 
-    private data class VerticalGridCell(
-        val sourceOffset: Int,
-        val logical: Int,
-        val row: Int,
-        val column: Int
-    )
-
     private data class VerticalGridModel(
-        val cells: List<VerticalGridCell>,
+        val cells: List<VerticalSubtitleCell>,
         val columnCount: Int,
         val maxRows: Int,
         val cellWidth: Float,
@@ -4494,7 +4485,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         return cachedVerticalLayout
     }
 
-    private fun resolveOffsetForEvent(x: Float, y: Float, model: VerticalGridModel): VerticalTapResolved? {
+    private fun resolveOffsetForEvent(x: Float, y: Float): VerticalTapResolved? {
         val layout = obtainVerticalLayout(height) ?: return null
         val hit = VerticalSubtitleLayoutEngine.hitTest(
             x = x,
@@ -4532,21 +4523,9 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
             return cachedGridModel
         }
 
-        val layout = VerticalSubtitleLayoutEngine.build(
-            content,
-            paint,
-            viewHeight,
-            effectiveCellHeightPx()
-        ) ?: return null
+        val layout = obtainVerticalLayout(viewHeight) ?: return null
         val computed = VerticalGridModel(
-            cells = layout.cells.map { cell ->
-                VerticalGridCell(
-                    sourceOffset = cell.sourceOffset,
-                    logical = cell.logical,
-                    row = cell.row,
-                    column = cell.column
-                )
-            },
+            cells = layout.cells,
             columnCount = layout.columnCount,
             maxRows = layout.maxRows,
             cellWidth = layout.cellWidth,
@@ -5467,7 +5446,7 @@ private fun persistReplacedSrtToImportState(
     if (audioKey.isBlank() || srtKey.isBlank()) return
 
     val state = loadPersistedImports(context)
-    val srtName = runCatching { queryBookDisplayName(resolver, targetSrtUri!!) }.getOrNull()
+    val srtName = runCatching { queryDisplayName(resolver, targetSrtUri!!) }.getOrNull()
 
     var matched = false
     val updatedBooks = state.books.map { book ->
@@ -5497,7 +5476,7 @@ private fun movePickedSrtToBookFolder(
     audioUri: Uri?
 ): Uri? {
     return runCatching {
-        val sourceName = queryBookDisplayName(resolver, pickedSrtUri)
+        val sourceName = queryDisplayName(resolver, pickedSrtUri)
             .trim()
             .ifBlank { "${title.ifBlank { "book" }}.srt" }
         val normalizedSourceName = if (sourceName.lowercase(Locale.ROOT).endsWith(".srt")) {
@@ -5677,18 +5656,6 @@ private fun BookReaderCoverImage(
             imageView.setImageURI(coverUri)
         }
     )
-}
-
-private fun queryBookDisplayName(contentResolver: ContentResolver, uri: Uri): String {
-    val fallback = uri.lastPathSegment ?: "Unknown"
-    return contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-        if (cursor.moveToFirst()) {
-            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (index >= 0) cursor.getString(index) else fallback
-        } else {
-            fallback
-        }
-    } ?: fallback
 }
 
 private fun applyControlModeScreenBrightness(context: Context, dimToMinimum: Boolean): () -> Unit {

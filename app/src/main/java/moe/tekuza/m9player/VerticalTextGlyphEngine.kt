@@ -8,6 +8,8 @@ import android.text.TextPaint
 import kotlin.math.ceil
 
 internal object VerticalTextGlyphEngine {
+    private val scratchBounds = ThreadLocal.withInitial { AndroidRect() }
+
     private val topRightPunctuation = setOf(
         '。', '、', '︒', '︑', '︐', '︔', '，', '．', '.', ','
     )
@@ -32,6 +34,8 @@ internal object VerticalTextGlyphEngine {
         '︵', '︶', '︷', '︸', '︹', '︺', '︿', '﹀', '︽', '︾', '︻', '︼',
         '﹁', '﹂', '﹃', '﹄', '︙'
     )
+
+    private val mirrorAfterRotation = setOf('ー', '〜', '～')
 
     private val noColumnStartChars: Set<Char> = setOf(
         '、', '。', '，', '．', '.', ',', '：', '；', ':', ';',
@@ -113,34 +117,30 @@ internal object VerticalTextGlyphEngine {
     fun draw(canvas: Canvas, sourcePaint: TextPaint, text: String, rect: RectF) {
         val displayText = presentationText(text)
         if (displayText.isEmpty()) return
-        val paint = TextPaint(sourcePaint).apply {
-            textAlign = Paint.Align.CENTER
-            isAntiAlias = true
-        }
-        val baselineAdjust = -(paint.ascent() + paint.descent()) * 0.5f
-        when (val ch = displayText.first()) {
-            in topRightPunctuation -> drawTopRightPunctuation(canvas, paint, displayText, rect)
-            in smallKana -> drawSmallKana(canvas, paint, displayText, rect)
-            in centerPunctuation -> drawOffsetText(canvas, paint, displayText, rect, baselineAdjust, 0f, -paint.textSize * 0.04f)
-            else -> drawRotatableText(canvas, paint, displayText, rect, baselineAdjust)
+        withPaint(sourcePaint, Paint.Align.CENTER) { paint ->
+            val baselineAdjust = -(paint.ascent() + paint.descent()) * 0.5f
+            when (val ch = displayText.first()) {
+                in topRightPunctuation -> drawTopRightPunctuation(canvas, paint, displayText, rect)
+                in smallKana -> drawSmallKana(canvas, paint, displayText, rect)
+                in centerPunctuation -> drawOffsetText(canvas, paint, displayText, rect, baselineAdjust, 0f, -paint.textSize * 0.04f)
+                else -> drawRotatableText(canvas, paint, displayText, rect, baselineAdjust)
+            }
         }
     }
 
     fun inkRect(sourcePaint: TextPaint, text: String, rect: RectF): RectF {
         val displayText = presentationText(text)
         if (displayText.isEmpty()) return rect
-        val paint = TextPaint(sourcePaint).apply {
-            textAlign = Paint.Align.CENTER
-            isAntiAlias = true
+        return withPaint(sourcePaint, Paint.Align.CENTER) { paint ->
+            val baselineAdjust = -(paint.ascent() + paint.descent()) * 0.5f
+            val rawRect = when (val ch = displayText.first()) {
+                in topRightPunctuation -> topRightPunctuationInkRect(paint, displayText, rect)
+                in smallKana -> smallKanaInkRect(paint, displayText, rect)
+                in centerPunctuation -> offsetInkRect(paint, displayText, rect, baselineAdjust, 0f, -paint.textSize * 0.04f)
+                else -> rotatableInkRect(paint, displayText, rect, baselineAdjust)
+            }
+            clampAndPadInkRect(rawRect, rect, paint.textSize)
         }
-        val baselineAdjust = -(paint.ascent() + paint.descent()) * 0.5f
-        val rawRect = when (val ch = displayText.first()) {
-            in topRightPunctuation -> topRightPunctuationInkRect(paint, displayText, rect)
-            in smallKana -> smallKanaInkRect(paint, displayText, rect)
-            in centerPunctuation -> offsetInkRect(paint, displayText, rect, baselineAdjust, 0f, -paint.textSize * 0.04f)
-            else -> rotatableInkRect(paint, displayText, rect, baselineAdjust)
-        }
-        return clampAndPadInkRect(rawRect, rect, paint.textSize)
     }
 
     fun rotationFor(text: String): Float {
@@ -155,7 +155,31 @@ internal object VerticalTextGlyphEngine {
     }
 
     fun shouldMirrorAfterRotation(text: String): Boolean {
-        return text.firstOrNull()?.let(::presentationChar) in setOf('ー', '〜', '～')
+        return text.firstOrNull()?.let(::presentationChar) in mirrorAfterRotation
+    }
+
+    private inline fun <T> withPaint(
+        paint: TextPaint,
+        align: Paint.Align,
+        block: (TextPaint) -> T
+    ): T {
+        val previousAlign = paint.textAlign
+        val previousAntiAlias = paint.isAntiAlias
+        paint.textAlign = align
+        paint.isAntiAlias = true
+        return try {
+            block(paint)
+        } finally {
+            paint.textAlign = previousAlign
+            paint.isAntiAlias = previousAntiAlias
+        }
+    }
+
+    private fun measureBounds(paint: TextPaint, text: String): AndroidRect {
+        val bounds = scratchBounds.get() ?: AndroidRect().also(scratchBounds::set)
+        bounds.setEmpty()
+        paint.getTextBounds(text, 0, text.length, bounds)
+        return bounds
     }
 
     private fun offsetInkRect(
@@ -166,8 +190,7 @@ internal object VerticalTextGlyphEngine {
         dx: Float,
         dy: Float
     ): RectF {
-        val bounds = AndroidRect()
-        paint.getTextBounds(text, 0, text.length, bounds)
+        val bounds = measureBounds(paint, text)
         val measuredWidth = paint.measureText(text).coerceAtLeast(bounds.width().toFloat())
         val cx = rect.centerX() + dx
         val baseline = rect.centerY() + dy + baselineAdjust
@@ -184,16 +207,14 @@ internal object VerticalTextGlyphEngine {
         text: String,
         rect: RectF
     ): RectF {
-        val markPaint = TextPaint(paint).apply {
-            textAlign = Paint.Align.LEFT
+        return withPaint(paint, Paint.Align.LEFT) { markPaint ->
+            val bounds = measureBounds(markPaint, text)
+            val targetRight = rect.right - rect.width() * 0.10f
+            val targetTop = rect.top + rect.height() * 0.08f
+            val x = targetRight - bounds.right
+            val y = targetTop - bounds.top
+            RectF(x + bounds.left, y + bounds.top, x + bounds.right, y + bounds.bottom)
         }
-        val bounds = AndroidRect()
-        markPaint.getTextBounds(text, 0, text.length, bounds)
-        val targetRight = rect.right - rect.width() * 0.10f
-        val targetTop = rect.top + rect.height() * 0.08f
-        val x = targetRight - bounds.right
-        val y = targetTop - bounds.top
-        return RectF(x + bounds.left, y + bounds.top, x + bounds.right, y + bounds.bottom)
     }
 
     private fun rotatableInkRect(
@@ -209,18 +230,7 @@ internal object VerticalTextGlyphEngine {
         val base = offsetInkRect(paint, text, rect, baselineAdjust, 0f, 0f)
         val cx = rect.centerX()
         val cy = rect.centerY()
-        val corners = listOf(
-            base.left to base.top,
-            base.right to base.top,
-            base.right to base.bottom,
-            base.left to base.bottom
-        ).map { (x, y) -> rotatePoint(x, y, cx, cy, rotation) }
-        return RectF(
-            corners.minOf { it.first },
-            corners.minOf { it.second },
-            corners.maxOf { it.first },
-            corners.maxOf { it.second }
-        )
+        return rotatedBounds(base, cx, cy, rotation)
     }
 
     private fun smallKanaInkRect(
@@ -228,25 +238,41 @@ internal object VerticalTextGlyphEngine {
         text: String,
         rect: RectF
     ): RectF {
-        val markPaint = TextPaint(paint).apply {
-            textAlign = Paint.Align.LEFT
+        return withPaint(paint, Paint.Align.LEFT) { markPaint ->
+            val bounds = measureBounds(markPaint, text)
+            val targetRight = rect.right - rect.width() * 0.18f
+            val targetTop = rect.top + rect.height() * 0.18f
+            val x = targetRight - bounds.right
+            val y = targetTop - bounds.top
+            RectF(x + bounds.left, y + bounds.top, x + bounds.right, y + bounds.bottom)
         }
-        val bounds = AndroidRect()
-        markPaint.getTextBounds(text, 0, text.length, bounds)
-        val targetRight = rect.right - rect.width() * 0.18f
-        val targetTop = rect.top + rect.height() * 0.18f
-        val x = targetRight - bounds.right
-        val y = targetTop - bounds.top
-        return RectF(x + bounds.left, y + bounds.top, x + bounds.right, y + bounds.bottom)
     }
 
-    private fun rotatePoint(x: Float, y: Float, cx: Float, cy: Float, degrees: Float): Pair<Float, Float> {
+    private fun rotatedBounds(rect: RectF, cx: Float, cy: Float, degrees: Float): RectF {
         val radians = Math.toRadians(degrees.toDouble())
         val cos = kotlin.math.cos(radians).toFloat()
         val sin = kotlin.math.sin(radians).toFloat()
-        val dx = x - cx
-        val dy = y - cy
-        return (cx + dx * cos - dy * sin) to (cy + dx * sin + dy * cos)
+        var minX = Float.POSITIVE_INFINITY
+        var minY = Float.POSITIVE_INFINITY
+        var maxX = Float.NEGATIVE_INFINITY
+        var maxY = Float.NEGATIVE_INFINITY
+
+        fun include(x: Float, y: Float) {
+            val dx = x - cx
+            val dy = y - cy
+            val rotatedX = cx + dx * cos - dy * sin
+            val rotatedY = cy + dx * sin + dy * cos
+            minX = minOf(minX, rotatedX)
+            minY = minOf(minY, rotatedY)
+            maxX = maxOf(maxX, rotatedX)
+            maxY = maxOf(maxY, rotatedY)
+        }
+
+        include(rect.left, rect.top)
+        include(rect.right, rect.top)
+        include(rect.right, rect.bottom)
+        include(rect.left, rect.bottom)
+        return RectF(minX, minY, maxX, maxY)
     }
 
     private fun clampAndPadInkRect(rect: RectF, cellRect: RectF, textSize: Float): RectF {
@@ -284,14 +310,14 @@ internal object VerticalTextGlyphEngine {
         text: String,
         rect: RectF
     ) {
-        val markPaint = TextPaint(paint).apply { textAlign = Paint.Align.LEFT }
-        val bounds = AndroidRect()
-        markPaint.getTextBounds(text, 0, text.length, bounds)
-        val targetRight = rect.right - rect.width() * 0.10f
-        val targetTop = rect.top + rect.height() * 0.08f
-        val x = targetRight - bounds.right
-        val y = targetTop - bounds.top
-        canvas.drawText(text, x, y, markPaint)
+        withPaint(paint, Paint.Align.LEFT) { markPaint ->
+            val bounds = measureBounds(markPaint, text)
+            val targetRight = rect.right - rect.width() * 0.10f
+            val targetTop = rect.top + rect.height() * 0.08f
+            val x = targetRight - bounds.right
+            val y = targetTop - bounds.top
+            canvas.drawText(text, x, y, markPaint)
+        }
     }
 
     private fun drawSmallKana(
@@ -300,16 +326,14 @@ internal object VerticalTextGlyphEngine {
         text: String,
         rect: RectF
     ) {
-        val markPaint = TextPaint(paint).apply {
-            textAlign = Paint.Align.LEFT
+        withPaint(paint, Paint.Align.LEFT) { markPaint ->
+            val bounds = measureBounds(markPaint, text)
+            val targetRight = rect.right - rect.width() * 0.18f
+            val targetTop = rect.top + rect.height() * 0.18f
+            val x = targetRight - bounds.right
+            val y = targetTop - bounds.top
+            canvas.drawText(text, x, y, markPaint)
         }
-        val bounds = AndroidRect()
-        markPaint.getTextBounds(text, 0, text.length, bounds)
-        val targetRight = rect.right - rect.width() * 0.18f
-        val targetTop = rect.top + rect.height() * 0.18f
-        val x = targetRight - bounds.right
-        val y = targetTop - bounds.top
-        canvas.drawText(text, x, y, markPaint)
     }
 
     private fun drawOffsetText(

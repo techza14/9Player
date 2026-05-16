@@ -12,6 +12,7 @@ import java.net.URLDecoder
 import java.util.Locale
 
 private const val MDICT_MOUNTED_SCHEME = "mdictres"
+private val MDICT_SAFE_CACHE_KEY_REGEX = Regex("[^A-Za-z0-9._-]")
 
 internal data class MountedMdictResource(
     val mimeType: String,
@@ -64,7 +65,7 @@ internal fun openMountedMdictResource(
 }
 
 internal fun mountedMdictMediaDir(context: Context, cacheKey: String): File {
-    val safe = cacheKey.trim().ifBlank { "mounted" }.replace(Regex("[^A-Za-z0-9._-]"), "_")
+    val safe = cacheKey.trim().ifBlank { "mounted" }.replace(MDICT_SAFE_CACHE_KEY_REGEX, "_")
     val dir = File(context.cacheDir, "mdx_mount_media/$safe")
     if (!dir.exists()) dir.mkdirs()
     return dir

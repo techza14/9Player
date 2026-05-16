@@ -24,7 +24,10 @@ internal object MdictNativeBridge {
     private val loaded: Boolean = runCatching {
         System.loadLibrary(NATIVE_LIBRARY_NAME)
         true
-    }.getOrElse { false }
+    }.getOrElse { error ->
+        Log.w(LOG_TAG, "native library load failed: ${error.message ?: error.javaClass.simpleName}")
+        false
+    }
 
     internal val isAvailable: Boolean
         get() = loaded
@@ -49,7 +52,10 @@ internal object MdictNativeBridge {
                 maxResults.coerceIn(1, 128),
                 scanLength.coerceAtLeast(1)
             )
-        }.getOrElse { return emptyList() }
+        }.getOrElse { error ->
+            Log.w(LOG_TAG, "lookup failed: ${error.message ?: error.javaClass.simpleName}")
+            return emptyList()
+        }
         return parseLookupResult(raw)
     }
 
@@ -84,7 +90,10 @@ internal object MdictNativeBridge {
                 Log.d(LOG_TAG, "lookup empty with error=$rootError")
             }
             parsed
-        }.getOrDefault(emptyList())
+        }.getOrElse { error ->
+            Log.w(LOG_TAG, "invalid lookup result: ${error.message ?: error.javaClass.simpleName}")
+            emptyList()
+        }
     }
 
     internal fun extractMdd(mddPath: String, outputDir: String): MdictNativeExtractMddResult {

@@ -44,6 +44,12 @@ private val HTML_IMG_SRC_QUOTED_REGEX =
     Regex("(?i)<img\\b([^>]*?)\\bsrc\\s*=\\s*(['\"])(.*?)\\2([^>]*)>")
 private val HTML_IMG_SRC_UNQUOTED_REGEX =
     Regex("(?i)<img\\b([^>]*?)\\bsrc\\s*=\\s*([^\\s>]+)([^>]*)>")
+private val DICTIONARY_STORAGE_SAFE_KEY_REGEX = Regex("[^A-Za-z0-9._-]")
+private val HOSHI_TERM_BANK_FILE_REGEX = Regex("term_bank_\\d+\\.json")
+private val HOSHI_TERM_META_BANK_FILE_REGEX = Regex("term_meta_bank_\\d+\\.json")
+private val HTML_TAG_NAME_SANITIZE_REGEX = Regex("[^a-z0-9-]")
+private val CSS_SIZE_UNIT_REGEX = Regex("^[a-z%]+$")
+private val CSS_NUMBER_REGEX = Regex("^[+-]?(?:\\d+\\.?\\d*|\\.\\d+)$")
 private var hoshiLookupPreparedKey: String? = null
 private val hoshiLookupPreparedLock = Any()
 
@@ -57,7 +63,7 @@ private fun dictionaryStorageRootDir(context: Context): File {
 }
 
 private fun dictionaryStorageSafeKey(cacheKey: String): String {
-    return cacheKey.trim().ifBlank { "unknown" }.replace(Regex("[^A-Za-z0-9._-]"), "_")
+    return cacheKey.trim().ifBlank { "unknown" }.replace(DICTIONARY_STORAGE_SAFE_KEY_REGEX, "_")
 }
 
 private fun dictionaryStorageDir(context: Context, cacheKey: String): File {
@@ -96,12 +102,12 @@ private fun normalizeHoshiZipPath(path: String): String {
 
 private fun isHoshiTermBankFile(path: String): Boolean {
     val fileName = normalizeHoshiZipPath(path).substringAfterLast('/').lowercase(Locale.US)
-    return Regex("term_bank_\\d+\\.json").matches(fileName)
+    return HOSHI_TERM_BANK_FILE_REGEX.matches(fileName)
 }
 
 private fun isHoshiTermMetaBankFile(path: String): Boolean {
     val fileName = normalizeHoshiZipPath(path).substringAfterLast('/').lowercase(Locale.US)
-    return Regex("term_meta_bank_\\d+\\.json").matches(fileName)
+    return HOSHI_TERM_META_BANK_FILE_REGEX.matches(fileName)
 }
 
 private fun inferHoshiDictionaryTypeFromPath(dir: File): HoshiDictionaryType? {
@@ -354,26 +360,28 @@ private fun prepareHoshiLookupIfNeeded(bindings: List<HoshiDictionaryBinding>) {
     synchronized(hoshiLookupPreparedLock) {
         if (hoshiLookupPreparedKey == signature) return
         val prepareStartNs = SystemClock.elapsedRealtimeNanos()
-        Log.d(
-            HOSHI_LOOKUP_PERF_LOG_TAG,
+        val termBindings = ArrayList<HoshiDictionaryBinding>()
+        val freqBindings = ArrayList<HoshiDictionaryBinding>()
+        val pitchBindings = ArrayList<HoshiDictionaryBinding>()
+        bindings.forEach { binding ->
+            when (binding.dictionaryType) {
+                HoshiDictionaryType.Term -> termBindings += binding
+                HoshiDictionaryType.Frequency -> freqBindings += binding
+                HoshiDictionaryType.Pitch -> pitchBindings += binding
+            }
+        }
+        val termPaths = termBindings.map { it.dictionaryDir.absolutePath }.toTypedArray()
+        val freqPaths = freqBindings.map { it.dictionaryDir.absolutePath }.toTypedArray()
+        val pitchPaths = pitchBindings.map { it.dictionaryDir.absolutePath }.toTypedArray()
+        logDebug(HOSHI_LOOKUP_PERF_LOG_TAG) {
             "rebuildQuery start dictCount=${bindings.size} signatureHash=${signature.hashCode()}"
-        )
-        val termPaths = bindings.filter { it.dictionaryType == HoshiDictionaryType.Term }
-            .map { it.dictionaryDir.absolutePath }
-            .toTypedArray()
-        val freqPaths = bindings.filter { it.dictionaryType == HoshiDictionaryType.Frequency }
-            .map { it.dictionaryDir.absolutePath }
-            .toTypedArray()
-        val pitchPaths = bindings.filter { it.dictionaryType == HoshiDictionaryType.Pitch }
-            .map { it.dictionaryDir.absolutePath }
-            .toTypedArray()
-        Log.d(
-            "HoshiLookupPopup",
+        }
+        logDebug("HoshiLookupPopup") {
             "prepareHoshiLookup dictCount=${bindings.size} termPaths=${termPaths.size} freqPaths=${freqPaths.size} pitchPaths=${pitchPaths.size} " +
-                "terms=${bindings.filter { it.dictionaryType == HoshiDictionaryType.Term }.joinToString { it.dictionary.name }} " +
-                "freqs=${bindings.filter { it.dictionaryType == HoshiDictionaryType.Frequency }.joinToString { it.dictionary.name }} " +
-                "pitches=${bindings.filter { it.dictionaryType == HoshiDictionaryType.Pitch }.joinToString { it.dictionary.name }}"
-        )
+                "terms=${termBindings.joinToString { it.dictionary.name }} " +
+                "freqs=${freqBindings.joinToString { it.dictionary.name }} " +
+                "pitches=${pitchBindings.joinToString { it.dictionary.name }}"
+        }
         HoshiDicts.rebuildQuery(
             HoshiDicts.lookupObject,
             termPaths,
@@ -381,10 +389,9 @@ private fun prepareHoshiLookupIfNeeded(bindings: List<HoshiDictionaryBinding>) {
             pitchPaths
         )
         hoshiLookupPreparedKey = signature
-        Log.d(
-            HOSHI_LOOKUP_PERF_LOG_TAG,
+        logDebug(HOSHI_LOOKUP_PERF_LOG_TAG) {
             "rebuildQuery done elapsedMs=${(SystemClock.elapsedRealtimeNanos() - prepareStartNs) / 1_000_000L}"
-        )
+        }
     }
 }
 
@@ -656,10 +663,9 @@ private fun importDictionaryZipWithHoshi(
         onProgress?.invoke(DictionaryImportProgress(stage = "分析辞典", current = 35, total = 100))
 
         val dictionaryType = detectHoshiDictionaryType(tempZip)
-        Log.d(
-            HOSHI_LOOKUP_PERF_LOG_TAG,
+        logDebug(HOSHI_LOOKUP_PERF_LOG_TAG) {
             "auto classify import uri=${uri} type=${dictionaryType.name}"
-        )
+        }
         val hoshiTypeRoot = dictionaryHoshiTypeRootDir(context, cacheKey, dictionaryType)
         if (hoshiTypeRoot.exists()) {
             hoshiTypeRoot.deleteRecursively()
@@ -834,13 +840,12 @@ private fun structuredMapToHtmlSql(value: Map<*, *>): String {
         if (dataAttributes["class"].isNullOrBlank() && explicitClass.isNotBlank()) {
             dataAttributes["class"] = explicitClass
         }
-        Log.d(
-            "HoshiLookupPopup",
+        logDebug("HoshiLookupPopup") {
             "structured image(sql) dict=${mapString("dictionary").takeIf { it.isNotBlank() } ?: mapString("dict")} " +
                 "path=${path.take(64)} class=${explicitClass.ifBlank { dataAttributes["class"].orEmpty() }} " +
                 "dataKeys=${dataAttributes.keys.joinToString(",")} styleLen=${styleValueToCssSql(value["style"]).length} " +
                 "lang=${mapString("lang").takeIf { it.isNotBlank() } ?: ""}"
-        )
+        }
         val dataScAttrs = buildStructuredDataScAttributesSql(dataAttributes)
         val styleAttr = mergeInlineStyleSql(
             styleValueToCssSql(value["style"]),
@@ -858,7 +863,7 @@ private fun structuredMapToHtmlSql(value: Map<*, *>): String {
     val tagRaw = mapString("tag").trim().lowercase(Locale.ROOT)
     val content = extractTextSnippetSql(value["content"]).orEmpty()
     if (tagRaw.isNotBlank()) {
-        val tag = tagRaw.replace(Regex("[^a-z0-9-]"), "")
+        val tag = tagRaw.replace(HTML_TAG_NAME_SANITIZE_REGEX, "")
         if (tag.isBlank()) return content
 
         val dataAttributes = extractStructuredDataAttributesSql(value["data"]).toMutableMap()
@@ -1016,13 +1021,13 @@ private fun supplementalInlineStyleSql(value: Map<*, *>, tag: String): String {
 private fun normalizeCssUnitSql(rawUnit: String): String? {
     val unit = rawUnit.trim().lowercase(Locale.ROOT)
     if (unit.isBlank()) return null
-    return if (unit.matches(Regex("^[a-z%]+$"))) unit else null
+    return if (unit.matches(CSS_SIZE_UNIT_REGEX)) unit else null
 }
 
 private fun toCssLengthSql(raw: String, unit: String): String {
     val text = raw.trim()
     if (text.isBlank()) return ""
-    return if (text.matches(Regex("^[+-]?(?:\\d+\\.?\\d*|\\.\\d+)$"))) "$text$unit" else text
+    return if (text.matches(CSS_NUMBER_REGEX)) "$text$unit" else text
 }
 
 private fun mergeInlineStyleSql(base: String, extra: String): String {

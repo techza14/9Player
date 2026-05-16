@@ -3,7 +3,6 @@ package moe.tekuza.m9player
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.pm.ActivityInfo
-import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
@@ -1797,7 +1796,13 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     private fun showImagePreviewDialog(image: EbookImageRef) {
-        val bitmap = BitmapFactory.decodeByteArray(image.bytes, 0, image.bytes.size)
+        val maxPreviewSide = maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+            .coerceAtLeast(1)
+        val bitmap = decodeSampledBitmap(
+            bytes = image.bytes,
+            targetWidthPx = maxPreviewSide,
+            targetHeightPx = maxPreviewSide
+        )
         if (bitmap == null) {
             Toast.makeText(this, R.string.reader_image_preview_unavailable, Toast.LENGTH_SHORT).show()
             return

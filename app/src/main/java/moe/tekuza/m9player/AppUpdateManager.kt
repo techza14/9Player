@@ -2,6 +2,7 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -13,6 +14,11 @@ import java.util.Locale
 
 private const val GITHUB_LATEST_RELEASE_URL = "https://api.github.com/repos/techza14/9Player/releases/latest"
 private const val UPDATE_APK_CACHE_DIR = "update_apk"
+private val UPDATE_APK_VERSION_REGEX = Regex(
+    """(?:^|[-_])v?(\d+(?:\.\d+)+)(?:[-_][^.]*)?\.apk$""",
+    RegexOption.IGNORE_CASE
+)
+private val INVALID_FILE_NAME_CHARS_REGEX = Regex("""[\\/:*?"<>|]""")
 
 internal data class AppUpdateRelease(
     val tagName: String,
@@ -102,13 +108,19 @@ internal suspend fun downloadAppUpdateApk(
             outputFile.outputStream().use { output ->
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                 var copied = 0L
+                var lastProgressEmitAt = 0L
                 while (true) {
                     val read = input.read(buffer)
                     if (read < 0) break
                     output.write(buffer, 0, read)
                     copied += read
-                    onProgress(total?.let { (copied.toFloat() / it.toFloat()).coerceIn(0f, 1f) })
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastProgressEmitAt >= 120L) {
+                        onProgress(total?.let { (copied.toFloat() / it.toFloat()).coerceIn(0f, 1f) })
+                        lastProgressEmitAt = now
+                    }
                 }
+                onProgress(total?.let { (copied.toFloat() / it.toFloat()).coerceIn(0f, 1f) })
             }
         }
         outputFile
@@ -169,8 +181,7 @@ private fun updateApkCacheDir(context: Context): File {
 }
 
 private fun String.extractUpdateApkVersion(): String? {
-    return Regex("""(?:^|[-_])v?(\d+(?:\.\d+)+)(?:[-_][^.]*)?\.apk$""", RegexOption.IGNORE_CASE)
-        .find(this)
+    return UPDATE_APK_VERSION_REGEX.find(this)
         ?.groupValues
         ?.getOrNull(1)
 }
@@ -202,5 +213,5 @@ private fun String.toVersionParts(): List<Int> {
 }
 
 private fun String.sanitizeFileName(): String {
-    return replace(Regex("""[\\/:*?"<>|]"""), "_")
+    return replace(INVALID_FILE_NAME_CHARS_REGEX, "_")
 }

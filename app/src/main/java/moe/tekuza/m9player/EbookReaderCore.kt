@@ -261,7 +261,10 @@ private fun loadEpubDocument(
             while (true) {
                 val entry = zip.nextEntry ?: break
                 if (!entry.isDirectory) {
-                    entries[entry.name.normalizeZipPath()] = zip.readBytes()
+                    val path = entry.name.normalizeZipPath()
+                    if (path.isReaderEpubEntry()) {
+                        entries[path] = zip.readBytes()
+                    }
                 }
                 zip.closeEntry()
             }
@@ -340,6 +343,15 @@ private fun htmlEntries(entries: Map<String, ByteArray>): List<Pair<String, Byte
         }
         .toList()
         .sortedBy { it.first }
+}
+
+private fun String.isReaderEpubEntry(): Boolean {
+    return equals("META-INF/container.xml", ignoreCase = true) ||
+        endsWith(".opf", ignoreCase = true) ||
+        endsWith(".xhtml", ignoreCase = true) ||
+        endsWith(".html", ignoreCase = true) ||
+        endsWith(".htm", ignoreCase = true) ||
+        isEpubImagePath()
 }
 
 private fun parseContainerRootFile(xml: String): String? {

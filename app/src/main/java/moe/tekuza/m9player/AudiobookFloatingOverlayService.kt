@@ -219,6 +219,7 @@ companion object {
         private var cachedText: String = ""
         private var cachedTextSize: Float = Float.NaN
         private var cachedTypeface: Typeface? = null
+        private val screenLocation = IntArray(2)
         private val paint = TextPaint().apply {
             isAntiAlias = true
             color = Color.WHITE
@@ -276,7 +277,9 @@ companion object {
 
         fun selectAt(x: Float, y: Float) {
             val layout = obtainLayout(height) ?: run {
-                Log.d(FLOATING_SUBTITLE_HIT_LOG_TAG, "verticalCanvasTap miss reason=no_layout x=$x y=$y view=${width}x$height")
+                logDebug(FLOATING_SUBTITLE_HIT_LOG_TAG) {
+                    "verticalCanvasTap miss reason=no_layout x=$x y=$y view=${width}x$height"
+                }
                 return
             }
             val hit = VerticalSubtitleLayoutEngine.hitTest(
@@ -287,15 +290,16 @@ companion object {
                 layout = layout,
                 paint = paint
             ) ?: run {
-                Log.d(FLOATING_SUBTITLE_HIT_LOG_TAG, "verticalCanvasTap miss x=$x y=$y view=${width}x$height")
+                logDebug(FLOATING_SUBTITLE_HIT_LOG_TAG) {
+                    "verticalCanvasTap miss x=$x y=$y view=${width}x$height"
+                }
                 return
             }
             val anchor = toScreenRect(hit.rect)
             lastAnchorRect = anchor
-            Log.d(
-                FLOATING_SUBTITLE_HIT_LOG_TAG,
+            logDebug(FLOATING_SUBTITLE_HIT_LOG_TAG) {
                 "verticalCanvasTap offset=${hit.sourceOffset} row=${hit.row} col=${hit.column} rect=${anchor.left},${anchor.top},${anchor.right},${anchor.bottom} view=${width}x$height"
-            )
+            }
             performFloatingLookup(hit.sourceOffset.coerceAtLeast(0), anchor)
         }
 
@@ -317,7 +321,11 @@ companion object {
                 viewHeight = height,
                 layout = layout,
                 paint = paint
-            ).map(::toScreenRect)
+            ).let { rects ->
+                if (rects.isEmpty()) return emptyList()
+                getLocationOnScreen(screenLocation)
+                rects.map { rect -> toScreenRect(rect, screenLocation) }
+            }
         }
 
         override fun onDraw(canvas: android.graphics.Canvas) {
@@ -373,8 +381,11 @@ companion object {
         }
 
         private fun toScreenRect(rect: RectF): Rect {
-            val location = IntArray(2)
-            getLocationOnScreen(location)
+            getLocationOnScreen(screenLocation)
+            return toScreenRect(rect, screenLocation)
+        }
+
+        private fun toScreenRect(rect: RectF, location: IntArray): Rect {
             return Rect(
                 left = location[0] + rect.left,
                 top = location[1] + rect.top,
@@ -1567,10 +1578,9 @@ companion object {
             setSubtitleTextWidthMode(matchParent = false)
             setSubtitleTranslationY(0f)
             if (shouldLog) {
-                Log.d(
-                    FLOATING_SUBTITLE_SCROLL_LOG_TAG,
+                logDebug(FLOATING_SUBTITLE_SCROLL_LOG_TAG) {
                     "vertical-canvas-static pos=$positionMs view=${verticalSubtitleView.width}x${verticalSubtitleView.height}"
-                )
+                }
                 lastSubtitleScrollLogAtMs = now
             }
             return
@@ -1599,10 +1609,9 @@ companion object {
             setSubtitleTranslationX(0f)
             setSubtitleTranslationY(0f)
             if (shouldLog) {
-                Log.d(
-                    FLOATING_SUBTITLE_SCROLL_LOG_TAG,
+                logDebug(FLOATING_SUBTITLE_SCROLL_LOG_TAG) {
                     "horizontal-off pos=$positionMs textLen=${text.length} scrollX=${subtitle.scrollX}"
-                )
+                }
                 lastSubtitleScrollLogAtMs = now
             }
             return
@@ -1634,10 +1643,9 @@ companion object {
             val centeredDx = ((viewportWidth - contentWidth) / 2f).coerceAtLeast(0f)
             setSubtitleTranslationX(centeredDx)
             if (shouldLog) {
-                Log.d(
-                    FLOATING_SUBTITLE_SCROLL_LOG_TAG,
+                logDebug(FLOATING_SUBTITLE_SCROLL_LOG_TAG) {
                     "fit pos=$positionMs viewportWidth=${"%.1f".format(viewportWidth)} textWidth=${"%.1f".format(textWidth)} dx=${"%.1f".format(centeredDx)} max=${"%.1f".format(maxScroll)}"
-                )
+                }
                 lastSubtitleScrollLogAtMs = now
             }
             return
@@ -1652,10 +1660,9 @@ companion object {
         outline?.textAlignment = View.TEXT_ALIGNMENT_VIEW_START
         if (!BookReaderFloatingBridge.isPlaying()) {
             if (shouldLog) {
-                Log.d(
-                    FLOATING_SUBTITLE_SCROLL_LOG_TAG,
+                logDebug(FLOATING_SUBTITLE_SCROLL_LOG_TAG) {
                     "pause pos=$positionMs width=${"%.1f".format(textWidth)} viewport=${"%.1f".format(viewportWidth)} max=${"%.1f".format(maxScroll)} scrollX=${subtitle.scrollX}"
-                )
+                }
                 lastSubtitleScrollLogAtMs = now
             }
             return
@@ -1670,10 +1677,9 @@ companion object {
         setSubtitleTranslationX(dx)
         val target = (-dx).toInt().coerceAtLeast(0)
         if (shouldLog) {
-            Log.d(
-                FLOATING_SUBTITLE_SCROLL_LOG_TAG,
+            logDebug(FLOATING_SUBTITLE_SCROLL_LOG_TAG) {
                 "tick pos=$positionMs linear=${"%.3f".format(linear)} mapped=${"%.3f".format(mapped)} viewportWidth=${"%.1f".format(viewportWidth)} textWidth=${"%.1f".format(textWidth)} dx=${"%.1f".format(dx)} max=${"%.1f".format(maxScroll)} target=$target scrollX=${subtitle.scrollX} transX=${"%.1f".format(subtitle.translationX)} contentW=$contentWidthPx playing=${BookReaderFloatingBridge.isPlaying()} speed=${"%.2f".format(subtitlePlaybackSpeed)}"
-            )
+            }
             lastSubtitleScrollLogAtMs = now
         }
     }
@@ -2207,7 +2213,9 @@ companion object {
             val popupSize = IntSize(host.measuredWidth, host.measuredHeight)
             val sourceRects = layerAnchorRects(layer)
             val avoidRects = buildFloatingAvoidRects(layerIndex, layout.gapPx)
-            Log.d(FLOATING_LOOKUP_LOG_TAG, "avoid layer=$layerIndex rects=${formatFloatingRectsForLog(avoidRects)}")
+            logDebug(FLOATING_LOOKUP_LOG_TAG) {
+                "avoid layer=$layerIndex rects=${formatFloatingRectsForLog(avoidRects)}"
+            }
             val sizeSpec = computeFloatingLookupPopupSizeSpec(
                 windowSize = layout.panelSize,
                 anchor = layer.anchor,
@@ -2226,19 +2234,17 @@ companion object {
                 gapPx = layout.gapPx,
                 screenPaddingPx = layout.screenPaddingPx
             ) ?: run {
-                Log.d(
-                    FLOATING_LOOKUP_LOG_TAG,
+                logDebug(FLOATING_LOOKUP_LOG_TAG) {
                     "rejectShow layer=$layerIndex reason=no_candidate"
-                )
+                }
                 if (layerIndex == activeIndex && activeIndex > 0) {
                     truncateFloatingLookupLayersTo(activeIndex - 1)
                 }
                 return@forEach
             }
-            Log.d(
-                FLOATING_LOOKUP_LOG_TAG,
+            logDebug(FLOATING_LOOKUP_LOG_TAG) {
                 "showCandidate layer=$layerIndex popupSize=${popupSize.width}x${popupSize.height} anchor=${layer.anchor?.rects?.size ?: 0} placeBelow=${layer.placeBelow} preferSide=${layer.preferSidePlacement} candidate=${candidate.x},${candidate.y}"
-            )
+            }
             val shown = showFloatingLookupHost(
                 layerIndex = layerIndex,
                 layer = layer,
@@ -4635,7 +4641,9 @@ companion object {
     }
 
     private fun exportFloatingHoshiLookupEntryToAnki(content: String, layer: ReaderLookupLayer): Boolean {
-        Log.d("AnkiExportDebug", "floatingHoshiExport rawContentLen=${content.length} rawPrefix=${content.take(120)}")
+        logDebug("AnkiExportDebug") {
+            "floatingHoshiExport rawContentLen=${content.length} rawPrefix=${content.take(120)}"
+        }
         val payload = runCatching { JSONObject(content) }.getOrNull() ?: return false
         val expression = payload.optString("expression").trim().ifBlank {
             payload.optString("matched").trim()

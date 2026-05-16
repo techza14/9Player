@@ -1,9 +1,9 @@
 package moe.tekuza.m9player.legado.reader.provider
 
-import android.graphics.BitmapFactory
 import android.graphics.Paint
 import android.text.TextPaint
 import moe.tekuza.m9player.EBOOK_IMAGE_MARKER
+import moe.tekuza.m9player.decodeBitmapBounds
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9ReadBookConfig
 import moe.tekuza.m9player.legado.reader.entities.ImageColumn
@@ -319,10 +319,9 @@ internal class TextChapterLayout(
 
     private fun imageHeight(chapter: TextChapter, chapterPosition: Int): Float {
         val image = chapter.images[chapterPosition] ?: return lineHeight * 4f
-        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(image.bytes, 0, image.bytes.size, options)
-        val sourceWidth = options.outWidth.takeIf { it > 0 } ?: visibleWidth
-        val sourceHeight = options.outHeight.takeIf { it > 0 } ?: visibleWidth
+        val bounds = decodeBitmapBounds(image.bytes)
+        val sourceWidth = bounds?.width ?: visibleWidth
+        val sourceHeight = bounds?.height ?: visibleWidth
         val ratio = sourceHeight.toFloat() / sourceWidth.toFloat().coerceAtLeast(1f)
         return (visibleWidth * ratio)
             .coerceIn(lineHeight * 4f, visibleHeight * 0.82f)

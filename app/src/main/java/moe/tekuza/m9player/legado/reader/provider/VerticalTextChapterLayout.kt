@@ -4,6 +4,7 @@ import android.graphics.Paint
 import android.text.TextPaint
 import moe.tekuza.m9player.EBOOK_IMAGE_MARKER
 import moe.tekuza.m9player.VerticalTextGlyphEngine
+import moe.tekuza.m9player.decodeBitmapBounds
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9ReadBookConfig
 import moe.tekuza.m9player.legado.reader.entities.ImageColumn
@@ -62,8 +63,9 @@ internal class VerticalTextChapterLayout(
             var y = if (config.paragraphIndent.isNotEmpty()) glyphHeight * config.paragraphIndent.length else 0f
             var lineStart = paragraphStart
             if (paragraphEnd - paragraphStart == 1 && text[paragraphStart] == EBOOK_IMAGE_MARKER) {
-                val imageHeight = imageHeight(chapter, paragraphStart)
-                if (currentColumns.isNotEmpty() && x < 0f) {
+                val imageSize = imageBlockSize(chapter, paragraphStart)
+                val imageLeft = x + columnWidth - imageSize.width
+                if (currentColumns.isNotEmpty() && imageLeft < 0f) {
                     pageColumns += currentColumns
                     pageRanges += pageStart until currentColumns.last().chapterPosition + currentColumns.last().text.length
                     pageStart = paragraphStart
@@ -75,9 +77,10 @@ internal class VerticalTextChapterLayout(
                     chapterPosition = paragraphStart,
                     pagePosition = max(0, paragraphStart - pageStart),
                     x = x,
-                    height = imageHeight
+                    width = imageSize.width,
+                    height = imageSize.height
                 )
-                x -= columnWidth + paragraphSpacing
+                x = x + columnWidth - imageSize.width - columnWidth - paragraphSpacing
                 if (paragraphEnd == text.length) break
                 paragraphStart = paragraphEnd + 1
                 continue
@@ -266,13 +269,16 @@ internal class VerticalTextChapterLayout(
         chapterPosition: Int,
         pagePosition: Int,
         x: Float,
+        width: Float,
         height: Float
     ): TextLine {
+        val right = (x + columnWidth).coerceAtMost(visibleWidth.toFloat())
+        val left = (right - width).coerceAtLeast(0f)
         val line = TextLine(
             text = EBOOK_IMAGE_MARKER.toString(),
-            lineTop = x,
-            lineBase = x + glyphWidth / 2f,
-            lineBottom = x + columnWidth,
+            lineTop = left,
+            lineBase = left + (right - left) / 2f,
+            lineBottom = right,
             crossStart = 0f,
             crossEnd = height,
             chapterPosition = chapterPosition,
@@ -296,10 +302,20 @@ internal class VerticalTextChapterLayout(
         return line
     }
 
-    private fun imageHeight(chapter: TextChapter, chapterPosition: Int): Float {
-        val image = chapter.images[chapterPosition] ?: return glyphHeight * 6f
-        val height = (visibleHeight * 0.45f).coerceAtLeast(glyphHeight * 6f)
-        return height.coerceAtMost(visibleHeight.toFloat())
+    private fun imageBlockSize(chapter: TextChapter, chapterPosition: Int): ImageBlockSize {
+        val bounds = chapter.images[chapterPosition]?.let { decodeBitmapBounds(it.bytes) }
+        val sourceWidth = bounds?.width?.toFloat()?.coerceAtLeast(1f) ?: visibleWidth.toFloat()
+        val sourceHeight = bounds?.height?.toFloat()?.coerceAtLeast(1f) ?: visibleHeight.toFloat()
+        val maxWidth = visibleWidth.toFloat().coerceAtLeast(columnWidth)
+        val maxHeight = visibleHeight.toFloat().coerceAtLeast(glyphHeight * 6f)
+        val scale = minOf(maxWidth / sourceWidth, maxHeight / sourceHeight)
+            .takeIf { it.isFinite() && it > 0f }
+            ?: 1f
+        val width = (sourceWidth * scale)
+            .coerceIn(columnWidth * 4f, maxWidth)
+        val height = (sourceHeight * scale)
+            .coerceIn(glyphHeight * 6f, maxHeight)
+        return ImageBlockSize(width = width, height = height)
     }
 
     private fun nextToken(text: String, start: Int, end: Int): VerticalToken {
@@ -327,5 +343,10 @@ internal class VerticalTextChapterLayout(
         val text: String,
         val length: Int,
         val heightUnits: Int
+    )
+
+    private data class ImageBlockSize(
+        val width: Float,
+        val height: Float
     )
 }

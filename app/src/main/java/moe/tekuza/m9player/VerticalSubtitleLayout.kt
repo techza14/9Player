@@ -47,6 +47,8 @@ internal object VerticalSubtitleLayoutEngine {
         var row = 0
         var column = 0
         var logical = 0
+        var maxColumn = 0
+        var maxRow = 0
 
         text.forEachIndexed { index, ch ->
             if (ch == '\r') return@forEachIndexed
@@ -61,6 +63,8 @@ internal object VerticalSubtitleLayoutEngine {
                 column += 1
                 row = 0
             }
+            maxColumn = maxOf(maxColumn, column)
+            maxRow = maxOf(maxRow, row)
             cells += VerticalSubtitleCell(
                 sourceOffset = index,
                 logical = logical++,
@@ -74,8 +78,8 @@ internal object VerticalSubtitleLayoutEngine {
         if (cells.isEmpty()) return null
         return VerticalSubtitleLayout(
             cells = cells,
-            columnCount = cells.maxOf { it.column } + 1,
-            maxRows = cells.maxOf { it.row } + 1,
+            columnCount = maxColumn + 1,
+            maxRows = maxRow + 1,
             cellWidth = cellWidth,
             cellHeight = cellHeight
         )
@@ -87,12 +91,25 @@ internal object VerticalSubtitleLayoutEngine {
         layout: VerticalSubtitleLayout,
         cell: VerticalSubtitleCell
     ): RectF {
+        return cellRect(viewWidth, viewHeight, layout, cell, layoutRightEdge(viewWidth, layout))
+    }
+
+    private fun layoutRightEdge(viewWidth: Int, layout: VerticalSubtitleLayout): Float {
         val contentWidth = layout.contentWidth()
-        val rightEdge = if (contentWidth < viewWidth) {
+        return if (contentWidth < viewWidth) {
             viewWidth - ((viewWidth - contentWidth) * 0.5f)
         } else {
             viewWidth.toFloat()
         }
+    }
+
+    private fun cellRect(
+        viewWidth: Int,
+        viewHeight: Int,
+        layout: VerticalSubtitleLayout,
+        cell: VerticalSubtitleCell,
+        rightEdge: Float
+    ): RectF {
         val left = (rightEdge - (cell.column + 1) * layout.cellWidth)
         val top = (cell.row * layout.cellHeight)
         return RectF(
@@ -111,8 +128,9 @@ internal object VerticalSubtitleLayoutEngine {
         layout: VerticalSubtitleLayout,
         paint: TextPaint? = null
     ): VerticalSubtitleTapResult? {
+        val rightEdge = layoutRightEdge(viewWidth, layout)
         for (cell in layout.cells) {
-            val rect = cellRect(viewWidth, viewHeight, layout, cell)
+            val rect = cellRect(viewWidth, viewHeight, layout, cell, rightEdge)
             if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
                 val resolvedRect = paint?.let { inkRectForCell(it, cell.char, rect) } ?: rect
                 return VerticalSubtitleTapResult(
@@ -137,9 +155,10 @@ internal object VerticalSubtitleLayoutEngine {
         val start = minOf(range.first, range.last)
         val end = maxOf(range.first, range.last)
         val selectedRectsByColumn = linkedMapOf<Int, MutableList<Pair<Int, RectF>>>()
+        val rightEdge = layoutRightEdge(viewWidth, layout)
         for (cell in layout.cells) {
             if (cell.sourceOffset !in start..end) continue
-            val cellRect = cellRect(viewWidth, viewHeight, layout, cell)
+            val cellRect = cellRect(viewWidth, viewHeight, layout, cell, rightEdge)
             val rect = paint?.let { inkRectForCell(it, cell.char, cellRect) } ?: cellRect
             selectedRectsByColumn.getOrPut(cell.column) { ArrayList(4) }.add(cell.row to rect)
         }
@@ -147,14 +166,10 @@ internal object VerticalSubtitleLayoutEngine {
 
         val rects = ArrayList<RectF>(selectedRectsByColumn.size)
         selectedRectsByColumn.forEach { (_, rowsInColumn) ->
-            val sorted = rowsInColumn
-                .distinctBy { it.first }
-                .sortedBy { it.first }
-            if (sorted.isEmpty()) return@forEach
-            var runStartRow = sorted.first().first
-            var previousRow = runStartRow
+            if (rowsInColumn.isEmpty()) return@forEach
+            var previousRow = rowsInColumn.first().first
             val runRects = ArrayList<RectF>()
-            runRects += sorted.first().second
+            runRects += rowsInColumn.first().second
 
             fun flushRun() {
                 if (runRects.isEmpty()) return
@@ -162,14 +177,13 @@ internal object VerticalSubtitleLayoutEngine {
                 runRects.clear()
             }
 
-            for (i in 1 until sorted.size) {
-                val (row, rect) = sorted[i]
+            for (i in 1 until rowsInColumn.size) {
+                val (row, rect) = rowsInColumn[i]
                 if (row == previousRow + 1) {
                     previousRow = row
                     runRects += rect
                 } else {
                     flushRun()
-                    runStartRow = row
                     previousRow = row
                     runRects += rect
                 }
@@ -186,8 +200,9 @@ internal object VerticalSubtitleLayoutEngine {
         viewWidth: Int,
         viewHeight: Int
     ) {
+        val rightEdge = layoutRightEdge(viewWidth, layout)
         for (cell in layout.cells) {
-            val rect = cellRect(viewWidth, viewHeight, layout, cell)
+            val rect = cellRect(viewWidth, viewHeight, layout, cell, rightEdge)
             VerticalTextGlyphEngine.draw(canvas, textPaint, cell.char, rect)
         }
     }
@@ -201,11 +216,18 @@ internal object VerticalSubtitleLayoutEngine {
     }
 
     private fun mergeRectFs(rects: List<RectF>): RectF {
-        return RectF(
-            rects.minOf { it.left },
-            rects.minOf { it.top },
-            rects.maxOf { it.right },
-            rects.maxOf { it.bottom }
-        )
+        val first = rects.first()
+        var left = first.left
+        var top = first.top
+        var right = first.right
+        var bottom = first.bottom
+        for (i in 1 until rects.size) {
+            val rect = rects[i]
+            left = minOf(left, rect.left)
+            top = minOf(top, rect.top)
+            right = maxOf(right, rect.right)
+            bottom = maxOf(bottom, rect.bottom)
+        }
+        return RectF(left, top, right, bottom)
     }
 }

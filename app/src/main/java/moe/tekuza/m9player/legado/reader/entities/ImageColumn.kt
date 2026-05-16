@@ -1,13 +1,15 @@
 package moe.tekuza.m9player.legado.reader.entities
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
+import android.util.LruCache
+import moe.tekuza.m9player.decodeSampledBitmap
 import moe.tekuza.m9player.EbookImageRef
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.page.ContentTextView
+import kotlin.math.roundToInt
 
 internal data class ImageColumn(
     override var start: Float,
@@ -18,16 +20,16 @@ internal data class ImageColumn(
     override var sourceStart: Int,
     override var sourceEnd: Int
 ) : BaseColumn {
-    private var bitmap: Bitmap? = null
-
     override fun draw(view: ContentTextView, canvas: Canvas, line: TextLine, selected: Boolean) {
-        val decoded = bitmap ?: BitmapFactory.decodeByteArray(image.bytes, 0, image.bytes.size)?.also {
-            bitmap = it
-        }
         val rect = when (line.layoutMode) {
             M9LayoutMode.HORIZONTAL -> RectF(start, line.crossStart, end, line.crossEnd)
             M9LayoutMode.VERTICAL -> RectF(line.lineTop, start, line.lineBottom, end)
         }
+        val decoded = ReaderImageBitmapCache.get(
+            image = image,
+            targetWidth = rect.width().roundToInt().coerceAtLeast(1),
+            targetHeight = rect.height().roundToInt().coerceAtLeast(1)
+        )
         val paint = view.contentPaint
         if (decoded != null) {
             val imageWidth = decoded.width.toFloat().coerceAtLeast(1f)
@@ -48,5 +50,28 @@ internal data class ImageColumn(
         val fontMetrics = paint.fontMetrics
         val baseline = rect.centerY() - (fontMetrics.ascent + fontMetrics.descent) / 2f
         canvas.drawText(fallback, rect.left + 8f, baseline, paint)
+    }
+
+    private object ReaderImageBitmapCache {
+        private const val MAX_CACHE_KIB = 12 * 1024
+
+        private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_KIB) {
+            override fun sizeOf(key: String, value: Bitmap): Int {
+                return (value.allocationByteCount / 1024).coerceAtLeast(1)
+            }
+        }
+
+        @Synchronized
+        fun get(image: EbookImageRef, targetWidth: Int, targetHeight: Int): Bitmap? {
+            val key = "${image.path}:${image.bytes.size}:$targetWidth:$targetHeight"
+            cache.get(key)?.let { return it }
+            val decoded = decodeSampledBitmap(
+                bytes = image.bytes,
+                targetWidthPx = targetWidth,
+                targetHeightPx = targetHeight
+            ) ?: return null
+            cache.put(key, decoded)
+            return decoded
+        }
     }
 }

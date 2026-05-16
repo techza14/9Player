@@ -32,6 +32,8 @@ private const val AUDIOBOOK_LOOKUP_ROOT_FULL_WIDTH_ENABLED_KEY = "audiobook_look
 private const val AUDIOBOOK_SUBTITLE_GLOBAL_FONT_ENABLED_KEY = "audiobook_subtitle_global_font_enabled"
 private const val AUDIOBOOK_SUBTITLE_CUSTOM_FONT_URI_KEY = "audiobook_subtitle_custom_font_uri"
 private const val AUDIOBOOK_SUBTITLE_CUSTOM_FONT_NAME_KEY = "audiobook_subtitle_custom_font_name"
+@Volatile
+private var cachedAudiobookSettingsConfig: AudiobookSettingsConfig? = null
 private const val DEFAULT_AUDIOBOOK_SKIP_MILLIS = 10_000L
 internal const val DEFAULT_FLOATING_OVERLAY_SIZE_DP = 58
 internal const val MIN_FLOATING_OVERLAY_SIZE_DP = 36
@@ -130,8 +132,17 @@ internal data class AudiobookSettingsConfig(
         }
 }
 
+private fun audiobookSettingsPrefs(context: Context) =
+    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+
+private fun audiobookSettingsEditor(context: Context): android.content.SharedPreferences.Editor {
+    cachedAudiobookSettingsConfig = null
+    return audiobookSettingsPrefs(context).edit()
+}
+
 internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsConfig {
-    val prefs = context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
+    cachedAudiobookSettingsConfig?.let { return it }
+    val prefs = audiobookSettingsPrefs(context)
     val lookupAudioUriRaw = prefs.getString(AUDIOBOOK_LOOKUP_LOCAL_AUDIO_URI_KEY, null)
     val lookupAudioUri = lookupAudioUriRaw
         ?.trim()
@@ -204,94 +215,82 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
         floatingOverlaySubtitleY = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_Y_KEY, 0),
         floatingOverlayBubbleX = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_X_KEY, 24),
         floatingOverlayBubbleY = prefs.getInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_Y_KEY, 0)
-    )
+    ).also { cachedAudiobookSettingsConfig = it }
 }
 
 internal fun saveSubtitleGlobalFontEnabled(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putBoolean(AUDIOBOOK_SUBTITLE_GLOBAL_FONT_ENABLED_KEY, enabled)
         .apply()
 }
 
 internal fun saveSubtitleCustomFontUri(context: Context, uri: Uri?) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putString(AUDIOBOOK_SUBTITLE_CUSTOM_FONT_URI_KEY, uri?.toString())
         .remove(AUDIOBOOK_SUBTITLE_CUSTOM_FONT_NAME_KEY)
         .apply()
 }
 
 internal fun saveSubtitleCustomFont(context: Context, uri: Uri?, displayName: String?) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putString(AUDIOBOOK_SUBTITLE_CUSTOM_FONT_URI_KEY, uri?.toString())
         .putString(AUDIOBOOK_SUBTITLE_CUSTOM_FONT_NAME_KEY, displayName?.trim()?.takeIf { it.isNotBlank() })
         .apply()
 }
 
 internal fun saveAudiobookSeekStepMillis(context: Context, millis: Long) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putLong(AUDIOBOOK_SKIP_MILLIS_KEY, millis.coerceIn(1_000L, 300_000L))
         .apply()
 }
 
 internal fun saveAudiobookFloatingOverlayShowOnReaderExit(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putBoolean(AUDIOBOOK_FLOATING_OVERLAY_SHOW_ON_READER_EXIT_KEY, enabled)
         .apply()
 }
 
 internal fun saveAudiobookFloatingOverlayMode(context: Context, mode: FloatingOverlayMode) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putBoolean(AUDIOBOOK_FLOATING_OVERLAY_ENABLED_KEY, mode.showsBubble)
         .putBoolean(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_ENABLED_KEY, mode.showsSubtitle)
         .apply()
 }
 
 internal fun saveAudiobookPausePlaybackOnLookup(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putBoolean(AUDIOBOOK_PAUSE_ON_LOOKUP_KEY, enabled)
         .apply()
 }
 
 internal fun saveAudiobookActiveCueDisplayAtTop(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putBoolean(AUDIOBOOK_ACTIVE_CUE_AT_TOP_KEY, enabled)
         .apply()
 }
 
 internal fun saveAudiobookFloatingOverlaySubtitlePosition(context: Context, y: Int) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_Y_KEY, y)
         .apply()
 }
 
 internal fun saveAudiobookFloatingOverlaySubtitlePosition(context: Context, x: Int, y: Int) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_X_KEY, x)
         .putInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_Y_KEY, y)
         .apply()
 }
 
 internal fun saveAudiobookFloatingOverlayBubblePosition(context: Context, x: Int, y: Int) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_X_KEY, x)
         .putInt(AUDIOBOOK_FLOATING_OVERLAY_BUBBLE_Y_KEY, y)
         .apply()
 }
 
 internal fun saveAudiobookFloatingOverlaySizeDp(context: Context, sizeDp: Int) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putInt(
             AUDIOBOOK_FLOATING_OVERLAY_SIZE_DP_KEY,
             sizeDp.coerceIn(MIN_FLOATING_OVERLAY_SIZE_DP, MAX_FLOATING_OVERLAY_SIZE_DP)
@@ -300,8 +299,7 @@ internal fun saveAudiobookFloatingOverlaySizeDp(context: Context, sizeDp: Int) {
 }
 
 internal fun saveAudiobookFloatingOverlaySubtitleSizeSp(context: Context, sizeSp: Int) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putInt(
             AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_SIZE_SP_KEY,
             sizeSp.coerceIn(
@@ -313,22 +311,19 @@ internal fun saveAudiobookFloatingOverlaySubtitleSizeSp(context: Context, sizeSp
 }
 
 internal fun saveAudiobookFloatingOverlaySubtitleColor(context: Context, color: Int) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_COLOR_KEY, color)
         .apply()
 }
 
 internal fun saveAudiobookFloatingOverlaySubtitleCustomColor(context: Context, color: Int) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putInt(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_CUSTOM_COLOR_KEY, color)
         .apply()
 }
 
 internal fun saveAudiobookFloatingOverlaySubtitleScrollEnabled(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putBoolean(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_SCROLL_ENABLED_KEY, enabled)
         .apply()
 }
@@ -337,8 +332,7 @@ internal fun saveAudiobookFloatingOverlaySubtitleWritingMode(
     context: Context,
     mode: FloatingSubtitleWritingMode
 ) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putString(AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_WRITING_MODE_KEY, mode.storageValue)
         .apply()
 }
@@ -347,8 +341,7 @@ internal fun saveAudiobookBookSubtitleWritingMode(
     context: Context,
     mode: FloatingSubtitleWritingMode
 ) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putString(AUDIOBOOK_BOOK_SUBTITLE_WRITING_MODE_KEY, mode.storageValue)
         .apply()
 }
@@ -357,57 +350,49 @@ internal fun saveAudiobookReaderPlaybackMode(
     context: Context,
     mode: ReaderPlaybackMode
 ) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putString(AUDIOBOOK_READER_PLAYBACK_MODE_KEY, mode.storageValue)
         .apply()
 }
 
 internal fun saveLookupPlaybackAudioEnabled(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putBoolean(AUDIOBOOK_LOOKUP_AUDIO_ENABLED_KEY, enabled)
         .apply()
 }
 
 internal fun saveLookupPlaybackAudioAutoPlay(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putBoolean(AUDIOBOOK_LOOKUP_AUDIO_AUTO_PLAY_KEY, enabled)
         .apply()
 }
 
 internal fun saveLookupExportFullSentence(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putBoolean(AUDIOBOOK_LOOKUP_FULL_SENTENCE_KEY, enabled)
         .apply()
 }
 
 internal fun saveLookupRangeSelectionEnabled(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putBoolean(AUDIOBOOK_LOOKUP_RANGE_SELECTION_ENABLED_KEY, enabled)
         .apply()
 }
 
 internal fun saveLookupRootFullWidthEnabled(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putBoolean(AUDIOBOOK_LOOKUP_ROOT_FULL_WIDTH_ENABLED_KEY, enabled)
         .apply()
 }
 
 internal fun saveLookupAudioMode(context: Context, mode: LookupAudioMode) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putString(AUDIOBOOK_LOOKUP_AUDIO_MODE_KEY, mode.storageValue)
         .apply()
 }
 
 internal fun saveLookupLocalAudioUri(context: Context, uri: Uri?) {
-    context.getSharedPreferences(AUDIOBOOK_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .edit()
+    audiobookSettingsEditor(context)
         .putString(AUDIOBOOK_LOOKUP_LOCAL_AUDIO_URI_KEY, uri?.toString())
         .apply()
 }

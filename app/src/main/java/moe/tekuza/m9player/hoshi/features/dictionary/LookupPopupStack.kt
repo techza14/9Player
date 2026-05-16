@@ -8,11 +8,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import android.util.Log
 import de.manhhao.hoshi.LookupResult
 import moe.tekuza.m9player.hoshi.dictionary.LookupEngine
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.AnkiDuplicateCheckResult
+import moe.tekuza.m9player.logDebug
 import java.util.UUID
 
 internal data class LookupPopupOptions(
@@ -47,27 +47,24 @@ internal fun createLookupPopupItem(
 ): Pair<LookupPopupItem, Int>? {
     val settings = options.dictionarySettings.normalized()
     val styles = dictionaryStyles ?: currentDictionaryStyles()
-    Log.d(
-        "HoshiLookupPopup",
+    logDebug("HoshiLookupPopup") {
         "createLookupPopupItem selection='${selection.text.take(32)}' selectionLen=${selection.text.length} " +
             "rect=${selection.rect.x},${selection.rect.y} ${selection.rect.width}x${selection.rect.height} " +
             "showRange=${options.showRangeSelection} showAudio=${options.showPlayAudio} popupActionBar=${options.popupActionBar}"
-    )
+    }
     val results = runCatching {
         lookup(selection.text, settings.maxResults, settings.scanLength)
     }.getOrDefault(emptyList())
     val first = results.firstOrNull()
     if (first == null) {
-        Log.d(
-            "HoshiLookupPopup",
+        logDebug("HoshiLookupPopup") {
             "createLookupPopupItem empty selection='${selection.text.take(32)}' scanLength=${settings.scanLength} maxResults=${settings.maxResults}"
-        )
+        }
         return null
     }
-    Log.d(
-        "HoshiLookupPopup",
+    logDebug("HoshiLookupPopup") {
         "createLookupPopupItem result selection='${selection.text.take(32)}' firstTerm='${first.matched.take(32)}' results=${results.size} matchedLength=${first.matched.codePointCount(0, first.matched.length)}"
-    )
+    }
     return LookupPopupItem(
         state = LookupPopupState(
             selection = selection,
@@ -155,14 +152,12 @@ internal fun LookupPopupStackView(
     displayPopups.forEachIndexed { index, popup ->
         val isHiddenWarmRoot = warmRootShell && !hasVisiblePopups && index == 0
         key(if (warmRootShell && index == 0) "warm-root-popup" else popup.id) {
-            Log.d(
-                "HoshiLookupPopup",
+            logDebug("HoshiLookupPopup") {
                 "stack view index=$index size=${popups.size} displaySize=${displayPopups.size} hiddenWarmRoot=$isHiddenWarmRoot showActionBar=${popup.state.popupActionBar} showCloseAll=${onCloseAll != null && index == popups.lastIndex && popups.size > 1} popupActionBar=${popup.state.popupActionBar}"
-            )
-            Log.d(
-                "AnkiExportDebug",
+            }
+            logDebug("AnkiExportDebug") {
                 "hoshiStack callbacks index=$index size=${popups.size} hasMineEntry=${onMineEntry != null} hasDuplicateCheck=${onDuplicateCheck != null}"
-            )
+            }
             LookupPopupView(
                 state = popup.state,
                 clearSelectionSignal = popup.clearSelectionSignal,
@@ -200,10 +195,9 @@ internal fun LookupPopupStackView(
                 onLookupRedirected = { redirectSelection ->
                     val nextPopups = closeChildPopups(popups, index)
                     lookupChildPopup(redirectSelection)?.let { (childPopup, _) ->
-                        Log.d(
-                            "HoshiLookupPopup",
+                        logDebug("HoshiLookupPopup") {
                             "stack push redirect parent=$index nextSize=${nextPopups.size + 1} query='${redirectSelection.text.take(32)}' rect=${redirectSelection.rect.x},${redirectSelection.rect.y} ${redirectSelection.rect.width}x${redirectSelection.rect.height}"
-                        )
+                        }
                         onPopupsChange(nextPopups + childPopup)
                     }
                 },

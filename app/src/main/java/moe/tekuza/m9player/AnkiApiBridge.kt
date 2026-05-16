@@ -1,6 +1,5 @@
 package moe.tekuza.m9player
 
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.media.MediaCodec
@@ -12,7 +11,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
-import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import android.util.Log
@@ -87,12 +85,6 @@ internal sealed interface AnkiExportResult {
     ) : AnkiExportResult
 }
 
-private data class StagedAnkiAudio(
-    val uri: Uri,
-    val extension: String,
-    val cleanup: () -> Unit
-)
-
 internal enum class ExportAnkiOutcome {
     ADDED,
     DUPLICATE_SKIPPED
@@ -108,10 +100,22 @@ private val DICTIONARY_TOKEN_STRIP_REGEX = Regex("[\\s\\p{Punct}\\p{S}]")
 private val ANKI_LINK_TAG_REGEX = Regex("(?is)<link\\b[^>]*>")
 private val ANKI_IMG_TAG_REGEX = Regex("(?is)<img\\b[^>]*>")
 private val ANKI_STYLE_TAG_REGEX = Regex("(?is)<style\\b[^>]*>(.*?)</style>")
-private val ANKI_ATTR_QUOTED_REGEX = Regex("(?i)\\b%s\\s*=\\s*(['\"])(.*?)\\1")
-private val ANKI_ATTR_UNQUOTED_REGEX = Regex("(?i)\\b%s\\s*=\\s*([^\\s\"'<>`]+)")
 private val ANKI_URI_SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
 private val ANKI_IMG_SRC_IN_TAG_REGEX = Regex("(?is)\\bsrc\\s*=\\s*(['\"])(.*?)\\1")
+private val ANKI_TAG_SEPARATOR_REGEX = Regex("[,\\s]+")
+private val ANKI_ZERO_WIDTH_REGEX = Regex("[\\u200B-\\u200D\\uFEFF]")
+private val ANKI_WHITESPACE_REGEX = Regex("\\s+")
+private val ANKI_MEDIA_SAFE_LABEL_REGEX = Regex("[^a-z0-9]+")
+private val ANKI_SRC_ATTR_QUOTED_REGEX = Regex("(?i)\\bsrc\\s*=\\s*(['\"])(.*?)\\1")
+private val ANKI_SRC_ATTR_UNQUOTED_REGEX = Regex("(?i)\\bsrc\\s*=\\s*([^\\s\"'<>`]+)")
+private val ANKI_REL_ATTR_QUOTED_REGEX = Regex("(?i)\\brel\\s*=\\s*(['\"])(.*?)\\1")
+private val ANKI_REL_ATTR_UNQUOTED_REGEX = Regex("(?i)\\brel\\s*=\\s*([^\\s\"'<>`]+)")
+private val ANKI_HREF_ATTR_QUOTED_REGEX = Regex("(?i)\\bhref\\s*=\\s*(['\"])(.*?)\\1")
+private val ANKI_HREF_ATTR_UNQUOTED_REGEX = Regex("(?i)\\bhref\\s*=\\s*([^\\s\"'<>`]+)")
+private val ANKI_LEADING_GLOSSARY_INDEX_REGEX = Regex("""(<i>\()\s*\d+\s*[,，]\s*""", RegexOption.IGNORE_CASE)
+private val ANKI_LEADING_DICTIONARY_LABEL_REGEX = Regex("""^<i>\([^<]*\)</i>\s*""", RegexOption.IGNORE_CASE)
+private val ANKI_LI_TAG_REGEX = Regex("</?li\\b", RegexOption.IGNORE_CASE)
+private val ANKI_FIRST_NUMBER_REGEX = Regex("\\d+(?:\\.\\d+)?")
 private const val ANKI_AUDIO_LOG_TAG = "AnkiAudio"
 private const val ANKI_EXPORT_DEBUG_TAG = "AnkiExportDebug"
 private val CORE_GLOSSARY_VARIABLES = setOf(
@@ -184,7 +188,7 @@ internal fun hasAnyAnkiFieldTemplate(templates: Map<String, String>): Boolean {
 
 internal fun parseAnkiTags(raw: String): Set<String> {
     return raw
-        .split(Regex("[,\\s]+"))
+        .split(ANKI_TAG_SEPARATOR_REGEX)
         .map { it.trim() }
         .filter { it.isNotBlank() }
         .toSet()
@@ -209,9 +213,7 @@ internal fun prepareAnkiExport(
     if (!hasAnyAnkiFieldTemplate(templates)) {
         error(context.getString(R.string.error_anki_fields_empty))
     }
-    val requiresLookupAudio = templates.values.any {
-        templateUsesVariable(it, "audio")
-    }
+    val requiresLookupAudio = extractRequiredTemplateMarkers(templates.values).needs("audio")
 
     return PreparedAnkiExport(
         config = AnkiExportConfig(
@@ -229,10 +231,9 @@ internal fun exportToAnkiDroidApi(
     card: MinedCard,
     config: AnkiExportConfig
 ): ExportAnkiOutcome {
-    Log.d(
-        ANKI_EXPORT_DEBUG_TAG,
+    logDebug(ANKI_EXPORT_DEBUG_TAG) {
         "export start word=${card.word} primaryDict=${card.dictionaryName.orEmpty()} glossaryByDictCount=${card.glossaryByDictionary.size} model=${config.modelName} deck=${config.deckName}"
-    )
+    }
     ankiAvailabilityErrorMessage(context, requirePermission = true)?.let(::error)
 
     val api = runCatching { AddContentApi(context) }.getOrElse { throwable ->
@@ -252,32 +253,21 @@ internal fun exportToAnkiDroidApi(
     if (templatesByField.values.none { it.isNotBlank() }) {
         error("All field variables are empty. Configure at least one marker in Settings > Anki.")
     }
-    val requiresCutAudio = templatesByField.values.any { templateUsesVariable(it, "cut-audio") }
-    val requiresLookupAudio = templatesByField.values.any {
-        templateUsesVariable(it, "audio")
-    }
-    val requiredMarkers = extractRequiredTemplateMarkers(
-        templatesByField.values,
-        includeCutAudio = requiresCutAudio,
-        includeLookupAudio = requiresLookupAudio
-    )
+    val requiredMarkers = extractRequiredTemplateMarkers(templatesByField.values)
 
     val variables = runCatching {
         buildAnkiVariables(
             context = context,
             api = api,
             card = card,
-            includeCutAudio = requiresCutAudio,
-            includeLookupAudio = requiresLookupAudio,
             requiredMarkers = requiredMarkers
         )
     }.getOrElse { throwable ->
         error("Anki variable build failed. ${throwableDetail(throwable)}")
     }
-    Log.d(
-        ANKI_EXPORT_DEBUG_TAG,
+    logDebug(ANKI_EXPORT_DEBUG_TAG) {
         "export variables dict=${variables["dictionary"].orEmpty()} glossaryLen=${variables["glossary"]?.length ?: 0} singleGlossaryLen=${variables["single-glossary"]?.length ?: 0}"
-    )
+    }
 
     val fieldValues = runCatching {
         val mediaSrcCache = mutableMapOf<String, String>()
@@ -298,10 +288,9 @@ internal fun exportToAnkiDroidApi(
     if (fieldValues.all { it.isBlank() }) {
         error("All rendered field values are empty. Check your field variables in Settings > Anki.")
     }
-    Log.d(
-        ANKI_EXPORT_DEBUG_TAG,
+    logDebug(ANKI_EXPORT_DEBUG_TAG) {
         "export rendered fields=${model.fields.zip(fieldValues.asList()).joinToString(separator = "|") { (name, value) -> "$name:${value.length}" }}"
-    )
+    }
 
     val tags = config.tags
     val duplicateConfig = loadAnkiDuplicateConfig(context)
@@ -312,10 +301,9 @@ internal fun exportToAnkiDroidApi(
             duplicateNotes != null && duplicateNotes.size() > 0
         }.getOrDefault(false)
         if (hasDuplicate) {
-            Log.d(
-                ANKI_EXPORT_DEBUG_TAG,
+            logDebug(ANKI_EXPORT_DEBUG_TAG) {
                 "export duplicate hit action=${duplicateConfig.action} scope=${duplicateConfig.scope} model=${model.name} key=${duplicateKey.take(80)}"
-            )
+            }
             when (duplicateConfig.action.lowercase(Locale.ROOT)) {
                 "add" -> Unit
                 "prevent" -> return ExportAnkiOutcome.DUPLICATE_SKIPPED
@@ -350,8 +338,8 @@ internal fun exportToAnkiDroidApi(
 internal fun normalizeAnkiDuplicateKey(raw: String?): String {
     val normalized = Normalizer.normalize(raw.orEmpty(), Normalizer.Form.NFKC)
     return normalized
-        .replace(Regex("[\\u200B-\\u200D\\uFEFF]"), "")
-        .replace(Regex("\\s+"), " ")
+        .replace(ANKI_ZERO_WIDTH_REGEX, "")
+        .replace(ANKI_WHITESPACE_REGEX, " ")
         .trim()
 }
 
@@ -511,8 +499,6 @@ private fun buildAnkiVariables(
     context: Context,
     api: AddContentApi,
     card: MinedCard,
-    includeCutAudio: Boolean,
-    includeLookupAudio: Boolean,
     requiredMarkers: RequiredTemplateMarkers
 ): Map<String, String> {
     val glossarySources = if (requiredMarkers.needsAny(CORE_GLOSSARY_VARIABLES) ||
@@ -523,10 +509,9 @@ private fun buildAnkiVariables(
     } else {
         emptyList()
     }
-    Log.d(
-        ANKI_EXPORT_DEBUG_TAG,
+    logDebug(ANKI_EXPORT_DEBUG_TAG) {
         "variables sources count=${glossarySources.size} names=${glossarySources.joinToString(separator = "|") { "${it.dictionaryName}:${it.definitions.size}" }}"
-    )
+    }
     val primaryGlossarySource = selectPrimaryGlossarySource(card, glossarySources)
     val dictionaryName = if (requiredMarkers.needs("dictionary-name", "dictionary", "dictionary-alias")) {
         primaryGlossarySource?.dictionaryName.orEmpty()
@@ -595,8 +580,7 @@ private fun buildAnkiVariables(
             )
         }
     }.orEmpty()
-    Log.d(
-        ANKI_EXPORT_DEBUG_TAG,
+    logDebug(ANKI_EXPORT_DEBUG_TAG) {
         "glossary templates primary=${primaryGlossarySource?.dictionaryName.orEmpty()} " +
             "cssLen=${primaryGlossarySource?.dictionaryCss?.length ?: 0} " +
             "rawGlossaryFirstLen=${card.glossaryFirstHtml?.length ?: 0} " +
@@ -605,13 +589,13 @@ private fun buildAnkiVariables(
             "glossaryFirstBriefLen=${glossaryFirst.length} glossaryFirstBriefHasScope=${glossaryFirst.contains("data-dictionary=")} " +
             "singleGlossaryLen=${singleGlossaryHtml.length} singleGlossaryHasScope=${singleGlossaryHtml.contains("data-dictionary=")} " +
             "singleGlossaryNoDictLen=${singleGlossaryNoDictionary.length}"
-    )
-    val cutAudio = if (includeCutAudio && requiredMarkers.needs("cut-audio")) {
+    }
+    val cutAudio = if (requiredMarkers.needs("cut-audio")) {
         attachAudio(api, context, card).orEmpty()
     } else {
         ""
     }
-    val lookupAudio = if (includeLookupAudio && requiredMarkers.needs("audio")) {
+    val lookupAudio = if (requiredMarkers.needs("audio")) {
         attachLookupAudio(api, context, card.lookupAudioUri).orEmpty()
     } else {
         ""
@@ -705,45 +689,71 @@ private fun buildAnkiVariables(
         }
     }
     }
-    Log.d(
-        ANKI_EXPORT_DEBUG_TAG,
+    logDebug(ANKI_EXPORT_DEBUG_TAG) {
         "variables done primary=${primaryGlossarySource?.dictionaryName.orEmpty()} dynamicSingleKeys=${variables.keys.count { it.startsWith("__single-glossary::") }}"
-    )
+    }
     return variables
 }
 
 private data class RequiredTemplateMarkers(
     val keys: Set<String>,
+    val canonicalKeys: Set<String>,
     val singleGlossaryTokens: Set<String>
 ) {
-    fun needsAny(names: Set<String>): Boolean = names.any { keys.contains(it) }
-    fun needs(vararg names: String): Boolean = names.any { keys.contains(it) }
+    fun needsAny(names: Set<String>): Boolean = names.any { needs(it) }
+    fun needs(vararg names: String): Boolean = names.any { name ->
+        keys.contains(name) || canonicalKeys.contains(canonicalizeTemplateKey(name))
+    }
 }
 
-private fun extractRequiredTemplateMarkers(
-    templates: Collection<String>,
-    includeCutAudio: Boolean,
-    includeLookupAudio: Boolean
-): RequiredTemplateMarkers {
+private data class SingleGlossaryMarkerRequest(
+    val dictionaryToken: String,
+    val markerKey: String
+)
+
+private fun extractRequiredTemplateMarkers(templates: Collection<String>): RequiredTemplateMarkers {
     val normalizedKeys = linkedSetOf<String>()
+    val canonicalKeys = linkedSetOf<String>()
     val singleGlossaryTokens = linkedSetOf<String>()
     templates.forEach { template ->
         TEMPLATE_VARIABLE_REGEX.findAll(template).forEach { match ->
             val raw = match.groupValues.getOrNull(1)?.trim().orEmpty()
             if (raw.isBlank()) return@forEach
             normalizedKeys += raw.lowercase(Locale.ROOT)
+            canonicalKeys += canonicalizeTemplateKey(raw)
         }
         SINGLE_GLOSSARY_DICT_MARKER_REGEX.findAll(template).forEach { match ->
-            val token = normalizeDictionaryToken(match.groupValues.getOrNull(1).orEmpty())
-            if (token.isNotBlank()) singleGlossaryTokens += token
+            parseSingleGlossaryMarker(match.groupValues.getOrNull(1).orEmpty())?.let { request ->
+                singleGlossaryTokens += request.dictionaryToken
+                normalizedKeys += request.markerKey
+                canonicalKeys += canonicalizeTemplateKey(request.markerKey)
+            }
         }
     }
-    if (includeCutAudio) normalizedKeys += "cut-audio"
-    if (includeLookupAudio) normalizedKeys += "audio"
     return RequiredTemplateMarkers(
         keys = normalizedKeys,
+        canonicalKeys = canonicalKeys,
         singleGlossaryTokens = singleGlossaryTokens
     )
+}
+
+private fun parseSingleGlossaryMarker(rawMarker: String): SingleGlossaryMarkerRequest? {
+    val marker = rawMarker.trim()
+    if (marker.isBlank()) return null
+    val (requestedNameRaw, markerKey) = when {
+        marker.endsWith("-brief", ignoreCase = true) -> {
+            marker.dropLast("-brief".length).trimEnd() to "single-glossary-brief"
+        }
+
+        marker.endsWith("-no-dictionary", ignoreCase = true) -> {
+            marker.dropLast("-no-dictionary".length).trimEnd() to "single-glossary-no-dictionary"
+        }
+
+        else -> marker to "single-glossary"
+    }
+    val dictionaryToken = normalizeDictionaryToken(requestedNameRaw)
+    if (dictionaryToken.isBlank()) return null
+    return SingleGlossaryMarkerRequest(dictionaryToken, markerKey)
 }
 
 private fun rewriteHtmlForAnkiExport(
@@ -791,10 +801,8 @@ private fun rewriteHtmlForAnkiExport(
     var imageIndex = 0
     output = ANKI_IMG_TAG_REGEX.replace(output) { match ->
         var tag = match.value
-        val quotedSrcRegex = Regex(ANKI_ATTR_QUOTED_REGEX.pattern.format("src"), setOf(RegexOption.IGNORE_CASE))
-        val unquotedSrcRegex = Regex(ANKI_ATTR_UNQUOTED_REGEX.pattern.format("src"), setOf(RegexOption.IGNORE_CASE))
         var replaced = false
-        tag = quotedSrcRegex.replace(tag) { attrMatch ->
+        tag = ANKI_SRC_ATTR_QUOTED_REGEX.replace(tag) { attrMatch ->
             val quote = attrMatch.groupValues[1]
             val rawSrc = attrMatch.groupValues[2]
             val rewritten = rewriteAnkiImageSrc(
@@ -810,7 +818,7 @@ private fun rewriteHtmlForAnkiExport(
             "src=$quote${escapeHtmlAttributeAnki(rewritten)}$quote"
         }
         if (!replaced) {
-            tag = unquotedSrcRegex.replace(tag) { attrMatch ->
+            tag = ANKI_SRC_ATTR_UNQUOTED_REGEX.replace(tag) { attrMatch ->
                 val rawSrc = attrMatch.groupValues[1]
                 val rewritten = rewriteAnkiImageSrc(
                     context = context,
@@ -901,9 +909,6 @@ private fun addMediaAsImageSrc(
         }.getOrNull()
         val fromProvider = providerUri?.let { callAddMedia(it, grantPermission = true) }
         if (!fromProvider.isNullOrBlank()) return fromProvider
-
-        val fromFile = callAddMedia(Uri.fromFile(temp), grantPermission = false)
-        if (!fromFile.isNullOrBlank()) return fromFile
         null
     } catch (_: Exception) {
         null
@@ -927,7 +932,7 @@ private fun buildPreferredImageMediaName(
     val ext = resolveImageExtension(context, uri, fallback = "png")
     val safeLabel = sourceLabel
         .lowercase(Locale.ROOT)
-        .replace(Regex("[^a-z0-9]+"), "-")
+        .replace(ANKI_MEDIA_SAFE_LABEL_REGEX, "-")
         .trim('-')
         .ifBlank { "glossary" }
     return "mdict-$safeLabel-${System.currentTimeMillis()}-$imageIndex.$ext"
@@ -975,11 +980,20 @@ private fun resolveAnkiHtmlResourceUri(raw: String): Uri? {
 }
 
 private fun findHtmlAttributeValue(tag: String, attribute: String): String? {
-    val quotedRegex = Regex(ANKI_ATTR_QUOTED_REGEX.pattern.format(attribute), setOf(RegexOption.IGNORE_CASE))
-    quotedRegex.find(tag)?.let { return it.groupValues.getOrNull(2) }
-    val unquotedRegex = Regex(ANKI_ATTR_UNQUOTED_REGEX.pattern.format(attribute), setOf(RegexOption.IGNORE_CASE))
-    unquotedRegex.find(tag)?.let { return it.groupValues.getOrNull(1) }
-    return null
+    val quoted = when (attribute.lowercase(Locale.ROOT)) {
+        "rel" -> ANKI_REL_ATTR_QUOTED_REGEX
+        "href" -> ANKI_HREF_ATTR_QUOTED_REGEX
+        "src" -> ANKI_SRC_ATTR_QUOTED_REGEX
+        else -> return null
+    }
+    quoted.find(tag)?.let { return it.groupValues.getOrNull(2) }
+    val unquoted = when (attribute.lowercase(Locale.ROOT)) {
+        "rel" -> ANKI_REL_ATTR_UNQUOTED_REGEX
+        "href" -> ANKI_HREF_ATTR_UNQUOTED_REGEX
+        "src" -> ANKI_SRC_ATTR_UNQUOTED_REGEX
+        else -> return null
+    }
+    return unquoted.find(tag)?.groupValues?.getOrNull(1)
 }
 
 private fun escapeHtmlAttributeAnki(value: String): String {
@@ -1014,13 +1028,12 @@ private fun buildMinedCardGlossarySources(card: MinedCard): List<MinedCardGlossa
             }
         }
     if (mapped.isNotEmpty()) {
-        Log.d(
-            ANKI_EXPORT_DEBUG_TAG,
+        logDebug(ANKI_EXPORT_DEBUG_TAG) {
             "sources using glossaryByDictionary count=${mapped.size} " +
                 "names=${mapped.joinToString("|") { it.dictionaryName }} " +
                 "cssLens=${mapped.joinToString("|") { it.dictionaryCss?.length?.toString().orEmpty() }} " +
                 "defs=${mapped.joinToString("|") { it.definitions.size.toString() }}"
-        )
+        }
         return mapped
     }
     val fallbackDefinitions = card.definitions
@@ -1034,11 +1047,10 @@ private fun buildMinedCardGlossarySources(card: MinedCard): List<MinedCardGlossa
             dictionaryCss = card.dictionaryCss
         )
     )
-    Log.d(
-        ANKI_EXPORT_DEBUG_TAG,
+    logDebug(ANKI_EXPORT_DEBUG_TAG) {
         "sources fallback dict=${fallback.first().dictionaryName} defs=${fallbackDefinitions.size} " +
             "cssLen=${fallback.first().dictionaryCss?.length ?: 0}"
-    )
+    }
     return fallback
 }
 
@@ -1054,25 +1066,23 @@ private fun selectPrimaryGlossarySource(
         sources.firstOrNull { normalizeDictionaryToken(it.dictionaryName) == preferred }
         ?: sources.firstOrNull()
     }
-    Log.d(
-        ANKI_EXPORT_DEBUG_TAG,
+    logDebug(ANKI_EXPORT_DEBUG_TAG) {
         "primary source selected preferred=${preferred.ifBlank { "<blank>" }} " +
             "selected=${selected?.dictionaryName.orEmpty()} " +
             "selectedCssLen=${selected?.dictionaryCss?.length ?: 0} " +
             "selectedDefs=${selected?.definitions?.size ?: 0} " +
             "sourceCount=${sources.size}"
-    )
+    }
     return selected
 }
 
 private fun buildStyledGlossaryFromSources(sources: List<MinedCardGlossarySource>): String {
     if (sources.isEmpty()) return ""
-    Log.d(
-        ANKI_EXPORT_DEBUG_TAG,
+    logDebug(ANKI_EXPORT_DEBUG_TAG) {
         "buildStyledGlossaryFromSources count=${sources.size} " +
             "names=${sources.joinToString("|") { it.dictionaryName }} " +
             "cssLens=${sources.joinToString("|") { it.dictionaryCss?.length?.toString().orEmpty() }}"
-    )
+    }
     return renderYomitanGlossaryHtml(
         items = sources.map { source ->
             GlossaryHtmlItem(
@@ -1124,11 +1134,10 @@ private fun buildStyledGlossary(
     dictionaryCss: String?,
     wrapItemsInList: Boolean = true
 ): String {
-    Log.d(
-        ANKI_EXPORT_DEBUG_TAG,
+    logDebug(ANKI_EXPORT_DEBUG_TAG) {
         "buildStyledGlossary dict=${dictionaryName.orEmpty()} defs=${definitions.size} " +
             "cssLen=${dictionaryCss?.length ?: 0} wrapItemsInList=$wrapItemsInList"
-    )
+    }
     return renderYomitanGlossaryHtml(
         items = listOf(
             GlossaryHtmlItem(
@@ -1174,17 +1183,11 @@ private fun sanitizeAnkiDefinitionHtml(raw: String): String {
 }
 
 private fun removeLeadingGlossaryIndex(html: String): String {
-    return html.replace(
-        Regex("""(<i>\()\s*\d+\s*,\s*""", RegexOption.IGNORE_CASE),
-        "$1"
-    )
+    return html.replace(ANKI_LEADING_GLOSSARY_INDEX_REGEX, "$1")
 }
 
 private fun removeLeadingGlossaryDictionaryLabel(html: String): String {
-    return html.replaceFirst(
-        Regex("""^<i>\([^<]*\)</i>\s*""", RegexOption.IGNORE_CASE),
-        ""
-    )
+    return html.replaceFirst(ANKI_LEADING_DICTIONARY_LABEL_REGEX, "")
 }
 
 private fun extractFirstGlossaryListItemHtml(raw: String): String? {
@@ -1196,8 +1199,7 @@ private fun extractFirstGlossaryListItemHtml(raw: String): String? {
             0
         }
     }
-    val tagRegex = Regex("</?li\\b", RegexOption.IGNORE_CASE)
-    var match: MatchResult? = tagRegex.find(raw, startSearchIndex) ?: return null
+    var match: MatchResult? = ANKI_LI_TAG_REGEX.find(raw, startSearchIndex) ?: return null
     var depth = 0
     var startIndex = -1
     while (match != null) {
@@ -1217,7 +1219,7 @@ private fun extractFirstGlossaryListItemHtml(raw: String): String? {
                 return raw.substring(startIndex, tagEnd + 1)
             }
         }
-        match = tagRegex.find(raw, tagEnd + 1)
+        match = ANKI_LI_TAG_REGEX.find(raw, tagEnd + 1)
     }
     return null
 }
@@ -1291,7 +1293,6 @@ private fun attachAudio(
     card: MinedCard
 ): String? {
     val sourceUri = card.audioUri ?: return null
-    val sourceExtension = resolveAudioExtension(context, sourceUri, fallback = "m4a")
     val preferredName = "tset-${System.currentTimeMillis()}"
     val failures = mutableListOf<String>()
     failures += "source-scheme=${sourceUri.scheme.orEmpty()}"
@@ -1301,10 +1302,9 @@ private fun attachAudio(
         uri: Uri,
         grantReadPermission: Boolean
     ): String? {
-        Log.d(
-            ANKI_AUDIO_LOG_TAG,
+        logDebug(ANKI_AUDIO_LOG_TAG) {
             "audio-attempt label=$label uri=$uri scheme=${uri.scheme.orEmpty()} last=${uri.lastPathSegment.orEmpty()} grant=$grantReadPermission"
-        )
+        }
         if (grantReadPermission && uri.scheme.equals("content", ignoreCase = true)) {
             runCatching {
                 context.grantUriPermission(
@@ -1343,113 +1343,31 @@ private fun attachAudio(
     }
     try {
         if (clipFile != null) {
-            val clipFileUri = Uri.fromFile(clipFile)
             val providerUri = runCatching {
                 FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", clipFile)
             }.onFailure {
                 failures += "clip fileprovider-uri-failed: ${it.message ?: it.javaClass.simpleName}"
             }.getOrNull()
 
-            if (providerUri != null) {
+            if (providerUri == null) {
+                failures += "clip-fileprovider unavailable"
+            } else {
                 attemptWithUri(
                     label = "clip-fileprovider",
                     uri = providerUri,
                     grantReadPermission = true
                 )?.let { return it }
             }
-
-            attemptWithUri(
-                label = "clip-file",
-                uri = clipFileUri,
-                grantReadPermission = false
-            )?.let { return it }
-
-            val stagedClip = stageAudioInMediaStore(
-                context = context,
-                sourceUri = clipFileUri,
-                extension = clipFile.extension.ifBlank { "m4a" }
-            )
-            if (stagedClip != null) {
-                try {
-                    attemptWithUri(
-                        label = "clip-mediastore",
-                        uri = stagedClip.uri,
-                        grantReadPermission = true
-                    )?.let { return it }
-                } finally {
-                    runCatching { stagedClip.cleanup() }
-                }
-            } else {
-                failures += "clip-mediastore stage-failed"
-            }
         } else {
             failures += "clip-not-created"
         }
 
+        val detail = failures.distinct().joinToString(" | ").take(900)
         if (card.requireCueAudioClip) {
-            val detail = failures.distinct().joinToString(" | ").take(900)
             error("Failed to attach cue audio clip to Anki media. $detail")
         }
-
-        attemptWithUri(
-            label = "source-direct",
-            uri = sourceUri,
-            grantReadPermission = true
-        )?.let { return it }
-
-        val copiedSource = copyUriToTempAudioFile(
-            context = context,
-            sourceUri = sourceUri,
-            extension = sourceExtension,
-            prefix = "source"
-        )
-        if (copiedSource != null) {
-            try {
-                val copiedProviderUri = runCatching {
-                    FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", copiedSource)
-                }.onFailure {
-                    failures += "source fileprovider-uri-failed: ${it.message ?: it.javaClass.simpleName}"
-                }.getOrNull()
-                if (copiedProviderUri != null) {
-                    attemptWithUri(
-                        label = "source-fileprovider",
-                        uri = copiedProviderUri,
-                        grantReadPermission = true
-                    )?.let { return it }
-                }
-                attemptWithUri(
-                    label = "source-file",
-                    uri = Uri.fromFile(copiedSource),
-                    grantReadPermission = false
-                )?.let { return it }
-            } finally {
-                runCatching { copiedSource.delete() }
-            }
-        } else {
-            failures += "source-copy-failed"
-        }
-
-        val stagedSource = stageAudioInMediaStore(
-            context = context,
-            sourceUri = sourceUri,
-            extension = sourceExtension
-        )
-        if (stagedSource != null) {
-            try {
-                attemptWithUri(
-                    label = "source-mediastore",
-                    uri = stagedSource.uri,
-                    grantReadPermission = true
-                )?.let { return it }
-            } finally {
-                runCatching { stagedSource.cleanup() }
-            }
-        } else {
-            failures += "source-mediastore stage-failed"
-        }
-
-        val detail = failures.distinct().joinToString(" | ").take(900)
-        error("Failed to attach subtitle audio clip to Anki media. $detail")
+        logDebug(ANKI_AUDIO_LOG_TAG) { "audio clip not attached. $detail" }
+        return null
     } finally {
         clipFile?.delete()
     }
@@ -1461,7 +1379,6 @@ private fun attachLookupAudio(
     lookupAudioUri: Uri?
 ): String? {
     val sourceUri = lookupAudioUri ?: return null
-    val sourceExtension = resolveAudioExtension(context, sourceUri, fallback = "wav")
     val preferredName = "lookup-${System.currentTimeMillis()}"
     val failures = mutableListOf<String>()
     failures += "source-scheme=${sourceUri.scheme.orEmpty()}"
@@ -1471,10 +1388,9 @@ private fun attachLookupAudio(
         uri: Uri,
         grantReadPermission: Boolean
     ): String? {
-        Log.d(
-            ANKI_AUDIO_LOG_TAG,
+        logDebug(ANKI_AUDIO_LOG_TAG) {
             "lookup-attempt label=$label uri=$uri scheme=${uri.scheme.orEmpty()} last=${uri.lastPathSegment.orEmpty()} grant=$grantReadPermission"
-        )
+        }
         if (grantReadPermission && uri.scheme.equals("content", ignoreCase = true)) {
             runCatching {
                 context.grantUriPermission(
@@ -1510,89 +1426,30 @@ private fun attachLookupAudio(
     ) { reason ->
         failures += "lookup-transcode $reason"
     }
-    if (transcodedLookup != null) {
-        try {
-            val transcodedProviderUri = runCatching {
-                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", transcodedLookup)
-            }.onFailure {
-                failures += "lookup transcoded fileprovider-uri-failed: ${it.message ?: it.javaClass.simpleName}"
-            }.getOrNull()
-            if (transcodedProviderUri != null) {
-                attemptWithUri(
-                    label = "lookup-transcoded-fileprovider",
-                    uri = transcodedProviderUri,
-                    grantReadPermission = true
-                )?.let { return it }
-            }
-            attemptWithUri(
-                label = "lookup-transcoded-file",
-                uri = Uri.fromFile(transcodedLookup),
-                grantReadPermission = false
-            )?.let { return it }
-        } finally {
-            runCatching { transcodedLookup.delete() }
+    try {
+        if (transcodedLookup == null) {
+            val detail = failures.distinct().joinToString(" | ").take(900)
+            error("Failed to prepare lookup audio for Anki media. $detail")
         }
-    }
-
-    attemptWithUri(
-        label = "lookup-direct",
-        uri = sourceUri,
-        grantReadPermission = true
-    )?.let { return it }
-
-    val copiedSource = copyUriToTempAudioFile(
-        context = context,
-        sourceUri = sourceUri,
-        extension = sourceExtension,
-        prefix = "lookup"
-    )
-    if (copiedSource != null) {
-        try {
-            val copiedProviderUri = runCatching {
-                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", copiedSource)
-            }.onFailure {
-                failures += "lookup fileprovider-uri-failed: ${it.message ?: it.javaClass.simpleName}"
-            }.getOrNull()
-            if (copiedProviderUri != null) {
-                attemptWithUri(
-                    label = "lookup-fileprovider",
-                    uri = copiedProviderUri,
-                    grantReadPermission = true
-                )?.let { return it }
-            }
-            attemptWithUri(
-                label = "lookup-file",
-                uri = Uri.fromFile(copiedSource),
-                grantReadPermission = false
-            )?.let { return it }
-        } finally {
-            runCatching { copiedSource.delete() }
+        val transcodedProviderUri = runCatching {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", transcodedLookup)
+        }.onFailure {
+            failures += "lookup transcoded fileprovider-uri-failed: ${it.message ?: it.javaClass.simpleName}"
+        }.getOrNull()
+        if (transcodedProviderUri == null) {
+            val detail = failures.distinct().joinToString(" | ").take(900)
+            error("Failed to expose lookup audio to Anki media. $detail")
         }
-    } else {
-        failures += "lookup-copy-failed"
+        attemptWithUri(
+            label = "lookup-transcoded-fileprovider",
+            uri = transcodedProviderUri,
+            grantReadPermission = true
+        )?.let { return it }
+        val detail = failures.distinct().joinToString(" | ").take(900)
+        error("Failed to attach lookup audio to Anki media. $detail")
+    } finally {
+        runCatching { transcodedLookup?.delete() }
     }
-
-    val stagedSource = stageAudioInMediaStore(
-        context = context,
-        sourceUri = sourceUri,
-        extension = sourceExtension
-    )
-    if (stagedSource != null) {
-        try {
-            attemptWithUri(
-                label = "lookup-mediastore",
-                uri = stagedSource.uri,
-                grantReadPermission = true
-            )?.let { return it }
-        } finally {
-            runCatching { stagedSource.cleanup() }
-        }
-    } else {
-        failures += "lookup-mediastore stage-failed"
-    }
-
-    val detail = failures.distinct().joinToString(" | ").take(900)
-    error("Failed to attach lookup audio to Anki media. $detail")
 }
 
 private fun addMediaAsAudioTag(
@@ -1602,10 +1459,9 @@ private fun addMediaAsAudioTag(
     onAttemptFailure: (String) -> Unit = {}
 ): String? {
     val resolvedName = buildPreferredAudioMediaName(preferredName, uri)
-    Log.d(
-        ANKI_AUDIO_LOG_TAG,
+    logDebug(ANKI_AUDIO_LOG_TAG) {
         "anki-addmedia-attempt uri=$uri scheme=${uri.scheme.orEmpty()} last=${uri.lastPathSegment.orEmpty()} name=$resolvedName"
-    )
+    }
     val mediaTag = runCatching {
         // Per Anki API contract, mediaType must be "audio" or "image".
         api.addMediaFromUri(uri, resolvedName, "audio")
@@ -1613,16 +1469,14 @@ private fun addMediaAsAudioTag(
         onAttemptFailure("exception=${it.message ?: it.javaClass.simpleName}")
     }.getOrNull()
     if (!mediaTag.isNullOrBlank()) {
-        Log.d(
-            ANKI_AUDIO_LOG_TAG,
+        logDebug(ANKI_AUDIO_LOG_TAG) {
             "anki-addmedia-success name=$resolvedName tag=$mediaTag"
-        )
+        }
         return mediaTag
     }
-    Log.d(
-        ANKI_AUDIO_LOG_TAG,
+    logDebug(ANKI_AUDIO_LOG_TAG) {
         "anki-addmedia-null name=$resolvedName uri=$uri"
-    )
+    }
     onAttemptFailure("returned-null")
     return null
 }
@@ -1637,46 +1491,6 @@ private fun buildPreferredAudioMediaName(preferredName: String, uri: Uri): Strin
         ?.lowercase(Locale.ROOT)
         .orEmpty()
     return if (uriExt.isNotBlank()) "$preferredName.$uriExt" else preferredName
-}
-
-private fun stageAudioInMediaStore(
-    context: Context,
-    sourceUri: Uri,
-    extension: String
-): StagedAnkiAudio? {
-    val resolver = context.contentResolver
-    val safeExt = extension.trim().trimStart('.').ifBlank { "m4a" }.lowercase(Locale.ROOT)
-    val mimeType = mimeTypeForAudioExtension(safeExt)
-    val fileName = "tset-${System.currentTimeMillis()}.$safeExt"
-    val values = ContentValues().apply {
-        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-        put(MediaStore.MediaColumns.RELATIVE_PATH, "Music/tset")
-        put(MediaStore.MediaColumns.IS_PENDING, 1)
-    }
-
-    val stagedUri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values) ?: return null
-    return try {
-        openInputStreamForUri(context, sourceUri)?.use { input ->
-            resolver.openOutputStream(stagedUri, "w")?.use { output ->
-                input.copyTo(output)
-            } ?: error("Cannot open MediaStore output stream.")
-        } ?: error("Cannot open audio input stream.")
-
-        val publishValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.IS_PENDING, 0)
-        }
-        resolver.update(stagedUri, publishValues, null, null)
-
-        StagedAnkiAudio(
-            uri = stagedUri,
-            extension = safeExt,
-            cleanup = { resolver.delete(stagedUri, null, null) }
-        )
-    } catch (_: Exception) {
-        resolver.delete(stagedUri, null, null)
-        null
-    }
 }
 
 private fun openInputStreamForUri(context: Context, uri: Uri): InputStream? {
@@ -1728,22 +1542,6 @@ private fun copyUriToTempAudioFile(
     } catch (_: Exception) {
         outFile.delete()
         null
-    }
-}
-
-private fun mimeTypeForAudioExtension(extension: String): String {
-    val fromMap = MimeTypeMap.getSingleton()
-        .getMimeTypeFromExtension(extension.lowercase(Locale.ROOT))
-    if (!fromMap.isNullOrBlank()) return fromMap
-    return when (extension.lowercase(Locale.ROOT)) {
-        "m4a", "mp4" -> "audio/mp4"
-        "aac" -> "audio/aac"
-        "mp3" -> "audio/mpeg"
-        "wav" -> "audio/wav"
-        "ogg" -> "audio/ogg"
-        "opus" -> "audio/opus"
-        "flac" -> "audio/flac"
-        else -> "audio/*"
     }
 }
 
@@ -2270,20 +2068,18 @@ private fun transcodeWavToM4aWithAudioConverter(
             onFailure("audioconverter-invalid-wav-header")
             return null
         }
-        Log.d(
-            ANKI_AUDIO_LOG_TAG,
+        logDebug(ANKI_AUDIO_LOG_TAG) {
             "wav-to-m4a-start source=$sourceUri file=${wavFile.absolutePath} sampleRate=${wavInfo.sampleRate} channels=${wavInfo.channelCount}"
-        )
+        }
 
         val outputFile = createAnkiMediaTempFile(context, prefix = prefix, extension = "m4a")
         val bitRate = recommendedM4aBitrate(
             sampleRate = wavInfo.sampleRate,
             channelCount = wavInfo.channelCount
         )
-        Log.d(
-            ANKI_AUDIO_LOG_TAG,
+        logDebug(ANKI_AUDIO_LOG_TAG) {
             "wav-to-m4a-config output=${outputFile.absolutePath} bitRate=$bitRate"
-        )
+        }
         val result = runCatching {
             WavToM4AConverter(
                 wavInfo.sampleRate,
@@ -2320,10 +2116,9 @@ private fun transcodeWavToM4aWithAudioConverter(
             outputFile.delete()
             return null
         }
-        Log.d(
-            ANKI_AUDIO_LOG_TAG,
+        logDebug(ANKI_AUDIO_LOG_TAG) {
             "wav-to-m4a-success output=${outputFile.absolutePath} size=${outputFile.length()}"
-        )
+        }
         return outputFile
     } finally {
         runCatching { tempWavFile?.delete() }
@@ -2542,21 +2337,9 @@ private fun createAnkiMediaTempFile(
 private fun resolveTemplate(template: String, variables: Map<String, String>): String {
     var output = template
     output = output.replace(SINGLE_GLOSSARY_DICT_MARKER_REGEX) { match ->
-        val rawMarker = match.groupValues.getOrNull(1).orEmpty().trim()
-        val (requestedNameRaw, markerKey) = when {
-            rawMarker.endsWith("-brief", ignoreCase = true) -> {
-                rawMarker.removeSuffix("-brief").trimEnd() to "single-glossary-brief"
-            }
-
-            rawMarker.endsWith("-no-dictionary", ignoreCase = true) -> {
-                rawMarker.removeSuffix("-no-dictionary").trimEnd() to "single-glossary-no-dictionary"
-            }
-
-            else -> rawMarker to "single-glossary"
-        }
-        val requestedDictionaryName = normalizeDictionaryToken(requestedNameRaw)
-        if (requestedDictionaryName.isBlank()) return@replace ""
-        variables[templateSingleGlossaryKey(markerKey, requestedDictionaryName)].orEmpty()
+        val request = parseSingleGlossaryMarker(match.groupValues.getOrNull(1).orEmpty())
+            ?: return@replace ""
+        variables[templateSingleGlossaryKey(request.markerKey, request.dictionaryToken)].orEmpty()
     }
     val selectedDictionaryName = normalizeDictionaryToken(
         variables["dictionary"].orEmpty().ifBlank { variables["dictionary-name"].orEmpty() }
@@ -2598,18 +2381,6 @@ private fun templateSingleGlossaryKey(markerKey: String, normalizedDictionaryNam
     return "__${markerKey}::$normalizedDictionaryName"
 }
 
-private fun templateUsesVariable(template: String, variableName: String): Boolean {
-    if (template.isBlank()) return false
-    val target = canonicalizeTemplateKey(variableName)
-    if (target.isBlank()) return false
-    return TEMPLATE_VARIABLE_REGEX
-        .findAll(template)
-        .any { match ->
-            val marker = match.groupValues.getOrNull(1).orEmpty()
-            canonicalizeTemplateKey(marker) == target
-        }
-}
-
 private fun canonicalizeTemplateKey(key: String): String {
     return key
         .trim()
@@ -2638,7 +2409,7 @@ private fun splitCloze(sentence: String, word: String): Triple<String, String, S
 
 private fun extractFirstNumber(text: String?): String {
     if (text.isNullOrBlank()) return ""
-    return Regex("\\d+(?:\\.\\d+)?").find(text)?.value.orEmpty()
+    return ANKI_FIRST_NUMBER_REGEX.find(text)?.value.orEmpty()
 }
 
 private fun buildExpressionFurigana(expression: String, reading: String?): String {

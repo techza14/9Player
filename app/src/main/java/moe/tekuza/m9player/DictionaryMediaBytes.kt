@@ -2,7 +2,6 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.net.Uri
-import android.util.Log
 import android.util.LruCache
 import android.webkit.WebResourceResponse
 import java.io.ByteArrayInputStream
@@ -17,8 +16,9 @@ internal data class DictionaryMediaPayload(
 
 private object DictionaryMediaByteCache {
     // Keep a bounded in-memory media cache for fast popup image first paint.
-    // 24 MiB is enough for most dictionary image bursts without excessive memory risk.
-    private const val MAX_CACHE_BYTES = 24 * 1024 * 1024
+    // Keep this conservative; the app can run with a 256 MiB heap.
+    private const val MAX_CACHE_BYTES = 8 * 1024 * 1024
+    private const val MAX_CACHEABLE_PAYLOAD_BYTES = 2 * 1024 * 1024
     private const val CACHE_KEY_UNKNOWN = "application/octet-stream"
 
     private data class InFlightLoad(
@@ -56,7 +56,11 @@ private object DictionaryMediaByteCache {
         if (isLoaderOwner) {
             val loaded = runCatching { loader() }.getOrNull()
             synchronized(lock) {
-                if (loaded != null && loaded.bytes.isNotEmpty()) {
+                if (
+                    loaded != null &&
+                    loaded.bytes.isNotEmpty() &&
+                    loaded.bytes.size <= MAX_CACHEABLE_PAYLOAD_BYTES
+                ) {
                     cache.put(key, loaded)
                 }
                 inFlight!!.result = loaded
@@ -98,16 +102,15 @@ internal fun loadDictionaryMediaPayload(
 ): DictionaryMediaPayload? {
     val mappedUri = mapDictionaryMediaRequestUri(requestUri) ?: return null
     val key = mappedUri.toString()
-    Log.d("BookLookupTap", "media load request uri=$requestUri mapped=$mappedUri key=$key")
+    logDebug("BookLookupTap") { "media load request uri=$requestUri mapped=$mappedUri key=$key" }
     return DictionaryMediaByteCache.getOrLoad(key) {
         val bundled = openBundledDictionaryResource(context, mappedUri)
         if (bundled != null) {
             bundled.inputStream.use { input ->
                 val bytes = input.readBytes()
-                Log.d(
-                    "BookLookupTap",
+                logDebug("BookLookupTap") {
                     "media load bundled hit uri=$mappedUri mime=${bundled.mimeType} bytes=${bytes.size}"
-                )
+                }
                 return@getOrLoad DictionaryMediaPayload(
                     mimeType = DictionaryMediaByteCache.normalizeMime(bundled.mimeType),
                     bytes = bytes
@@ -117,10 +120,9 @@ internal fun loadDictionaryMediaPayload(
         val mounted = openMountedMdictResource(context, mappedUri) ?: return@getOrLoad null
         mounted.inputStream.use { input ->
             val bytes = input.readBytes()
-            Log.d(
-                "BookLookupTap",
+            logDebug("BookLookupTap") {
                 "media load mounted hit uri=$mappedUri mime=${mounted.mimeType} bytes=${bytes.size}"
-            )
+            }
             DictionaryMediaPayload(
                 mimeType = DictionaryMediaByteCache.normalizeMime(mounted.mimeType),
                 bytes = bytes
@@ -149,7 +151,7 @@ internal fun clearDictionaryMediaPayloadCache() {
 internal fun buildDictionaryWebResourceResponse(
     payload: DictionaryMediaPayload
 ): WebResourceResponse {
-    Log.d("BookLookupTap", "media response mime=${payload.mimeType} bytes=${payload.bytes.size}")
+    logDebug("BookLookupTap") { "media response mime=${payload.mimeType} bytes=${payload.bytes.size}" }
     val encoding = if (payload.mimeType.startsWith("text/", ignoreCase = true)) "utf-8" else null
     val headers = mutableMapOf(
         "Cache-Control" to "public, max-age=31536000, immutable"

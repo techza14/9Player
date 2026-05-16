@@ -21,16 +21,21 @@ internal data class MdxMountState(
 private const val MDX_MOUNT_PREFS = "mdx_mount_prefs"
 private const val KEY_ENABLED = "enabled"
 private const val KEY_ENTRIES_JSON = "entries_json"
+@Volatile
+private var cachedMdxMountState: MdxMountState? = null
 
 internal fun loadMdxMountState(context: Context): MdxMountState {
+    cachedMdxMountState?.let { return it }
     val prefs = context.getSharedPreferences(MDX_MOUNT_PREFS, Context.MODE_PRIVATE)
     val enabled = prefs.getBoolean(KEY_ENABLED, false)
     val fromJson = parseEntriesJson(prefs.getString(KEY_ENTRIES_JSON, null))
     return MdxMountState(enabled = enabled, entries = dedupeMountedEntries(fromJson))
+        .also { cachedMdxMountState = it }
 }
 
 internal fun saveMdxMountState(context: Context, state: MdxMountState) {
     val normalized = state.copy(entries = dedupeMountedEntries(state.entries))
+    cachedMdxMountState = normalized
     val json = JSONArray().apply {
         normalized.entries.forEach { entry ->
             put(

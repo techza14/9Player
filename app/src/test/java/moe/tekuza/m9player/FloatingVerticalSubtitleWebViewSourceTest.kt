@@ -6,15 +6,15 @@ import java.io.File
 
 class FloatingVerticalSubtitleWebViewSourceTest {
     @Test
-    fun verticalSubtitleColorAndOutlineAreAppliedThroughWebView() {
+    fun verticalSubtitleColorAndOutlineAreAppliedThroughCanvas() {
         val source = File("src/main/java/moe/tekuza/m9player/AudiobookFloatingOverlayService.kt").readText()
 
-        assertTrue(source.contains("outlineCss = floatingSubtitleOutlineCss()"))
-        assertTrue(source.contains("text-shadow: \$outlineCss;"))
-        assertTrue(source.contains("fun applyTypography(color: Int, sizeSp: Float)"))
-        assertTrue(source.contains("subtitleVerticalWebView?.apply"))
+        assertTrue(source.contains("FloatingVerticalSubtitleCanvasView"))
+        assertTrue(source.contains("outlinePaint"))
+        assertTrue(source.contains("VerticalSubtitleLayoutEngine.draw(canvas, outlinePaint"))
+        assertTrue(source.contains("fun applyTypography(color: Int, sizeSp: Float, typeface: Typeface? = paint.typeface)"))
+        assertTrue(source.contains("subtitleVerticalCanvasView?.apply"))
         assertTrue(source.contains("applyTypography("))
         assertTrue(source.contains("settings.floatingOverlaySubtitleColor,"))
-        assertTrue(source.contains("buildFloatingVerticalSubtitleHtml(content, textColor, textSizeSp)"))
     }
 }

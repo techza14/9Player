@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,7 @@ internal fun MainHoshiResultWebView(
     val assets = remember(context) { LookupPopupAssets.load(context) }
     val callbackHolder = remember { PopupWebViewCallbackHolder(effectiveCallbacks) }
     val lookupResultsHolder = remember { PopupLookupResultsHolder(results) }
+    val webViewHolder = remember { mutableStateOf<WebView?>(null) }
     val offsetState = remember {
         PopupWebViewOffsetState(
             selectionOffsetX = selectionOffsetX,
@@ -61,11 +63,18 @@ internal fun MainHoshiResultWebView(
     }
     var loadedHtml by remember { mutableStateOf<String?>(null) }
     var appliedClearSelectionSignal by remember { mutableStateOf(clearSelectionSignal) }
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewHolder.value?.let(::destroyWebViewSafely)
+            webViewHolder.value = null
+        }
+    }
 
     AndroidView(
         modifier = modifier.fillMaxSize(),
         factory = { context ->
             WebView(context).apply {
+                webViewHolder.value = this
                 applyHoshiWebViewSecurityDefaults()
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false

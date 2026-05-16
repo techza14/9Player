@@ -1,9 +1,9 @@
 package moe.tekuza.m9player.hoshi.features.dictionary
 
 import android.content.Context
-import android.util.Log
 import de.manhhao.hoshi.LookupResult
 import moe.tekuza.m9player.AudiobookSettingsConfig
+import moe.tekuza.m9player.logDebug
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -52,12 +52,11 @@ internal object LookupPopupHtml {
         val entryCount = results.size
         if (results.isNotEmpty()) {
             val first = results.first()
-            Log.d(
-                "HoshiLookupPopup",
+            logDebug("HoshiLookupPopup") {
                 "render entryCount=$entryCount firstTerm='${first.term.expression}' freqCount=${first.term.frequencies.size} pitchCount=${first.term.pitches.size} glossCount=${first.term.glossaries.size}"
-            )
+            }
         } else {
-            Log.d("HoshiLookupPopup", "render entryCount=0")
+            logDebug("HoshiLookupPopup") { "render entryCount=0" }
         }
         val entries = if (assets == null) {
             "[]"
@@ -291,10 +290,9 @@ internal object LookupPopupHtml {
     internal fun entryJsonString(result: LookupResult): String = result.toEntryJson().toString()
 
     private fun LookupResult.toEntryJson(): JSONObject = JSONObject().apply {
-        Log.d(
-            "HoshiLookupPopup",
+        logDebug("HoshiLookupPopup") {
             "entryJson term='${term.expression}' freqCount=${term.frequencies.size} pitchCount=${term.pitches.size} glossCount=${term.glossaries.size}"
-        )
+        }
         put("expression", term.expression)
         put("reading", term.reading)
         put("matched", matched)

@@ -34,7 +34,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import moe.tekuza.m9player.ui.theme.TsetTheme
 
 class UpdateSettingsActivity : ComponentActivity() {
@@ -107,9 +106,7 @@ private fun UpdateSettingsScreen(onBack: () -> Unit) {
             progress = null
             result
                 .onSuccess { file ->
-                    val launched = withContext(Dispatchers.Main) {
-                        launchAppUpdateInstall(context, file)
-                    }
+                    val launched = launchAppUpdateInstall(context, file)
                     statusText = if (launched) {
                         context.getString(R.string.update_install_started)
                     } else {

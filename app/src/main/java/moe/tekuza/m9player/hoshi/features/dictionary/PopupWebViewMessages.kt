@@ -16,8 +16,11 @@ import moe.tekuza.m9player.hoshi.dictionary.LookupEngine
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
 import moe.tekuza.m9player.AnkiDuplicateCheckResult
+import moe.tekuza.m9player.logDebug
 import org.json.JSONArray
 import org.json.JSONObject
+
+private const val HOSHI_LOOKUP_POPUP_LOG_TAG = "HoshiLookupPopup"
 
 internal class PopupWebViewCallbacks(
     val onTapOutside: () -> Unit = {},
@@ -128,7 +131,7 @@ internal class PopupMessageWebViewClient(
     private fun handleAssetRequest(uri: Uri): WebResourceResponse? {
         val assets = assets ?: return null
         if (uri.host != "hoshi.local" || !uri.path.orEmpty().startsWith("/popup/")) return null
-        Log.d("HoshiLookupPopup", "asset request uri=$uri")
+        logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) { "asset request uri=$uri" }
         val content = when (uri.lastPathSegment) {
             "popup.css" -> assets.popupCss
             "selection.js" -> assets.selectionJs
@@ -167,19 +170,18 @@ internal class DictionaryImageRequestHandler(
             uri.host == "hoshi.local" &&
             uri.path == "/image"
         if (!isIosImageScheme && !isAndroidImageEndpoint) return null
-        Log.d("HoshiLookupPopup", "image request uri=$uri")
+        logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) { "image request uri=$uri" }
         val dictionary = uri.getQueryParameter("dictionary").orEmpty()
         val mediaPath = uri.getQueryParameter("path").orEmpty()
         if (dictionary.isBlank() || mediaPath.isBlank()) return null
         val data = loadMedia(dictionary, mediaPath)?.takeIf { it.isNotEmpty() }
         if (data == null) {
-            Log.d("HoshiLookupPopup", "image miss dictionary=$dictionary path=$mediaPath")
+            logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) { "image miss dictionary=$dictionary path=$mediaPath" }
             return null
         }
-        Log.d(
-            "HoshiLookupPopup",
+        logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
             "image hit dictionary=$dictionary path=$mediaPath bytes=${data.size} mime=${dictionaryImageMimeType(mediaPath)}"
-        )
+        }
 
         return WebResourceResponse(
             dictionaryImageMimeType(mediaPath),
@@ -262,10 +264,9 @@ internal class PopupWebViewBridge(
     @JavascriptInterface
     fun lookupRedirect(query: String): Int {
         val results = callbackHolder.callbacks.onLookupRedirect(query)
-        Log.d(
-            "HoshiLookupPopup",
+        logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
             "lookupRedirect query='${query.take(32)}' resultCount=${results.size}"
-        )
+        }
         if (results.isNotEmpty()) {
             val offset = currentSelectionOffset()
             val selection = ReaderSelectionData(
@@ -292,10 +293,9 @@ internal class PopupWebViewBridge(
             sentenceOffset = 0,
         ) ?: return 0
         val results = callbackHolder.callbacks.onLookupRedirect(query)
-        Log.d(
-            "HoshiLookupPopup",
+        logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
             "lookupRedirectAt query='${query.take(32)}' resultCount=${results.size} rect=${selection.rect.x},${selection.rect.y} ${selection.rect.width}x${selection.rect.height}"
-        )
+        }
         if (results.isNotEmpty()) {
             mainHandler.post { callbackHolder.callbacks.onLookupRedirected(selection, results) }
         }
@@ -309,13 +309,12 @@ internal class PopupWebViewBridge(
         when (payload.optString("name")) {
             "openLink" -> payload.optString("body").takeIf { it.isNotBlank() }?.let(callbacks.onOpenLink)
             "debug" -> payload.optJSONObject("body")?.let { body ->
-                Log.d(
-                    "HoshiLookupPopup",
+                logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
                     "popupDebug name=${body.optString("name").takeIf { it.isNotBlank() } ?: "unknown"} body=$body"
-                )
+                }
             }
             "imageTap" -> payload.optJSONObject("body")?.optString("src")?.takeIf { it.isNotBlank() }?.let { src ->
-                Log.d("HoshiLookupPopup", "imageTap src=$src")
+                logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) { "imageTap src=$src" }
                 callbacks.onImageTap(src)
             }
             "rangeSelection" -> mainHandler.post(callbacks.onRangeSelection)
@@ -346,14 +345,13 @@ internal class PopupWebViewBridge(
                     val rawY = rect?.optDouble("y")
                     val rawWidth = rect?.optDouble("width")
                     val rawHeight = rect?.optDouble("height")
-                    Log.d(
-                        "HoshiLookupPopup",
+                    logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
                         "textSelected text='${selection.text.take(32)}' " +
                             "webViewOffset(windowDp)=${offset.x},${offset.y} " +
                             "selectedRect(screenDp)=${selection.rect.x},${selection.rect.y} ${selection.rect.width}x${selection.rect.height} " +
                             "selectedRect(rawDp)=${rawX},${rawY} ${rawWidth}x${rawHeight} " +
                             "raw=${rect?.toString()}"
-                    )
+                    }
                     mainHandler.post {
                         val highlightCount = callbacks.onTextSelected(selection) ?: return@post
                         webView.evaluateJavascript("window.hoshiSelection.highlightSelection($highlightCount)", null)
@@ -367,12 +365,13 @@ internal class PopupWebViewBridge(
     fun mineEntry(content: String): Boolean {
         val callbacks = callbackHolder.callbacks
         return runCatching {
-            Log.d(
-                "AnkiExportDebug",
+            logDebug("AnkiExportDebug") {
                 "bridge mineEntry dispatch contentSize=${content.length}"
-            )
+            }
             val accepted = callbacks.onMineEntry(content)
-            Log.d("HoshiLookupPopup", "mineEntry accepted=$accepted contentSize=${content.length}")
+            logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
+                "mineEntry accepted=$accepted contentSize=${content.length}"
+            }
             accepted
         }.getOrElse {
             Log.w("HoshiLookupPopup", "mineEntry failed", it)
@@ -385,10 +384,9 @@ internal class PopupWebViewBridge(
         val callbacks = callbackHolder.callbacks
         return runCatching {
             val result = callbacks.onDuplicateCheck(expression)
-            Log.d(
-                "HoshiLookupPopup",
+            logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
                 "duplicateCheck expression='${expression.take(32)}' duplicated=${result.duplicate} noteIds=${result.noteIds.size} allowAdd=${result.allowAdd}"
-            )
+            }
             JSONObject()
                 .put("duplicate", result.duplicate)
                 .put("allowAdd", result.allowAdd)

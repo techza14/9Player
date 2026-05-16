@@ -12,6 +12,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 private const val SHIZUKU_BT_TAG = "ShizukuBluetooth"
+private val SHIZUKU_BLUETOOTH_ADDRESS_REGEX = Regex("^([0-9A-F]{2}:){5}[0-9A-F]{2}$")
 
 internal enum class SleepBluetoothOutcome {
     TARGET_DISCONNECTED,
@@ -242,6 +243,6 @@ private fun runShizukuShell(command: String): ShizukuShellResult {
 }
 
 private fun isBluetoothAddress(value: String): Boolean {
-    return Regex("^([0-9A-F]{2}:){5}[0-9A-F]{2}$").matches(value)
+    return SHIZUKU_BLUETOOTH_ADDRESS_REGEX.matches(value)
 }
 

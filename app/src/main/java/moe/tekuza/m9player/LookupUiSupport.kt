@@ -1238,7 +1238,7 @@ internal class DefinitionLookupBridge(
 
     @JavascriptInterface
     fun onDebug(message: String?) {
-        Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "js ${message.orEmpty()}")
+        logDebug(BOOK_LOOKUP_TAP_LOG_TAG) { "js ${message.orEmpty()}" }
     }
 
     @JavascriptInterface
@@ -1283,25 +1283,25 @@ internal class DefinitionLookupBridge(
                     }
                 }
                 "tab" -> {
-                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge popupMessage tab payload=$payload")
+                    logDebug(BOOK_LOOKUP_TAP_LOG_TAG) { "bridge popupMessage tab payload=$payload" }
                 }
                 "back" -> {
-                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge popupMessage back")
+                    logDebug(BOOK_LOOKUP_TAP_LOG_TAG) { "bridge popupMessage back" }
                 }
                 "audio" -> {
                     val action = payload.optString("action").trim().lowercase(Locale.ROOT)
                     if (action == "open-external") {
                         dispatchOpenExternalUrl(payload.optString("href"))
                     } else {
-                        Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge popupMessage audio action=$action")
+                        logDebug(BOOK_LOOKUP_TAP_LOG_TAG) { "bridge popupMessage audio action=$action" }
                     }
                 }
                 else -> {
-                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge popupMessage unknown type=$type")
+                    logDebug(BOOK_LOOKUP_TAP_LOG_TAG) { "bridge popupMessage unknown type=$type" }
                 }
             }
         }.onFailure {
-            Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge popupMessage parse failed json=$json")
+            logDebug(BOOK_LOOKUP_TAP_LOG_TAG) { "bridge popupMessage parse failed json=$json" }
         }
     }
 
@@ -1314,7 +1314,7 @@ internal class DefinitionLookupBridge(
         val ctx = hostView?.context ?: return
         val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         runCatching { ctx.startActivity(intent) }
-            .onFailure { Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "openExternal failed url=$raw") }
+            .onFailure { logDebug(BOOK_LOOKUP_TAP_LOG_TAG) { "openExternal failed url=$raw" } }
     }
 
     private fun dispatchLookupLink(
@@ -1329,38 +1329,36 @@ internal class DefinitionLookupBridge(
     ) {
         val raw = rawUrl?.trim().orEmpty()
         if (raw.isBlank()) {
-            Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge lookupLink skip reason=blank_url")
+            logDebug(BOOK_LOOKUP_TAP_LOG_TAG) { "bridge lookupLink skip reason=blank_url" }
             return
         }
         val parsed = parseCustomLookupUrlTarget(raw)
         val target = parsed?.target
         if (target == null) {
-            Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge lookupLink skip reason=target_null raw=$raw")
+            logDebug(BOOK_LOOKUP_TAP_LOG_TAG) { "bridge lookupLink skip reason=target_null raw=$raw" }
             return
         }
         val callback = onLookupTap
         if (callback == null) {
-            Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge lookupLink skip reason=callback_null target=$target")
+            logDebug(BOOK_LOOKUP_TAP_LOG_TAG) { "bridge lookupLink skip reason=callback_null target=$target" }
             return
         }
-        Log.d(
-            BOOK_LOOKUP_TAP_LOG_TAG,
+        logDebug(BOOK_LOOKUP_TAP_LOG_TAG) {
             "bridge lookupLink dispatch target=$target dictKey=${parsed.dictionaryCacheKey.orEmpty()} key=${tappedDefinitionKey?.trim().orEmpty()} raw=$raw"
-        )
+        }
         lastEntryTapAtMs = System.currentTimeMillis()
         lastLookupLinkTapAtMs = lastEntryTapAtMs
         lastLookupLinkTarget = target
         val localRect = Rect(left, top, right, bottom)
         val localRects = parseRectListJson(localRectsJson).ifEmpty { listOf(localRect) }
-        val localCharRects = parseRectListJson(localCharRectsJson).ifEmpty { localRects }
+        val localCharRects = parseRectListJson(localCharRectsJson)
         val dispatch = Runnable {
             val host = hostView
             val screenRect = host?.cssRectToScreenRect(localRect)
             val screenCharRects = host?.cssRectsToScreenRects(localCharRects).orEmpty()
-            Log.d(
-                BOOK_LOOKUP_TAP_LOG_TAG,
+            logDebug(BOOK_LOOKUP_TAP_LOG_TAG) {
                 "bridge lookupLink rects local=${localRects.size} chars=${localCharRects.size} screenChars=${screenCharRects.size}"
-            )
+            }
             callback.invoke(
                 DefinitionLookupTapData(
                     text = target,
@@ -1387,7 +1385,7 @@ internal class DefinitionLookupBridge(
     fun onImageTap(rawSrc: String?) {
         val src = rawSrc?.trim().orEmpty()
         if (src.isBlank()) return
-        Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge onImageTap src=$src")
+        logDebug(BOOK_LOOKUP_TAP_LOG_TAG) { "bridge onImageTap src=$src" }
         val callback = onImageTap ?: return
         val dispatch = Runnable { callback.invoke(src) }
         if (Looper.myLooper() == Looper.getMainLooper()) dispatch.run() else mainHandler.post(dispatch)
@@ -1428,10 +1426,9 @@ internal class DefinitionLookupBridge(
                                     candidate.contains(lookupTarget) ||
                                     lookupTarget.contains(candidate))
                         if (sameTap) {
-                            Log.d(
-                                BOOK_LOOKUP_TAP_LOG_TAG,
+                            logDebug(BOOK_LOOKUP_TAP_LOG_TAG) {
                                 "bridge onTap drop entry-after-link elapsedMs=$elapsedFromLookupLink target=$lookupTarget candidate=$candidate"
-                            )
+                            }
                             return
                         }
                     }
@@ -1440,7 +1437,7 @@ internal class DefinitionLookupBridge(
             } else if (sourceValue.equals("text", ignoreCase = true)) {
                 val elapsed = now - lastEntryTapAtMs
                 if (elapsed in 0..500) {
-                    Log.d(BOOK_LOOKUP_TAP_LOG_TAG, "bridge onTap drop text-after-entry elapsedMs=$elapsed")
+                    logDebug(BOOK_LOOKUP_TAP_LOG_TAG) { "bridge onTap drop text-after-entry elapsedMs=$elapsed" }
                     return
                 }
             }
@@ -1448,10 +1445,9 @@ internal class DefinitionLookupBridge(
             val localRect = Rect(left, top, right, bottom)
             val localRects = parseRectListJson(localRectsJson).ifEmpty { listOf(localRect) }
             val localCharRects = parseRectListJson(localCharRectsJson)
-            Log.d(
-                BOOK_LOOKUP_TAP_LOG_TAG,
+            logDebug(BOOK_LOOKUP_TAP_LOG_TAG) {
                 "bridge onTap source=$sourceValue textLen=${value.length} scanLen=${scanValue.length} offset=$offset localRects=${localRects.size} localChars=${localCharRects.size} onMain=${Looper.myLooper() == Looper.getMainLooper()}"
-            )
+            }
             val dispatch = Runnable {
                 try {
                     val host = hostView
@@ -1474,20 +1470,17 @@ internal class DefinitionLookupBridge(
                     )
                     val callback = onLookupTap
                     if (callback == null) {
-                        Log.d(
-                            BOOK_LOOKUP_TAP_LOG_TAG,
+                        logDebug(BOOK_LOOKUP_TAP_LOG_TAG) {
                             "bridge onTap callback_null source=$sourceValue textLen=${value.length} scanLen=${scanValue.length}"
-                        )
+                        }
                     } else {
-                        Log.d(
-                            BOOK_LOOKUP_TAP_LOG_TAG,
+                        logDebug(BOOK_LOOKUP_TAP_LOG_TAG) {
                             "bridge onTap callback_invoke source=$sourceValue textLen=${value.length} scanLen=${scanValue.length} offset=$offset"
-                        )
+                        }
                         callback.invoke(data)
-                        Log.d(
-                            BOOK_LOOKUP_TAP_LOG_TAG,
+                        logDebug(BOOK_LOOKUP_TAP_LOG_TAG) {
                             "bridge onTap callback_done source=$sourceValue"
-                        )
+                        }
                     }
                 } catch (t: Throwable) {
                     Log.e(BOOK_LOOKUP_TAP_LOG_TAG, "bridge dispatch failed", t)
