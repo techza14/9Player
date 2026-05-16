@@ -57,14 +57,14 @@ import moe.tekuza.m9player.legado.reader.entities.TextPage
 import moe.tekuza.m9player.legado.reader.page.ReadView
 import moe.tekuza.m9player.legado.reader.provider.TextPageFactory
 
-private const val LEGADO_READER_PROTOTYPE_TITLE = "吾輩は猫である"
-private const val LEGADO_READER_PROTOTYPE_LOG_TAG = "LegadoReaderPrototype"
+private const val LEGADO_READER_DEFAULT_TITLE = "吾輩は猫である"
+private const val LEGADO_READER_LOG_TAG = "LegadoReader"
 private const val NIGHT_BAR_BG = 0xFF677C8B.toInt()
 private const val NIGHT_BOTTOM_BG = 0xFF3A3A3A.toInt()
 private const val NIGHT_FLOATING_BG = 0xFF303030.toInt()
 private const val NIGHT_BRIGHTNESS_BG = 0x80303030.toInt()
 private const val NIGHT_ACCENT = 0xFFE36A3C.toInt()
-private val LEGADO_READER_PROTOTYPE_PARAGRAPHS = listOf(
+private val LEGADO_READER_DEFAULT_PARAGRAPHS = listOf(
     "吾輩は猫である。名前はまだ無い。",
     "どこで生れたかとんと見當がつかぬ。何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。",
     "吾輩はここで始めて人間というものを見た。しかもあとで聞くとそれは書生という人間中で一番獰悪な種族であったそうだ。",
@@ -98,7 +98,7 @@ private enum class ReaderOverflowAction(val menuId: Int) {
     HELP(6)
 }
 
-class LegadoReaderPrototypeActivity : AppCompatActivity() {
+class LegadoReaderActivity : AppCompatActivity() {
     private lateinit var readMenu: View
     private lateinit var statusBarScrim: View
     private lateinit var navigationBarScrim: View
@@ -336,7 +336,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         if (uriText.isBlank()) return null
         val title = intent.getStringExtra(EXTRA_EBOOK_TITLE)?.trim()
             ?: intent.getStringExtra(EXTRA_EBOOK_NAME)?.let(::localReaderBookTitleFromDisplayName)
-            ?: LEGADO_READER_PROTOTYPE_TITLE
+            ?: LEGADO_READER_DEFAULT_TITLE
         val format = intent.getStringExtra(EXTRA_EBOOK_FORMAT)?.trim().orEmpty().ifBlank { "ebook" }
         return LocalReaderBook(
             title = title,
@@ -710,7 +710,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             findViewById<TextView>(R.id.audio_timer_off).setOnClickListener {
                 audioStopAtMs = null
                 Toast.makeText(
-                    this@LegadoReaderPrototypeActivity,
+                    this@LegadoReaderActivity,
                     readerString(R.string.reader_timer_closed),
                     Toast.LENGTH_SHORT
                 ).show()
@@ -1174,7 +1174,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             orientation = RadioGroup.VERTICAL
             setPadding(dp(22), dp(8), dp(22), 0)
             resources.getStringArray(R.array.reader_click_region_titles).forEachIndexed { index, label ->
-                addView(RadioButton(this@LegadoReaderPrototypeActivity).apply {
+                addView(RadioButton(this@LegadoReaderActivity).apply {
                     id = View.generateViewId()
                     text = label
                     isChecked = index == 0
@@ -1205,7 +1205,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(22), dp(8), dp(22), 0)
             resources.getStringArray(R.array.reader_page_key_titles).forEach { label ->
-                addView(CheckBox(this@LegadoReaderPrototypeActivity).apply {
+                addView(CheckBox(this@LegadoReaderActivity).apply {
                     text = label
                     isChecked = true
                 })
@@ -1292,7 +1292,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
     }
 
     private fun currentReaderTitle(): String {
-        return document?.title ?: importedBook?.title ?: LEGADO_READER_PROTOTYPE_TITLE
+        return document?.title ?: importedBook?.title ?: LEGADO_READER_DEFAULT_TITLE
     }
 
     private fun openPlayerFromReader() {
@@ -1703,7 +1703,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
 
                 override fun onInfoClicked() {
                     Toast.makeText(
-                        this@LegadoReaderPrototypeActivity,
+                        this@LegadoReaderActivity,
                         getString(
                             R.string.reader_info_debug,
                             pages.size,
@@ -1900,7 +1900,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                 } else {
                     loadSrtSyncIfNeeded()
                     Log.d(
-                        LEGADO_READER_PROTOTYPE_LOG_TAG,
+                        LEGADO_READER_LOG_TAG,
                         "loadDisplayedBook no in-memory matches; trying persisted restore"
                     )
                     restorePersistedMatchIfPossible()
@@ -1934,18 +1934,18 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         }
         val loaded = if (book != null) {
             loadEbookDocument(
-                context = this@LegadoReaderPrototypeActivity,
+                context = this@LegadoReaderActivity,
                 book = book,
                 preferredCharsetName = preferredCharsetName
             )
         } else {
             EbookDocument(
-                title = LEGADO_READER_PROTOTYPE_TITLE,
+                title = LEGADO_READER_DEFAULT_TITLE,
                 format = "TXT",
                 chapters = listOf(
                     EbookChapter(
-                        title = LEGADO_READER_PROTOTYPE_TITLE,
-                        text = LEGADO_READER_PROTOTYPE_PARAGRAPHS.joinToString("\n\n")
+                        title = LEGADO_READER_DEFAULT_TITLE,
+                        text = LEGADO_READER_DEFAULT_PARAGRAPHS.joinToString("\n\n")
                     )
                 )
             )
@@ -1954,7 +1954,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         loadedDocumentCharsetName = preferredCharsetName
         if (forceDocumentReload) {
             Log.d(
-                LEGADO_READER_PROTOTYPE_LOG_TAG,
+                LEGADO_READER_LOG_TAG,
                 "loadOrReuseDocument force reload resets in-memory match cache bookUri=$bookUriText charset=$preferredCharsetName"
             )
             cueMatchesByCueIndex = emptyMap()
@@ -2011,7 +2011,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             readView.setPage(
                 TextPage(
                     title = currentReaderTitle(),
-                    text = LEGADO_READER_PROTOTYPE_PARAGRAPHS.joinToString("\n\n"),
+                    text = LEGADO_READER_DEFAULT_PARAGRAPHS.joinToString("\n\n"),
                     totalPages = 1
                 )
             )
@@ -2449,7 +2449,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             syncToAudioPosition(allowPageJump = isAudioPlaying())
         } else {
             Log.d(
-                LEGADO_READER_PROTOTYPE_LOG_TAG,
+                LEGADO_READER_LOG_TAG,
                 "relayoutCurrentDocument no in-memory matches; trying persisted restore"
             )
             restorePersistedMatchIfPossible()
@@ -2469,30 +2469,30 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
 
     private fun restorePersistedMatchIfPossible() {
         if (document == null) {
-            Log.d(LEGADO_READER_PROTOTYPE_LOG_TAG, "restoreMatch skipped document=null")
+            Log.d(LEGADO_READER_LOG_TAG, "restoreMatch skipped document=null")
             return
         }
         if (cues.isEmpty()) {
-            Log.d(LEGADO_READER_PROTOTYPE_LOG_TAG, "restoreMatch skipped cues empty")
+            Log.d(LEGADO_READER_LOG_TAG, "restoreMatch skipped cues empty")
             return
         }
         if (cueMatchesByCueIndex.isNotEmpty()) {
             Log.d(
-                LEGADO_READER_PROTOTYPE_LOG_TAG,
+                LEGADO_READER_LOG_TAG,
                 "restoreMatch skipped alreadyLoaded matches=${cueMatchesByCueIndex.size}"
             )
             return
         }
         val storeKey = currentReaderMatchStoreKey() ?: run {
-            Log.d(LEGADO_READER_PROTOTYPE_LOG_TAG, "restoreMatch skipped storeKey=null")
+            Log.d(LEGADO_READER_LOG_TAG, "restoreMatch skipped storeKey=null")
             return
         }
         Log.d(
-            LEGADO_READER_PROTOTYPE_LOG_TAG,
+            LEGADO_READER_LOG_TAG,
             "restoreMatch try key=${storeKey.take(48)} cues=${cues.size} book=${importedBook?.title}"
         )
         val snapshot = loadLegadoReaderMatchSnapshotOrNull(this, storeKey) ?: run {
-            Log.d(LEGADO_READER_PROTOTYPE_LOG_TAG, "restoreMatch miss key=${storeKey.take(48)}")
+            Log.d(LEGADO_READER_LOG_TAG, "restoreMatch miss key=${storeKey.take(48)}")
             return
         }
         cueMatchesByCueIndex = snapshot.matches.associateBy { it.cueIndex }
@@ -2503,29 +2503,29 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
         )
         activeCueIndex = -1
         Log.d(
-            LEGADO_READER_PROTOTYPE_LOG_TAG,
+            LEGADO_READER_LOG_TAG,
             "restoreMatch applied matches=${snapshot.matches.size} totalCues=${snapshot.totalCues} unmatched=${snapshot.unmatched}"
         )
     }
 
     private fun persistCurrentMatchSnapshot() {
         val current = matchData ?: run {
-            Log.d(LEGADO_READER_PROTOTYPE_LOG_TAG, "persistMatch skipped matchData=null")
+            Log.d(LEGADO_READER_LOG_TAG, "persistMatch skipped matchData=null")
             return
         }
         if (current.matches.isEmpty() || current.totalCues <= 0) {
             Log.d(
-                LEGADO_READER_PROTOTYPE_LOG_TAG,
+                LEGADO_READER_LOG_TAG,
                 "persistMatch skipped invalid matches=${current.matches.size} totalCues=${current.totalCues}"
             )
             return
         }
         val storeKey = currentReaderMatchStoreKey() ?: run {
-            Log.d(LEGADO_READER_PROTOTYPE_LOG_TAG, "persistMatch skipped storeKey=null")
+            Log.d(LEGADO_READER_LOG_TAG, "persistMatch skipped storeKey=null")
             return
         }
         Log.d(
-            LEGADO_READER_PROTOTYPE_LOG_TAG,
+            LEGADO_READER_LOG_TAG,
             "persistMatch saving matches=${current.matches.size} totalCues=${current.totalCues} key=${storeKey.take(48)}"
         )
         saveLegadoReaderMatchSnapshot(
@@ -2731,7 +2731,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                         matchData = data
                         cueMatchesByCueIndex = data.matches.associateBy { it.cueIndex }
                         Log.d(
-                            LEGADO_READER_PROTOTYPE_LOG_TAG,
+                            LEGADO_READER_LOG_TAG,
                             "manual match success matches=${data.matches.size} totalCues=${data.totalCues} unmatched=${data.unmatched}"
                         )
                         persistCurrentMatchSnapshot()
@@ -2793,7 +2793,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                 matchData = null
                 temporaryCuePage = null
                 Log.d(
-                    LEGADO_READER_PROTOTYPE_LOG_TAG,
+                    LEGADO_READER_LOG_TAG,
                     "loadSrtSyncIfNeeded loaded cues=${loadedCues.size} uri=$uriText reset in-memory match cache"
                 )
                 srtLoadError = if (loadedCues.isEmpty()) {
@@ -2803,7 +2803,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
                 }
                 if (loadedCues.isNotEmpty()) {
                     Log.d(
-                        LEGADO_READER_PROTOTYPE_LOG_TAG,
+                        LEGADO_READER_LOG_TAG,
                         "loadSrtSyncIfNeeded trying persisted restore after SRT load"
                     )
                     restorePersistedMatchIfPossible()
@@ -2818,7 +2818,7 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             }
             srtLoading = false
             if (srtLoadError != null && force) {
-                Toast.makeText(this@LegadoReaderPrototypeActivity, srtLoadError, Toast.LENGTH_LONG).show()
+                Toast.makeText(this@LegadoReaderActivity, srtLoadError, Toast.LENGTH_LONG).show()
             }
         }
     }

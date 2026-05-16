@@ -33,8 +33,6 @@
     <string name="settings_section_advanced">Advanced</string>
     <string name="settings_section_about">About</string>
     <string name="settings_audiobook_title">Audiobooks</string>
-    <string name="settings_reader_prototype_title">Reader prototype</string>
-    <string name="settings_reader_prototype_subtitle">Static Legado-style reading UI</string>
     <string name="settings_control_mode_title">Control mode</string>
     <string name="settings_audiobook_ui_title">Audiobook UI</string>
     <string name="settings_audiobook_ui_subtitle">Playback layout for each subtitle direction</string>

@@ -2632,22 +2632,22 @@ private fun BookReaderScreen(
                                             }
                                         }
                                         context.startActivity(
-                                            Intent(context, LegadoReaderPrototypeActivity::class.java).apply {
-                                                putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_TITLE, title)
-                                                putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_URI, ebookUri.toString())
+                                            Intent(context, LegadoReaderActivity::class.java).apply {
+                                                putExtra(LegadoReaderActivity.EXTRA_EBOOK_TITLE, title)
+                                                putExtra(LegadoReaderActivity.EXTRA_EBOOK_URI, ebookUri.toString())
                                                 ebookName?.let {
-                                                    putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_NAME, it)
+                                                    putExtra(LegadoReaderActivity.EXTRA_EBOOK_NAME, it)
                                                 }
                                                 ebookFormat?.let {
-                                                    putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_FORMAT, it)
+                                                    putExtra(LegadoReaderActivity.EXTRA_EBOOK_FORMAT, it)
                                                 }
                                                 audioUri?.let {
-                                                    putExtra(LegadoReaderPrototypeActivity.EXTRA_AUDIO_URI, it.toString())
-                                                    putExtra(LegadoReaderPrototypeActivity.EXTRA_AUDIO_POSITION_MS, immediatePositionMs)
-                                                    putExtra(LegadoReaderPrototypeActivity.EXTRA_AUDIO_DURATION_MS, immediateDurationMs)
+                                                    putExtra(LegadoReaderActivity.EXTRA_AUDIO_URI, it.toString())
+                                                    putExtra(LegadoReaderActivity.EXTRA_AUDIO_POSITION_MS, immediatePositionMs)
+                                                    putExtra(LegadoReaderActivity.EXTRA_AUDIO_DURATION_MS, immediateDurationMs)
                                                 }
                                                 srtUri?.let {
-                                                    putExtra(LegadoReaderPrototypeActivity.EXTRA_SRT_URI, it.toString())
+                                                    putExtra(LegadoReaderActivity.EXTRA_SRT_URI, it.toString())
                                                 }
                                             }
                                         )

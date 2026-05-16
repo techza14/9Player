@@ -36,7 +36,6 @@ internal fun SettingsPanel(
     selectedAppLanguageLabel: String,
     versionName: String,
     onAudiobookClick: () -> Unit,
-    onReaderPrototypeClick: () -> Unit,
     onControlModeClick: () -> Unit,
     onAudiobookUiClick: () -> Unit,
     onFontClick: () -> Unit,
@@ -63,12 +62,6 @@ internal fun SettingsPanel(
                 icon = Icons.Outlined.AutoStories,
                 title = stringResource(R.string.settings_audiobook_title),
                 onClick = onAudiobookClick
-            )
-            SettingsListItem(
-                icon = Icons.Outlined.Description,
-                title = stringResource(R.string.settings_reader_prototype_title),
-                subtitle = stringResource(R.string.settings_reader_prototype_subtitle),
-                onClick = onReaderPrototypeClick
             )
             SettingsListItem(
                 icon = Icons.Outlined.MenuBook,

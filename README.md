@@ -120,6 +120,7 @@ Double tap: Expand the control bar.
 
 - [hoshidicts](https://github.com/Manhhao/hoshidicts)
 - [Hoshi-Reader](https://github.com/Manhhao/Hoshi-Reader)
+- [Hoshi-Reader-Android](https://github.com/HuangAntimony/Hoshi-Reader-Android)
 - [Ankiconnect Android](https://github.com/KamWithK/AnkiconnectAndroid) (local audio)
 - [Yomitan](https://github.com/yomidevs/yomitan)
 - [Voice](https://github.com/PaulWoitaschek/Voice)
@@ -128,6 +129,7 @@ Double tap: Expand the control bar.
 - [Ciyue](https://github.com/mumu-lhl/Ciyue/)
 - [APlayer](https://github.com/rRemix/APlayer)
 - [mdict-rs](https://crates.io/crates/mdict-rs)
+- [Legado](https://github.com/gedoor/legado)
 
 ## License
 

@@ -121,6 +121,7 @@ Anki模板:[Lapis](https://github.com/donkuri/lapis)
 
 - [hoshidicts](https://github.com/Manhhao/hoshidicts)
 - [Hoshi-Reader](https://github.com/Manhhao/Hoshi-Reader)
+- [Hoshi-Reader-Android](https://github.com/HuangAntimony/Hoshi-Reader-Android)
 - [Ankiconnect Android](https://github.com/KamWithK/AnkiconnectAndroid)本地音频
 - [Yomitan](https://github.com/yomidevs/yomitan)
 - [Voice](https://github.com/PaulWoitaschek/Voice)
@@ -129,6 +130,7 @@ Anki模板:[Lapis](https://github.com/donkuri/lapis)
 - [Ciyue](https://github.com/mumu-lhl/Ciyue/)
 - [APlayer](https://github.com/rRemix/APlayer)
 - [mdict-rs](https://crates.io/crates/mdict-rs)
+- [Legado](https://github.com/gedoor/legado)
 
 ## License
 

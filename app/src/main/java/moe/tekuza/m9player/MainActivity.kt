@@ -1072,13 +1072,13 @@ private fun ReaderSyncScreen() {
     }
 
     fun createLegadoReaderIntent(context: Context, book: ReaderBook): Intent {
-        return Intent(context, LegadoReaderPrototypeActivity::class.java).apply {
-            putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_TITLE, book.title)
-            book.ebookUri?.let { putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_URI, it.toString()) }
-            book.ebookName?.let { putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_NAME, it) }
-            book.ebookFormat?.let { putExtra(LegadoReaderPrototypeActivity.EXTRA_EBOOK_FORMAT, it) }
-            putExtra(LegadoReaderPrototypeActivity.EXTRA_AUDIO_URI, book.audioUri.toString())
-            book.srtUri?.let { putExtra(LegadoReaderPrototypeActivity.EXTRA_SRT_URI, it.toString()) }
+        return Intent(context, LegadoReaderActivity::class.java).apply {
+            putExtra(LegadoReaderActivity.EXTRA_EBOOK_TITLE, book.title)
+            book.ebookUri?.let { putExtra(LegadoReaderActivity.EXTRA_EBOOK_URI, it.toString()) }
+            book.ebookName?.let { putExtra(LegadoReaderActivity.EXTRA_EBOOK_NAME, it) }
+            book.ebookFormat?.let { putExtra(LegadoReaderActivity.EXTRA_EBOOK_FORMAT, it) }
+            putExtra(LegadoReaderActivity.EXTRA_AUDIO_URI, book.audioUri.toString())
+            book.srtUri?.let { putExtra(LegadoReaderActivity.EXTRA_SRT_URI, it.toString()) }
         }
     }
 
@@ -2842,7 +2842,6 @@ private fun ReaderSyncScreen() {
                         selectedAppLanguageLabel = selectedAppLanguage.displayLabel(context),
                         versionName = resolveAppVersionName(context),
                         onAudiobookClick = { context.startActivity(Intent(context, AudiobookSettingsActivity::class.java)) },
-                        onReaderPrototypeClick = { context.startActivity(Intent(context, LegadoReaderPrototypeActivity::class.java)) },
                         onControlModeClick = { context.startActivity(Intent(context, ControlModeSettingsActivity::class.java)) },
                         onAudiobookUiClick = { context.startActivity(Intent(context, AudiobookUiSettingsActivity::class.java)) },
                         onFontClick = { context.startActivity(Intent(context, FontSettingsActivity::class.java)) },

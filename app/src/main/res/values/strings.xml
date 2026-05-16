@@ -37,8 +37,6 @@
     <string name="settings_section_advanced">进阶</string>
     <string name="settings_section_about">关于</string>
     <string name="settings_audiobook_title">有声书</string>
-    <string name="settings_reader_prototype_title">阅读器原型</string>
-    <string name="settings_reader_prototype_subtitle">静态 Legado 风格阅读界面</string>
     <string name="settings_control_mode_title">控制模式</string>
     <string name="settings_audiobook_ui_title">有声书界面</string>
     <string name="settings_audiobook_ui_subtitle">不同字幕方向下的播放界面布局</string>
