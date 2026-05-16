@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
@@ -87,6 +88,10 @@ internal fun LookupPopupView(
     onCloseAll: (() -> Unit)? = null,
     showActionBar: Boolean = false,
     showCloseAll: Boolean = false,
+    warmShell: Boolean = false,
+    contentResetKey: Any? = null,
+    isPopupActive: Boolean = true,
+    isContentVisible: Boolean = true,
     onLookupRedirect: (String) -> List<LookupResult> = { query ->
         moe.tekuza.m9player.hoshi.dictionary.LookupEngine.lookup(
             query,
@@ -96,7 +101,7 @@ internal fun LookupPopupView(
     },
     onLookupRedirected: (ReaderSelectionData) -> Unit = {},
 ) {
-    if (state.results.isEmpty()) {
+    if (state.results.isEmpty() && !warmShell) {
         Log.d(
             "HoshiLookupPopup",
             "view skipped reason=empty_results selection='${state.selection.text.take(32)}' rect=${state.selection.rect.x},${state.selection.rect.y} ${state.selection.rect.width}x${state.selection.rect.height}"
@@ -107,8 +112,9 @@ internal fun LookupPopupView(
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val assets = remember(context) { LookupPopupAssets.load(context) }
+    val htmlResults = if (warmShell) emptyList() else state.results
     val html = remember(
-        state.results,
+        htmlResults,
         state.dictionaryStyles,
         state.dictionarySettings,
         state.swipeToDismiss,
@@ -120,7 +126,7 @@ internal fun LookupPopupView(
         state.showRangeSelection,
     ) {
         LookupPopupHtml.render(
-            results = state.results,
+            results = htmlResults,
             assets = assets,
             dictionaryStyles = state.dictionaryStyles,
             settings = state.dictionarySettings,
@@ -133,7 +139,7 @@ internal fun LookupPopupView(
             showRangeSelection = state.showRangeSelection,
         )
     }
-    var contentReady by remember(html) { mutableStateOf(false) }
+    var contentReady by remember(html, contentResetKey) { mutableStateOf(false) }
     var previewImageUrl by remember { mutableStateOf<String?>(null) }
     val frame = remember(
         state.selection.rect,
@@ -162,6 +168,8 @@ internal fun LookupPopupView(
     }
     val frameX = frame.centerX - frame.width / 2
     val frameY = frame.centerY - frame.height / 2
+    val effectiveFrameX = if (isPopupActive) frameX else -10000.0
+    val effectiveFrameY = if (isPopupActive) frameY else -10000.0
     val popupShape = if (state.eInkMode) RectangleShape else RoundedCornerShape(18.dp)
     val popupBackground = if (state.darkMode) HoshiDarkCardBackground else HoshiCardBackground
     val contentBackground = if (state.darkMode) HoshiDarkCardBackground else HoshiCardBackground
@@ -173,13 +181,13 @@ internal fun LookupPopupView(
     }
     Log.d(
         "HoshiLookupPopup",
-        "view showActionBar=$showActionBar popupActionBar=${state.popupActionBar} hasCloseAll=${onCloseAll != null} results=${state.results.size} " +
+        "view active=$isPopupActive visible=$isContentVisible warmShell=$warmShell showActionBar=$showActionBar popupActionBar=${state.popupActionBar} hasCloseAll=${onCloseAll != null} results=${state.results.size} " +
             "selectionRect(screenDp)=${state.selection.rect.x},${state.selection.rect.y} ${state.selection.rect.width}x${state.selection.rect.height} " +
             "avoidRects=${state.avoidRects.size} " +
             "popupFrame(screenDp)=${frameX},${frameY} ${frame.width}x${frame.height} " +
             "popupTopGapDp=${frameY - (state.selection.rect.y + state.selection.rect.height)}"
     )
-    val positionProvider = remember(frameX, frameY, density.density) {
+    val positionProvider = remember(effectiveFrameX, effectiveFrameY, density.density) {
         val densityScale = density.density.coerceAtLeast(0.1f)
         object : PopupPositionProvider {
             override fun calculatePosition(
@@ -189,8 +197,8 @@ internal fun LookupPopupView(
                 popupContentSize: IntSize
             ): IntOffset {
                 return IntOffset(
-                    x = (frameX * densityScale).toInt(),
-                    y = (frameY * densityScale).toInt()
+                    x = (effectiveFrameX * densityScale).toInt(),
+                    y = (effectiveFrameY * densityScale).toInt()
                 )
             }
         }
@@ -207,9 +215,8 @@ internal fun LookupPopupView(
     ) {
         Surface(
             modifier = Modifier
-                .width(frame.width.dp)
-                .height(frame.height.dp)
-                .alpha(if (contentReady) 1f else 0f)
+                .then(if (isPopupActive) Modifier.width(frame.width.dp).height(frame.height.dp) else Modifier.size(1.dp))
+                .alpha(if (contentReady && isPopupActive && isContentVisible) 1f else 0f)
                 .clip(popupShape)
                 .background(popupBackground),
             shape = popupShape,
@@ -238,6 +245,7 @@ internal fun LookupPopupView(
                         selectionOffsetX = frameX + 10.0,
                         selectionOffsetY = frameY + 10.0,
                         clearSelectionSignal = clearSelectionSignal,
+                        warmShell = warmShell,
                         callbacks = PopupWebViewCallbacks(
                             onTapOutside = onTapOutside,
                             onSwipeDismiss = onSwipeDismiss,
@@ -357,6 +365,7 @@ private fun LookupPopupWebView(
     clearSelectionSignal: Int,
     backSignal: Int = 0,
     forwardSignal: Int = 0,
+    warmShell: Boolean = false,
     callbacks: PopupWebViewCallbacks,
     modifier: Modifier = Modifier,
 ) {
@@ -375,6 +384,7 @@ private fun LookupPopupWebView(
     var appliedBackSignal by remember { mutableStateOf(backSignal) }
     var appliedForwardSignal by remember { mutableStateOf(forwardSignal) }
     var shellReady by remember { mutableStateOf(false) }
+    var appliedWarmResults by remember { mutableStateOf<List<LookupResult>?>(null) }
     AndroidView(
         modifier = modifier
             .fillMaxSize()
@@ -405,10 +415,13 @@ private fun LookupPopupWebView(
             offsetState.selectionOffsetY = selectionOffsetY
             webView.setBackgroundColor(backgroundColor.toArgb())
             if (loadedHtml != html) {
-                lookupResultsHolder.results = results
                 loadedHtml = html
                 shellReady = false
+                appliedWarmResults = null
                 contentReadyGate.reset()
+                if (!warmShell) {
+                    lookupResultsHolder.results = results
+                }
                 webView.loadDataWithBaseURL(
                     "https://hoshi.local/popup/",
                     html,
@@ -417,7 +430,12 @@ private fun LookupPopupWebView(
                     null,
                 )
             }
-            if (shellReady) {
+            if (warmShell && shellReady && appliedWarmResults !== results) {
+                appliedWarmResults = results
+                lookupResultsHolder.results = results
+                contentReadyGate.reset()
+                webView.evaluateJavascript("window.replacePopupResults && window.replacePopupResults(${results.size})", null)
+            } else if (!warmShell && shellReady) {
                 lookupResultsHolder.results = results
             }
             if (appliedClearSelectionSignal != clearSelectionSignal) {

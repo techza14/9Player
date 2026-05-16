@@ -2,7 +2,11 @@ package moe.tekuza.m9player.hoshi.features.dictionary
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import android.util.Log
 import de.manhhao.hoshi.LookupResult
@@ -128,12 +132,32 @@ internal fun LookupPopupStackView(
     onLookupRedirect: ((String) -> List<LookupResult>)? = null,
     modifier: Modifier = Modifier,
     onRootPopupDismissed: () -> Unit = {},
-    ) {
-    popups.forEachIndexed { index, popup ->
-        key(popup.id) {
+    warmRootShell: Boolean = true,
+) {
+    var warmRootPopup by remember { mutableStateOf<LookupPopupItem?>(null) }
+    popups.firstOrNull()?.let { warmRootPopup = it }
+    val displayPopups = if (popups.isNotEmpty()) {
+        popups
+    } else if (warmRootShell) {
+        warmRootPopup?.let { root ->
+            root.copy(
+                state = root.state.copy(results = emptyList()),
+                clearSelectionSignal = root.clearSelectionSignal,
+            )
+        }
+            ?.let(::listOf)
+            .orEmpty()
+    } else {
+        emptyList()
+    }
+    val hasVisiblePopups = popups.isNotEmpty()
+
+    displayPopups.forEachIndexed { index, popup ->
+        val isHiddenWarmRoot = warmRootShell && !hasVisiblePopups && index == 0
+        key(if (warmRootShell && index == 0) "warm-root-popup" else popup.id) {
             Log.d(
                 "HoshiLookupPopup",
-                "stack view index=$index size=${popups.size} showActionBar=${popup.state.popupActionBar} showCloseAll=${onCloseAll != null && index == popups.lastIndex && popups.size > 1} popupActionBar=${popup.state.popupActionBar}"
+                "stack view index=$index size=${popups.size} displaySize=${displayPopups.size} hiddenWarmRoot=$isHiddenWarmRoot showActionBar=${popup.state.popupActionBar} showCloseAll=${onCloseAll != null && index == popups.lastIndex && popups.size > 1} popupActionBar=${popup.state.popupActionBar}"
             )
             Log.d(
                 "AnkiExportDebug",
@@ -162,6 +186,10 @@ internal fun LookupPopupStackView(
                 onCloseAll = onCloseAll,
                 showActionBar = popup.state.popupActionBar,
                 showCloseAll = onCloseAll != null && index == popups.lastIndex && popups.size > 1,
+                warmShell = warmRootShell && index == 0,
+                contentResetKey = if (warmRootShell && index == 0) popup.id else null,
+                isPopupActive = !isHiddenWarmRoot,
+                isContentVisible = !isHiddenWarmRoot,
                 onLookupRedirect = onLookupRedirect ?: { query ->
                     LookupEngine.lookup(
                         query,

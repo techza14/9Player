@@ -3,20 +3,30 @@ package moe.tekuza.m9player.legado.reader.page
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.TextPaint
 import android.util.AttributeSet
 import android.util.TypedValue
 import android.view.View
 import moe.tekuza.m9player.EbookImageRef
+import moe.tekuza.m9player.VerticalTextGlyphEngine
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.entities.ImageColumn
+import moe.tekuza.m9player.legado.reader.entities.TextColumn
 import moe.tekuza.m9player.legado.reader.entities.TextPage
 
 internal class ContentTextView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : View(context, attrs) {
+    internal data class AssistToken(
+        val text: String,
+        val rect: RectF,
+        val sourceStart: Int,
+        val sourceEnd: Int
+    )
+
     val contentPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
     val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     val searchPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -88,6 +98,34 @@ internal class ContentTextView @JvmOverloads constructor(
                 if (hit) {
                     return column.image
                 }
+            }
+        }
+        return null
+    }
+
+    fun findAssistTokenAt(x: Float, y: Float): AssistToken? {
+        val current = page ?: return null
+        val localX = x - paddingLeft
+        val localY = y - paddingTop
+        current.lines.forEach { line ->
+            if (line.layoutMode != M9LayoutMode.VERTICAL) return@forEach
+            val inLineBounds = localX >= line.lineTop && localX <= line.lineBottom
+            if (!inLineBounds) return@forEach
+            line.columns.forEach { column ->
+                if (column !is TextColumn) return@forEach
+                if (!VerticalTextGlyphEngine.isAsciiAssistToken(column.charData)) return@forEach
+                if (localY < column.start || localY > column.end) return@forEach
+                return AssistToken(
+                    text = column.charData,
+                    rect = RectF(
+                        line.lineTop + paddingLeft,
+                        column.start + paddingTop,
+                        line.lineBottom + paddingLeft,
+                        column.end + paddingTop
+                    ),
+                    sourceStart = column.sourceStart,
+                    sourceEnd = column.sourceEnd
+                )
             }
         }
         return null

@@ -15,7 +15,15 @@ internal data class LookupPopupAssets(
     val audioSvg: String = "",
 ) {
     companion object {
-        fun load(context: Context): LookupPopupAssets = LookupPopupAssets(
+        @Volatile
+        private var cached: LookupPopupAssets? = null
+
+        fun load(context: Context): LookupPopupAssets =
+            cached ?: synchronized(this) {
+                cached ?: read(context.applicationContext).also { cached = it }
+            }
+
+        private fun read(context: Context): LookupPopupAssets = LookupPopupAssets(
             popupJs = context.assets.open("hoshi-popup/popup.js").bufferedReader().use { it.readText() },
             popupCss = context.assets.open("hoshi-popup/popup.css").bufferedReader().use { it.readText() },
             selectionJs = context.assets.open("hoshi-popup/selection.js").bufferedReader().use { it.readText() },
@@ -35,13 +43,11 @@ internal object LookupPopupHtml {
         audioSettings: AudiobookSettingsConfig = AudiobookSettingsConfig(),
         showPlayAudio: Boolean = false,
         showRangeSelection: Boolean = false,
-        showCloseAllButton: Boolean = false,
         swipeToDismiss: Boolean = false,
         swipeThreshold: Int = 40,
         backgroundColorCss: String? = null,
         darkMode: Boolean = false,
         eInkMode: Boolean = false,
-        hideUntilContentReady: Boolean = false,
     ): String {
         val entryCount = results.size
         if (results.isNotEmpty()) {
@@ -89,16 +95,6 @@ internal object LookupPopupHtml {
                 """.trimIndent()
             }
             .orEmpty()
-        val contentReadyCss = if (hideUntilContentReady) {
-            """
-            <style>
-                #entries-container { visibility: hidden; }
-                html[data-hoshi-content-ready="true"] #entries-container { visibility: visible; }
-            </style>
-            """.trimIndent()
-        } else {
-            ""
-        }
         val selectionJs = assets?.let { """<script>${it.selectionJs}</script>""" }
             ?: """<script src="$PopupAssetBaseUrl/selection.js"></script>"""
         val popupJs = assets?.let { """<script>${it.popupJs}</script>""" }
@@ -127,7 +123,6 @@ internal object LookupPopupHtml {
                 <style>$androidColorSchemeCss</style>
                 $eInkCss
                 $backgroundOverrideCss
-                $contentReadyCss
                 $selectionJs
                 $popupJs
             </head>

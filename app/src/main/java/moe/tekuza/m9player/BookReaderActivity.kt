@@ -3574,7 +3574,7 @@ private fun BookReaderScreen(
         }
     }
 
-    if (hoshiLookupPopups.isNotEmpty() && !hoshiLookupPopupTemporarilyHidden) LookupPopupStackView(
+    if (!hoshiLookupPopupTemporarilyHidden) LookupPopupStackView(
         popups = hoshiLookupPopups,
         onPopupsChange = { next ->
             hoshiLookupPopups.clear()

@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.Gravity
 import android.view.View
 import android.graphics.Typeface
+import android.graphics.RectF
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.util.TypedValue
@@ -68,6 +69,18 @@ internal class PageView(context: Context) : LinearLayout(context) {
         return contentView.findImageAt(
             x = x - contentView.left,
             y = y - contentView.top
+        )
+    }
+
+    fun findAssistTokenAt(x: Float, y: Float): ContentTextView.AssistToken? {
+        val token = contentView.findAssistTokenAt(
+            x = x - contentView.left,
+            y = y - contentView.top
+        ) ?: return null
+        return token.copy(
+            rect = RectF(token.rect).apply {
+                offset(contentView.left.toFloat(), contentView.top.toFloat())
+            }
         )
     }
 

@@ -305,9 +305,9 @@ internal class VerticalTextChapterLayout(
     private fun nextToken(text: String, start: Int, end: Int): VerticalToken {
         if (start >= end) return VerticalToken("", 0, 0)
         val first = text[start]
-        if (isAsciiWordChar(first)) {
+        if (VerticalTextGlyphEngine.isAsciiWordChar(first)) {
             var index = start + 1
-            while (index < end && isAsciiWordChar(text[index])) {
+            while (index < end && VerticalTextGlyphEngine.isAsciiWordChar(text[index])) {
                 index += 1
             }
             return VerticalToken(
@@ -321,10 +321,6 @@ internal class VerticalTextChapterLayout(
             length = 1,
             heightUnits = 1
         )
-    }
-
-    private fun isAsciiWordChar(ch: Char): Boolean {
-        return ch.code in 0x21..0x7E && !ch.isWhitespace()
     }
 
     private data class VerticalToken(

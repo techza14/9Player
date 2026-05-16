@@ -7,6 +7,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -16,6 +17,7 @@ import android.provider.Settings
 import android.util.Log
 import android.text.SpannableString
 import android.text.Spanned
+import android.text.TextPaint
 import android.text.TextUtils
 import android.text.style.BackgroundColorSpan
 import android.view.View.MeasureSpec
@@ -59,6 +61,7 @@ import moe.tekuza.m9player.hoshi.features.dictionary.DictionarySettings
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupAssets
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupHtml
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupOptions
+import moe.tekuza.m9player.hoshi.features.dictionary.PopupContentReadyGate
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupLookupResultsHolder
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupMessageWebViewClient
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewBridge
@@ -67,7 +70,6 @@ import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbacks
 import moe.tekuza.m9player.hoshi.features.dictionary.currentDictionaryStyles
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
-import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -105,257 +107,6 @@ internal fun stopAudiobookFloatingOverlayService(context: Context) {
     context.startService(intent)
 }
 
-private fun buildFloatingVerticalSubtitleHtml(text: String, color: Int, textSizeSp: Float): String {
-    val safeText = escapeFloatingSubtitleHtml(text)
-    val colorCss = androidColorToCssRgba(color)
-    val outlineCss = floatingSubtitleOutlineCss()
-    val safeSize = textSizeSp.coerceIn(8f, 96f)
-    val sourceJson = JSONObject.quote(text)
-    return """
-        <!doctype html>
-        <html>
-        <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-            <style>
-                html, body {
-                    margin: 0;
-                    padding: 0;
-                    width: 100%;
-                    height: 100%;
-                    overflow: hidden;
-                    background: transparent;
-                    color: $colorCss;
-                    font-size: ${safeSize}px;
-                    line-height: 1.45;
-                    text-shadow: $outlineCss;
-                    -webkit-text-size-adjust: 100%;
-                    text-size-adjust: 100%;
-                    -webkit-user-select: none;
-                    user-select: none;
-                }
-                body {
-                    box-sizing: border-box;
-                    padding: 4px 10px;
-                    writing-mode: vertical-rl;
-                    text-orientation: mixed;
-                    display: flex;
-                    align-items: flex-end;
-                    justify-content: flex-start;
-                    font-family: sans-serif;
-                    position: relative;
-                }
-                #subtitle {
-                    white-space: pre-wrap;
-                    overflow-wrap: anywhere;
-                    word-break: break-word;
-                    max-width: 100%;
-                    max-height: 100%;
-                    overflow: hidden;
-                    position: relative;
-                    z-index: 1;
-                }
-                .nine-subtitle-highlight-box {
-                    position: fixed;
-                    pointer-events: none;
-                    background-color: rgba(161, 161, 170, 0.35);
-                    z-index: 0;
-                }
-            </style>
-        </head>
-        <body>
-            <div id="subtitle">$safeText</div>
-            <script>
-                window.nineSubtitleText = $sourceJson;
-                function nineSubtitleTextNode() {
-                    var root = document.getElementById('subtitle');
-                    return root && root.firstChild && root.firstChild.nodeType === Node.TEXT_NODE ? root.firstChild : null;
-                }
-                function nineSubtitleRoot() {
-                    return document.getElementById('subtitle');
-                }
-                function nineSubtitleFontSizePx() {
-                    var root = nineSubtitleRoot() || document.body;
-                    return parseFloat(window.getComputedStyle(root).fontSize || '0') || 0;
-                }
-                function nineSubtitleNormalizeRect(raw) {
-                    var fontSize = nineSubtitleFontSizePx();
-                    var rect = {
-                        left: raw.left,
-                        top: raw.top,
-                        right: raw.right,
-                        bottom: raw.bottom,
-                        width: raw.width,
-                        height: raw.height
-                    };
-                    if (fontSize > 0) {
-                        var glyphWidth = Math.min(rect.width, Math.max(1, fontSize * 1.16));
-                        var center = (rect.left + rect.right) / 2 + fontSize * 0.02;
-                        rect.left = center - glyphWidth / 2;
-                        rect.right = center + glyphWidth / 2;
-                        rect.width = rect.right - rect.left;
-                    }
-                    return rect;
-                }
-                function nineSubtitleRectsForRange(start, endExclusive) {
-                    var node = nineSubtitleTextNode();
-                    if (!node) return [];
-                    var text = node.textContent || '';
-                    var safeStart = Math.max(0, Math.min(start || 0, text.length));
-                    var safeEnd = Math.max(safeStart, Math.min(endExclusive || safeStart, text.length));
-                    var rects = [];
-                    var offset = safeStart;
-                    while (offset < safeEnd) {
-                        var char = String.fromCodePoint(text.codePointAt(offset));
-                        var next = Math.min(offset + char.length, safeEnd);
-                        var range = document.createRange();
-                        range.setStart(node, offset);
-                        range.setEnd(node, next);
-                        Array.from(range.getClientRects()).forEach(function(raw) {
-                            if (raw.width <= 0 || raw.height <= 0) return;
-                            rects.push(nineSubtitleNormalizeRect(raw));
-                        });
-                        offset = next;
-                    }
-                    return rects;
-                }
-                function nineSubtitleClearHighlights() {
-                    document.querySelectorAll('.nine-subtitle-highlight-box').forEach(function(node) {
-                        node.remove();
-                    });
-                }
-                window.nineSubtitleSetContent = function(nextText, nextColor, nextSize) {
-                    var root = nineSubtitleRoot();
-                    if (!root) return;
-                    window.nineSubtitleText = nextText || '';
-                    root.textContent = window.nineSubtitleText;
-                    document.documentElement.style.color = nextColor;
-                    document.body.style.color = nextColor;
-                    document.documentElement.style.fontSize = nextSize + 'px';
-                    document.body.style.fontSize = nextSize + 'px';
-                    nineSubtitleClearHighlights();
-                };
-                function nineSubtitleRangeForOffset(offset) {
-                    var node = nineSubtitleTextNode();
-                    if (!node) return null;
-                    var safe = Math.max(0, Math.min(offset, node.textContent.length - 1));
-                    var range = document.createRange();
-                    range.setStart(node, safe);
-                    range.setEnd(node, safe + 1);
-                    return range;
-                }
-                function nineSubtitleHitOffset(x, y) {
-                    var node = nineSubtitleTextNode();
-                    if (!node) return -1;
-                    var text = node.textContent || '';
-                    var best = -1;
-                    var bestDistance = Number.MAX_VALUE;
-                    var fontSize = nineSubtitleFontSizePx();
-                    for (var i = 0; i < text.length;) {
-                        var char = String.fromCodePoint(text.codePointAt(i));
-                        var next = i + char.length;
-                        var range = document.createRange();
-                        range.setStart(node, i);
-                        range.setEnd(node, next);
-                        var rects = Array.from(range.getClientRects());
-                        for (var j = 0; j < rects.length; j++) {
-                            var r = nineSubtitleNormalizeRect(rects[j]);
-                            if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i;
-                            var cx = Math.max(r.left, Math.min(x, r.right));
-                            var cy = Math.max(r.top, Math.min(y, r.bottom));
-                            var dx = x - cx;
-                            var dy = y - cy;
-                            var dist = dx * dx + dy * dy;
-                            if (dist < bestDistance) {
-                                bestDistance = dist;
-                                best = i;
-                            }
-                        }
-                        i = next;
-                    }
-                    var threshold = Math.max(18, fontSize * 1.8);
-                    return bestDistance <= threshold * threshold ? best : -1;
-                }
-                window.nineSubtitleSelectAt = function(x, y) {
-                    var offset = nineSubtitleHitOffset(x, y);
-                    if (offset < 0) return null;
-                    var range = nineSubtitleRangeForOffset(offset);
-                    if (!range) return null;
-                    var rect = Array.from(range.getClientRects()).map(nineSubtitleNormalizeRect).find(function(r) {
-                        return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-                    }) || nineSubtitleNormalizeRect(range.getBoundingClientRect());
-                    var payload = {
-                        offset: offset,
-                        x: rect.left,
-                        y: rect.top,
-                        left: rect.left,
-                        top: rect.top,
-                        width: rect.width,
-                        height: rect.height
-                    };
-                    return JSON.stringify(payload);
-                };
-                window.nineSubtitleHighlight = function(start, endExclusive) {
-                    nineSubtitleClearHighlights();
-                    nineSubtitleRectsForRange(start, endExclusive).forEach(function(rect) {
-                        var box = document.createElement('div');
-                        box.className = 'nine-subtitle-highlight-box';
-                        box.style.left = rect.left + 'px';
-                        box.style.top = rect.top + 'px';
-                        box.style.width = rect.width + 'px';
-                        box.style.height = rect.height + 'px';
-                        document.body.appendChild(box);
-                    });
-                };
-            </script>
-        </body>
-        </html>
-    """.trimIndent()
-}
-
-private fun floatingSubtitleOutlineCss(): String =
-    listOf(
-        "-0.6px -0.6px 0 rgba(0,0,0,0.35)",
-        "0.6px -0.6px 0 rgba(0,0,0,0.35)",
-        "-0.6px 0.6px 0 rgba(0,0,0,0.35)",
-        "0.6px 0.6px 0 rgba(0,0,0,0.35)"
-    ).joinToString(", ")
-
-private fun escapeFloatingSubtitleHtml(value: String): String =
-    buildString(value.length + 16) {
-        value.forEach { ch ->
-            when (ch) {
-                '&' -> append("&amp;")
-                '<' -> append("&lt;")
-                '>' -> append("&gt;")
-                '"' -> append("&quot;")
-                '\'' -> append("&#39;")
-                else -> append(ch)
-            }
-        }
-    }
-
-private fun androidColorToCssRgba(color: Int): String {
-    val alpha = android.graphics.Color.alpha(color) / 255f
-    return String.format(
-        Locale.US,
-        "rgba(%d,%d,%d,%.3f)",
-        android.graphics.Color.red(color),
-        android.graphics.Color.green(color),
-        android.graphics.Color.blue(color),
-        alpha.coerceIn(0f, 1f)
-    )
-}
-
-private fun decodeFloatingEvaluateJavascriptJson(raw: String?): String? {
-    val value = raw?.trim().orEmpty()
-    if (value.isBlank() || value == "null" || value == "undefined") return null
-    return if (value.startsWith('"')) {
-        runCatching { JSONObject("""{"value":$value}""").optString("value") }.getOrNull()
-    } else {
-        value
-    }
-}
-
 class AudiobookFloatingOverlayService : Service() {
 companion object {
         const val ACTION_SHOW = "moe.tekuza.m9player.action.SHOW_FLOATING_OVERLAY"
@@ -385,7 +136,7 @@ companion object {
     private var subtitleFrameView: FrameLayout? = null
     private var subtitleTextView: TextView? = null
     private var subtitleOutlineTextView: TextView? = null
-    private var subtitleVerticalWebView: FloatingVerticalSubtitleWebView? = null
+    private var subtitleVerticalCanvasView: FloatingVerticalSubtitleCanvasView? = null
     private var subtitleControlsRow: LinearLayout? = null
     private var subtitleSettingsPanel: LinearLayout? = null
     private var subtitleSettingsInlineHost: LinearLayout? = null
@@ -451,153 +202,101 @@ companion object {
 
     private data class FloatingHoshiLookupWebViewTag(
         val callbackHolder: PopupWebViewCallbackHolder,
-        val resultsHolder: PopupLookupResultsHolder
+        val resultsHolder: PopupLookupResultsHolder,
+        val contentReadyGate: PopupContentReadyGate = PopupContentReadyGate(),
+        var shellReady: Boolean = false,
+        var pendingResults: List<LookupResult> = emptyList(),
+        var appliedResults: List<LookupResult>? = null,
     )
 
-    private inner class FloatingVerticalSubtitleWebView(context: Context) : WebView(context) {
+    private inner class FloatingVerticalSubtitleCanvasView(context: Context) : View(context) {
         private var content: String = ""
-        private var textColor: Int = Color.WHITE
         private var textSizeSp: Float = 28f
         private var selectedRange: IntRange? = null
         private var lastAnchorRect: Rect? = null
-        private var pageLoaded: Boolean = false
+        private var cachedLayout: VerticalSubtitleLayout? = null
+        private var cachedHeight: Int = -1
+        private var cachedText: String = ""
+        private var cachedTextSize: Float = Float.NaN
+        private var cachedTypeface: Typeface? = null
+        private val paint = TextPaint().apply {
+            isAntiAlias = true
+            color = Color.WHITE
+            textAlign = Paint.Align.LEFT
+        }
+        private val outlinePaint = TextPaint(paint).apply {
+            style = Paint.Style.STROKE
+            strokeJoin = Paint.Join.ROUND
+        }
+        private val selectionPaint = Paint().apply {
+            color = Color.argb(0x66, 0xA1, 0xA1, 0xAA)
+            style = Paint.Style.FILL
+            isAntiAlias = true
+        }
 
         init {
             setBackgroundColor(Color.TRANSPARENT)
-            overScrollMode = WebView.OVER_SCROLL_NEVER
-            isVerticalScrollBarEnabled = false
-            isHorizontalScrollBarEnabled = false
             isLongClickable = false
             isHapticFeedbackEnabled = false
             isSoundEffectsEnabled = false
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = false
-            settings.allowFileAccess = false
-            settings.allowContentAccess = false
-            settings.blockNetworkLoads = true
-            webViewClient = object : android.webkit.WebViewClient() {
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    pageLoaded = true
-                    pushContentToPage()
-                    applySelectedRange()
-                    super.onPageFinished(view, url)
-                }
-            }
-            loadDataWithBaseURL(
-                "https://nine.local/floating-subtitle/",
-                buildFloatingVerticalSubtitleHtml(content, textColor, textSizeSp),
-                "text/html",
-                "UTF-8",
-                null
-            )
+            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         }
 
-        fun bindText(text: String, color: Int, sizeSp: Float) {
-            val changed = content != text || textColor != color || textSizeSp != sizeSp
+        fun bindText(text: String, color: Int, sizeSp: Float, typeface: Typeface? = paint.typeface) {
+            val sizePx = sizeSpToPx(sizeSp)
+            val changed = content != text ||
+                paint.color != color ||
+                paint.textSize != sizePx ||
+                paint.typeface != typeface
             content = text
-            textColor = color
             textSizeSp = sizeSp
-            updateEstimatedSize(text, sizeSp)
+            paint.color = color
+            paint.textSize = sizePx
+            paint.typeface = typeface
+            outlinePaint.textSize = sizePx
+            outlinePaint.typeface = typeface
+            outlinePaint.color = Color.argb(0x59, 0, 0, 0)
+            outlinePaint.strokeWidth = (resources.displayMetrics.density * 1.2f).coerceAtLeast(1f)
             if (changed) {
                 lastAnchorRect = null
-                pushContentToPage()
-            } else {
-                applySelectedRange()
+                clearLayoutCache()
+                requestLayout()
+                invalidate()
             }
         }
 
-        fun applyTypography(color: Int, sizeSp: Float) {
-            if (content.isBlank()) {
-                textColor = color
-                textSizeSp = sizeSp
-                return
-            }
-            bindText(content, color, sizeSp)
-        }
-
-        private fun pushContentToPage() {
-            if (!pageLoaded) {
-                return
-            }
-            val colorCss = androidColorToCssRgba(textColor)
-            val safeSize = textSizeSp.coerceIn(8f, 96f)
-            val script = """
-                window.nineSubtitleSetContent &&
-                window.nineSubtitleSetContent(${JSONObject.quote(content)}, ${JSONObject.quote(colorCss)}, $safeSize);
-            """.trimIndent()
-            evaluateJavascript(script) {
-                applySelectedRange()
-            }
-        }
-
-        private fun updateEstimatedSize(text: String, sizeSp: Float) {
-            val metrics = resources.displayMetrics
-            val density = metrics.density
-            val scaledDensity = metrics.scaledDensity
-            val visibleChars = text.count { it != '\n' && it != '\r' }.coerceAtLeast(1)
-            val horizontalPadding = 20f * density
-            val verticalPadding = 8f * density
-            val columnWidth = (sizeSp * scaledDensity * 1.24f).coerceAtLeast(1f)
-            val rowHeight = (sizeSp * scaledDensity * 1.45f).coerceAtLeast(1f)
-            val maxHeight = (metrics.heightPixels * 0.72f).roundToInt().coerceAtLeast(1)
-            val rows = ((maxHeight - verticalPadding) / rowHeight)
-                .toInt()
-                .coerceAtLeast(1)
-            val contentColumns = kotlin.math.ceil(visibleChars / rows.toDouble()).toInt().coerceAtLeast(1)
-            val maxDraggableWidth = (metrics.widthPixels * 0.48f).roundToInt().coerceAtLeast(1)
-            val maxColumns = kotlin.math.floor((maxDraggableWidth - horizontalPadding) / columnWidth)
-                .toInt()
-                .coerceAtLeast(1)
-            val columns = contentColumns.coerceAtMost(maxColumns)
-            val desiredWidth = (columns * columnWidth + horizontalPadding)
-                .roundToInt()
-                .coerceIn((44f * density).roundToInt(), maxDraggableWidth)
-            val desiredHeight = (rows * rowHeight + verticalPadding)
-                .roundToInt()
-                .coerceIn((96f * density).roundToInt(), maxHeight)
-            val current = layoutParams
-            if (current == null || current.width != desiredWidth || current.height != desiredHeight) {
-                layoutParams = FrameLayout.LayoutParams(desiredWidth, desiredHeight, Gravity.CENTER)
-            }
+        fun applyTypography(color: Int, sizeSp: Float, typeface: Typeface? = paint.typeface) {
+            bindText(content, color, sizeSp, typeface)
         }
 
         fun setSelectedSourceRange(range: IntRange?) {
             selectedRange = range
-            applySelectedRange()
+            invalidate()
         }
 
         fun selectAt(x: Float, y: Float) {
-            val density = resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
-            val cssX = x / density
-            val cssY = y / density
-            evaluateJavascript("window.nineSubtitleSelectAt && window.nineSubtitleSelectAt($cssX, $cssY);") { result ->
-                val payloadText = decodeFloatingEvaluateJavascriptJson(result)
-                    ?.takeIf { it.isNotBlank() && it != "null" }
-                    ?: run {
-                        Log.d(
-                            FLOATING_SUBTITLE_HIT_LOG_TAG,
-                            "verticalWebTap miss x=$x y=$y css=$cssX,$cssY result=${result.orEmpty().take(80)}"
-                        )
-                        return@evaluateJavascript
-                    }
-                val payload = runCatching { JSONObject(payloadText) }.getOrNull()
-                    ?: run {
-                        Log.d(
-                            FLOATING_SUBTITLE_HIT_LOG_TAG,
-                            "verticalWebTap invalidJson payload=${payloadText.take(120)}"
-                        )
-                        return@evaluateJavascript
-                    }
-                val offset = payload.optInt("offset", -1)
-                if (offset < 0) {
-                    Log.d(
-                        FLOATING_SUBTITLE_HIT_LOG_TAG,
-                        "verticalWebTap invalidPayload payload=${payloadText.take(120)}"
-                    )
-                    return@evaluateJavascript
-                }
-                handleVerticalSubtitleTapPayload(offset, payload)
+            val layout = obtainLayout(height) ?: run {
+                Log.d(FLOATING_SUBTITLE_HIT_LOG_TAG, "verticalCanvasTap miss reason=no_layout x=$x y=$y view=${width}x$height")
+                return
             }
+            val hit = VerticalSubtitleLayoutEngine.hitTest(
+                x = x,
+                y = y,
+                viewWidth = width,
+                viewHeight = height,
+                layout = layout,
+                paint = paint
+            ) ?: run {
+                Log.d(FLOATING_SUBTITLE_HIT_LOG_TAG, "verticalCanvasTap miss x=$x y=$y view=${width}x$height")
+                return
+            }
+            val anchor = toScreenRect(hit.rect)
+            lastAnchorRect = anchor
+            Log.d(
+                FLOATING_SUBTITLE_HIT_LOG_TAG,
+                "verticalCanvasTap offset=${hit.sourceOffset} row=${hit.row} col=${hit.column} rect=${anchor.left},${anchor.top},${anchor.right},${anchor.bottom} view=${width}x$height"
+            )
+            performFloatingLookup(hit.sourceOffset.coerceAtLeast(0), anchor)
         }
 
         fun cachedAnchorForRange(range: IntRange): Rect? {
@@ -606,85 +305,97 @@ companion object {
         }
 
         fun resolveAnchorRectsForRange(range: IntRange, callback: (List<Rect>) -> Unit) {
-            if (range.first < 0 || range.last < range.first) {
-                callback(emptyList())
-                return
-            }
-            val script = """
-                (function() {
-                    try {
-                        if (!window.nineSubtitleRectsForRange) return '[]';
-                        return JSON.stringify(window.nineSubtitleRectsForRange(${range.first}, ${range.last + 1}));
-                    } catch (e) {
-                        return '[]';
-                    }
-                })();
-            """.trimIndent()
-            evaluateJavascript(script) { result ->
-                val payloadText = decodeFloatingEvaluateJavascriptJson(result).orEmpty()
-                val payload = runCatching { JSONArray(payloadText) }.getOrNull()
-                if (payload == null || payload.length() == 0) {
-                    callback(emptyList())
-                    return@evaluateJavascript
-                }
-                val location = IntArray(2)
-                getLocationOnScreen(location)
-                val density = resources.displayMetrics.density.toDouble().takeIf { it > 0.0 } ?: 1.0
-                val rects = buildList {
-                    for (index in 0 until payload.length()) {
-                        val item = payload.optJSONObject(index) ?: continue
-                        val left = item.optDouble("left", 0.0) * density
-                        val top = item.optDouble("top", 0.0) * density
-                        val right = item.optDouble("right", left) * density
-                        val bottom = item.optDouble("bottom", top) * density
-                        if (right <= left || bottom <= top) continue
-                        add(
-                            Rect(
-                                left = location[0] + left.toFloat(),
-                                top = location[1] + top.toFloat(),
-                                right = location[0] + right.toFloat(),
-                                bottom = location[1] + bottom.toFloat()
-                            )
-                        )
-                    }
-                }
-                callback(rects)
-            }
+            callback(resolveAnchorRectsForRange(range))
         }
 
-        private fun applySelectedRange() {
-            val range = selectedRange
-            if (range == null || range.first < 0 || range.last < range.first) {
-                evaluateJavascript("window.nineSubtitleClearHighlights && window.nineSubtitleClearHighlights();", null)
-                return
+        private fun resolveAnchorRectsForRange(range: IntRange): List<Rect> {
+            if (range.first < 0 || range.last < range.first) return emptyList()
+            val layout = obtainLayout(height) ?: return emptyList()
+            return VerticalSubtitleLayoutEngine.selectionRects(
+                range = range,
+                viewWidth = width,
+                viewHeight = height,
+                layout = layout,
+                paint = paint
+            ).map(::toScreenRect)
+        }
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            super.onDraw(canvas)
+            val layout = obtainLayout(height) ?: return
+            selectedRange?.takeIf { it.first >= 0 && it.last >= it.first }?.let { range ->
+                VerticalSubtitleLayoutEngine.selectionRects(range, width, height, layout, paint)
+                    .forEach { rect -> canvas.drawRect(rect, selectionPaint) }
             }
-            evaluateJavascript(
-                "window.nineSubtitleHighlight && window.nineSubtitleHighlight(${range.first}, ${range.last + 1});",
-                null
+            VerticalSubtitleLayoutEngine.draw(canvas, outlinePaint, layout, width, height)
+            VerticalSubtitleLayoutEngine.draw(canvas, paint, layout, width, height)
+        }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val metrics = resources.displayMetrics
+            val density = metrics.density.coerceAtLeast(0.1f)
+            val maxHeight = (metrics.heightPixels * 0.72f).roundToInt().coerceAtLeast((96f * density).roundToInt())
+            val measuredHeight = resolveSize(maxHeight, heightMeasureSpec)
+            val layout = obtainLayout(measuredHeight)
+            val desiredWidth = layout
+                ?.contentWidth()
+                ?.let { ceil(it.toDouble()).toInt() + (20f * density).roundToInt() }
+                ?: (44f * density).roundToInt()
+            val maxWidth = (metrics.widthPixels * 0.82f).roundToInt().coerceAtLeast(1)
+            val measuredWidth = resolveSize(
+                desiredWidth.coerceIn((44f * density).roundToInt(), maxWidth),
+                widthMeasureSpec
             )
+            setMeasuredDimension(measuredWidth, measuredHeight)
         }
 
-        private fun handleVerticalSubtitleTapPayload(offset: Int, rectPayload: JSONObject) {
+        private fun obtainLayout(targetHeight: Int): VerticalSubtitleLayout? {
+            if (content.isBlank() || targetHeight <= 0) return null
+            if (cachedLayout != null &&
+                cachedHeight == targetHeight &&
+                cachedText == content &&
+                cachedTextSize == paint.textSize &&
+                cachedTypeface == paint.typeface
+            ) {
+                return cachedLayout
+            }
+            cachedLayout = VerticalSubtitleLayoutEngine.build(
+                content,
+                paint,
+                targetHeight,
+                effectiveCellHeightPx()
+            )
+            cachedHeight = targetHeight
+            cachedText = content
+            cachedTextSize = paint.textSize
+            cachedTypeface = paint.typeface
+            return cachedLayout
+        }
+
+        private fun toScreenRect(rect: RectF): Rect {
             val location = IntArray(2)
             getLocationOnScreen(location)
-            val density = resources.displayMetrics.density.toDouble().takeIf { it > 0.0 } ?: 1.0
-            val x = (rectPayload.optDouble("x", rectPayload.optDouble("left", 0.0))) * density
-            val y = (rectPayload.optDouble("y", rectPayload.optDouble("top", 0.0))) * density
-            val width = rectPayload.optDouble("width", 1.0) * density
-            val height = rectPayload.optDouble("height", 1.0) * density
-            val anchor = Rect(
-                left = location[0] + x.toFloat(),
-                top = location[1] + y.toFloat(),
-                right = location[0] + (x + width).toFloat(),
-                bottom = location[1] + (y + height).toFloat()
+            return Rect(
+                left = location[0] + rect.left,
+                top = location[1] + rect.top,
+                right = location[0] + rect.right,
+                bottom = location[1] + rect.bottom
             )
-            Log.d(
-                FLOATING_SUBTITLE_HIT_LOG_TAG,
-                "verticalWebTap offset=$offset rect=${anchor.left},${anchor.top},${anchor.right},${anchor.bottom} view=${width}x$height density=$density"
-            )
-            lastAnchorRect = anchor
-            performFloatingLookup(offset.coerceAtLeast(0), anchor)
         }
+
+        private fun clearLayoutCache() {
+            cachedLayout = null
+            cachedHeight = -1
+            cachedText = ""
+            cachedTextSize = Float.NaN
+            cachedTypeface = null
+        }
+
+        private fun effectiveCellHeightPx(): Float =
+            (paint.textSize * 1.08f).coerceAtLeast(1f)
+
+        private fun sizeSpToPx(sizeSp: Float): Float =
+            sizeSp.coerceIn(8f, 96f) * resources.displayMetrics.scaledDensity.coerceAtLeast(0.1f)
     }
 
     // Measure only the toolbar child (index 0). Overlay children can extend visually
@@ -1006,7 +717,7 @@ companion object {
             )
         }
         subtitleTextView = subtitleText
-        val subtitleVerticalWeb = FloatingVerticalSubtitleWebView(this).apply {
+        val subtitleVerticalCanvas = FloatingVerticalSubtitleCanvasView(this).apply {
             visibility = if (verticalWriting) View.VISIBLE else View.GONE
             setOnTouchListener(
                 OverlayDragTouchListener(
@@ -1023,7 +734,7 @@ companion object {
                 )
             )
         }
-        subtitleVerticalWebView = subtitleVerticalWeb
+        subtitleVerticalCanvasView = subtitleVerticalCanvas
         applySubtitleTypography(settings)
         val subtitleFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -1045,7 +756,7 @@ companion object {
                     FrameLayout.LayoutParams.WRAP_CONTENT
                 )
             )
-            addView(subtitleVerticalWeb)
+            addView(subtitleVerticalCanvas)
         }
         subtitleFrameView = subtitleFrame
         val controls = LinearLayout(this).apply {
@@ -1626,14 +1337,14 @@ companion object {
     private fun handleSubtitleSingleTap(event: MotionEvent) {
         val settings = loadAudiobookSettingsConfig(this)
         val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
-        val webSubtitle = subtitleVerticalWebView
+        val verticalSubtitle = subtitleVerticalCanvasView
         val subtitle = subtitleTextView
         Log.d(
             FLOATING_SUBTITLE_HIT_LOG_TAG,
-            "subtitleTap vertical=$verticalWriting x=${event.x} y=${event.y} subtitleVisible=${subtitle?.visibility == View.VISIBLE || webSubtitle?.visibility == View.VISIBLE}"
+            "subtitleTap vertical=$verticalWriting x=${event.x} y=${event.y} subtitleVisible=${subtitle?.visibility == View.VISIBLE || verticalSubtitle?.visibility == View.VISIBLE}"
         )
-        if (verticalWriting && webSubtitle != null) {
-            webSubtitle.selectAt(event.x, event.y)
+        if (verticalWriting && verticalSubtitle != null) {
+            verticalSubtitle.selectAt(event.x, event.y)
             return
         }
         if (subtitle == null) return
@@ -1676,13 +1387,13 @@ companion object {
     private fun setSubtitleTranslationX(dx: Float) {
         subtitleTextView?.translationX = dx
         subtitleOutlineTextView?.translationX = dx
-        subtitleVerticalWebView?.translationX = dx
+        subtitleVerticalCanvasView?.translationX = dx
     }
 
     private fun setSubtitleTranslationY(dy: Float) {
         subtitleTextView?.translationY = dy
         subtitleOutlineTextView?.translationY = dy
-        subtitleVerticalWebView?.translationY = dy
+        subtitleVerticalCanvasView?.translationY = dy
     }
 
     private fun setSubtitleFrameHeight(heightPx: Int?) {
@@ -1745,7 +1456,7 @@ companion object {
     private fun updateSubtitleText(text: String?) {
         val subtitle = subtitleTextView ?: return
         val outline = subtitleOutlineTextView
-        val verticalWeb = subtitleVerticalWebView
+        val verticalSubtitle = subtitleVerticalCanvasView
         val settings = loadAudiobookSettingsConfig(this)
         val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
         val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleTimeline()
@@ -1763,30 +1474,35 @@ companion object {
             outline?.scrollTo(0, 0)
             outline?.translationX = 0f
             outline?.translationY = 0f
-            verticalWeb?.visibility = View.GONE
-            verticalWeb?.translationX = 0f
-            verticalWeb?.translationY = 0f
-            verticalWeb?.setSelectedSourceRange(null)
+            verticalSubtitle?.visibility = View.GONE
+            verticalSubtitle?.translationX = 0f
+            verticalSubtitle?.translationY = 0f
+            verticalSubtitle?.setSelectedSourceRange(null)
             stopSubtitleTicker()
             hideFloatingLookup()
             rootView?.post { alignOverlayWindow(force = true) }
             return
         }
-        if (verticalWriting && verticalWeb != null) {
+        if (verticalWriting && verticalSubtitle != null) {
             subtitle.animate().cancel()
             subtitle.text = ""
             subtitle.visibility = View.GONE
             outline?.text = ""
             outline?.visibility = View.GONE
-            verticalWeb.bindText(normalized, settings.floatingOverlaySubtitleColor, settings.floatingOverlaySubtitleSizeSp.toFloat())
-            verticalWeb.visibility = View.VISIBLE
-            verticalWeb.alpha = 1f
-            verticalWeb.translationX = 0f
-            verticalWeb.translationY = 0f
-            verticalWeb.setSelectedSourceRange(floatingLookupSession.getOrNull(0)?.selectedRange)
+            verticalSubtitle.bindText(
+                normalized,
+                settings.floatingOverlaySubtitleColor,
+                settings.floatingOverlaySubtitleSizeSp.toFloat(),
+                resolveSubtitleTypeface(this, settings.subtitleCustomFontUri),
+            )
+            verticalSubtitle.visibility = View.VISIBLE
+            verticalSubtitle.alpha = 1f
+            verticalSubtitle.translationX = 0f
+            verticalSubtitle.translationY = 0f
+            verticalSubtitle.setSelectedSourceRange(floatingLookupSession.getOrNull(0)?.selectedRange)
             subtitleTickerBasePositionMs = BookReaderFloatingBridge.currentPlaybackPositionMs()
             subtitleTickerBaseRealtimeMs = SystemClock.uptimeMillis()
-            verticalWeb.post {
+            verticalSubtitle.post {
                 alignOverlayWindow(force = true)
                 updateSubtitleAutoScroll()
                 if (BookReaderFloatingBridge.isPlaying()) {
@@ -1795,7 +1511,7 @@ companion object {
             }
             return
         }
-        verticalWeb?.visibility = View.GONE
+        verticalSubtitle?.visibility = View.GONE
         if (subtitle.text?.toString() == displayText && subtitle.visibility == View.VISIBLE) {
             // Same cue text can still require a different scroll offset (playhead moved, pause/resume,
             // or overlay refresh). Recompute instead of keeping stale translated position.
@@ -1844,8 +1560,8 @@ companion object {
         val shouldLog = now - lastSubtitleScrollLogAtMs >= 300L
 
         if (verticalWriting) {
-            val web = subtitleVerticalWebView
-            if (web?.visibility != View.VISIBLE) return
+            val verticalSubtitleView = subtitleVerticalCanvasView
+            if (verticalSubtitleView?.visibility != View.VISIBLE) return
             setSubtitleTranslationX(0f)
             setSubtitleFrameHeight(null)
             setSubtitleTextWidthMode(matchParent = false)
@@ -1853,7 +1569,7 @@ companion object {
             if (shouldLog) {
                 Log.d(
                     FLOATING_SUBTITLE_SCROLL_LOG_TAG,
-                    "vertical-web-static pos=$positionMs view=${web.width}x${web.height}"
+                    "vertical-canvas-static pos=$positionMs view=${verticalSubtitleView.width}x${verticalSubtitleView.height}"
                 )
                 lastSubtitleScrollLogAtMs = now
             }
@@ -1979,19 +1695,24 @@ companion object {
     private fun applySubtitleSelectionHighlight(selectedRange: IntRange?) {
         val subtitle = subtitleTextView
         val outline = subtitleOutlineTextView
-        val verticalWeb = subtitleVerticalWebView
+        val verticalSubtitle = subtitleVerticalCanvasView
         val settings = loadAudiobookSettingsConfig(this)
         val baseText = BookReaderFloatingBridge.currentSubtitle()?.trim().orEmpty()
         if (baseText.isBlank()) {
             subtitle?.text = ""
             outline?.text = ""
-            verticalWeb?.setSelectedSourceRange(null)
+            verticalSubtitle?.setSelectedSourceRange(null)
             return
         }
         if (settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
-            verticalWeb?.bindText(baseText, settings.floatingOverlaySubtitleColor, settings.floatingOverlaySubtitleSizeSp.toFloat())
-            verticalWeb?.setSelectedSourceRange(selectedRange)
-            verticalWeb?.visibility = View.VISIBLE
+            verticalSubtitle?.bindText(
+                baseText,
+                settings.floatingOverlaySubtitleColor,
+                settings.floatingOverlaySubtitleSizeSp.toFloat(),
+                resolveSubtitleTypeface(this, settings.subtitleCustomFontUri),
+            )
+            verticalSubtitle?.setSelectedSourceRange(selectedRange)
+            verticalSubtitle?.visibility = View.VISIBLE
             subtitle?.text = ""
             subtitle?.visibility = View.GONE
             outline?.text = ""
@@ -1999,8 +1720,8 @@ companion object {
             return
         }
         if (subtitle == null) return
-        verticalWeb?.setSelectedSourceRange(null)
-        verticalWeb?.visibility = View.GONE
+        verticalSubtitle?.setSelectedSourceRange(null)
+        verticalSubtitle?.visibility = View.GONE
         if (selectedRange == null || selectedRange.first !in baseText.indices) {
             subtitle.text = baseText
             outline?.text = baseText
@@ -2063,8 +1784,8 @@ companion object {
         val controlsWidth = subtitleControlsRow?.width?.takeIf { it > 0 }
             ?: subtitleControlsRow?.measuredWidth?.takeIf { it > 0 }
             ?: 0
-        val subtitleWidth = subtitleVerticalWebView?.width?.takeIf { it > 0 }
-            ?: subtitleVerticalWebView?.measuredWidth?.takeIf { it > 0 }
+        val subtitleWidth = subtitleVerticalCanvasView?.width?.takeIf { it > 0 }
+            ?: subtitleVerticalCanvasView?.measuredWidth?.takeIf { it > 0 }
             ?: subtitleFrameView?.width?.takeIf { it > 0 }
             ?: subtitleFrameView?.measuredWidth?.takeIf { it > 0 }
             ?: 0
@@ -2252,9 +1973,9 @@ companion object {
                     renderFloatingLookupResults(layer)
                 }
                 if (verticalWriting) {
-                    val verticalWeb = subtitleVerticalWebView
-                    if (verticalWeb != null) {
-                        verticalWeb.resolveAnchorRectsForRange(trimmedRange) { resolvedRects ->
+                    val verticalSubtitle = subtitleVerticalCanvasView
+                    if (verticalSubtitle != null) {
+                        verticalSubtitle.resolveAnchorRectsForRange(trimmedRange) { resolvedRects ->
                             finishRender(
                                 resolvedRects.takeIf { it.isNotEmpty() }
                                     ?: initialAnchorRect?.let { listOf(it) }
@@ -3780,26 +3501,38 @@ companion object {
     ): View {
         val audiobookSettings = loadAudiobookSettingsConfig(this)
         val html = LookupPopupHtml.render(
-            results = layer.hoshiResults,
+            results = emptyList(),
             assets = floatingHoshiLookupAssets,
             dictionaryStyles = layer.hoshiDictionaryStyles,
             settings = DictionarySettings(),
             audioSettings = audiobookSettings,
             showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
             showRangeSelection = false,
-            showCloseAllButton = false,
             swipeToDismiss = true,
             swipeThreshold = 40,
             backgroundColorCss = "transparent",
             darkMode = isSystemDarkMode(),
             eInkMode = false,
-            hideUntilContentReady = true,
         )
         var popupWebView: WebView? = null
         val existingWebView = floatingHoshiLookupWebViews[layerIndex] as? FloatingHoshiLookupWebView
         val existingTag = existingWebView?.tag as? FloatingHoshiLookupWebViewTag
         val callbackHolder = existingTag?.callbackHolder ?: PopupWebViewCallbackHolder(PopupWebViewCallbacks())
         val resultsHolder = existingTag?.resultsHolder ?: PopupLookupResultsHolder(emptyList())
+        val webViewTag = existingTag ?: FloatingHoshiLookupWebViewTag(callbackHolder, resultsHolder)
+        webViewTag.pendingResults = layer.hoshiResults
+        fun applyPendingResults() {
+            val view = popupWebView ?: return
+            val pendingResults = webViewTag.pendingResults
+            if (!webViewTag.shellReady || webViewTag.appliedResults === pendingResults) return
+            webViewTag.appliedResults = pendingResults
+            resultsHolder.results = pendingResults
+            webViewTag.contentReadyGate.reset()
+            view.evaluateJavascript(
+                "window.replacePopupResults && window.replacePopupResults(${pendingResults.size})",
+                null
+            )
+        }
         val callbacks = PopupWebViewCallbacks(
             onSwipeDismiss = { closeFloatingLookupLayer(layerIndex) },
             onTapOutside = {},
@@ -3844,7 +3577,6 @@ companion object {
             onContentReady = { scheduleFloatingLookupHostReposition(layerIndex, delayMs = 0L, reason = "hoshiContentReady") }
         )
         callbackHolder.callbacks = callbacks
-        resultsHolder.results = layer.hoshiResults
         val webView = existingWebView ?: FloatingHoshiLookupWebView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
             overScrollMode = WebView.OVER_SCROLL_IF_CONTENT_SCROLLS
@@ -3874,11 +3606,16 @@ companion object {
                 PopupWebViewBridge(
                     webView = this,
                     callbackHolder = callbackHolder,
-                    lookupResultsHolder = resultsHolder
+                    lookupResultsHolder = resultsHolder,
+                    contentReadyGate = webViewTag.contentReadyGate,
+                    onShellReady = {
+                        webViewTag.shellReady = true
+                        applyPendingResults()
+                    }
                 ),
                 "HoshiPopup"
             )
-            tag = FloatingHoshiLookupWebViewTag(callbackHolder, resultsHolder)
+            tag = webViewTag
             floatingHoshiLookupWebViews[layerIndex] = this
         }
         popupWebView = webView
@@ -3887,9 +3624,13 @@ companion object {
         webView.requestLayout()
         if (floatingHoshiLookupHtmlByLayer[layerIndex] != html) {
             floatingHoshiLookupHtmlByLayer[layerIndex] = html
+            webViewTag.shellReady = false
+            webViewTag.appliedResults = null
+            webViewTag.contentReadyGate.reset()
             webView.scrollTo(0, 0)
             webView.loadDataWithBaseURL("https://hoshi.local/popup/", html, "text/html", "utf-8", null)
         }
+        applyPendingResults()
         return webView
     }
 
@@ -4315,11 +4056,12 @@ companion object {
                 setShadowLayer(0f, 0f, 0f, 0)
             }
         }
-        subtitleVerticalWebView?.apply {
+        subtitleVerticalCanvasView?.apply {
             visibility = if (verticalWriting) visibility else View.GONE
             applyTypography(
                 settings.floatingOverlaySubtitleColor,
-                settings.floatingOverlaySubtitleSizeSp.toFloat()
+                settings.floatingOverlaySubtitleSizeSp.toFloat(),
+                customTypeface ?: Typeface.DEFAULT,
             )
         }
         subtitleOutlineTextView?.apply {
@@ -4581,7 +4323,7 @@ companion object {
         subtitleFrameView = null
         subtitleTextView = null
         subtitleOutlineTextView = null
-        subtitleVerticalWebView = null
+        subtitleVerticalCanvasView = null
         subtitleControlsRow = null
         subtitleSettingsPanel = null
         subtitleSettingsInlineHost = null

@@ -3159,62 +3159,60 @@ private fun ReaderSyncScreen() {
             )
         }
 
-        if (mainHoshiLookupPopups.isNotEmpty()) {
-            LookupPopupStackView(
-                popups = mainHoshiLookupPopups,
-                onPopupsChange = { next ->
-                    mainHoshiLookupPopups.clear()
-                    mainHoshiLookupPopups.addAll(next)
-                    if (next.isEmpty()) {
-                        mainHoshiLookupCue = null
-                        mainHoshiLookupSelectedRange = null
-                        mainHoshiLookupAudioUri = null
-                        mainHoshiLookupTitle = ""
-                    }
-                },
-                lookupChildPopup = { selection ->
-                    mainHoshiLookupSession.createPopup(
-                        selection = selection,
-                        options = mainHoshiLookupOptions(showRangeSelection = false),
+        LookupPopupStackView(
+            popups = mainHoshiLookupPopups,
+            onPopupsChange = { next ->
+                mainHoshiLookupPopups.clear()
+                mainHoshiLookupPopups.addAll(next)
+                if (next.isEmpty()) {
+                    mainHoshiLookupCue = null
+                    mainHoshiLookupSelectedRange = null
+                    mainHoshiLookupAudioUri = null
+                    mainHoshiLookupTitle = ""
+                }
+            },
+            lookupChildPopup = { selection ->
+                mainHoshiLookupSession.createPopup(
+                    selection = selection,
+                    options = mainHoshiLookupOptions(showRangeSelection = false),
+                )
+            },
+            onLookupRedirect = { query ->
+                mainHoshiLookupSession.lookup(
+                    query,
+                    DictionarySettings().maxResults,
+                    DictionarySettings().scanLength,
+                )
+            },
+            onPlayWordAudio = { _url, term, reading ->
+                if (!term.isNullOrBlank()) {
+                    playLookupAudioForTerm(
+                        context = context,
+                        term = term,
+                        reading = reading,
+                        settings = audiobookSettings
                     )
-                },
-                onLookupRedirect = { query ->
-                    mainHoshiLookupSession.lookup(
-                        query,
-                        DictionarySettings().maxResults,
-                        DictionarySettings().scanLength,
-                    )
-                },
-                onPlayWordAudio = { _url, term, reading ->
-                    if (!term.isNullOrBlank()) {
-                        playLookupAudioForTerm(
-                            context = context,
-                            term = term,
-                            reading = reading,
-                            settings = audiobookSettings
-                        )
-                    }
-                },
-                onMineEntry = { content ->
-                    exportMainHoshiLookupEntryToAnki(content)
-                },
-                onDuplicateCheck = { expression -> checkMainAnkiDuplicate(expression) },
-                onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
-                onCloseAll = {
-                    clearMainHoshiChildPopups()
-                },
-                modifier = Modifier.fillMaxSize(),
-                onRootPopupDismissed = {
-                    clearMainHoshiChildPopups()
-                },
-            )
-        }
+                }
+            },
+            onMineEntry = { content ->
+                exportMainHoshiLookupEntryToAnki(content)
+            },
+            onDuplicateCheck = { expression -> checkMainAnkiDuplicate(expression) },
+            onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
+            onCloseAll = {
+                clearMainHoshiChildPopups()
+            },
+            modifier = Modifier.fillMaxSize(),
+            onRootPopupDismissed = {
+                clearMainHoshiChildPopups()
+            },
+        )
 
-            VersionEasterGifPopup(
-                visible = showVersionEasterGif && activeSection == MiningSection.SETTINGS,
-                bottomPadding = innerPadding.calculateBottomPadding(),
-                onDismiss = { showVersionEasterGif = false }
-            )
+        VersionEasterGifPopup(
+            visible = showVersionEasterGif && activeSection == MiningSection.SETTINGS,
+            bottomPadding = innerPadding.calculateBottomPadding(),
+            onDismiss = { showVersionEasterGif = false }
+        )
         }
     }
 }

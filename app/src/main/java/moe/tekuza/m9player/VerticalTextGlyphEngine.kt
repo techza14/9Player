@@ -93,6 +93,14 @@ internal object VerticalTextGlyphEngine {
         return ch in noColumnEndChars || presentationChar(ch) in noColumnEndChars
     }
 
+    fun isAsciiWordChar(ch: Char): Boolean {
+        return ch.code in 0x21..0x7E && !ch.isWhitespace()
+    }
+
+    fun isAsciiAssistToken(text: String): Boolean {
+        return text.length > 1 && text.all(::isAsciiWordChar)
+    }
+
     fun estimateCellWidth(paint: TextPaint): Float {
         val sampleWidth = maxOf(
             paint.measureText("国"),
