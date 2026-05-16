@@ -4,10 +4,8 @@
     <string name="playback_notification_channel_description">Book playback controls</string>
     <string name="playback_progress_template">%1$d%% · %2$s / %3$s</string>
     <string name="playback_progress_unknown">Progress unavailable</string>
-    <string name="common_back">&lt; 戻る</string>
     <string name="common_close">閉じる</string>
     <string name="common_close_all">すべて閉じる</string>
-    <string name="floating_lookup_from">元: %1$s</string>
     <string name="anki_toast_added">Anki に追加しました。</string>
     <string name="anki_toast_duplicate_skipped">Anki に重複カードがあるためスキップしました。</string>
     <string name="common_cancel">キャンセル</string>
@@ -19,13 +17,10 @@
     <string name="common_delete">削除</string>
     <string name="common_play">再生</string>
     <string name="common_pause">一時停止</string>
-    <string name="common_open">開く</string>
     <string name="common_lookup">辞書</string>
     <string name="common_loading">読み込み中...</string>
-    <string name="common_querying">検索中...</string>
     <string name="common_not_selected">未選択</string>
     <string name="common_unknown">不明</string>
-    <string name="common_audio">音声</string>
     <string name="common_empty_option">(空)</string>
     <string name="collections_title">お気に入り</string>
     <string name="collections_count">%1$d 件</string>
@@ -53,7 +48,6 @@
     <string name="settings_ebook_default_reader_subtitle">ebook 付きの本を本棚から開くとき、直接リーダーを開きます。</string>
     <string name="settings_other_title">実験的機能</string>
     <string name="settings_statistics_title">統計</string>
-    <string name="settings_statistics_subtitle">再生時間、進捗、テキスト密度</string>
     <string name="settings_update_title">アップデート</string>
     <string name="settings_font_title">フォント</string>
     <string name="settings_font_import">フォントをインポート</string>
@@ -113,9 +107,7 @@
     <string name="home_book_name">名前</string>
     <string name="home_no_books">まだ書籍がありません。</string>
     <string name="home_no_books_hint">+書籍 を押して、先にオーディオブックフォルダを選び、その後 audio/m4b を選択してください（SRT は任意）。</string>
-    <string name="home_has_subtitle">字幕あり</string>
     <string name="home_subtitle_attached">字幕付き</string>
-    <string name="home_no_subtitle">字幕なし</string>
     <string name="home_selected">選択済み</string>
     <string name="home_opened">開いている</string>
     <string name="dictionary_title">検索</string>
@@ -132,7 +124,6 @@
     <string name="dictionary_unloaded">未読み込み</string>
     <string name="dictionary_default_name">辞書 %1$d</string>
     <string name="dictionary_query_label">検索</string>
-    <string name="dictionary_query_button">検索</string>
     <string name="dictionary_querying">辞書を検索中...</string>
     <string name="dictionary_import_batch">%1$d/%2$d をインポート中：%3$s</string>
     <string name="dictionary_import_batch_suffix">%1$s（%2$d/%3$d）</string>
@@ -179,10 +170,7 @@
     <string name="statistics_export_progress">進捗：%1$d%%</string>
     <string name="statistics_export_listened">再生済み：%1$s</string>
     <string name="statistics_export_characters">文字：%1$s</string>
-    <string name="dictionary_page_title">辞書</string>
     <string name="dictionary_home_rich_mode_label">検索ページに辞書を表示</string>
-    <string name="dictionary_home_rich_mode_enabled">オン：検索ページに現在の辞書ページを表示します。</string>
-    <string name="dictionary_home_rich_mode_disabled">オフ：検索ページは入力欄のみ表示します。</string>
     <string name="mdx_error_no_file">このフォルダに .mdx ファイルがありません</string>
     <string name="mdx_error_prefix">エラー：%1$s</string>
     <string name="mdx_scanning">スキャン中...</string>
@@ -238,7 +226,6 @@
     <string name="status_books_deleted_with_failures">%1$d 冊を削除しました。ファイル削除失敗 %2$d 件、フォルダ削除失敗 %3$d 件。</string>
     <string name="status_pick_audiobook_folder_first">先にオーディオブックフォルダを選択してください。</string>
     <string name="status_pick_audio_first">音声ファイルを選択してください。</string>
-    <string name="status_pick_audio_before_ebook">先に音声を選択してから ebook を追加してください。</string>
     <string name="status_pick_audio_srt_before_ebook">先に音声と SRT を選択してから ebook を追加してください。</string>
     <string name="status_pick_ebook_file">TXT または EPUB ファイルを選択してください。</string>
     <string name="status_book_added">書籍を追加しました：%1$s。</string>
@@ -297,7 +284,6 @@
     <string name="add_book_pick_srt">SRT字幕を選択（任意）</string>
     <string name="add_book_ebook_label">ebook（任意）: %1$s</string>
     <string name="add_book_pick_ebook">TXT/EPUB を選択</string>
-    <string name="add_book_ebook_requires_audio">ebook を追加するには先に音声を選択してください。</string>
     <string name="add_book_ebook_requires_audio_srt">ebook を追加するには先に音声と SRT を選択してください。</string>
     <string name="lookup_audio_enable_first">先に設定 &gt; オーディオブックで検索音声を有効にしてください。</string>
     <string name="lookup_audio_empty_term">現在の語句が空のため再生できません。</string>
@@ -324,11 +310,7 @@
     <string name="audiobook_pause_on_lookup_enabled">有効：辞書表示時に再生を停止します。</string>
     <string name="audiobook_pause_on_lookup_disabled">無効：辞書表示時も再生を続けます。</string>
     <string name="audiobook_lookup_full_sentence">全文を出力</string>
-    <string name="audiobook_lookup_full_sentence_enabled">有効：Anki エクスポートで全文を使います。</string>
-    <string name="audiobook_lookup_full_sentence_disabled">無効：Anki エクスポートで現在の字幕文を使います。</string>
     <string name="audiobook_lookup_range_selection_enable">範囲選択を有効化</string>
-    <string name="audiobook_lookup_range_selection_enabled">有効：辞書ポップアップで文の範囲選択が使えます。</string>
-    <string name="audiobook_lookup_range_selection_disabled">無効：文の範囲選択を非表示にしました。</string>
     <string name="audiobook_lookup_root_full_width_enable">第一層ポップアップ全幅</string>
     <string name="audiobook_lookup_root_full_width_enabled">有効：書籍内の1層目辞書ポップアップのみ全幅で下側に表示します。</string>
     <string name="audiobook_lookup_root_full_width_disabled">無効：書籍内の辞書ポップアップは標準レイアウトを使います。</string>
@@ -387,16 +369,6 @@
     <string name="audiobook_overlay_subtitle_writing_mode">字幕表示方向</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">横書き</string>
     <string name="audiobook_overlay_subtitle_writing_mode_vertical_rtl">縦書き</string>
-    <string name="audiobook_ui_preview_title">プレビュー</string>
-    <string name="audiobook_ui_preview_subtitle">第一段階：通常のオーディオブック再生UIを表示。ドラッグと保存は次段階で対応。</string>
-    <string name="audiobook_ui_play_button_side">再生ボタン位置</string>
-    <string name="audiobook_ui_play_button_side_hint">設定は保存しました。次に実際のリーダー再生バーへ接続します。</string>
-    <string name="audiobook_ui_preview_text">オーディオブック字幕プレビュー</string>
-    <string name="audiobook_ui_open_preview">現在のオーディオブック画面プレビューを開く</string>
-    <string name="audiobook_ui_open_preview_hint">別のプレビュー UI は描画せず、既存のリーダー画面を再利用します。</string>
-    <string name="audiobook_ui_open_preview_need_active_book">先にオーディオブックを開いてから、ここに戻ってプレビューしてください。</string>
-    <string name="audiobook_ui_not_applied_yet">再生ボタン位置の設定を保存しました。次に実際の再生バーへ接続します。</string>
-    <string name="audiobook_ui_writing_mode_saved">字幕方向の設定を保存しました。</string>
     <string name="audiobook_unknown_file">不明なファイル</string>
     <string name="audiobook_import_stage_copy">ファイルをコピー中...</string>
     <string name="audiobook_import_stage_validate">データベースを検証中...</string>
@@ -466,9 +438,6 @@
     <string name="bookreader_ui_test_swap_swapped">進む/戻る: 入れ替え</string>
     <string name="bookreader_lookup_no_dict">辞書が読み込まれていません。ホームで先に辞書をインポートしてください。</string>
     <string name="bookreader_lookup_failed">検索失敗</string>
-    <string name="bookreader_anki_export_failed">Anki への追加に失敗しました。</string>
-    <string name="bookreader_meta_frequency">頻度</string>
-    <string name="bookreader_meta_pitch">アクセント</string>
     <string name="controller_title">コントローラー</string>
     <string name="controller_scheme_1_title">方式 1</string>
     <string name="controller_scheme_2_title">方式 2</string>
@@ -552,7 +521,6 @@
     <string name="anki_clear_field_variables">フィールド変数をクリア</string>
     <string name="anki_field_variable_help">{audio} は辞書音声、{cut-audio} は切り出し音声を書き出します。</string>
     <string name="anki_field_placeholder">プレースホルダーを入力するか、一覧から選択</string>
-    <string name="anki_duplicate_title">重複チェック</string>
     <string name="anki_duplicate_check_label">重複カードを確認</string>
     <string name="anki_duplicate_scope_label">重複範囲</string>
     <string name="anki_duplicate_scope_deck">現在のデッキ</string>

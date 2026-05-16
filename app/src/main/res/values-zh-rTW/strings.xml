@@ -4,10 +4,8 @@
     <string name="playback_notification_channel_description">Book playback controls</string>
     <string name="playback_progress_template">%1$d%% · %2$s / %3$s</string>
     <string name="playback_progress_unknown">Progress unavailable</string>
-    <string name="common_back">&lt; 返回</string>
     <string name="common_close">關閉</string>
     <string name="common_close_all">全部關閉</string>
-    <string name="floating_lookup_from">來自：%1$s</string>
     <string name="anki_toast_added">已加入 Anki。</string>
     <string name="anki_toast_duplicate_skipped">Anki 已有重複卡片，已略過。</string>
     <string name="common_cancel">取消</string>
@@ -18,13 +16,10 @@
     <string name="common_change">更改</string>
     <string name="common_delete">刪除</string>
     <string name="common_play">播放</string>
-    <string name="common_open">打開</string>
     <string name="common_lookup">查詞</string>
     <string name="common_loading">載入中...</string>
-    <string name="common_querying">查詢中...</string>
     <string name="common_not_selected">未選擇</string>
     <string name="common_unknown">未知</string>
-    <string name="common_audio">音訊</string>
     <string name="common_empty_option">(空)</string>
     <string name="collections_title">收藏</string>
     <string name="collections_count">共 %1$d 條</string>
@@ -52,7 +47,6 @@
     <string name="settings_ebook_default_reader_subtitle">有 ebook 的書從書架打開時直接進入閱讀器。</string>
     <string name="settings_other_title">實驗性功能</string>
     <string name="settings_statistics_title">統計</string>
-    <string name="settings_statistics_subtitle">聽書時長、進度和文字密度</string>
     <string name="settings_update_title">更新</string>
     <string name="settings_font_title">字體</string>
     <string name="settings_font_import">匯入字體</string>
@@ -112,8 +106,6 @@
     <string name="home_book_name">名稱</string>
     <string name="home_no_books">還沒有書籍。</string>
     <string name="home_no_books_hint">點擊 +書籍，先選擇有聲書資料夾，再選擇音訊/m4b（SRT 可選）。</string>
-    <string name="home_has_subtitle">有字幕</string>
-    <string name="home_no_subtitle">無字幕</string>
     <string name="home_selected">已選中</string>
     <string name="home_opened">已打開</string>
     <string name="dictionary_title">查詢</string>
@@ -130,7 +122,6 @@
     <string name="dictionary_unloaded">未載入</string>
     <string name="dictionary_default_name">辭典 %1$d</string>
     <string name="dictionary_query_label">查詞</string>
-    <string name="dictionary_query_button">查詢</string>
     <string name="dictionary_querying">正在查詢辭典...</string>
     <string name="dictionary_import_batch">匯入 %1$d/%2$d：%3$s</string>
     <string name="dictionary_import_batch_suffix">%1$s（%2$d/%3$d）</string>
@@ -177,10 +168,7 @@
     <string name="statistics_export_progress">進度：%1$d%%</string>
     <string name="statistics_export_listened">已聽：%1$s</string>
     <string name="statistics_export_characters">字元：%1$s</string>
-    <string name="dictionary_page_title">辭典</string>
     <string name="dictionary_home_rich_mode_label">查詢頁顯示辭典</string>
-    <string name="dictionary_home_rich_mode_enabled">已開啟：查詢頁顯示目前辭典頁面。</string>
-    <string name="dictionary_home_rich_mode_disabled">已關閉：查詢頁僅保留輸入查詞。</string>
     <string name="mdx_error_no_file">資料夾裡沒有 .mdx 檔案</string>
     <string name="mdx_error_prefix">錯誤：%1$s</string>
     <string name="mdx_scanning">掃描中...</string>
@@ -236,7 +224,6 @@
     <string name="status_books_deleted_with_failures">已刪書 %1$d 本；%2$d 個檔案刪除失敗，%3$d 個資料夾刪除失敗。</string>
     <string name="status_pick_audiobook_folder_first">請先選擇有聲書資料夾。</string>
     <string name="status_pick_audio_first">請選擇音訊檔案。</string>
-    <string name="status_pick_audio_before_ebook">請先選擇音訊，再新增 ebook。</string>
     <string name="status_pick_audio_srt_before_ebook">請先選擇音訊和 SRT，再新增 ebook。</string>
     <string name="status_pick_ebook_file">請選擇 TXT 或 EPUB 檔案。</string>
     <string name="status_book_added">已添加書籍：%1$s。</string>
@@ -295,7 +282,6 @@
     <string name="add_book_pick_srt">選擇字幕 SRT（可選）</string>
     <string name="add_book_ebook_label">ebook（可選）: %1$s</string>
     <string name="add_book_pick_ebook">選擇 TXT/EPUB</string>
-    <string name="add_book_ebook_requires_audio">先選擇音訊後才能新增 ebook。</string>
     <string name="add_book_ebook_requires_audio_srt">先選擇音訊和 SRT 後才能新增 ebook。</string>
     <string name="lookup_audio_enable_first">請先在設定 &gt; 有聲書啟用查詞播放音訊。</string>
     <string name="lookup_audio_empty_term">目前詞條為空，無法播放。</string>
@@ -322,11 +308,7 @@
     <string name="audiobook_pause_on_lookup_enabled">已開啟：點擊查詞時停止播放。</string>
     <string name="audiobook_pause_on_lookup_disabled">已關閉：點擊查詞時停止播放。</string>
     <string name="audiobook_lookup_full_sentence">輸出完整句子</string>
-    <string name="audiobook_lookup_full_sentence_enabled">已開啟：Anki 匯出時輸出完整句子。</string>
-    <string name="audiobook_lookup_full_sentence_disabled">已關閉：Anki 匯出時輸出目前字幕文字。</string>
     <string name="audiobook_lookup_range_selection_enable">開啟選取範圍功能</string>
-    <string name="audiobook_lookup_range_selection_enabled">已開啟：可在查詞彈窗中選取句子範圍。</string>
-    <string name="audiobook_lookup_range_selection_disabled">已關閉：已隱藏句子範圍功能。</string>
     <string name="audiobook_lookup_root_full_width_enable">首層彈窗全寬</string>
     <string name="audiobook_lookup_root_full_width_enabled">已開啟：僅書內第一層查詞彈窗全寬並顯示在下方。</string>
     <string name="audiobook_lookup_root_full_width_disabled">已關閉：書內查詞彈窗使用預設版面。</string>
@@ -385,16 +367,6 @@
     <string name="audiobook_overlay_subtitle_writing_mode">字幕書寫方向</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">橫書</string>
     <string name="audiobook_overlay_subtitle_writing_mode_vertical_rtl">縱書</string>
-    <string name="audiobook_ui_preview_title">介面預覽</string>
-    <string name="audiobook_ui_preview_subtitle">第一步：先顯示標準有聲書播放介面，之後再接拖動與保存。</string>
-    <string name="audiobook_ui_play_button_side">播放鍵位置</string>
-    <string name="audiobook_ui_play_button_side_hint">先保留選項，下一步會把它接入真實閱讀器播放列。</string>
-    <string name="audiobook_ui_preview_text">這是有聲書字幕預覽</string>
-    <string name="audiobook_ui_open_preview">打開目前有聲書介面預覽</string>
-    <string name="audiobook_ui_open_preview_hint">這裡將直接複用現有閱讀器介面，不再單獨重畫一套 UI。</string>
-    <string name="audiobook_ui_open_preview_need_active_book">請先打開一本有聲書，再返回這裡預覽。</string>
-    <string name="audiobook_ui_not_applied_yet">播放鍵左右位置設定已記錄，下一步接入真實播放列。</string>
-    <string name="audiobook_ui_writing_mode_saved">已儲存字幕方向設定。</string>
     <string name="audiobook_unknown_file">未知檔案</string>
     <string name="audiobook_import_stage_copy">複製檔案中...</string>
     <string name="audiobook_import_stage_validate">驗證資料庫中...</string>
@@ -459,9 +431,6 @@
     <string name="bookreader_open_bluetooth">打開手機藍牙介面</string>
     <string name="bookreader_lookup_no_dict">未載入辭典，請先在主頁匯入辭典。</string>
     <string name="bookreader_lookup_failed">查詢失敗</string>
-    <string name="bookreader_anki_export_failed">加入 Anki 失敗。</string>
-    <string name="bookreader_meta_frequency">詞頻</string>
-    <string name="bookreader_meta_pitch">音調</string>
     <string name="controller_title">手柄</string>
     <string name="controller_scheme_1_title">方案 1</string>
     <string name="controller_scheme_2_title">方案 2</string>
@@ -552,7 +521,6 @@
     <string name="bookreader_ui_test_layout_mode">佈局模式: %1$d/2</string>
     <string name="bookreader_ui_test_swap_normal">前進/後退: 正常</string>
     <string name="bookreader_ui_test_swap_swapped">前進/後退: 已交換</string>
-    <string name="anki_duplicate_title">重複檢查</string>
     <string name="anki_duplicate_check_label">檢查重複卡片</string>
     <string name="anki_duplicate_scope_label">重複範圍</string>
     <string name="anki_duplicate_scope_deck">目前牌組</string>

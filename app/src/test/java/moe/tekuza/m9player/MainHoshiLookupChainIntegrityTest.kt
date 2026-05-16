@@ -17,7 +17,7 @@ class MainHoshiLookupChainIntegrityTest {
     fun mainScreenKeepsNewHoshiLookupStack() {
         listOf(
             "LookupPopupStackView(",
-            "createLookupPopupItem(",
+            "mainHoshiLookupSession.createPopup(",
             "mainHoshiLookupPopups",
         ).forEach { requiredSymbol ->
             assertTrue("New Hoshi lookup stack must stay wired: $requiredSymbol", mainActivitySource.contains(requiredSymbol))

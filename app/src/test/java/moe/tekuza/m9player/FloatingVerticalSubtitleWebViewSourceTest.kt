@@ -15,6 +15,6 @@ class FloatingVerticalSubtitleWebViewSourceTest {
         assertTrue(source.contains("subtitleVerticalWebView?.apply"))
         assertTrue(source.contains("applyTypography("))
         assertTrue(source.contains("settings.floatingOverlaySubtitleColor,"))
-        assertTrue(source.contains("buildFloatingVerticalSubtitleHtml(text, color, sizeSp)"))
+        assertTrue(source.contains("buildFloatingVerticalSubtitleHtml(content, textColor, textSizeSp)"))
     }
 }

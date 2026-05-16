@@ -1313,6 +1313,9 @@ class LegadoReaderPrototypeActivity : AppCompatActivity() {
             putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, currentReaderTitle())
             putExtra(BookReaderActivity.EXTRA_AUDIO_URI, targetAudioUri.toString())
             putExtra(BookReaderActivity.EXTRA_SRT_URI, srtUri?.toString())
+            importedBook?.uri?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_URI, it.toString()) }
+            importedBook?.title?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_NAME, it) }
+            importedBook?.format?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_FORMAT, it) }
         }
         startActivity(intent)
     }

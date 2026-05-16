@@ -4,7 +4,6 @@
     <string name="replace">取代</string>
     <string name="setting">設定</string>
     <string name="interface_setting">介面</string>
-    <string name="brightness">亮度</string>
     <string name="chapter_list">目錄</string>
     <string name="next_chapter">下一章</string>
     <string name="previous_chapter">上一章</string>
@@ -35,7 +34,6 @@
     <string name="del_h_tag">刪除h標籤</string>
     <string name="key_page_on_long_press">按鍵長按翻頁</string>
     <string name="bookmark">書籤</string>
-    <string name="all_bookmark">所有書籤</string>
     <string name="search_content">全文搜尋</string>
     <string name="night_theme">夜間模式</string>
     <string name="page_touch_slop_title">滑動翻頁閾值</string>

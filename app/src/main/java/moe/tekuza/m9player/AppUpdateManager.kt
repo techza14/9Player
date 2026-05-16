@@ -2,7 +2,6 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -127,9 +126,7 @@ internal fun launchAppUpdateInstall(context: Context, apkFile: File): Boolean {
         setDataAndType(uri, "application/vnd.android.package-archive")
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
-        }
+        putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
     }
     return runCatching {
         context.startActivity(intent)

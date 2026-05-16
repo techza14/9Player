@@ -81,7 +81,7 @@ class LookupPopupHtmlShimTest {
     fun popupShellUsesWhiteBackgroundInLightMode() {
         val popupViewSource = File("src/main/java/moe/tekuza/m9player/hoshi/features/dictionary/LookupPopupView.kt").readText()
 
-        assertTrue(popupViewSource.contains("""val popupBackground = if (state.darkMode) Color.Black else HoshiCardBackground"""))
+        assertTrue(popupViewSource.contains("""val popupBackground = if (state.darkMode) HoshiDarkCardBackground else HoshiCardBackground"""))
     }
 
     @Test
@@ -113,7 +113,7 @@ class LookupPopupHtmlShimTest {
 
         assertTrue(colorSource.contains("""internal val HoshiPanelBackground = Color(0xFFEDF3FA)"""))
         assertTrue(colorSource.contains("""internal val HoshiCardBackground = Color(0xFFFFFFFF)"""))
-        assertTrue(popupViewSource.contains("""val popupBackground = if (state.darkMode) Color.Black else HoshiCardBackground"""))
+        assertTrue(popupViewSource.contains("""val popupBackground = if (state.darkMode) HoshiDarkCardBackground else HoshiCardBackground"""))
         assertTrue(htmlSource.contains("""--background-color: #ffffff;"""))
         assertTrue(htmlSource.contains("""background-color: #ffffff !important;"""))
         assertTrue(mainActivitySource.contains("""SpanStyle(background = Color(0x1FA0A0A0))"""))

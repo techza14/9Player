@@ -4,7 +4,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
-import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
@@ -17,7 +16,6 @@ import android.provider.Settings
 import android.util.Log
 import android.text.SpannableString
 import android.text.Spanned
-import android.text.TextPaint
 import android.text.TextUtils
 import android.text.style.BackgroundColorSpan
 import android.view.View.MeasureSpec
@@ -105,37 +103,6 @@ internal fun stopAudiobookFloatingOverlayService(context: Context) {
         action = AudiobookFloatingOverlayService.ACTION_HIDE
     }
     context.startService(intent)
-}
-
-private fun normalizeFloatingVerticalPunctuationText(text: String): String {
-    if (text.isEmpty()) return text
-    var changed = false
-    val out = StringBuilder(text.length)
-    text.forEach { ch ->
-        val mapped = when (ch) {
-            ',' -> '\uFE10'
-            '.' -> '\uFE12'
-            ':' -> '\uFE13'
-            ';' -> '\uFE14'
-            '!' -> '\uFE15'
-            '?' -> '\uFE16'
-            '(' -> '\uFE35'
-            ')' -> '\uFE36'
-            '[' -> '\uFE39'
-            ']' -> '\uFE3A'
-            '{' -> '\uFE37'
-            '}' -> '\uFE38'
-            '<' -> '\uFE3F'
-            '>' -> '\uFE40'
-            '\u2025' -> '\uFE30'
-            '\u2026', '\u22EF' -> '\uFE19'
-            '\u203B' -> '\uFE61'
-            else -> ch
-        }
-        if (mapped != ch) changed = true
-        out.append(mapped)
-    }
-    return if (changed) out.toString() else text
 }
 
 private fun buildFloatingVerticalSubtitleHtml(text: String, color: Int, textSizeSp: Float): String {
@@ -744,220 +711,6 @@ companion object {
         }
     }
 
-    private class VerticalLayoutTextView(context: Context) : AppCompatTextView(context) {
-        private var verticalEnabled: Boolean = false
-        private var selectedSourceRange: IntRange? = null
-        private var cachedLayout: VerticalSubtitleLayout? = null
-        private var cachedLayoutHeight: Int = -1
-        private var cachedLayoutText: String = ""
-        private var cachedLayoutTextSize: Float = Float.NaN
-        private var cachedLayoutTypeface: Typeface? = null
-
-        data class VerticalTapResolved(
-            val sourceOffset: Int,
-            val row: Int,
-            val column: Int,
-            val rectInWindow: android.graphics.RectF
-        )
-
-        fun setVerticalLayoutEnabled(enabled: Boolean) {
-            if (verticalEnabled == enabled) return
-            verticalEnabled = enabled
-            clearLayoutCache()
-            requestLayout()
-            invalidate()
-        }
-
-        fun isVerticalLayoutEnabled(): Boolean = verticalEnabled
-
-
-        fun setSelectedSourceRange(range: IntRange?) {
-            if (selectedSourceRange == range) return
-            selectedSourceRange = range
-            invalidate()
-        }
-
-        fun resolveVerticalTap(x: Float, y: Float): VerticalTapResolved? {
-            if (!verticalEnabled) return null
-            val layout = buildVerticalLayout(height) ?: return null
-            val contentX = x + scrollX
-            val contentY = y + scrollY
-            val hit = VerticalSubtitleLayoutEngine.hitTest(
-                contentX,
-                contentY,
-                width,
-                height,
-                layout,
-                TextPaint(paint)
-            ) ?: return null
-            val location = IntArray(2)
-            getLocationOnScreen(location)
-            return VerticalTapResolved(
-                sourceOffset = hit.sourceOffset,
-                row = hit.row,
-                column = hit.column,
-                rectInWindow = android.graphics.RectF(
-                    location[0] + hit.rect.left - scrollX,
-                    location[1] + hit.rect.top - scrollY,
-                    location[0] + hit.rect.right - scrollX,
-                    location[1] + hit.rect.bottom - scrollY
-                )
-            )
-        }
-
-        fun logVerticalTapDebug(tag: String, x: Float, y: Float, resolved: VerticalTapResolved) {
-            if (!verticalEnabled) return
-            val ch = text?.getOrNull(resolved.sourceOffset)?.toString().orEmpty()
-            Log.d(
-                tag,
-                "verticalTap scrollX=$scrollX scrollY=$scrollY x=${x.roundToInt()} y=${y.roundToInt()} contentX=${(x + scrollX).roundToInt()} contentY=${(y + scrollY).roundToInt()} row=${resolved.row} col=${resolved.column} sourceOffset=${resolved.sourceOffset} char='$ch' textSize=${textSize.roundToInt()} fontSpacing=${paint.fontSpacing.roundToInt()}"
-            )
-        }
-
-        fun computeSelectionRects(range: IntRange): List<Rect> {
-            if (!verticalEnabled) return emptyList()
-            val layout = buildVerticalLayout(height) ?: return emptyList()
-            val location = IntArray(2)
-            getLocationOnScreen(location)
-            return VerticalSubtitleLayoutEngine.selectionRects(range, width, height, layout, TextPaint(paint)).map { rect ->
-                Rect(
-                    left = location[0] + rect.left - scrollX,
-                    top = location[1] + rect.top - scrollY,
-                    right = location[0] + rect.right - scrollX,
-                    bottom = location[1] + rect.bottom - scrollY
-                )
-            }
-        }
-
-        fun getVerticalContentWidthPx(): Int {
-            if (!verticalEnabled) return width.coerceAtLeast(1)
-            val layout = buildVerticalLayout(height) ?: return width.coerceAtLeast(1)
-            return ceil(layout.contentWidth().toDouble()).toInt().coerceAtLeast(1)
-        }
-
-        fun getVerticalContentHeightPx(): Int {
-            if (!verticalEnabled) return height.coerceAtLeast(1)
-            val current = normalizeFloatingVerticalPunctuationText(text?.toString().orEmpty())
-            if (current.isBlank()) return height.coerceAtLeast(1)
-            val visibleChars = current.count { it != '\n' && it != '\r' }.coerceAtLeast(1)
-            val step = textSize.coerceAtLeast(1f)
-            return ceil(visibleChars * step.toDouble()).toInt().coerceAtLeast(height.coerceAtLeast(1))
-        }
-
-        override fun setText(text: CharSequence?, type: BufferType?) {
-            super.setText(text, type)
-            clearLayoutCache()
-        }
-
-        override fun setTextColor(color: Int) {
-            super.setTextColor(color)
-            invalidate()
-        }
-
-        override fun setPaintFlags(flags: Int) {
-            super.setPaintFlags(flags)
-            clearLayoutCache()
-            invalidate()
-        }
-
-        override fun setTypeface(tf: Typeface?) {
-            super.setTypeface(tf)
-            clearLayoutCache()
-            requestLayout()
-            invalidate()
-        }
-
-        override fun setTextSize(size: Float) {
-            super.setTextSize(size)
-            clearLayoutCache()
-            requestLayout()
-            invalidate()
-        }
-
-        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            if (!verticalEnabled) {
-                super.onMeasure(widthMeasureSpec, heightMeasureSpec)
-                return
-            }
-            val heightSize = MeasureSpec.getSize(heightMeasureSpec)
-            val measuredHeight = if (heightSize > 0) {
-                heightSize
-            } else {
-                (textSize * 12f).roundToInt().coerceAtLeast(1)
-            }
-            val desiredWidth = buildVerticalLayout(measuredHeight)?.let {
-                ceil(it.contentWidth().toDouble()).toInt().coerceAtLeast(1)
-            } ?: 1
-            val measuredWidth = resolveSize(desiredWidth, widthMeasureSpec)
-            setMeasuredDimension(measuredWidth, resolveSize(measuredHeight, heightMeasureSpec))
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            if (!verticalEnabled) {
-                super.onDraw(canvas)
-                return
-            }
-            drawSelectionBackground(canvas)
-            val layout = buildVerticalLayout(height) ?: return
-            canvas.save()
-            canvas.translate(-scrollX.toFloat(), -scrollY.toFloat())
-            VerticalSubtitleLayoutEngine.draw(canvas, TextPaint(paint), layout, width, height)
-            canvas.restore()
-        }
-
-        private fun buildVerticalLayout(targetHeight: Int): VerticalSubtitleLayout? {
-            val current = normalizeFloatingVerticalPunctuationText(text?.toString().orEmpty())
-            if (current.isBlank() || targetHeight <= 0) return null
-            if (cachedLayout != null &&
-                cachedLayoutHeight == targetHeight &&
-                cachedLayoutText == current &&
-                cachedLayoutTextSize == textSize &&
-                cachedLayoutTypeface == typeface
-            ) {
-                return cachedLayout
-            }
-            val layoutPaint = TextPaint(paint).apply {
-                color = currentTextColor
-                typeface = this@VerticalLayoutTextView.typeface
-                textSize = this@VerticalLayoutTextView.textSize
-                isAntiAlias = true
-            }
-            cachedLayout = VerticalSubtitleLayoutEngine.build(
-                current,
-                layoutPaint,
-                targetHeight,
-                textSize.coerceAtLeast(1f)
-            )
-            cachedLayoutHeight = targetHeight
-            cachedLayoutText = current
-            cachedLayoutTextSize = textSize
-            cachedLayoutTypeface = typeface
-            return cachedLayout
-        }
-
-        private fun drawSelectionBackground(canvas: Canvas) {
-            val range = selectedSourceRange ?: return
-            val highlightPaint = Paint().apply {
-                color = android.graphics.Color.argb(0x66, 0xA0, 0xA0, 0xA0)
-                style = Paint.Style.FILL
-                isAntiAlias = true
-            }
-            val layout = buildVerticalLayout(height) ?: return
-            VerticalSubtitleLayoutEngine.selectionRects(range, width, height, layout, TextPaint(paint)).forEach { rect ->
-                canvas.drawRect(rect.left - scrollX, rect.top - scrollY, rect.right - scrollX, rect.bottom - scrollY, highlightPaint)
-            }
-        }
-
-        private fun clearLayoutCache() {
-            cachedLayout = null
-            cachedLayoutHeight = -1
-            cachedLayoutText = ""
-            cachedLayoutTextSize = Float.NaN
-            cachedLayoutTypeface = null
-        }
-
-    }
-
     private val playbackListener = object : BookReaderFloatingBridge.PlaybackStateListener {
         override fun onPlaybackStateChanged(isPlaying: Boolean) {
             updateBubbleIcon(isPlaying)
@@ -1210,7 +963,7 @@ companion object {
             }
         )
 
-        val subtitleOutlineText = VerticalLayoutTextView(this).apply {
+        val subtitleOutlineText = AppCompatTextView(this).apply {
             setLineSpacing(0f, 1.08f)
             maxLines = 3
             ellipsize = null
@@ -1223,11 +976,10 @@ companion object {
             )
             isClickable = false
             isFocusable = false
-            setVerticalLayoutEnabled(verticalWriting)
         }
         subtitleOutlineTextView = subtitleOutlineText
 
-        val subtitleText = VerticalLayoutTextView(this).apply {
+        val subtitleText = AppCompatTextView(this).apply {
             setLineSpacing(0f, 1.08f)
             maxLines = 3
             ellipsize = null
@@ -1252,7 +1004,6 @@ companion object {
                     }
                 )
             )
-            setVerticalLayoutEnabled(verticalWriting)
         }
         subtitleTextView = subtitleText
         val subtitleVerticalWeb = FloatingVerticalSubtitleWebView(this).apply {
@@ -1886,21 +1637,6 @@ companion object {
             return
         }
         if (subtitle == null) return
-        if (verticalWriting && subtitle is VerticalLayoutTextView) {
-            val resolved = subtitle.resolveVerticalTap(event.x, event.y) ?: return
-            subtitle.logVerticalTapDebug(FLOATING_SUBTITLE_HIT_LOG_TAG, event.x, event.y, resolved)
-            val rect = resolved.rectInWindow
-            performFloatingLookup(
-                resolved.sourceOffset,
-                Rect(
-                    left = rect.left,
-                    top = rect.top,
-                    right = rect.right,
-                    bottom = rect.bottom
-                )
-            )
-            return
-        }
         val layout = subtitle.layout ?: return
         val x = (event.x - subtitle.totalPaddingLeft).coerceAtLeast(0f)
         val y = (event.y - subtitle.totalPaddingTop + subtitle.scrollY).coerceAtLeast(0f)
@@ -2014,13 +1750,7 @@ companion object {
         val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
         val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleTimeline()
         val normalized = text?.trim()?.takeIf { it.isNotEmpty() }
-        val displayText = normalized?.let {
-            if (verticalWriting) {
-                normalizeFloatingVerticalPunctuationText(it)
-            } else {
-                formatFloatingSubtitleDisplayText(it, settings.floatingOverlaySubtitleWritingMode)
-            }
-        }
+        val displayText = normalized
         if (!subtitleEnabledByData || normalized == null) {
             subtitle.animate().cancel()
             subtitle.text = ""
@@ -2262,8 +1992,6 @@ companion object {
             verticalWeb?.bindText(baseText, settings.floatingOverlaySubtitleColor, settings.floatingOverlaySubtitleSizeSp.toFloat())
             verticalWeb?.setSelectedSourceRange(selectedRange)
             verticalWeb?.visibility = View.VISIBLE
-            (subtitle as? VerticalLayoutTextView)?.setSelectedSourceRange(selectedRange)
-            (outline as? VerticalLayoutTextView)?.setSelectedSourceRange(selectedRange)
             subtitle?.text = ""
             subtitle?.visibility = View.GONE
             outline?.text = ""
@@ -2273,8 +2001,6 @@ companion object {
         if (subtitle == null) return
         verticalWeb?.setSelectedSourceRange(null)
         verticalWeb?.visibility = View.GONE
-        (subtitle as? VerticalLayoutTextView)?.setSelectedSourceRange(null)
-        (outline as? VerticalLayoutTextView)?.setSelectedSourceRange(null)
         if (selectedRange == null || selectedRange.first !in baseText.indices) {
             subtitle.text = baseText
             outline?.text = baseText
@@ -2296,26 +2022,6 @@ companion object {
         subtitle.text = spannable
         outline?.text = baseText
     }
-
-    private fun formatFloatingSubtitleDisplayText(
-        text: String,
-        mode: FloatingSubtitleWritingMode
-    ): String {
-        if (mode == FloatingSubtitleWritingMode.HORIZONTAL) return text
-        val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
-        return normalized
-            .lines()
-            .joinToString("\n\n") { line ->
-                line.map { ch ->
-                    when (ch) {
-                        ' ' -> '\u3000'
-                        '\t' -> '\u3000'
-                        else -> ch
-                    }
-                }.joinToString("\n")
-            }
-    }
-
 
     private fun updateFloatingLookupPanelPosition() {
         rootView?.post { alignOverlayWindow(force = false) }
@@ -2371,14 +2077,6 @@ companion object {
     }
 
     private fun computeSubtitleAnchorRects(subtitle: TextView, range: IntRange): List<Rect> {
-        if (subtitle is VerticalLayoutTextView && subtitle.isVerticalLayoutEnabled()) {
-            val rects = subtitle.computeSelectionRects(range)
-            Log.d(
-                FLOATING_SUBTITLE_HIT_LOG_TAG,
-                "subtitleAnchor vertical range=${range.first}..${range.last} rects=${rects.size} subtitleSize=${subtitle.width}x${subtitle.height}"
-            )
-            return rects
-        }
         val layout = subtitle.layout ?: return emptyList()
         val text = subtitle.text ?: return emptyList()
         if (text.isEmpty()) return emptyList()

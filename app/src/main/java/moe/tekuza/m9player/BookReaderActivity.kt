@@ -152,11 +152,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
-import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
 import moe.tekuza.m9player.ui.theme.TsetTheme
 import moe.tekuza.m9player.hoshi.features.dictionary.DictionarySettings
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
@@ -566,7 +564,6 @@ private fun BookReaderScreen(
     var bottomControlsVisible by remember { mutableStateOf(true) }
     var topActionsExpanded by remember { mutableStateOf(false) }
     var speedMenuExpanded by remember { mutableStateOf(false) }
-    var playbackModeMenuExpanded by remember { mutableStateOf(false) }
     var sleepTimerDeadlineMs by remember { mutableStateOf<Long?>(null) }
     var sleepTimerOptionsVisible by remember { mutableStateOf(false) }
     var sleepCustomMinutesInput by remember { mutableStateOf("") }
@@ -874,16 +871,20 @@ private fun BookReaderScreen(
         cueLoopEnabled,
         cueLoopWindow,
         audiobookSettings.readerPlaybackMode,
-        cues
+        cues,
+        dragPreviewPositionMs
     ) {
         if (!isPlaying) {
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = if (player.duration > 0L) player.duration else 0L
             return@LaunchedEffect
         }
+        var lastCueIndex = findBookCueIndexAtTime(cues, player.currentPosition.coerceAtLeast(0L))
+        var condensedSkipBlockedUntilMs = 0L
         while (true) {
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = if (player.duration > 0L) player.duration else 0L
+            val currentCueIndex = findBookCueIndexAtTime(cues, positionMs)
             if (cueLoopEnabled) {
                 val window = cueLoopWindow
                 if (window != null) {
@@ -895,12 +896,24 @@ private fun BookReaderScreen(
                     }
                 }
             } else if (audiobookSettings.readerPlaybackMode == ReaderPlaybackMode.CONDENSED) {
-                val target = findCondensedPlaybackSeekTarget(cues, positionMs)
-                if (target != null) {
+                val nowMs = SystemClock.elapsedRealtime()
+                val target = findCondensedPlaybackSeekTarget(
+                    cues = cues,
+                    previousCueIndex = lastCueIndex,
+                    currentCueIndex = currentCueIndex,
+                    timeMs = positionMs
+                )
+                if (
+                    target != null &&
+                    dragPreviewPositionMs == null &&
+                    nowMs >= condensedSkipBlockedUntilMs
+                ) {
+                    condensedSkipBlockedUntilMs = nowMs + 1_000L
                     player.seekTo(target)
                     positionMs = target
                 }
             }
+            lastCueIndex = currentCueIndex
             delay(250L)
         }
     }
@@ -2192,6 +2205,9 @@ private fun BookReaderScreen(
                     putExtra(BookReaderActivity.EXTRA_AUDIO_URI, audioUri?.toString())
                     putExtra(BookReaderActivity.EXTRA_SRT_URI, srtUri?.toString())
                     putExtra(BookReaderActivity.EXTRA_COVER_URI, coverUri?.toString())
+                    ebookUri?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_URI, it.toString()) }
+                    ebookName?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_NAME, it) }
+                    ebookFormat?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_FORMAT, it) }
                 }
                 context.startActivity(intent)
             }
@@ -2588,41 +2604,6 @@ private fun BookReaderScreen(
                         }
                     }
                     Box {
-                        TextButton(
-                            enabled = hasSubtitleFile,
-                            onClick = { playbackModeMenuExpanded = true }
-                        ) {
-                            Text(
-                                when (audiobookSettings.readerPlaybackMode) {
-                                    ReaderPlaybackMode.NORMAL -> stringResource(R.string.bookreader_playback_mode_normal_label)
-                                    ReaderPlaybackMode.CONDENSED -> stringResource(R.string.bookreader_playback_mode_condensed_label)
-                                },
-                                maxLines = 1
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = playbackModeMenuExpanded,
-                            onDismissRequest = { playbackModeMenuExpanded = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.bookreader_playback_mode_normal)) },
-                                onClick = {
-                                    saveAudiobookReaderPlaybackMode(context, ReaderPlaybackMode.NORMAL)
-                                    audiobookSettings = loadAudiobookSettingsConfig(context)
-                                    playbackModeMenuExpanded = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.bookreader_playback_mode_condensed)) },
-                                onClick = {
-                                    saveAudiobookReaderPlaybackMode(context, ReaderPlaybackMode.CONDENSED)
-                                    audiobookSettings = loadAudiobookSettingsConfig(context)
-                                    playbackModeMenuExpanded = false
-                                }
-                            )
-                        }
-                    }
-                    Box {
                         TextButton(onClick = { topActionsExpanded = true }) {
                             Text("...")
                         }
@@ -2673,6 +2654,26 @@ private fun BookReaderScreen(
                                     }
                                 )
                             }
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        when (audiobookSettings.readerPlaybackMode) {
+                                            ReaderPlaybackMode.NORMAL -> stringResource(R.string.bookreader_playback_mode_normal_label)
+                                            ReaderPlaybackMode.CONDENSED -> stringResource(R.string.bookreader_playback_mode_condensed_label)
+                                        }
+                                    )
+                                },
+                                onClick = {
+                                    val nextMode = when (audiobookSettings.readerPlaybackMode) {
+                                        ReaderPlaybackMode.NORMAL -> ReaderPlaybackMode.CONDENSED
+                                        ReaderPlaybackMode.CONDENSED -> ReaderPlaybackMode.NORMAL
+                                    }
+                                    saveAudiobookReaderPlaybackMode(context, nextMode)
+                                    audiobookSettings = loadAudiobookSettingsConfig(context)
+                                    topActionsExpanded = false
+                                },
+                                enabled = hasSubtitleFile
+                            )
                             DropdownMenuItem(
                                 text = {
                                     Text(
@@ -4248,13 +4249,12 @@ private class VerticalSubtitleView(context: Context) : android.view.View(context
     private var cachedTypeface: Typeface? = null
 
     fun bind(newText: String, color: Int, sizePx: Float, typeface: Typeface?) {
-        val normalizedText = normalizeVerticalPunctuation(newText)
-        val changed = content != normalizedText ||
+        val changed = content != newText ||
             paint.color != color ||
             paint.textSize != sizePx ||
             paint.typeface != typeface
         if (!changed) return
-        content = normalizedText
+        content = newText
         paint.color = color
         paint.textSize = sizePx
         paint.typeface = typeface
@@ -4343,8 +4343,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         onSelectionAnchorChanged: ((ReaderLookupAnchor?) -> Unit)?,
         onTap: (sourceOffset: Int, rectInWindow: android.graphics.RectF) -> Unit
     ) {
-        val normalizedText = normalizeVerticalPunctuation(newText)
-        val changed = content != normalizedText ||
+        val changed = content != newText ||
             paint.color != color ||
             paint.textSize != sizePx ||
             paint.typeface != typeface ||
@@ -4355,7 +4354,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         this.selectedSourceRange = selectedSourceRange
         this.onSelectionAnchorChanged = onSelectionAnchorChanged
         if (!changed) return
-        content = normalizedText
+        content = newText
         paint.color = color
         paint.textSize = sizePx
         paint.typeface = typeface
@@ -4751,44 +4750,6 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         )
     }
 }
-
-private fun normalizeVerticalPunctuation(text: String): String {
-    if (text.isEmpty()) return text
-    var changed = false
-    val out = StringBuilder(text.length)
-    text.forEach { ch ->
-        val mapped = when (ch) {
-            '\u3001' -> '\uFE11' // ︑
-            '\u3002' -> '\uFE12' // ︒
-            ',' -> '\uFE10' // ︐
-            '.' -> '\uFE12' // ︒
-            ':' -> '\uFE13' // ︓
-            ';' -> '\uFE14' // ︔
-            '!' -> '\uFE15' // ︕
-            '?' -> '\uFE16' // ︖
-            '(' -> '\uFE35' // ︵
-            ')' -> '\uFE36' // ︶
-            '[' -> '\uFE39' // ︹
-            ']' -> '\uFE3A' // ︺
-            '{' -> '\uFE37' // ︷
-            '}' -> '\uFE38' // ︸
-            '<' -> '\uFE3F' // ︿
-            '>' -> '\uFE40' // ﹀
-            '\u2025' // ‥
-            -> '\uFE30' // ︰
-            '\u2026', // …
-            '\u22EF'  // ⋯
-            -> '\uFE19' // ︙ Vertical ellipsis
-            '\u203B' // ※
-            -> '\uFE61' // ﹡
-            else -> ch
-        }
-        if (mapped != ch) changed = true
-        out.append(mapped)
-    }
-    return if (changed) out.toString() else text
-}
-
 
 private fun mergeRects(rects: List<Rect>): Rect {
     return Rect(
@@ -5329,13 +5290,18 @@ private fun findBookDisplayCueIndexAtTime(cues: List<ReaderSubtitleCue>, timeMs:
     return findCueIndexAtOrBeforeTime(cues, timeMs)
 }
 
-private fun findCondensedPlaybackSeekTarget(cues: List<ReaderSubtitleCue>, timeMs: Long): Long? {
+private fun findCondensedPlaybackSeekTarget(
+    cues: List<ReaderSubtitleCue>,
+    previousCueIndex: Int,
+    currentCueIndex: Int,
+    timeMs: Long
+): Long? {
     if (cues.isEmpty()) return null
-    if (findBookCueIndexAtTime(cues, timeMs) >= 0) return null
-    val nextIndex = findCueIndexAtOrAfterTime(cues, timeMs)
-    if (nextIndex < 0) return null
+    if (previousCueIndex !in cues.indices || currentCueIndex >= 0) return null
+    val nextIndex = previousCueIndex + 1
+    if (nextIndex !in cues.indices) return null
     val target = cues[nextIndex].startMs.coerceAtLeast(0L)
-    return if (target - timeMs > 120L) target else null
+    return if (abs(timeMs - target) > 2_000L) target else null
 }
 
 private fun findCueIndexAtOrBeforeTime(cues: List<ReaderSubtitleCue>, timeMs: Long): Int {

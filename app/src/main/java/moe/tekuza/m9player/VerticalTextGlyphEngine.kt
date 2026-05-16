@@ -33,15 +33,65 @@ internal object VerticalTextGlyphEngine {
         '﹁', '﹂', '﹃', '﹄', '︙'
     )
 
-    val noColumnStartChars: Set<Char> = setOf(
+    private val noColumnStartChars: Set<Char> = setOf(
         '、', '。', '，', '．', '.', ',', '：', '；', ':', ';',
         '！', '？', '）', ')', ']', '】', '}', '』', '」', '》', '〉',
-        '…', '—', '―', '～', '〜'
+        '…', '—', '―', '～', '〜',
+        '︑', '︒', '︐', '︓', '︔', '︕', '︖', '︶', '︺', '︸', '﹀',
+        '︙', '︰', '﹡'
     )
 
-    val noColumnEndChars: Set<Char> = setOf(
-        '「', '『', '（', '(', '[', '{', '【', '〔', '〈', '《', '＜'
+    private val noColumnEndChars: Set<Char> = setOf(
+        '「', '『', '（', '(', '[', '{', '【', '〔', '〈', '《', '＜',
+        '︵', '︹', '︷', '︿'
     )
+
+    private fun presentationChar(ch: Char): Char = when (ch) {
+        '\u3001' -> '\uFE11'
+        '\u3002' -> '\uFE12'
+        ',' -> '\uFE10'
+        '.' -> '\uFE12'
+        ':' -> '\uFE13'
+        ';' -> '\uFE14'
+        '!' -> '\uFE15'
+        '?' -> '\uFE16'
+        '(' -> '\uFE35'
+        ')' -> '\uFE36'
+        '[' -> '\uFE39'
+        ']' -> '\uFE3A'
+        '{' -> '\uFE37'
+        '}' -> '\uFE38'
+        '<' -> '\uFE3F'
+        '>' -> '\uFE40'
+        '\u2025' -> '\uFE30'
+        '\u2026', '\u22EF' -> '\uFE19'
+        '\u203B' -> '\uFE61'
+        else -> ch
+    }
+
+    private fun presentationText(text: String): String {
+        if (text.isEmpty()) return text
+        if (text.length == 1) {
+            val mapped = presentationChar(text[0])
+            return if (mapped == text[0]) text else mapped.toString()
+        }
+        var changed = false
+        val out = StringBuilder(text.length)
+        text.forEach { ch ->
+            val mapped = presentationChar(ch)
+            if (mapped != ch) changed = true
+            out.append(mapped)
+        }
+        return if (changed) out.toString() else text
+    }
+
+    fun isNoColumnStart(ch: Char): Boolean {
+        return ch in noColumnStartChars || presentationChar(ch) in noColumnStartChars
+    }
+
+    fun isNoColumnEnd(ch: Char): Boolean {
+        return ch in noColumnEndChars || presentationChar(ch) in noColumnEndChars
+    }
 
     fun estimateCellWidth(paint: TextPaint): Float {
         val sampleWidth = maxOf(
@@ -53,38 +103,40 @@ internal object VerticalTextGlyphEngine {
     }
 
     fun draw(canvas: Canvas, sourcePaint: TextPaint, text: String, rect: RectF) {
-        if (text.isEmpty()) return
+        val displayText = presentationText(text)
+        if (displayText.isEmpty()) return
         val paint = TextPaint(sourcePaint).apply {
             textAlign = Paint.Align.CENTER
             isAntiAlias = true
         }
         val baselineAdjust = -(paint.ascent() + paint.descent()) * 0.5f
-        when (val ch = text.first()) {
-            in topRightPunctuation -> drawTopRightPunctuation(canvas, paint, text, rect)
-            in smallKana -> drawSmallKana(canvas, paint, text, rect)
-            in centerPunctuation -> drawOffsetText(canvas, paint, text, rect, baselineAdjust, 0f, -paint.textSize * 0.04f)
-            else -> drawRotatableText(canvas, paint, text, rect, baselineAdjust)
+        when (val ch = displayText.first()) {
+            in topRightPunctuation -> drawTopRightPunctuation(canvas, paint, displayText, rect)
+            in smallKana -> drawSmallKana(canvas, paint, displayText, rect)
+            in centerPunctuation -> drawOffsetText(canvas, paint, displayText, rect, baselineAdjust, 0f, -paint.textSize * 0.04f)
+            else -> drawRotatableText(canvas, paint, displayText, rect, baselineAdjust)
         }
     }
 
     fun inkRect(sourcePaint: TextPaint, text: String, rect: RectF): RectF {
-        if (text.isEmpty()) return rect
+        val displayText = presentationText(text)
+        if (displayText.isEmpty()) return rect
         val paint = TextPaint(sourcePaint).apply {
             textAlign = Paint.Align.CENTER
             isAntiAlias = true
         }
         val baselineAdjust = -(paint.ascent() + paint.descent()) * 0.5f
-        val rawRect = when (val ch = text.first()) {
-            in topRightPunctuation -> topRightPunctuationInkRect(paint, text, rect)
-            in smallKana -> smallKanaInkRect(paint, text, rect)
-            in centerPunctuation -> offsetInkRect(paint, text, rect, baselineAdjust, 0f, -paint.textSize * 0.04f)
-            else -> rotatableInkRect(paint, text, rect, baselineAdjust)
+        val rawRect = when (val ch = displayText.first()) {
+            in topRightPunctuation -> topRightPunctuationInkRect(paint, displayText, rect)
+            in smallKana -> smallKanaInkRect(paint, displayText, rect)
+            in centerPunctuation -> offsetInkRect(paint, displayText, rect, baselineAdjust, 0f, -paint.textSize * 0.04f)
+            else -> rotatableInkRect(paint, displayText, rect, baselineAdjust)
         }
         return clampAndPadInkRect(rawRect, rect, paint.textSize)
     }
 
     fun rotationFor(text: String): Float {
-        val ch = text.firstOrNull() ?: return 0f
+        val ch = text.firstOrNull()?.let(::presentationChar) ?: return 0f
         return when {
             ch in 'A'..'Z' || ch in 'a'..'z' -> 90f
             ch in '0'..'9' -> 0f
@@ -95,7 +147,7 @@ internal object VerticalTextGlyphEngine {
     }
 
     fun shouldMirrorAfterRotation(text: String): Boolean {
-        return text.firstOrNull() in setOf('ー', '〜', '～')
+        return text.firstOrNull()?.let(::presentationChar) in setOf('ー', '〜', '～')
     }
 
     private fun offsetInkRect(

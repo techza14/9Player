@@ -4,7 +4,6 @@
     <string name="replace">置換</string>
     <string name="setting">設定</string>
     <string name="interface_setting">画面</string>
-    <string name="brightness">明るさ</string>
     <string name="chapter_list">目次</string>
     <string name="next_chapter">次の章</string>
     <string name="previous_chapter">前の章</string>
@@ -35,7 +34,6 @@
     <string name="del_h_tag">hタグを削除</string>
     <string name="key_page_on_long_press">長押しでページ送り</string>
     <string name="bookmark">しおり</string>
-    <string name="all_bookmark">すべてのしおり</string>
     <string name="search_content">本文検索</string>
     <string name="night_theme">夜間模式</string>
     <string name="page_touch_slop_title">スライドでページ送りのしきい値</string>

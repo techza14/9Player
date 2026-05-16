@@ -4,10 +4,8 @@
     <string name="playback_notification_channel_description">Book playback controls</string>
     <string name="playback_progress_template">%1$d%% · %2$s / %3$s</string>
     <string name="playback_progress_unknown">Progress unavailable</string>
-    <string name="common_back">&lt; Back</string>
     <string name="common_close">Close</string>
     <string name="common_close_all">Close all</string>
-    <string name="floating_lookup_from">From: %1$s</string>
     <string name="anki_toast_added">Added to Anki.</string>
     <string name="anki_toast_duplicate_skipped">Anki already has a duplicate card, skipped.</string>
     <string name="common_cancel">Cancel</string>
@@ -18,13 +16,10 @@
     <string name="common_change">Change</string>
     <string name="common_delete">Delete</string>
     <string name="common_play">Play</string>
-    <string name="common_open">Open</string>
     <string name="common_lookup">Lookup</string>
     <string name="common_loading">Loading...</string>
-    <string name="common_querying">Searching...</string>
     <string name="common_not_selected">Not selected</string>
     <string name="common_unknown">Unknown</string>
-    <string name="common_audio">Audio</string>
     <string name="common_empty_option">(empty)</string>
     <string name="collections_title">Bookmarks</string>
     <string name="collections_count">%1$d items</string>
@@ -52,7 +47,6 @@
     <string name="settings_ebook_default_reader_subtitle">Open books with an ebook attachment directly in the reader from the bookshelf.</string>
     <string name="settings_other_title">Experimental features</string>
     <string name="settings_statistics_title">Statistics</string>
-    <string name="settings_statistics_subtitle">Listening time, progress, and text density</string>
     <string name="settings_update_title">Updates</string>
     <string name="settings_font_title">Font</string>
     <string name="settings_font_import">Import font</string>
@@ -112,8 +106,6 @@
     <string name="home_book_name">Name</string>
     <string name="home_no_books">No books yet.</string>
     <string name="home_no_books_hint">Tap +Book, choose the audiobook folder first, then choose audio/m4b (SRT optional).</string>
-    <string name="home_has_subtitle">With subtitles</string>
-    <string name="home_no_subtitle">No subtitles</string>
     <string name="home_selected">Selected</string>
     <string name="home_opened">Opened</string>
     <string name="dictionary_title">Lookup</string>
@@ -130,7 +122,6 @@
     <string name="dictionary_unloaded">Not loaded</string>
     <string name="dictionary_default_name">Dictionary %1$d</string>
     <string name="dictionary_query_label">Lookup</string>
-    <string name="dictionary_query_button">Search</string>
     <string name="dictionary_querying">Searching dictionaries...</string>
     <string name="dictionary_import_batch">Importing %1$d/%2$d: %3$s</string>
     <string name="dictionary_import_batch_suffix">%1$s (%2$d/%3$d)</string>
@@ -177,10 +168,7 @@
     <string name="statistics_export_progress">Progress: %1$d%%</string>
     <string name="statistics_export_listened">Listened: %1$s</string>
     <string name="statistics_export_characters">Characters: %1$s</string>
-    <string name="dictionary_page_title">Dictionary</string>
     <string name="dictionary_home_rich_mode_label">Show dictionaries on lookup page</string>
-    <string name="dictionary_home_rich_mode_enabled">On: the lookup page shows the current dictionary page.</string>
-    <string name="dictionary_home_rich_mode_disabled">Off: the lookup page keeps only the lookup input.</string>
     <string name="mdx_error_no_file">No .mdx file found in this folder</string>
     <string name="mdx_error_prefix">Error: %1$s</string>
     <string name="mdx_scanning">Scanning...</string>
@@ -236,7 +224,6 @@
     <string name="status_books_deleted_with_failures">Deleted %1$d books; %2$d file deletions failed, %3$d folder deletions failed.</string>
     <string name="status_pick_audiobook_folder_first">Choose the audiobook folder first.</string>
     <string name="status_pick_audio_first">Choose an audio file.</string>
-    <string name="status_pick_audio_before_ebook">Choose audio before adding an ebook.</string>
     <string name="status_pick_audio_srt_before_ebook">Choose audio and SRT before adding an ebook.</string>
     <string name="status_pick_ebook_file">Choose a TXT or EPUB file.</string>
     <string name="status_book_added">Added book: %1$s.</string>
@@ -295,7 +282,6 @@
     <string name="add_book_pick_srt">Choose SRT subtitle (optional)</string>
     <string name="add_book_ebook_label">ebook (optional): %1$s</string>
     <string name="add_book_pick_ebook">Choose TXT/EPUB</string>
-    <string name="add_book_ebook_requires_audio">Choose audio before adding an ebook.</string>
     <string name="add_book_ebook_requires_audio_srt">Choose audio and SRT before adding an ebook.</string>
     <string name="lookup_audio_enable_first">Enable lookup audio first in Settings &gt; Audiobooks.</string>
     <string name="lookup_audio_empty_term">The current term is empty and cannot be played.</string>
@@ -322,11 +308,7 @@
     <string name="audiobook_pause_on_lookup_enabled">Enabled: playback pauses on lookup.</string>
     <string name="audiobook_pause_on_lookup_disabled">Disabled: playback keeps running on lookup.</string>
     <string name="audiobook_lookup_full_sentence">Export full sentence</string>
-    <string name="audiobook_lookup_full_sentence_enabled">Enabled: Anki export uses the full sentence.</string>
-    <string name="audiobook_lookup_full_sentence_disabled">Disabled: Anki export uses the current subtitle text.</string>
     <string name="audiobook_lookup_range_selection_enable">Enable range selection</string>
-    <string name="audiobook_lookup_range_selection_enabled">Enabled: sentence range selection is available in the lookup popup.</string>
-    <string name="audiobook_lookup_range_selection_disabled">Disabled: sentence range selection has been hidden.</string>
     <string name="audiobook_lookup_root_full_width_enable">Root popup full width</string>
     <string name="audiobook_lookup_root_full_width_enabled">Enabled: only the first lookup popup layer in book view is full width and shown below.</string>
     <string name="audiobook_lookup_root_full_width_disabled">Disabled: book lookup popup uses the default layout.</string>
@@ -385,16 +367,6 @@
     <string name="audiobook_overlay_subtitle_writing_mode">Subtitle writing mode</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">Horizontal</string>
     <string name="audiobook_overlay_subtitle_writing_mode_vertical_rtl">Vertical</string>
-    <string name="audiobook_ui_preview_title">Preview</string>
-    <string name="audiobook_ui_preview_subtitle">Step 1: show a normal audiobook player UI. Drag and persistence will come next.</string>
-    <string name="audiobook_ui_play_button_side">Play button position</string>
-    <string name="audiobook_ui_play_button_side_hint">Option saved for now; the real reader playback bar will use it next.</string>
-    <string name="audiobook_ui_preview_text">Audiobook subtitle preview</string>
-    <string name="audiobook_ui_open_preview">Open current audiobook UI preview</string>
-    <string name="audiobook_ui_open_preview_hint">This reuses the existing reader UI instead of drawing a separate preview UI.</string>
-    <string name="audiobook_ui_open_preview_need_active_book">Open an audiobook first, then return here to preview.</string>
-    <string name="audiobook_ui_not_applied_yet">Play button side setting saved; the real playback bar will use it next.</string>
-    <string name="audiobook_ui_writing_mode_saved">Subtitle direction setting saved.</string>
     <string name="audiobook_unknown_file">Unknown file</string>
     <string name="audiobook_import_stage_copy">Copying file...</string>
     <string name="audiobook_import_stage_validate">Validating database...</string>
@@ -459,9 +431,6 @@
     <string name="bookreader_open_bluetooth">Open phone Bluetooth settings</string>
     <string name="bookreader_lookup_no_dict">No dictionary loaded. Import one from Home first.</string>
     <string name="bookreader_lookup_failed">Lookup failed</string>
-    <string name="bookreader_anki_export_failed">Failed to add to Anki.</string>
-    <string name="bookreader_meta_frequency">Frequency</string>
-    <string name="bookreader_meta_pitch">Pitch</string>
     <string name="controller_title">Controller</string>
     <string name="controller_scheme_1_title">Scheme 1</string>
     <string name="controller_scheme_2_title">Scheme 2</string>
@@ -552,7 +521,6 @@
     <string name="bookreader_ui_test_layout_mode">Layout mode: %1$d/2</string>
     <string name="bookreader_ui_test_swap_normal">Next/Previous: normal</string>
     <string name="bookreader_ui_test_swap_swapped">Next/Previous: swapped</string>
-    <string name="anki_duplicate_title">Duplicate check</string>
     <string name="anki_duplicate_check_label">Check duplicate cards</string>
     <string name="anki_duplicate_scope_label">Duplicate scope</string>
     <string name="anki_duplicate_scope_deck">Current deck</string>

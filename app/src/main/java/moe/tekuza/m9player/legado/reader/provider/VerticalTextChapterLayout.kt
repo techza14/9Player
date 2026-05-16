@@ -187,8 +187,8 @@ internal class VerticalTextChapterLayout(
             val nextIndex = start + count
             val prevChar = text[start + count - 1]
             val nextChar = text.getOrNull(nextIndex)
-            val hitsNoStart = nextChar != null && nextChar in VerticalTextGlyphEngine.noColumnStartChars
-            val hitsNoEnd = prevChar in VerticalTextGlyphEngine.noColumnEndChars
+            val hitsNoStart = nextChar != null && VerticalTextGlyphEngine.isNoColumnStart(nextChar)
+            val hitsNoEnd = VerticalTextGlyphEngine.isNoColumnEnd(prevChar)
             if (!hitsNoStart && !hitsNoEnd) {
                 break
             }

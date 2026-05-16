@@ -53,13 +53,3 @@ internal class TextPageFactory(
         }
     }
 }
-
-private fun String.normalizeLayoutWhitespace(): String {
-    return replace("\r\n", "\n")
-        .replace('\r', '\n')
-        .replace('\u00A0', ' ')
-        .lines()
-        .joinToString("\n") { it.trimEnd() }
-        .replace(Regex("\n{3,}"), "\n\n")
-        .trim()
-}
