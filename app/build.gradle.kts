@@ -1,4 +1,4 @@
-import org.gradle.internal.os.OperatingSystem
+﻿import org.gradle.internal.os.OperatingSystem
 import java.io.File
 
 plugins {
@@ -17,8 +17,8 @@ android {
         applicationId = "moe.tekuza.m9player"
         minSdk = 29
         targetSdk = 36
-        versionCode = 32
-        versionName = "1.6.1"
+        versionCode = 33
+        versionName = "1.6.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -165,6 +165,7 @@ tasks.register("buildMdictRust") {
 tasks.named("preBuild") {
     dependsOn("buildMdictRust")
 }
+
 
 
 
