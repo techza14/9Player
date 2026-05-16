@@ -42,10 +42,7 @@
     <string name="settings_controller_title">コントローラー</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX（制作中）</string>
-    <string name="settings_ebook_title">ebook</string>
-    <string name="settings_ebook_subtitle">音声を選択した後に TXT/EPUB を紐付けます。</string>
-    <string name="settings_ebook_default_reader_title">既定でリーダーを開く</string>
-    <string name="settings_ebook_default_reader_subtitle">ebook 付きの本を本棚から開くとき、直接リーダーを開きます。</string>
+    <string name="settings_ebook_default_reader_title">既定</string>
     <string name="settings_other_title">実験的機能</string>
     <string name="settings_statistics_title">統計</string>
     <string name="settings_update_title">アップデート</string>

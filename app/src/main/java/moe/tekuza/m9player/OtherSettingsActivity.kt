@@ -28,6 +28,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.FolderCopy
+import androidx.compose.material.icons.outlined.Science
+import androidx.compose.ui.graphics.vector.ImageVector
 import moe.tekuza.m9player.ui.theme.TsetTheme
 
 class OtherSettingsActivity : ComponentActivity() {
@@ -52,9 +54,16 @@ private fun OtherSettingsScreen(
     val context = LocalContext.current
     var ebookEnabled by remember { mutableStateOf(loadEbookFeatureEnabled(context)) }
     var ebookDefaultToReader by remember { mutableStateOf(loadEbookDefaultToReader(context)) }
+    var showEbookSettings by remember { mutableStateOf(false) }
     SettingsScaffold(
-        title = stringResource(R.string.settings_other_title),
-        onBack = onBack
+        title = if (showEbookSettings) "" else stringResource(R.string.settings_other_title),
+        onBack = {
+            if (showEbookSettings) {
+                showEbookSettings = false
+            } else {
+                onBack()
+            }
+        }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -63,47 +72,55 @@ private fun OtherSettingsScreen(
                 .padding(vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
-            SettingsLikeItem(
-                icon = Icons.Outlined.FolderCopy,
-                title = stringResource(R.string.settings_mdx_title),
-                onClick = onOpenMdx,
-                showDivider = true
-            )
-            SettingsSwitchItem(
-                title = stringResource(R.string.settings_ebook_title),
-                subtitle = stringResource(R.string.settings_ebook_subtitle),
-                checked = ebookEnabled,
-                onCheckedChange = { enabled ->
-                    ebookEnabled = enabled
-                    saveEbookFeatureEnabled(context, enabled)
-                    if (!enabled) {
-                        ebookDefaultToReader = false
-                        saveEbookDefaultToReader(context, false)
-                    }
-                },
-                showDivider = true
-            )
-            SettingsSwitchItem(
-                title = stringResource(R.string.settings_ebook_default_reader_title),
-                subtitle = stringResource(R.string.settings_ebook_default_reader_subtitle),
-                checked = ebookDefaultToReader,
-                enabled = ebookEnabled,
-                onCheckedChange = { enabled ->
-                    ebookDefaultToReader = enabled
-                    saveEbookDefaultToReader(context, enabled)
-                },
-                showDivider = false
-            )
+            if (showEbookSettings) {
+                SettingsSwitchItem(
+                    icon = Icons.Outlined.Science,
+                    title = "",
+                    checked = ebookEnabled,
+                    onCheckedChange = { enabled ->
+                        ebookEnabled = enabled
+                        saveEbookFeatureEnabled(context, enabled)
+                        if (!enabled) {
+                            ebookDefaultToReader = false
+                            saveEbookDefaultToReader(context, false)
+                        }
+                    },
+                    showDivider = true
+                )
+                SettingsSwitchItem(
+                    icon = Icons.Outlined.Science,
+                    title = stringResource(R.string.settings_ebook_default_reader_title),
+                    checked = ebookDefaultToReader,
+                    enabled = ebookEnabled,
+                    onCheckedChange = { enabled ->
+                        ebookDefaultToReader = enabled
+                        saveEbookDefaultToReader(context, enabled)
+                    },
+                    showDivider = false
+                )
+            } else {
+                SettingsLikeItem(
+                    icon = Icons.Outlined.FolderCopy,
+                    title = stringResource(R.string.settings_mdx_title),
+                    onClick = onOpenMdx,
+                    showDivider = true
+                )
+                SettingsLikeItem(
+                    icon = Icons.Outlined.Science,
+                    title = "",
+                    onClick = { showEbookSettings = true },
+                    showDivider = false
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun SettingsLikeItem(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     title: String,
     onClick: () -> Unit,
-    subtitle: String? = null,
     showDivider: Boolean = true
 ) {
     Column(
@@ -127,13 +144,8 @@ private fun SettingsLikeItem(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
-                Text(text = title, style = MaterialTheme.typography.bodyLarge)
-                if (!subtitle.isNullOrBlank()) {
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                if (title.isNotBlank()) {
+                    Text(text = title, style = MaterialTheme.typography.bodyLarge)
                 }
             }
         }
@@ -151,7 +163,7 @@ private fun SettingsSwitchItem(
     title: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    subtitle: String? = null,
+    icon: ImageVector? = null,
     enabled: Boolean = true,
     showDivider: Boolean = true
 ) {
@@ -167,24 +179,30 @@ private fun SettingsSwitchItem(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (enabled) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                    }
+                )
+            }
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (enabled) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                )
-                if (!subtitle.isNullOrBlank()) {
+                if (title.isNotBlank()) {
                     Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (enabled) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
                     )
                 }
             }

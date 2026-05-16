@@ -45,10 +45,7 @@
     <string name="settings_controller_title">手柄</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX(制作中)</string>
-    <string name="settings_ebook_title">ebook</string>
-    <string name="settings_ebook_subtitle">允许给已选择音频的书籍绑定 TXT/EPUB。</string>
-    <string name="settings_ebook_default_reader_title">默认进入阅读器</string>
-    <string name="settings_ebook_default_reader_subtitle">有 ebook 的书从书架打开时直接进入阅读器。</string>
+    <string name="settings_ebook_default_reader_title">默认</string>
     <string name="settings_other_title">实验性功能</string>
     <string name="settings_statistics_title">统计</string>
     <string name="settings_update_title">更新</string>

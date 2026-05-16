@@ -41,10 +41,7 @@
     <string name="settings_controller_title">Controller</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX (WIP)</string>
-    <string name="settings_ebook_title">ebook</string>
-    <string name="settings_ebook_subtitle">Allow TXT/EPUB files to be attached after audio is selected.</string>
-    <string name="settings_ebook_default_reader_title">Open reader by default</string>
-    <string name="settings_ebook_default_reader_subtitle">Open books with an ebook attachment directly in the reader from the bookshelf.</string>
+    <string name="settings_ebook_default_reader_title">Default</string>
     <string name="settings_other_title">Experimental features</string>
     <string name="settings_statistics_title">Statistics</string>
     <string name="settings_update_title">Updates</string>
