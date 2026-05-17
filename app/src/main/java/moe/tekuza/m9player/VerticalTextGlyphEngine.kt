@@ -101,8 +101,15 @@ internal object VerticalTextGlyphEngine {
         return ch.code in 0x21..0x7E && !ch.isWhitespace()
     }
 
+    fun isAsciiRunSpace(ch: Char): Boolean {
+        return ch == ' ' || ch == '\u00A0'
+    }
+
     fun isAsciiAssistToken(text: String): Boolean {
-        return text.length > 1 && text.all(::isAsciiWordChar)
+        val trimmed = text.trim()
+        return trimmed.isNotEmpty() &&
+            trimmed.any { it.isLetterOrDigit() } &&
+            trimmed.all { isAsciiWordChar(it) || isAsciiRunSpace(it) }
     }
 
     fun estimateCellWidth(paint: TextPaint): Float {
@@ -125,6 +132,23 @@ internal object VerticalTextGlyphEngine {
                 in centerPunctuation -> drawOffsetText(canvas, paint, displayText, rect, baselineAdjust, 0f, -paint.textSize * 0.04f)
                 else -> drawRotatableText(canvas, paint, displayText, rect, baselineAdjust)
             }
+        }
+    }
+
+    fun drawLatinRun(canvas: Canvas, sourcePaint: TextPaint, text: String, rect: RectF) {
+        val displayText = text.trim()
+        if (displayText.isEmpty()) return
+        withPaint(sourcePaint, Paint.Align.LEFT) { paint ->
+            val baselineAdjust = -(paint.ascent() + paint.descent()) * 0.5f
+            val cx = rect.centerX()
+            val cy = rect.centerY()
+            val topPadding = (paint.textSize * 0.08f).coerceAtMost(rect.height() * 0.18f)
+            val drawX = cx + (rect.top + topPadding - cy)
+            val drawY = cy + baselineAdjust
+            canvas.save()
+            canvas.rotate(90f, cx, cy)
+            canvas.drawText(displayText, drawX, drawY, paint)
+            canvas.restore()
         }
     }
 

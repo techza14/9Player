@@ -7,6 +7,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.TextPaint
 import android.util.AttributeSet
+import android.util.Log
 import android.util.TypedValue
 import android.view.View
 import moe.tekuza.m9player.EbookImageRef
@@ -21,6 +22,8 @@ import moe.tekuza.m9player.legado.reader.entities.TextPage
 import java.text.BreakIterator
 import java.util.Locale
 import kotlin.math.max
+
+private const val READER_LATIN_LOG_TAG = "M9ReaderLatin"
 
 internal class ContentTextView @JvmOverloads constructor(
     context: Context,
@@ -38,6 +41,13 @@ internal class ContentTextView @JvmOverloads constructor(
         val sourceEnd: Int,
         val lineIndex: Int,
         val columnIndex: Int,
+        val rect: RectF
+    )
+
+    private data class AssistColumnRef(
+        val lineIndex: Int,
+        val columnIndex: Int,
+        val column: TextColumn,
         val rect: RectF
     )
 
@@ -224,28 +234,76 @@ internal class ContentTextView @JvmOverloads constructor(
         val current = page ?: return null
         val localX = x - paddingLeft
         val localY = y - paddingTop
-        current.lines.forEach { line ->
-            if (line.layoutMode != M9LayoutMode.VERTICAL) return@forEach
+        current.lines.forEachIndexed { lineIndex, line ->
+            if (line.layoutMode != M9LayoutMode.VERTICAL) return@forEachIndexed
             val inLineBounds = localX >= line.lineTop && localX <= line.lineBottom
-            if (!inLineBounds) return@forEach
-            line.columns.forEach { column ->
-                if (column !is TextColumn) return@forEach
-                if (!VerticalTextGlyphEngine.isAsciiAssistToken(column.charData)) return@forEach
-                if (localY < column.start || localY > column.end) return@forEach
-                return AssistToken(
-                    text = column.charData,
-                    rect = RectF(
-                        line.lineTop + paddingLeft,
-                        column.start + paddingTop,
-                        line.lineBottom + paddingLeft,
-                        column.end + paddingTop
-                    ),
-                    sourceStart = column.sourceStart,
-                    sourceEnd = column.sourceEnd
+            if (!inLineBounds) return@forEachIndexed
+            line.columns.forEachIndexed { columnIndex, column ->
+                if (column !is TextColumn) return@forEachIndexed
+                if (!VerticalTextGlyphEngine.isAsciiAssistToken(column.charData)) return@forEachIndexed
+                if (localY < column.start || localY > column.end) return@forEachIndexed
+                val token = assistTokenAround(current, lineIndex, columnIndex)
+                Log.d(
+                    READER_LATIN_LOG_TAG,
+                    "assist hit line=$lineIndex column=$columnIndex source=${column.sourceStart}-${column.sourceEnd} " +
+                        "columnText='${column.charData}' token='${token?.text}' tokenSource=${token?.sourceStart}-${token?.sourceEnd}"
                 )
+                return token
             }
         }
         return null
+    }
+
+    private fun assistTokenAround(page: TextPage, lineIndex: Int, columnIndex: Int): AssistToken? {
+        val refs = buildList {
+            page.lines.forEachIndexed { pageLineIndex, line ->
+                if (line.layoutMode != M9LayoutMode.VERTICAL) return@forEachIndexed
+                line.columns.forEachIndexed { pageColumnIndex, column ->
+                    if (column is TextColumn && VerticalTextGlyphEngine.isAsciiAssistToken(column.charData)) {
+                        add(
+                            AssistColumnRef(
+                                lineIndex = pageLineIndex,
+                                columnIndex = pageColumnIndex,
+                                column = column,
+                                rect = columnRect(line, column)
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        val hitIndex = refs.indexOfFirst { it.lineIndex == lineIndex && it.columnIndex == columnIndex }
+        if (hitIndex < 0) return null
+        var startIndex = hitIndex
+        while (
+            startIndex > 0 &&
+            refs[startIndex - 1].column.sourceEnd == refs[startIndex].column.sourceStart
+        ) {
+            startIndex -= 1
+        }
+        var endIndex = hitIndex
+        while (
+            endIndex < refs.lastIndex &&
+            refs[endIndex].column.sourceEnd == refs[endIndex + 1].column.sourceStart
+        ) {
+            endIndex += 1
+        }
+        val selectedRefs = refs.subList(startIndex, endIndex + 1)
+        val text = selectedRefs.joinToString(separator = "") { it.column.charData }.trim()
+        if (text.isBlank()) return null
+        val rect = RectF(selectedRefs.first().rect)
+        selectedRefs.drop(1).forEach { rect.union(it.rect) }
+        Log.d(
+            READER_LATIN_LOG_TAG,
+            "assist merge hit=$hitIndex refs=${selectedRefs.size} indexRange=$startIndex-$endIndex " +
+                "source=${selectedRefs.minOf { it.column.sourceStart }}-${selectedRefs.maxOf { it.column.sourceEnd }} text='$text' rect=$rect"
+        )
+        return AssistToken(
+            text = text,
+            rect = rect,
+            sourceStart = selectedRefs.minOf { it.column.sourceStart },
+            sourceEnd = selectedRefs.maxOf { it.column.sourceEnd }
+        )
     }
 
     fun beginSelectionAt(x: Float, y: Float): Boolean {
@@ -390,7 +448,7 @@ internal class ContentTextView @JvmOverloads constructor(
     private fun findColumnRect(source: Int, preferStart: Boolean): RectF? {
         val current = page ?: return null
         val range = selectionRange
-        current.lines.forEach { line ->
+        current.lines.forEachIndexed { lineIndex, line ->
             line.columns.filterIsInstance<TextColumn>().forEach { column ->
                 val hit = if (preferStart) {
                     column.sourceStart <= source && column.sourceEnd > source

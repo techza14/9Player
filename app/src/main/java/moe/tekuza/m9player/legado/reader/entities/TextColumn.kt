@@ -34,12 +34,22 @@ internal data class TextColumn(
             }
             M9LayoutMode.VERTICAL -> {
                 val glyphRight = (line.lineBottom - line.rubyReservePx).coerceAtLeast(line.lineTop)
-                VerticalTextGlyphEngine.draw(
-                    canvas = canvas,
-                    sourcePaint = paint,
-                    text = charData,
-                    rect = RectF(line.lineTop, start, glyphRight, end)
-                )
+                val rect = RectF(line.lineTop, start, glyphRight, end)
+                if (VerticalTextGlyphEngine.isAsciiAssistToken(charData)) {
+                    VerticalTextGlyphEngine.drawLatinRun(
+                        canvas = canvas,
+                        sourcePaint = paint,
+                        text = charData,
+                        rect = rect
+                    )
+                } else {
+                    VerticalTextGlyphEngine.draw(
+                        canvas = canvas,
+                        sourcePaint = paint,
+                        text = charData,
+                        rect = rect
+                    )
+                }
                 drawVerticalRuby(view, canvas, line)
             }
         }

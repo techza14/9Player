@@ -11,6 +11,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.util.AttributeSet
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -33,6 +34,8 @@ import moe.tekuza.m9player.legado.reader.M9PageAnim
 import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.TextPage
 import kotlin.math.abs
+
+private const val READER_LATIN_LOG_TAG = "M9ReaderLatin"
 
 internal class ReadView @JvmOverloads constructor(
     context: Context,
@@ -332,6 +335,9 @@ internal class ReadView @JvmOverloads constructor(
                 }
                 if (longPressTriggered) {
                     longPressTriggered = false
+                    if (isTextSelected) {
+                        showSelectionMenu()
+                    }
                     parent?.requestDisallowInterceptTouchEvent(false)
                     return true
                 }
@@ -774,7 +780,6 @@ internal class ReadView @JvmOverloads constructor(
         if (!pageView.beginTextSelectionAt(downX, downY)) return
         isTextSelected = true
         updateSelectionOverlays()
-        showSelectionMenu()
     }
 
     private fun copySelectedTextAndClear() {
@@ -813,7 +818,6 @@ internal class ReadView @JvmOverloads constructor(
         }
         if (changed) {
             updateSelectionOverlays()
-            showSelectionMenu()
         }
     }
 
@@ -994,12 +998,19 @@ internal class ReadView @JvmOverloads constructor(
 
     private fun computeOverlayBounds(anchor: RectF, overlayWidth: Int, overlayHeight: Int): RectF {
         val margin = dp(12).toFloat()
+        val maxLeft = (width - overlayWidth - margin).coerceAtLeast(margin)
+        val maxTop = (height - overlayHeight - margin).coerceAtLeast(margin)
         val left = when {
             anchor.left - overlayWidth - margin >= margin -> anchor.left - overlayWidth - margin
             anchor.right + overlayWidth + margin <= width - margin -> anchor.right + margin
-            else -> (anchor.centerX() - overlayWidth / 2f).coerceIn(margin, width - overlayWidth - margin)
+            else -> (anchor.centerX() - overlayWidth / 2f).coerceIn(margin, maxLeft)
         }
-        val top = (anchor.centerY() - overlayHeight / 2f).coerceIn(margin, height - overlayHeight - margin)
+        val top = (anchor.centerY() - overlayHeight / 2f).coerceIn(margin, maxTop)
+        Log.d(
+            READER_LATIN_LOG_TAG,
+            "overlay bounds anchor=$anchor overlay=${overlayWidth}x$overlayHeight view=${width}x$height " +
+                "left=$left top=$top maxLeft=$maxLeft maxTop=$maxTop"
+        )
         return RectF(left, top, left + overlayWidth, top + overlayHeight)
     }
 
