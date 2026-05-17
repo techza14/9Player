@@ -94,7 +94,7 @@
                 android:layout_weight="1"
                 android:background="@drawable/reader_menu_touch"
                 android:gravity="center"
-                android:text="◇\n结果"
+                android:text="@string/reader_search_results_action"
                 android:textColor="#2C241B"
                 android:textSize="12sp" />
 
@@ -105,7 +105,7 @@
                 android:layout_weight="1"
                 android:background="@drawable/reader_menu_touch"
                 android:gravity="center"
-                android:text="◇\n主菜单"
+                android:text="@string/reader_search_main_menu_action"
                 android:textColor="#2C241B"
                 android:textSize="12sp" />
 
@@ -116,7 +116,7 @@
                 android:layout_weight="1"
                 android:background="@drawable/reader_menu_touch"
                 android:gravity="center"
-                android:text="◇\n退出"
+                android:text="@string/reader_search_exit_action"
                 android:textColor="#2C241B"
                 android:textSize="12sp" />
         </LinearLayout>

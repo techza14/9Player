@@ -1,36 +1,37 @@
 package moe.tekuza.m9player
 
+import android.app.Dialog
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.pm.ActivityInfo
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Bundle
-import android.text.InputType
 import android.util.Log
 import android.view.Gravity
-import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.text.Editable
+import android.text.InputType
 import android.text.TextWatcher
 import android.view.WindowManager
-import android.widget.CheckBox
 import android.widget.FrameLayout
 import android.widget.ArrayAdapter
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
-import android.widget.RadioButton
-import android.widget.RadioGroup
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.PopupMenu
@@ -40,17 +41,22 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
+import com.jaredrummler.android.colorpicker.ColorPickerDialog
+import com.jaredrummler.android.colorpicker.ColorPickerDialogListener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.tekuza.m9player.legado.reader.M9PageAnim
 import moe.tekuza.m9player.legado.reader.M9ReadBookConfig
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
+import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.legado.reader.SearchMenu
 import moe.tekuza.m9player.legado.reader.config.MoreConfigDialog
 import moe.tekuza.m9player.legado.reader.config.MoreConfigState
+import moe.tekuza.m9player.legado.reader.config.ReadStyleColorItem
 import moe.tekuza.m9player.legado.reader.config.ReadStyleDialog
 import moe.tekuza.m9player.legado.reader.config.ReadStyleState
 import moe.tekuza.m9player.legado.reader.entities.TextPage
@@ -93,12 +99,12 @@ private enum class ReaderOverflowAction(val menuId: Int) {
     PLAYER(1),
     ADD_BOOKMARK(2),
     REMOVE_RUBY(3),
-    REMOVE_H(4),
-    SWITCH_LAYOUT(5),
+    SWITCH_LAYOUT(4),
+    CHARSET(5),
     HELP(6)
 }
 
-class LegadoReaderActivity : AppCompatActivity() {
+class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private lateinit var readMenu: View
     private lateinit var statusBarScrim: View
     private lateinit var navigationBarScrim: View
@@ -118,9 +124,6 @@ class LegadoReaderActivity : AppCompatActivity() {
     private lateinit var searchResultListView: ListView
     private lateinit var readView: ReadView
     private lateinit var toolbarTitleText: TextView
-    private lateinit var toolbarBackButton: TextView
-    private lateinit var toolbarEncodingButton: TextView
-    private lateinit var toolbarOverflowButton: TextView
     private lateinit var chapterSeekBar: SeekBar
     private lateinit var listenActionText: TextView
     private lateinit var audioPlayPauseText: TextView
@@ -151,6 +154,7 @@ class LegadoReaderActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
     private var syncJob: Job? = null
     private var reloadBookJob: Job? = null
+    private var paginationJob: Job? = null
     private var pendingAudioRestorePositionMs: Long = 0L
     private var pendingAudioRestoreDurationMs: Long = 0L
     private var lastSavedPlaybackPositionMs: Long = Long.MIN_VALUE
@@ -179,16 +183,41 @@ class LegadoReaderActivity : AppCompatActivity() {
     private var readerLineSpacingDp: Int = 8
     private var readerParagraphSpacingDp: Int = 14
     private var readerLetterSpacingDp: Int = 0
-    private var readerTextBold: Boolean = false
+    private var readerTextWeight: M9TextWeight = M9TextWeight.NORMAL
     private var readerTypefaceIndex: Int = 0
     private var readerTypeface: Typeface? = Typeface.DEFAULT
     private var readerParagraphIndentCount: Int = 0
     private var readerPaddingDp: Int = 22
     private var readerLayoutMode: M9LayoutMode = M9LayoutMode.HORIZONTAL
     private var readerPageAnim: M9PageAnim = M9PageAnim.NONE
+    private var readerStyleSelect: Int = 0
+    private var readerStyleConfigs: MutableList<LegadoReaderStyleConfig> =
+        defaultLegadoReaderStyleConfigs().toMutableList()
     private var readerBgColor: Int = READER_PAGE_BG
     private var readerTextColor: Int = READER_TEXT
     private var readerTipColor: Int = READER_TIP
+    private var readerCueHighlightColor: Int = 0xFFFFEFF6.toInt()
+    private var readerBgAlpha: Int = 100
+    private var readerDarkStatusIcon: Boolean = true
+    private var readerUnderline: Boolean = false
+    private var readerBgAssetName: String? = null
+    private var readerBgImageUri: String? = null
+    private var pendingReaderStyleImageIndex: Int = -1
+    private var pendingReaderColorDialogId: Int = -1
+    private var pendingReaderColorSelected: ((Int) -> Unit)? = null
+    private val readerStyleImagePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val index = pendingReaderStyleImageIndex
+        pendingReaderStyleImageIndex = -1
+        if (uri == null || index !in readerStyleConfigs.indices) return@registerForActivityResult
+        runCatching {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        readerStyleConfigs[index] = readerStyleConfigs[index].copy(
+            bgAssetName = null,
+            bgImageUri = uri.toString()
+        )
+        selectReaderStyle(index)
+    }
     private var audioStopAtMs: Long? = null
     private var hideStatusBar: Boolean = false
     private var readBodyToLh: Boolean = true
@@ -201,17 +230,15 @@ class LegadoReaderActivity : AppCompatActivity() {
     private var useZhLayout: Boolean = true
     private var textFullJustify: Boolean = true
     private var textBottomJustify: Boolean = true
-    private var clickMode: ReadView.ClickMode = ReadView.ClickMode.LEFT_CENTER_RIGHT
+    private var clickRegionActions: List<ReadView.TapAction> = ReadView.defaultClickRegionActions()
     private var progressByChapter: Boolean = true
     private var keepScreenOn: Boolean = false
-    private var mouseWheelPage: Boolean = true
-    private var keyPageOnLongPress: Boolean = false
     private var noAnimScrollPage: Boolean = false
     private var previewImageByClick: Boolean = false
-    private var optimizeRender: Boolean = false
     private var disableReturnKey: Boolean = false
     private var readBarStyleFollowPage: Boolean = false
     private var playbackBarPinnedVisible: Boolean = false
+    private var showRubyText: Boolean = true
     private var playbackBarHeightPx: Int = 0
     private var pendingRestoreAnchor: ReaderPageAnchor? = null
     private var loadedDocumentBookUriText: String? = null
@@ -253,34 +280,6 @@ class LegadoReaderActivity : AppCompatActivity() {
         BookReaderFloatingBridge.addPlaybackPositionListener(sharedPlaybackPositionListener)
         initAudioPlayerIfNeeded()
         readView.post { loadDisplayedBook(anchor = pendingRestoreAnchor) }
-    }
-
-    override fun onKeyLongPress(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyPageOnLongPress) {
-            when (keyCode) {
-                KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    moveChapter(-1)
-                    return true
-                }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    moveChapter(1)
-                    return true
-                }
-            }
-        }
-        return super.onKeyLongPress(keyCode, event)
-    }
-
-    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        if (mouseWheelPage && event.action == MotionEvent.ACTION_SCROLL) {
-            val vScroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-            when {
-                vScroll > 0f -> movePage(-1)
-                vScroll < 0f -> movePage(1)
-            }
-            if (vScroll != 0f) return true
-        }
-        return super.onGenericMotionEvent(event)
     }
 
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
@@ -435,7 +434,7 @@ class LegadoReaderActivity : AppCompatActivity() {
             moreSettingsPanel,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                dp(360),
+                dp(500),
                 Gravity.BOTTOM
             )
         )
@@ -493,16 +492,25 @@ class LegadoReaderActivity : AppCompatActivity() {
     private fun buildStaticPage(): View {
         return ReadView(this).apply {
             readView = this
-            setReaderColors(readerBgColor, readerTextColor, readerTipColor)
+            setReaderColors(readerBgColor, readerTextColor, readerTipColor, readerBgAssetName, readerBgImageUri, readerBgAlpha)
+            setCueHighlightColor(readerCueHighlightColor)
             setTextSizeSp(readerTextSizeSp.toFloat())
-            setFakeBoldText(readerTextBold)
+            setTextWeight(readerTextWeight)
+            setTextUnderline(readerUnderline && readerLayoutMode == M9LayoutMode.HORIZONTAL)
             setReaderTypeface(readerTypeface)
             setReaderPadding(dp(readerPaddingDp), dp(34), dp(readerPaddingDp), currentReaderBottomPaddingPx())
             setPageAnim(readerPageAnim)
-            setClickMode(clickMode)
+            setLayoutMode(readerLayoutMode)
+            setNoAnimScrollPage(noAnimScrollPage)
+            setClickRegionActions(clickRegionActions)
             setShowHeaderFooter(showReadTitleAddition)
+            onPagePreview = { delta -> pages.getOrNull(pageIndex + delta) }
+            onMovePages = { delta -> movePage(delta) }
             onPrevPage = { movePage(-1) }
             onNextPage = { movePage(1) }
+            onTapAction = { handleTapRegionAction(it) }
+            onSelectionAction = { action, text -> handleSelectionAction(action, text) }
+            onSelectionProcessText = { intent, text -> handleSelectionProcessText(intent, text) }
             onImageClick = { image ->
                 if (previewImageByClick) {
                     showImagePreviewDialog(image)
@@ -527,7 +535,6 @@ class LegadoReaderActivity : AppCompatActivity() {
                 readMenu.visibility = View.GONE
             }
             findViewById<TextView>(R.id.reader_back).also {
-                toolbarBackButton = it
                 it.setOnClickListener {
                     returnToHome()
                 }
@@ -537,11 +544,10 @@ class LegadoReaderActivity : AppCompatActivity() {
                 it.text = currentReaderTitle()
             }
             findViewById<TextView>(R.id.reader_encoding).also {
-                toolbarEncodingButton = it
+                it.visibility = View.GONE
                 it.setOnClickListener { view -> showEncodingMenu(view) }
             }
             findViewById<TextView>(R.id.reader_overflow).also {
-                toolbarOverflowButton = it
                 it.setOnClickListener { view -> showOverflowMenu(view) }
             }
             findViewById<ImageButton>(R.id.reader_search).also {
@@ -749,6 +755,7 @@ class LegadoReaderActivity : AppCompatActivity() {
             onUseZhLayoutChanged = {
                 useZhLayout = it
                 requestBookRelayout()
+                if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
             }
             onTextFullJustifyChanged = {
                 textFullJustify = it
@@ -758,28 +765,13 @@ class LegadoReaderActivity : AppCompatActivity() {
                 textBottomJustify = it
                 requestBookRelayout()
             }
-            onMouseWheelPageChanged = {
-                mouseWheelPage = it
-                persistReaderSettings()
-            }
-            onKeyPageOnLongPressChanged = {
-                keyPageOnLongPress = it
-                persistReaderSettings()
-            }
             onNoAnimScrollPageChanged = {
                 noAnimScrollPage = it
-                if (it && readerPageAnim == M9PageAnim.SCROLL) {
-                    readerPageAnim = M9PageAnim.NONE
-                    readView.setPageAnim(readerPageAnim)
-                }
+                readView.setNoAnimScrollPage(it)
                 persistReaderSettings()
             }
             onPreviewImageByClickChanged = {
                 previewImageByClick = it
-                persistReaderSettings()
-            }
-            onOptimizeRenderChanged = {
-                optimizeRender = it
                 persistReaderSettings()
             }
             onDisableReturnKeyChanged = {
@@ -793,37 +785,34 @@ class LegadoReaderActivity : AppCompatActivity() {
             }
             onScreenOrientationClicked = { showScreenOrientationDialog() }
             onKeepLightClicked = { showKeepLightDialog() }
-            onDoublePageClicked = {
-                showChoiceToastDialog(
-                    readerString(R.string.double_page_horizontal),
-                    resources.getStringArray(R.array.reader_double_page_titles)
-                )
-            }
             onProgressBehaviorClicked = { showProgressBehaviorDialog() }
-            onPageTouchSlopClicked = {
-                showNumberInputDialog(readerString(R.string.page_touch_slop_title), "8")
-            }
             onClickRegionalConfigClicked = { showClickRegionDialog() }
-            onCustomPageKeyClicked = { showPageKeyDialog() }
+            onResetDefaultsClicked = { showResetReaderDefaultsDialog() }
             bind(currentMoreConfigState())
         }
     }
 
     private fun currentMoreConfigState(): MoreConfigState {
         return MoreConfigState(
+            screenOrientationIndex = when (requestedOrientation) {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT -> 1
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE -> 2
+                else -> 0
+            },
+            keepScreenOn = keepScreenOn,
+            progressByChapter = progressByChapter,
+            clickRegionSummary = currentClickRegionSummary(),
             hideStatusBar = hideStatusBar,
             readBodyToLh = readBodyToLh,
             hideNavigationBar = hideNavigationBar,
             showBrightnessView = showBrightnessView,
             showReadTitleAddition = showReadTitleAddition,
             useZhLayout = useZhLayout,
+            useZhLayoutLabel = currentZhLayoutToggleLabel(),
             textFullJustify = textFullJustify,
             textBottomJustify = textBottomJustify,
-            mouseWheelPage = mouseWheelPage,
-            keyPageOnLongPress = keyPageOnLongPress,
             noAnimScrollPage = noAnimScrollPage,
             previewImageByClick = previewImageByClick,
-            optimizeRender = optimizeRender,
             disableReturnKey = disableReturnKey,
             readBarStyleFollowPage = readBarStyleFollowPage
         )
@@ -835,9 +824,8 @@ class LegadoReaderActivity : AppCompatActivity() {
         val systemBarColor = currentSystemBarColor()
         window.statusBarColor = systemBarColor
         window.navigationBarColor = systemBarColor
-        val lightIcons = !isColorDark(systemBarColor)
-        controller.isAppearanceLightStatusBars = lightIcons
-        controller.isAppearanceLightNavigationBars = lightIcons
+        controller.isAppearanceLightStatusBars = readerDarkStatusIcon
+        controller.isAppearanceLightNavigationBars = readerDarkStatusIcon
         val hideTypes =
             (if (hideStatusBar) WindowInsetsCompat.Type.statusBars() else 0) or
                 (if (hideNavigationBar) WindowInsetsCompat.Type.navigationBars() else 0)
@@ -908,20 +896,7 @@ class LegadoReaderActivity : AppCompatActivity() {
     }
 
     private fun currentSystemBarColor(): Int {
-        val isNight = isNightReaderTheme()
-        return when {
-            readBarStyleFollowPage -> readerBgColor
-            isNight -> NIGHT_BOTTOM_BG
-            else -> 0xFFF8F1E3.toInt()
-        }
-    }
-
-    private fun isColorDark(color: Int): Boolean {
-        val red = (color shr 16) and 0xFF
-        val green = (color shr 8) and 0xFF
-        val blue = color and 0xFF
-        val luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255.0
-        return luminance < 0.5
+        return readerBgColor
     }
 
     private fun tintMenuContent(view: View, textColor: Int) {
@@ -1032,7 +1007,7 @@ class LegadoReaderActivity : AppCompatActivity() {
         bookmarks += ReaderBookmark(
             chapterIndex = page.chapterIndex,
             chapterPosition = page.charStart,
-            chapterTitle = page.title.ifBlank { "Chapter ${page.chapterIndex + 1}" },
+            chapterTitle = page.title,
             preview = preview,
             createdAtMs = System.currentTimeMillis()
         )
@@ -1094,15 +1069,6 @@ class LegadoReaderActivity : AppCompatActivity() {
 
     private fun accentColor(): Int = NIGHT_ACCENT
 
-    private fun showChoiceToastDialog(title: String, items: Array<String>) {
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setItems(items) { _, which ->
-                Toast.makeText(this, "$title：${items[which]}", Toast.LENGTH_SHORT).show()
-            }
-            .show()
-    }
-
     private fun showScreenOrientationDialog() {
         val items = resources.getStringArray(R.array.reader_screen_direction_titles)
         val checked = when (requestedOrientation) {
@@ -1118,6 +1084,7 @@ class LegadoReaderActivity : AppCompatActivity() {
                     2 -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
                     else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                 }
+                if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
                 dialog.dismiss()
             }
             .show()
@@ -1135,6 +1102,7 @@ class LegadoReaderActivity : AppCompatActivity() {
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
                 persistReaderSettings()
+                if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
                 dialog.dismiss()
             }
             .show()
@@ -1149,104 +1117,302 @@ class LegadoReaderActivity : AppCompatActivity() {
                 persistReaderSettings()
                 dialog.dismiss()
                 renderCurrentPage()
+                if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
             }
-            .show()
-    }
-
-    private fun showNumberInputDialog(title: String, initial: String) {
-        val input = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setText(initial)
-            setSelection(text.length)
-        }
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setView(input)
-            .setPositiveButton(R.string.reader_dialog_confirm) { _, _ ->
-                Toast.makeText(this, "$title：${input.text}", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton(R.string.reader_dialog_cancel, null)
             .show()
     }
 
     private fun showClickRegionDialog() {
-        val group = RadioGroup(this).apply {
-            orientation = RadioGroup.VERTICAL
-            setPadding(dp(22), dp(8), dp(22), 0)
-            resources.getStringArray(R.array.reader_click_region_titles).forEachIndexed { index, label ->
-                addView(RadioButton(this@LegadoReaderActivity).apply {
-                    id = View.generateViewId()
-                    text = label
-                    isChecked = index == 0
-                })
+        val root = layoutInflater.inflate(R.layout.dialog_reader_click_action_config, null, false)
+        val dialog = Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+        val cellIds = intArrayOf(
+            R.id.reader_click_region_top_left,
+            R.id.reader_click_region_top_center,
+            R.id.reader_click_region_top_right,
+            R.id.reader_click_region_middle_left,
+            R.id.reader_click_region_middle_center,
+            R.id.reader_click_region_middle_right,
+            R.id.reader_click_region_bottom_left,
+            R.id.reader_click_region_bottom_center,
+            R.id.reader_click_region_bottom_right
+        )
+        root.findViewById<View>(R.id.reader_click_region_root).setOnClickListener {
+            dialog.dismiss()
+        }
+        repeat(ReadView.CLICK_REGION_COUNT) { index ->
+            root.findViewById<TextView>(cellIds[index]).apply {
+                text = readerTapActionLabel(clickRegionActions[index])
+                setOnClickListener {
+                    showClickRegionActionDialog(index, clickRegionActions[index]) { action ->
+                        clickRegionActions = clickRegionActions.toMutableList().apply {
+                            this[index] = action
+                        }.toList()
+                        text = readerTapActionLabel(action)
+                        readView.setClickRegionActions(clickRegionActions)
+                        persistReaderSettings()
+                        if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
+                    }
+                }
             }
         }
-        AlertDialog.Builder(this)
-            .setTitle(R.string.reader_title_click_region)
-            .setView(group)
-            .setPositiveButton(R.string.reader_dialog_confirm) { _, _ ->
-                val checkedIndex = (0 until group.childCount).indexOfFirst {
-                    group.getChildAt(it).id == group.checkedRadioButtonId
-                }.coerceAtLeast(0)
-                clickMode = when (checkedIndex) {
-                    1 -> ReadView.ClickMode.TOP_CENTER_BOTTOM
-                    2 -> ReadView.ClickMode.FULL_NEXT
-                    else -> ReadView.ClickMode.LEFT_CENTER_RIGHT
-                }
-                readView.setClickMode(clickMode)
+        root.findViewById<View>(R.id.reader_click_region_panel).setOnClickListener { }
+        root.findViewById<View>(R.id.reader_click_region_close).setOnClickListener { dialog.dismiss() }
+        dialog.setOnDismissListener {
+            val normalized = normalizeClickRegionActions(clickRegionActions)
+            if (normalized != clickRegionActions) {
+                clickRegionActions = normalized
+                readView.setClickRegionActions(clickRegionActions)
                 persistReaderSettings()
+                Toast.makeText(this, R.string.reader_click_region_menu_required, Toast.LENGTH_SHORT).show()
             }
-            .setNegativeButton(R.string.reader_dialog_cancel, null)
+            if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
+        }
+        dialog.setContentView(root)
+        dialog.show()
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        dialog.window?.setLayout(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+    }
+
+    private fun currentZhLayoutToggleLabel(): String {
+        return if (useZhLayout) {
+            readerString(R.string.reader_convert_state_enabled)
+        } else {
+            readerString(R.string.reader_convert_state_disabled)
+        }
+    }
+
+    private fun showResetReaderDefaultsDialog() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.reader_reset_defaults)
+            .setMessage(R.string.reader_reset_defaults_confirm)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                resetReaderSettingsToDefaults()
+            }
             .show()
     }
 
-    private fun showPageKeyDialog() {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(8), dp(22), 0)
-            resources.getStringArray(R.array.reader_page_key_titles).forEach { label ->
-                addView(CheckBox(this@LegadoReaderActivity).apply {
-                    text = label
-                    isChecked = true
-                })
+    private fun resetReaderSettingsToDefaults() {
+        val anchor = currentPageAnchor()
+        val defaults = LegadoReaderPersistedState(
+            currentBookUri = importedBook?.uri?.toString(),
+            currentChapterIndex = anchor?.chapterIndex ?: 0,
+            currentCharPosition = anchor?.charPosition ?: 0
+        )
+        saveLegadoReaderPersistedState(this, defaults)
+        recreate()
+    }
+
+    private fun currentClickRegionSummary(): String {
+        return if (clickRegionActions == defaultClickRegionActionsForCurrentLayout()) {
+            readerString(R.string.reader_click_region_summary_default)
+        } else {
+            readerString(R.string.reader_click_region_summary_custom)
+        }
+    }
+
+    private fun defaultClickRegionActionsForCurrentLayout(): List<ReadView.TapAction> {
+        return ReadView.defaultClickRegionActions(readerLayoutMode)
+    }
+
+    private fun showClickRegionActionDialog(
+        regionIndex: Int,
+        currentAction: ReadView.TapAction,
+        onSelected: (ReadView.TapAction) -> Unit
+    ) {
+        val actions = readerTapActionOptions()
+        val labels = actions.map(::readerTapActionLabel).toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(readerTapRegionLabel(regionIndex))
+            .setSingleChoiceItems(labels, actions.indexOf(currentAction)) { dialog, which ->
+                onSelected(actions[which])
+                dialog.dismiss()
+            }
+            .show()
+    }
+
+    private fun readerTapActionOptions(): List<ReadView.TapAction> = listOf(
+        ReadView.TapAction.NONE,
+        ReadView.TapAction.MENU,
+        ReadView.TapAction.NEXT_PAGE,
+        ReadView.TapAction.PREV_PAGE,
+        ReadView.TapAction.NEXT_CHAPTER,
+        ReadView.TapAction.PREV_CHAPTER,
+        ReadView.TapAction.NEXT_AUDIO_CUE,
+        ReadView.TapAction.PREV_AUDIO_CUE,
+        ReadView.TapAction.ADD_BOOKMARK,
+        ReadView.TapAction.TOGGLE_CONVERT,
+        ReadView.TapAction.CATALOG,
+        ReadView.TapAction.SEARCH
+    )
+
+    private fun readerTapActionLabel(action: ReadView.TapAction): String {
+        val resId = when (action) {
+            ReadView.TapAction.NONE -> R.string.reader_click_action_none
+            ReadView.TapAction.MENU -> R.string.reader_click_action_menu
+            ReadView.TapAction.NEXT_PAGE -> R.string.reader_click_action_next_page
+            ReadView.TapAction.PREV_PAGE -> R.string.reader_click_action_prev_page
+            ReadView.TapAction.NEXT_CHAPTER -> R.string.reader_click_action_next_chapter
+            ReadView.TapAction.PREV_CHAPTER -> R.string.reader_click_action_prev_chapter
+            ReadView.TapAction.NEXT_AUDIO_CUE -> R.string.reader_click_action_next_audio
+            ReadView.TapAction.PREV_AUDIO_CUE -> R.string.reader_click_action_prev_audio
+            ReadView.TapAction.ADD_BOOKMARK -> R.string.reader_click_action_add_bookmark
+            ReadView.TapAction.TOGGLE_CONVERT -> R.string.reader_click_action_toggle_convert
+            ReadView.TapAction.CATALOG -> R.string.reader_click_action_catalog
+            ReadView.TapAction.SEARCH -> R.string.reader_click_action_search
+        }
+        return readerString(resId)
+    }
+
+    private fun readerTapRegionLabel(index: Int): String {
+        val resId = when (index) {
+            0 -> R.string.reader_click_region_top_left
+            1 -> R.string.reader_click_region_top_center
+            2 -> R.string.reader_click_region_top_right
+            3 -> R.string.reader_click_region_middle_left
+            4 -> R.string.reader_click_region_middle_center
+            5 -> R.string.reader_click_region_middle_right
+            6 -> R.string.reader_click_region_bottom_left
+            7 -> R.string.reader_click_region_bottom_center
+            else -> R.string.reader_click_region_bottom_right
+        }
+        return readerString(resId)
+    }
+
+    private fun handleTapRegionAction(action: ReadView.TapAction) {
+        when (action) {
+            ReadView.TapAction.NONE,
+            ReadView.TapAction.MENU,
+            ReadView.TapAction.NEXT_PAGE,
+            ReadView.TapAction.PREV_PAGE -> Unit
+            ReadView.TapAction.NEXT_CHAPTER -> moveChapter(1)
+            ReadView.TapAction.PREV_CHAPTER -> moveChapter(-1)
+            ReadView.TapAction.NEXT_AUDIO_CUE -> seekToAdjacentCue(1)
+            ReadView.TapAction.PREV_AUDIO_CUE -> seekToAdjacentCue(-1)
+            ReadView.TapAction.ADD_BOOKMARK -> addCurrentBookmark()
+            ReadView.TapAction.TOGGLE_CONVERT -> toggleReaderConvertState()
+            ReadView.TapAction.CATALOG -> {
+                closeReaderChrome()
+                showChapterListDialog()
+            }
+            ReadView.TapAction.SEARCH -> {
+                closeReaderChrome()
+                showSearchPanel(searchQuery.orEmpty())
             }
         }
-        AlertDialog.Builder(this)
-            .setTitle(R.string.reader_title_page_key)
-            .setView(container)
-            .setPositiveButton(R.string.reader_dialog_confirm) { _, _ ->
-                Toast.makeText(this, R.string.reader_page_key_saved, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun handleSelectionAction(action: ReadView.SelectionAction, text: String) {
+        when (action) {
+            ReadView.SelectionAction.COPY -> Unit
+            ReadView.SelectionAction.SHARE -> {
+                runCatching {
+                    startActivity(
+                        Intent.createChooser(
+                            Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, text)
+                            },
+                            text
+                        )
+                    )
+                }
             }
-            .setNegativeButton(R.string.reader_dialog_cancel, null)
-            .show()
+            ReadView.SelectionAction.SEARCH -> {
+                closeReaderChrome()
+                showSearchPanel(text)
+                startSearch(text)
+            }
+            ReadView.SelectionAction.ADD_BOOKMARK -> addCurrentBookmark()
+            ReadView.SelectionAction.BROWSER -> {
+                runCatching {
+                    startActivity(
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse("https://www.google.com/search?q=${Uri.encode(text)}")
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private fun handleSelectionProcessText(intent: Intent, text: String) {
+        runCatching {
+            startActivity(
+                Intent(intent).apply {
+                    putExtra(Intent.EXTRA_PROCESS_TEXT, text)
+                    putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, false)
+                }
+            )
+        }.onFailure {
+            Toast.makeText(this, it.localizedMessage ?: "PROCESS_TEXT", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun normalizeClickRegionActions(actions: List<ReadView.TapAction>): List<ReadView.TapAction> {
+        if (actions.any { it == ReadView.TapAction.MENU }) return actions
+        return actions.toMutableList().apply {
+            this[4] = ReadView.TapAction.MENU
+        }.toList()
+    }
+
+    private fun toggleReaderConvertState() {
+        useZhLayout = !useZhLayout
+        requestBookRelayout()
+        persistReaderSettings()
+        if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
     }
 
     private fun showOverflowMenu(anchor: View) {
         PopupMenu(this, anchor).apply {
             menu.add(0, ReaderOverflowAction.PLAYER.menuId, 0, R.string.reader_menu_player)
             menu.add(0, ReaderOverflowAction.ADD_BOOKMARK.menuId, 1, R.string.reader_menu_add_bookmark)
-            menu.add(0, ReaderOverflowAction.REMOVE_RUBY.menuId, 2, R.string.del_ruby_tag)
-            menu.add(0, ReaderOverflowAction.REMOVE_H.menuId, 3, R.string.del_h_tag)
+            if (hasRubySpans()) {
+                menu.add(0, ReaderOverflowAction.REMOVE_RUBY.menuId, 2, R.string.del_ruby_tag).apply {
+                    isCheckable = true
+                    isChecked = !showRubyText
+                }
+            }
             menu.add(
                 0,
                 ReaderOverflowAction.SWITCH_LAYOUT.menuId,
-                4,
+                3,
                 if (readerLayoutMode == M9LayoutMode.VERTICAL) R.string.reader_menu_switch_horizontal else R.string.reader_menu_switch_vertical
             )
+            menu.add(0, ReaderOverflowAction.CHARSET.menuId, 4, R.string.reader_encoding_set)
             menu.add(0, ReaderOverflowAction.HELP.menuId, 5, R.string.reader_menu_help)
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     ReaderOverflowAction.PLAYER.menuId -> openPlayerFromReader()
                     ReaderOverflowAction.ADD_BOOKMARK.menuId -> addCurrentBookmark()
+                    ReaderOverflowAction.REMOVE_RUBY.menuId -> {
+                        item.isChecked = !item.isChecked
+                        showRubyText = !item.isChecked
+                        requestBookRelayout(immediate = true)
+                    }
                     ReaderOverflowAction.SWITCH_LAYOUT.menuId -> {
+                        val oldLayoutMode = readerLayoutMode
+                        val wasDefaultClickRegions = clickRegionActions == ReadView.defaultClickRegionActions(oldLayoutMode)
                         readerLayoutMode =
-                            if (readerLayoutMode == M9LayoutMode.VERTICAL) {
+                            if (oldLayoutMode == M9LayoutMode.VERTICAL) {
                                 M9LayoutMode.HORIZONTAL
                             } else {
                                 M9LayoutMode.VERTICAL
                             }
+                        readView.setLayoutMode(readerLayoutMode)
+                        if (wasDefaultClickRegions) {
+                            clickRegionActions = defaultClickRegionActionsForCurrentLayout()
+                            readView.setClickRegionActions(clickRegionActions)
+                            if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
+                        }
+                        readView.setTextUnderline(readerUnderline && readerLayoutMode == M9LayoutMode.HORIZONTAL)
                         requestBookRelayout()
                     }
+                    ReaderOverflowAction.CHARSET.menuId -> showEncodingMenu(anchor)
                 }
                 persistReaderSettings()
                 true
@@ -1279,6 +1445,10 @@ class LegadoReaderActivity : AppCompatActivity() {
             }
             show()
         }
+    }
+
+    private fun hasRubySpans(): Boolean {
+        return document?.chapters?.any { chapter -> chapter.rubySpans.isNotEmpty() } == true
     }
 
     private fun text(value: String, sizeSp: Float, color: Int): TextView {
@@ -1352,7 +1522,7 @@ class LegadoReaderActivity : AppCompatActivity() {
             readerTipColor = 0xFF948B7D.toInt()
         }
         closeReaderChrome()
-        readView.setReaderColors(readerBgColor, readerTextColor, readerTipColor)
+        readView.setReaderColors(readerBgColor, readerTextColor, readerTipColor, readerBgAssetName, readerBgImageUri, readerBgAlpha)
         applyReadBarStyle()
         persistReaderSettings()
         requestBookRelayout()
@@ -1377,7 +1547,7 @@ class LegadoReaderActivity : AppCompatActivity() {
                     add(
                         ReaderSearchHit(
                             chapterIndex = chapterIndex,
-                            chapterTitle = chapter.title.ifBlank { currentReaderTitle() },
+                            chapterTitle = chapter.title,
                             preview = pageText.substring(previewStart, previewEnd).replace('\n', ' '),
                             chapterPosition = hitIndex,
                             query = query
@@ -1580,7 +1750,7 @@ class LegadoReaderActivity : AppCompatActivity() {
                 }
                 val item = getItem(position)
                 val chapterIndex = item?.first ?: position
-                val chapterTitle = item?.second?.title?.ifBlank { "Chapter ${chapterIndex + 1}" } ?: "Chapter ${chapterIndex + 1}"
+                val chapterTitle = item?.second?.title.orEmpty()
                 view.text = "${chapterIndex + 1}. $chapterTitle"
                 view.setTextColor(if (chapterIndex == currentChapterIndex) accentColor() else currentMenuTextColor())
                 return view
@@ -1665,6 +1835,19 @@ class LegadoReaderActivity : AppCompatActivity() {
                 letterSpacingDp = readerLetterSpacingDp,
                 lineSpacingDp = readerLineSpacingDp,
                 paragraphSpacingDp = readerParagraphSpacingDp,
+                textWeight = readerTextWeight,
+                backgroundStyleIndex = readerStyleSelect.coerceIn(0, readerStyleConfigs.lastIndex),
+                backgroundStyles = readerStyleConfigs.map {
+                    ReadStyleColorItem(
+                        name = it.name,
+                        bgColor = it.bgColor,
+                        textColor = it.textColor,
+                        tipColor = it.tipColor,
+                        bgAlpha = it.bgAlpha,
+                        bgAssetName = it.bgAssetName,
+                        bgImageUri = it.bgImageUri
+                    )
+                },
                 pageAnim = readerPageAnim
             ),
             callback = object : ReadStyleDialog.Callback {
@@ -1713,10 +1896,8 @@ class LegadoReaderActivity : AppCompatActivity() {
                     ).show()
                 }
 
-                override fun onWeightClicked() {
-                    readerTextBold = !readerTextBold
-                    readView.setFakeBoldText(readerTextBold)
-                    requestBookRelayout()
+                override fun onWeightClicked(onChanged: (M9TextWeight) -> Unit) {
+                    showTextWeightDialog(onChanged)
                 }
 
                 override fun onFontClicked() {
@@ -1739,7 +1920,7 @@ class LegadoReaderActivity : AppCompatActivity() {
                     readerPageAnim = when (animIndex) {
                         0 -> M9PageAnim.COVER
                         1 -> M9PageAnim.SLIDE
-                        2 -> if (noAnimScrollPage) M9PageAnim.NONE else M9PageAnim.SCROLL
+                        2 -> M9PageAnim.SCROLL
                         else -> M9PageAnim.NONE
                     }
                     readView.setPageAnim(readerPageAnim)
@@ -1747,22 +1928,470 @@ class LegadoReaderActivity : AppCompatActivity() {
                 }
 
                 override fun onBackgroundClicked(index: Int) {
-                    val colors = listOf(
-                        READER_PAGE_BG to READER_TEXT,
-                        0xFFFFFFFF.toInt() to 0xFF111111.toInt(),
-                        0xFFD9E6D2.toInt() to 0xFF25301F.toInt(),
-                        0xFF1F1F1F.toInt() to 0xFFD8D2C5.toInt()
-                    )
-                    val (bg, text) = colors.getOrElse(index) { colors.first() }
-                    readerBgColor = bg
-                    readerTextColor = text
-                    readerTipColor = if (index == 3) 0xFF948B7D.toInt() else READER_TIP
-                    readView.setReaderColors(readerBgColor, readerTextColor, readerTipColor)
-                    applyReadBarStyle()
-                    requestBookRelayout()
+                    selectReaderStyle(index)
+                }
+
+                override fun onBackgroundLongClicked(index: Int) {
+                    selectReaderStyle(index)
+                    showReaderStyleConfigDialog(index)
+                }
+
+                override fun onBackgroundAddClicked() {
+                    readerStyleConfigs.add(defaultLegadoReaderStyleConfigs().first().copy(name = "文字"))
+                    val index = readerStyleConfigs.lastIndex
+                    selectReaderStyle(index)
+                    showReaderStyleConfigDialog(index)
                 }
             }
         ).show()
+    }
+
+    private fun selectReaderStyle(index: Int) {
+        val style = readerStyleConfigs.getOrNull(index) ?: return
+        readerStyleSelect = index
+        readerBgColor = style.bgColor
+        readerTextColor = style.textColor
+        readerTipColor = style.tipColor
+        readerBgAlpha = style.bgAlpha
+        readerDarkStatusIcon = style.darkStatusIcon
+        readerUnderline = style.underline
+        readerBgAssetName = style.bgAssetName
+        readerBgImageUri = style.bgImageUri
+        applyReaderVisualStyle()
+        persistReaderSettings()
+    }
+
+    private fun applyReaderVisualStyle() {
+        readView.setReaderColors(readerBgColor, readerTextColor, readerTipColor, readerBgAssetName, readerBgImageUri, readerBgAlpha)
+        readView.setCueHighlightColor(readerCueHighlightColor)
+        readView.setTextUnderline(readerUnderline && readerLayoutMode == M9LayoutMode.HORIZONTAL)
+        applyReadBarStyle()
+    }
+
+    private fun showReaderStyleConfigDialog(index: Int) {
+        val current = readerStyleConfigs.getOrNull(index) ?: return
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(10), dp(14), dp(12))
+            setBackgroundColor(readerBgColor)
+        }
+        var selectedBgColor = current.bgColor
+        var selectedTextColor = current.textColor
+        var selectedTipColor = current.tipColor
+        var selectedBgAssetName = current.bgAssetName
+        var selectedBgImageUri = current.bgImageUri
+        val nameInput = addTextInput(container, R.string.reader_style_name, current.name)
+        val restoreView = addActionText(container, R.string.reader_style_restore)
+        val darkStatusIconCheck = addCheckBox(container, R.string.reader_dark_status_icon, current.darkStatusIcon)
+        val underlineCheck = addCheckBox(container, R.string.reader_text_underline, current.underline)
+        val colorRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val textColorButton = styleConfigButton(R.string.reader_style_text_color, selectedTextColor)
+        val bgColorButton = styleConfigButton(R.string.reader_style_bg_color, selectedBgColor)
+        colorRow.addView(textColorButton, LinearLayout.LayoutParams(0, dp(42), 1f).apply {
+            marginEnd = dp(8)
+        })
+        colorRow.addView(bgColorButton, LinearLayout.LayoutParams(0, dp(42), 1f))
+        container.addView(colorRow, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(8) })
+        val alphaLabel = TextView(this).apply {
+            textSize = 13f
+            setTextColor(readerTipColor)
+        }
+        val alphaSeek = SeekBar(this).apply {
+            max = 100
+            progress = current.bgAlpha.coerceIn(0, 100)
+        }
+        fun updateAlphaLabel() {
+            alphaLabel.text = getString(R.string.reader_bg_alpha, alphaSeek.progress)
+        }
+        updateAlphaLabel()
+        container.addView(alphaLabel, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(8) })
+        container.addView(alphaSeek, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        fun persistDraftStyle() {
+            readerStyleConfigs[index] = LegadoReaderStyleConfig(
+                name = nameInput.text.toString().trim(),
+                bgColor = selectedBgColor,
+                textColor = selectedTextColor,
+                tipColor = selectedTipColor,
+                bgAlpha = alphaSeek.progress,
+                darkStatusIcon = darkStatusIconCheck.isChecked,
+                underline = underlineCheck.isChecked,
+                bgAssetName = selectedBgAssetName,
+                bgImageUri = selectedBgImageUri
+            )
+            selectReaderStyle(index)
+        }
+        val updateBgImageSelection = addBackgroundImagePicker(
+            container = container,
+            selectedAssetName = selectedBgAssetName,
+            selectedImageUri = selectedBgImageUri,
+            onSelected = { nextAssetName, nextImageUri ->
+                selectedBgAssetName = nextAssetName
+                selectedBgImageUri = nextImageUri
+                persistDraftStyle()
+            },
+            onPickExternal = {
+                persistDraftStyle()
+                pendingReaderStyleImageIndex = index
+                readerStyleImagePicker.launch(arrayOf("image/*"))
+            }
+        )
+        textColorButton.setOnClickListener {
+            showReaderColorPicker(READER_TEXT_COLOR_DIALOG_ID, selectedTextColor) { color ->
+                selectedTextColor = color
+                bindStyleConfigButton(textColorButton, R.string.reader_style_text_color, selectedTextColor)
+                persistDraftStyle()
+            }
+        }
+        bgColorButton.setOnClickListener {
+            val pickerColor = if (selectedBgAssetName == null && selectedBgImageUri == null) {
+                selectedBgColor
+            } else {
+                LEGADO_COLOR_PICKER_IMAGE_BG_FALLBACK
+            }
+            showReaderColorPicker(READER_BG_COLOR_DIALOG_ID, pickerColor) { color ->
+                selectedBgColor = color
+                selectedBgAssetName = null
+                selectedBgImageUri = null
+                bindStyleConfigButton(bgColorButton, R.string.reader_style_bg_color, selectedBgColor)
+                updateBgImageSelection(selectedBgAssetName, selectedBgImageUri)
+                persistDraftStyle()
+            }
+        }
+        darkStatusIconCheck.setOnCheckedChangeListener { _, _ -> persistDraftStyle() }
+        underlineCheck.setOnCheckedChangeListener { _, _ -> persistDraftStyle() }
+        alphaSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                updateAlphaLabel()
+                if (fromUser) persistDraftStyle()
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
+        restoreView.setOnClickListener {
+            val defaults = defaultLegadoReaderStyleConfigs()
+            val restoreDialog = AlertDialog.Builder(this)
+                .setTitle(R.string.reader_style_restore)
+                .setItems(defaults.map { it.name }.toTypedArray()) { dialog, which ->
+                    val restored = defaults[which]
+                    nameInput.setText(restored.name)
+                    selectedBgColor = restored.bgColor
+                    selectedTextColor = restored.textColor
+                    selectedTipColor = restored.tipColor
+                    bindStyleConfigButton(bgColorButton, R.string.reader_style_bg_color, selectedBgColor)
+                    bindStyleConfigButton(textColorButton, R.string.reader_style_text_color, selectedTextColor)
+                    alphaSeek.progress = restored.bgAlpha
+                    darkStatusIconCheck.isChecked = restored.darkStatusIcon
+                    underlineCheck.isChecked = restored.underline
+                    selectedBgAssetName = restored.bgAssetName
+                    selectedBgImageUri = restored.bgImageUri
+                    updateBgImageSelection(selectedBgAssetName, selectedBgImageUri)
+                    persistDraftStyle()
+                    dialog.dismiss()
+                }
+                .create()
+            restoreDialog.setOnShowListener {
+                restoreDialog.window?.run {
+                    clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                    val attr = attributes
+                    attr.dimAmount = 0f
+                    attributes = attr
+                }
+            }
+            restoreDialog.show()
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.reader_style_config_title)
+            .setView(container)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setNeutralButton(R.string.reader_style_delete, null)
+            .setPositiveButton(R.string.reader_dialog_done, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.window?.run {
+                clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                setBackgroundDrawable(ColorDrawable(readerBgColor))
+                val attr = attributes
+                attr.dimAmount = 0f
+                attr.gravity = Gravity.BOTTOM
+                attributes = attr
+                setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            }
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).apply {
+                isEnabled = readerStyleConfigs.size > 1
+                setOnClickListener {
+                    if (readerStyleConfigs.size <= 1) return@setOnClickListener
+                    readerStyleConfigs.removeAt(index)
+                    readerStyleSelect = readerStyleSelect.coerceAtMost(readerStyleConfigs.lastIndex)
+                    selectReaderStyle(readerStyleSelect)
+                    dialog.dismiss()
+                }
+            }
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                readerStyleConfigs[index] = LegadoReaderStyleConfig(
+                    name = nameInput.text.toString().trim(),
+                    bgColor = selectedBgColor,
+                    textColor = selectedTextColor,
+                    tipColor = selectedTipColor,
+                    bgAlpha = alphaSeek.progress,
+                    darkStatusIcon = darkStatusIconCheck.isChecked,
+                    underline = underlineCheck.isChecked,
+                    bgAssetName = selectedBgAssetName,
+                    bgImageUri = selectedBgImageUri
+                )
+                selectReaderStyle(index)
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun addTextInput(container: LinearLayout, labelRes: Int, value: String): EditText {
+        return addLabeledInput(container, labelRes).apply {
+            setText(value)
+            selectAll()
+        }
+    }
+
+    private fun addCheckBox(container: LinearLayout, labelRes: Int, checked: Boolean): CheckBox {
+        return CheckBox(this).apply {
+            text = getString(labelRes)
+            textSize = 14f
+            setTextColor(readerTextColor)
+            isChecked = checked
+        }.also { checkBox ->
+            container.addView(checkBox, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+        }
+    }
+
+    private fun addActionText(container: LinearLayout, labelRes: Int): TextView {
+        return TextView(this).apply {
+            text = getString(labelRes)
+            textSize = 15f
+            gravity = Gravity.CENTER_VERTICAL
+            setTextColor(readerTextColor)
+            setPadding(0, dp(10), 0, dp(10))
+        }.also { view ->
+            container.addView(view, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+        }
+    }
+
+    private fun styleConfigButton(labelRes: Int, color: Int): TextView {
+        return TextView(this).apply {
+            gravity = Gravity.CENTER
+            textSize = 14f
+            setPadding(dp(8), 0, dp(8), 0)
+            bindStyleConfigButton(this, labelRes, color)
+        }
+    }
+
+    private fun bindStyleConfigButton(view: TextView, labelRes: Int, color: Int) {
+        view.text = getString(labelRes)
+        view.setTextColor(readerTextColor)
+        view.background = GradientDrawable().apply {
+            cornerRadius = dp(4).toFloat()
+            setColor(withAlpha(color, 0.18f))
+            setStroke(dp(1), color)
+        }
+    }
+
+    private fun showReaderColorPicker(dialogId: Int, currentColor: Int, onColor: (Int) -> Unit) {
+        pendingReaderColorDialogId = dialogId
+        pendingReaderColorSelected = onColor
+        ColorPickerDialog.newBuilder()
+            .setColor(currentColor)
+            .setShowAlphaSlider(false)
+            .setDialogType(ColorPickerDialog.TYPE_CUSTOM)
+            .setDialogId(dialogId)
+            .show(this)
+    }
+
+    private fun addLabeledInput(container: LinearLayout, labelRes: Int): EditText {
+        container.addView(TextView(this).apply {
+            text = getString(labelRes)
+            textSize = 13f
+            setTextColor(readerTipColor)
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            topMargin = dp(8)
+        })
+        return EditText(this).apply {
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT
+        }.also { input ->
+            container.addView(input, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+        }
+    }
+
+    private fun addBackgroundImagePicker(
+        container: LinearLayout,
+        selectedAssetName: String?,
+        selectedImageUri: String?,
+        onSelected: (String?, String?) -> Unit,
+        onPickExternal: () -> Unit
+    ): (String?, String?) -> Unit {
+        container.addView(TextView(this).apply {
+            text = getString(R.string.reader_bg_image)
+            textSize = 13f
+            setTextColor(readerTipColor)
+            setPadding(0, dp(10), 0, dp(4))
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val tiles = mutableMapOf<Pair<String?, String?>, LinearLayout>()
+        fun addTile(assetName: String?, imageUri: String?, title: String, drawable: Drawable?) {
+            val tile = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(3), dp(3), dp(3), dp(3))
+            }
+            val image = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = ColorDrawable(if (assetName == null && imageUri == null) readerBgColor else 0x00000000)
+                setImageDrawable(drawable)
+            }
+            val label = TextView(this).apply {
+                text = title
+                textSize = 10f
+                setSingleLine(true)
+                gravity = Gravity.CENTER
+                setTextColor(readerTextColor)
+            }
+            tile.addView(image, LinearLayout.LayoutParams(dp(54), dp(44)))
+            tile.addView(label, LinearLayout.LayoutParams(dp(62), LinearLayout.LayoutParams.WRAP_CONTENT))
+            tile.setOnClickListener {
+                onSelected(assetName, imageUri)
+                bindBgTiles(tiles, assetName, imageUri)
+            }
+            row.addView(tile, LinearLayout.LayoutParams(dp(66), dp(88)).apply {
+                marginEnd = dp(6)
+            })
+            tiles[assetName to imageUri] = tile
+        }
+        addTile(null, null, getString(R.string.reader_bg_image_none), null)
+        if (!selectedImageUri.isNullOrBlank()) {
+            val currentDrawable = runCatching {
+                contentResolver.openInputStream(Uri.parse(selectedImageUri))?.use { input ->
+                    Drawable.createFromStream(input, selectedImageUri)
+                }
+            }.getOrNull()
+            addTile(null, selectedImageUri, getString(R.string.reader_bg_image_current), currentDrawable)
+        }
+        val pickTile = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(4).toFloat()
+                setColor(0x00000000)
+                setStroke(dp(1), readerTipColor)
+            }
+            setOnClickListener { onPickExternal() }
+        }
+        pickTile.addView(TextView(this).apply {
+            text = "+"
+            textSize = 24f
+            gravity = Gravity.CENTER
+            setTextColor(readerTextColor)
+        }, LinearLayout.LayoutParams(dp(54), dp(44)))
+        pickTile.addView(TextView(this).apply {
+            text = getString(R.string.reader_select_image)
+            textSize = 10f
+            setSingleLine(true)
+            gravity = Gravity.CENTER
+            setTextColor(readerTextColor)
+        }, LinearLayout.LayoutParams(dp(62), LinearLayout.LayoutParams.WRAP_CONTENT))
+        row.addView(pickTile, LinearLayout.LayoutParams(dp(66), dp(88)).apply {
+            marginEnd = dp(6)
+        })
+        legadoBgAssets().forEach { asset ->
+            val drawable = runCatching {
+                assets.open("legado_bg/$asset").use { input ->
+                    Drawable.createFromStream(input, asset)
+                }
+            }.getOrNull()
+            addTile(asset, null, asset.substringBeforeLast("."), drawable)
+        }
+        container.addView(android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(row, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(96)
+        ))
+        bindBgTiles(tiles, selectedAssetName, selectedImageUri)
+        return { nextAssetName, nextImageUri -> bindBgTiles(tiles, nextAssetName, nextImageUri) }
+    }
+
+    private fun bindBgTiles(
+        tiles: Map<Pair<String?, String?>, LinearLayout>,
+        selectedAssetName: String?,
+        selectedImageUri: String?
+    ) {
+        tiles.forEach { (key, tile) ->
+            val selected = key.first == selectedAssetName && key.second == selectedImageUri
+            tile.background = GradientDrawable().apply {
+                cornerRadius = dp(4).toFloat()
+                setColor(0x00000000)
+                setStroke(dp(if (selected) 2 else 1), if (selected) 0xFF2E9F6E.toInt() else readerTipColor)
+            }
+        }
+    }
+
+    private fun legadoBgAssets(): List<String> {
+        return runCatching {
+            assets.list("legado_bg")?.toList().orEmpty()
+        }.getOrDefault(emptyList())
+    }
+
+    private fun showTextWeightDialog(onChanged: (M9TextWeight) -> Unit = {}) {
+        val choices = arrayOf(
+            getString(R.string.reader_text_weight_normal),
+            getString(R.string.reader_text_weight_bold),
+            getString(R.string.reader_text_weight_light)
+        )
+        AlertDialog.Builder(this)
+            .setTitle(R.string.reader_text_font_weight_converter)
+            .setSingleChoiceItems(choices, readerTextWeight.ordinal) { dialog, which ->
+                readerTextWeight = M9TextWeight.fromIndex(which)
+                readView.setTextWeight(readerTextWeight)
+                onChanged(readerTextWeight)
+                dialog.dismiss()
+                requestBookRelayout(immediate = true)
+            }
+            .show()
     }
 
     private fun showIndentDialog() {
@@ -1878,14 +2507,18 @@ class LegadoReaderActivity : AppCompatActivity() {
         val pageWidth = readView.contentWidth.takeIf { it > 0 } ?: (resources.displayMetrics.widthPixels - dp(44))
         val pageHeight = readView.contentHeight.takeIf { it > 0 } ?: (resources.displayMetrics.heightPixels - dp(220))
         val book = importedBook
-        lifecycleScope.launch {
+        paginationJob?.cancel()
+        paginationJob = lifecycleScope.launch {
             runCatching {
                 val loaded = loadOrReuseDocument(book, forceDocumentReload)
-                loaded to paginateDocument(
-                    document = loaded,
-                    contentWidthPx = pageWidth.coerceAtLeast(1),
-                    contentHeightPx = pageHeight.coerceAtLeast(dp(120))
-                )
+                val loadedPages = withContext(Dispatchers.Default) {
+                    paginateDocument(
+                        document = loaded,
+                        contentWidthPx = pageWidth.coerceAtLeast(1),
+                        contentHeightPx = pageHeight.coerceAtLeast(dp(120))
+                    )
+                }
+                loaded to loadedPages
             }.onSuccess { (loaded, loadedPages) ->
                 document = loaded
                 pages = loadedPages
@@ -1906,6 +2539,7 @@ class LegadoReaderActivity : AppCompatActivity() {
                     restorePersistedMatchIfPossible()
                 }
             }.onFailure { error ->
+                if (error is CancellationException) return@onFailure
                 readView.setPage(
                     TextPage(
                         title = currentReaderTitle(),
@@ -1933,11 +2567,13 @@ class LegadoReaderActivity : AppCompatActivity() {
             return document!!
         }
         val loaded = if (book != null) {
-            loadEbookDocument(
-                context = this@LegadoReaderActivity,
-                book = book,
-                preferredCharsetName = preferredCharsetName
-            )
+            withContext(Dispatchers.IO) {
+                loadEbookDocument(
+                    context = this@LegadoReaderActivity,
+                    book = book,
+                    preferredCharsetName = preferredCharsetName
+                )
+            }
         } else {
             EbookDocument(
                 title = LEGADO_READER_DEFAULT_TITLE,
@@ -1985,12 +2621,13 @@ class LegadoReaderActivity : AppCompatActivity() {
             textBottomJustify = textBottomJustify,
             paragraphIndent = "　".repeat(readerParagraphIndentCount),
             letterSpacingPx = dp(readerLetterSpacingDp).toFloat(),
-            textBold = readerTextBold,
+            textWeight = readerTextWeight,
             typeface = readerTypeface,
             paddingLeftPx = dp(readerPaddingDp),
             paddingRightPx = dp(readerPaddingDp),
             layoutMode = readerLayoutMode,
-            pageAnim = readerPageAnim
+            pageAnim = readerPageAnim,
+            showRubyText = showRubyText
         )
         return TextPageFactory(config).createPages(
             document = document,
@@ -2004,7 +2641,7 @@ class LegadoReaderActivity : AppCompatActivity() {
         return dp(12)
     }
 
-    private fun renderCurrentPage() {
+    private fun renderCurrentPage(forward: Boolean = true) {
         val normalPage = pages.getOrNull(pageIndex)
         val page = temporaryCuePage ?: normalPage
         if (page == null) {
@@ -2031,7 +2668,7 @@ class LegadoReaderActivity : AppCompatActivity() {
                 }
                 start.takeIf { it >= 0 }?.let { it until (it + query.length) }
             }
-        readView.setPage(page, highlight, searchHighlight)
+        readView.setPage(page, highlight, searchHighlight, forward = forward)
         updateProgressSeekBar()
         persistReaderSettings()
     }
@@ -2140,6 +2777,15 @@ class LegadoReaderActivity : AppCompatActivity() {
             .asSequence()
             .filter { it.key >= safeStart }
             .associate { (position, image) -> (position - safeStart) to image }
+        val shiftedRubySpans = chapter.rubySpans
+            .asSequence()
+            .filter { it.end > safeStart }
+            .mapNotNull { span ->
+                val start = (span.start - safeStart).coerceAtLeast(0)
+                val end = span.end - safeStart
+                if (end > start) span.copy(start = start, end = end) else null
+            }
+            .toList()
         val temporaryDocument = EbookDocument(
             title = document?.title ?: currentReaderTitle(),
             format = document?.format ?: "EPUB",
@@ -2148,7 +2794,8 @@ class LegadoReaderActivity : AppCompatActivity() {
                     title = chapter.title,
                     text = text,
                     sourcePath = chapter.sourcePath,
-                    images = shiftedImages
+                    images = shiftedImages,
+                    rubySpans = shiftedRubySpans
                 )
             )
         )
@@ -2173,7 +2820,7 @@ class LegadoReaderActivity : AppCompatActivity() {
             pageIndex = next
             activeCueIndex = -1
             temporaryCuePage = null
-            renderCurrentPage()
+            renderCurrentPage(forward = delta > 0)
         }
     }
 
@@ -2186,7 +2833,7 @@ class LegadoReaderActivity : AppCompatActivity() {
             pageIndex = next
             activeCueIndex = -1
             temporaryCuePage = null
-            renderCurrentPage()
+            renderCurrentPage(forward = delta > 0)
         }
     }
 
@@ -2381,8 +3028,17 @@ class LegadoReaderActivity : AppCompatActivity() {
         val page = pages.getOrNull(pageIndex) ?: return null
         return ReaderPageAnchor(
             chapterIndex = page.chapterIndex,
-            charPosition = page.charStart
+            charPosition = currentAnchorCharPosition(page)
         )
+    }
+
+    private fun currentAnchorCharPosition(page: TextPage): Int {
+        val cueMatch = cueMatchesByCueIndex[activeCueIndex]
+        if (cueMatch != null && cueMatch.chapterIndex == page.chapterIndex) {
+            return cueMatch.rawStart.coerceIn(page.charStart, page.charEnd.coerceAtLeast(page.charStart))
+        }
+        val middle = page.charStart + ((page.charEnd - page.charStart).coerceAtLeast(0) / 2)
+        return middle.coerceIn(page.charStart, page.charEnd.coerceAtLeast(page.charStart))
     }
 
     private fun pageIndexForAnchor(loadedPages: List<TextPage>, anchor: ReaderPageAnchor): Int {
@@ -2436,23 +3092,37 @@ class LegadoReaderActivity : AppCompatActivity() {
         }
         val pageWidth = readView.contentWidth.takeIf { it > 0 } ?: (resources.displayMetrics.widthPixels - dp(44))
         val pageHeight = readView.contentHeight.takeIf { it > 0 } ?: (resources.displayMetrics.heightPixels - dp(220))
-        val loadedPages = paginateDocument(
-            document = loaded,
-            contentWidthPx = pageWidth.coerceAtLeast(1),
-            contentHeightPx = pageHeight.coerceAtLeast(dp(120))
-        )
-        pages = loadedPages
-        temporaryCuePage = null
-        pageIndex = anchor?.let { pageIndexForAnchor(loadedPages, it) } ?: pageIndex.coerceIn(0, pages.lastIndex)
-        renderCurrentPage()
-        if (cueMatchesByCueIndex.isNotEmpty()) {
-            syncToAudioPosition(allowPageJump = isAudioPlaying())
-        } else {
-            Log.d(
-                LEGADO_READER_LOG_TAG,
-                "relayoutCurrentDocument no in-memory matches; trying persisted restore"
-            )
-            restorePersistedMatchIfPossible()
+        paginationJob?.cancel()
+        paginationJob = lifecycleScope.launch {
+            val relayoutResult = runCatching {
+                withContext(Dispatchers.Default) {
+                    paginateDocument(
+                        document = loaded,
+                        contentWidthPx = pageWidth.coerceAtLeast(1),
+                        contentHeightPx = pageHeight.coerceAtLeast(dp(120))
+                    )
+                }
+            }
+            val loadedPages = relayoutResult.getOrNull()
+            if (loadedPages == null) {
+                val error = relayoutResult.exceptionOrNull()
+                if (error is CancellationException) return@launch
+                Log.w(LEGADO_READER_LOG_TAG, "relayoutCurrentDocument failed", error)
+                return@launch
+            }
+            pages = loadedPages
+            temporaryCuePage = null
+            pageIndex = anchor?.let { pageIndexForAnchor(loadedPages, it) } ?: pageIndex.coerceIn(0, pages.lastIndex)
+            renderCurrentPage()
+            if (cueMatchesByCueIndex.isNotEmpty()) {
+                syncToAudioPosition(allowPageJump = isAudioPlaying())
+            } else {
+                Log.d(
+                    LEGADO_READER_LOG_TAG,
+                    "relayoutCurrentDocument no in-memory matches; trying persisted restore"
+                )
+                restorePersistedMatchIfPossible()
+            }
         }
     }
 
@@ -2545,7 +3215,7 @@ class LegadoReaderActivity : AppCompatActivity() {
         readerLineSpacingDp = state.lineSpacingDp
         readerParagraphSpacingDp = state.paragraphSpacingDp
         readerLetterSpacingDp = state.letterSpacingDp
-        readerTextBold = state.textBold
+        readerTextWeight = state.textWeight
         readerTypefaceIndex = state.typefaceIndex
         readerTypeface = when (readerTypefaceIndex) {
             1 -> Typeface.SERIF
@@ -2556,9 +3226,22 @@ class LegadoReaderActivity : AppCompatActivity() {
         readerPaddingDp = state.paddingDp
         readerLayoutMode = state.layoutMode
         readerPageAnim = state.pageAnim
-        readerBgColor = state.bgColor
-        readerTextColor = state.textColor
-        readerTipColor = state.tipColor
+        readerStyleConfigs = state.readerStyleConfigs
+            .takeIf { it.isNotEmpty() }
+            ?.toMutableList()
+            ?: defaultLegadoReaderStyleConfigs().toMutableList()
+        readerStyleSelect = state.readerStyleSelect.coerceIn(0, readerStyleConfigs.lastIndex)
+        readerStyleConfigs[readerStyleSelect].let { style ->
+            readerBgColor = style.bgColor
+            readerTextColor = style.textColor
+            readerTipColor = style.tipColor
+            readerBgAlpha = style.bgAlpha
+            readerDarkStatusIcon = style.darkStatusIcon
+            readerUnderline = style.underline
+            readerBgAssetName = style.bgAssetName
+            readerBgImageUri = style.bgImageUri
+        }
+        readerCueHighlightColor = state.cueHighlightColor
         hideStatusBar = state.hideStatusBar
         readBodyToLh = state.readBodyToLh
         hideNavigationBar = state.hideNavigationBar
@@ -2570,17 +3253,22 @@ class LegadoReaderActivity : AppCompatActivity() {
         useZhLayout = state.useZhLayout
         textFullJustify = state.textFullJustify
         textBottomJustify = state.textBottomJustify
-        clickMode = state.clickMode
+        clickRegionActions =
+            if (state.layoutMode == M9LayoutMode.VERTICAL &&
+                state.clickRegionActions == ReadView.defaultClickRegionActions(M9LayoutMode.HORIZONTAL)
+            ) {
+                ReadView.defaultClickRegionActions(M9LayoutMode.VERTICAL)
+            } else {
+                state.clickRegionActions
+            }
         progressByChapter = state.progressByChapter
         keepScreenOn = state.keepScreenOn
-        mouseWheelPage = state.mouseWheelPage
-        keyPageOnLongPress = state.keyPageOnLongPress
         noAnimScrollPage = state.noAnimScrollPage
         previewImageByClick = state.previewImageByClick
-        optimizeRender = state.optimizeRender
         disableReturnKey = state.disableReturnKey
         readBarStyleFollowPage = state.readBarStyleFollowPage
         playbackBarPinnedVisible = state.playbackBarPinnedVisible
+        showRubyText = state.showRubyText
         preferredCharsetName = state.preferredCharsetName
         pendingRestoreAnchor = ReaderPageAnchor(
             chapterIndex = state.currentChapterIndex,
@@ -2609,15 +3297,15 @@ class LegadoReaderActivity : AppCompatActivity() {
                 lineSpacingDp = readerLineSpacingDp,
                 paragraphSpacingDp = readerParagraphSpacingDp,
                 letterSpacingDp = readerLetterSpacingDp,
-                textBold = readerTextBold,
+                textWeight = readerTextWeight,
                 typefaceIndex = readerTypefaceIndex,
                 paragraphIndentCount = readerParagraphIndentCount,
                 paddingDp = readerPaddingDp,
                 layoutMode = readerLayoutMode,
                 pageAnim = readerPageAnim,
-                bgColor = readerBgColor,
-                textColor = readerTextColor,
-                tipColor = readerTipColor,
+                readerStyleSelect = readerStyleSelect,
+                readerStyleConfigs = readerStyleConfigs.toList(),
+                cueHighlightColor = readerCueHighlightColor,
                 hideStatusBar = hideStatusBar,
                 readBodyToLh = readBodyToLh,
                 hideNavigationBar = hideNavigationBar,
@@ -2629,17 +3317,15 @@ class LegadoReaderActivity : AppCompatActivity() {
                 useZhLayout = useZhLayout,
                 textFullJustify = textFullJustify,
                 textBottomJustify = textBottomJustify,
-                clickMode = clickMode,
+                clickRegionActions = clickRegionActions,
                 progressByChapter = progressByChapter,
                 keepScreenOn = keepScreenOn,
-                mouseWheelPage = mouseWheelPage,
-                keyPageOnLongPress = keyPageOnLongPress,
                 noAnimScrollPage = noAnimScrollPage,
                 previewImageByClick = previewImageByClick,
-                optimizeRender = optimizeRender,
                 disableReturnKey = disableReturnKey,
                 readBarStyleFollowPage = readBarStyleFollowPage,
                 playbackBarPinnedVisible = playbackBarPinnedVisible,
+                showRubyText = showRubyText,
                 preferredCharsetName = preferredCharsetName,
                 currentBookUri = importedBook?.uri?.toString(),
                 currentChapterIndex = anchor?.chapterIndex ?: 0,
@@ -2685,6 +3371,10 @@ class LegadoReaderActivity : AppCompatActivity() {
             14f,
             MENU_TEXT
         )
+        val cueHighlightButton = styleConfigButton(
+            R.string.reader_match_highlight_color,
+            readerCueHighlightColor
+        )
         val seekBar = SeekBar(this).apply {
             max = MATCH_SEARCH_WINDOW_MAX - MATCH_SEARCH_WINDOW_MIN
             progress = (matchSearchWindow - MATCH_SEARCH_WINDOW_MIN).coerceIn(0, max)
@@ -2706,6 +3396,26 @@ class LegadoReaderActivity : AppCompatActivity() {
         container.addView(summaryText, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)))
         container.addView(windowText, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)))
         container.addView(seekBar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)))
+        container.addView(cueHighlightButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(42)
+        ).apply {
+            bottomMargin = dp(10)
+            topMargin = dp(8)
+        })
+        cueHighlightButton.setOnClickListener {
+            showReaderColorPicker(READER_CUE_HIGHLIGHT_DIALOG_ID, readerCueHighlightColor) { color ->
+                readerCueHighlightColor = color
+                readView.setCueHighlightColor(readerCueHighlightColor)
+                bindStyleConfigButton(
+                    cueHighlightButton,
+                    R.string.reader_match_highlight_color,
+                    readerCueHighlightColor
+                )
+                renderCurrentPage()
+                persistReaderSettings()
+            }
+        }
 
         val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.reader_match_title)
@@ -2886,8 +3596,23 @@ class LegadoReaderActivity : AppCompatActivity() {
         renderCurrentPage()
     }
 
+    override fun onColorSelected(dialogId: Int, color: Int) {
+        if (dialogId != pendingReaderColorDialogId) return
+        val callback = pendingReaderColorSelected ?: return
+        pendingReaderColorDialogId = -1
+        pendingReaderColorSelected = null
+        callback(color)
+    }
+
+    override fun onDialogDismissed(dialogId: Int) {
+        if (dialogId != pendingReaderColorDialogId) return
+        pendingReaderColorDialogId = -1
+        pendingReaderColorSelected = null
+    }
+
     override fun onDestroy() {
         reloadBookJob?.cancel()
+        paginationJob?.cancel()
         syncJob?.cancel()
         persistAudioPlaybackSnapshot()
         BookReaderFloatingBridge.removePlaybackStateListener(sharedPlaybackStateListener)
@@ -2913,6 +3638,10 @@ class LegadoReaderActivity : AppCompatActivity() {
         private const val READER_PAGE_BG = 0xFFF3E7CF.toInt()
         private const val READER_TEXT = 0xFF2C241B.toInt()
         private const val READER_TIP = 0xFF7D6E5C.toInt()
+        private const val READER_TEXT_COLOR_DIALOG_ID = 121
+        private const val READER_BG_COLOR_DIALOG_ID = 122
+        private const val READER_CUE_HIGHLIGHT_DIALOG_ID = 123
+        private const val LEGADO_COLOR_PICKER_IMAGE_BG_FALLBACK = 0xFF015A86.toInt()
         private const val MENU_BG = 0xFFF7F0E2.toInt()
         private const val MENU_TEXT = 0xFF2C241B.toInt()
         private const val SUBTLE_TEXT = 0xFF7D6E5C.toInt()

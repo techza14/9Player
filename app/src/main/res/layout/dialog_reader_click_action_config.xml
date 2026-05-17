@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/reader_click_region_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#66000000"
+    android:orientation="vertical"
+    android:padding="3dp">
+
+    <LinearLayout
+        android:id="@+id/reader_click_region_panel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_margin="3dp"
+            android:background="@drawable/reader_click_region_card"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="16dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="8dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/click_regional_config"
+                android:textColor="#FFFFFFFF"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/reader_click_region_close"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:gravity="center"
+                android:text="×"
+                android:textColor="#FFFFFFFF"
+                android:textSize="24sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/reader_click_region_top_left"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_margin="3dp"
+                android:layout_weight="1"
+                android:background="@drawable/reader_click_region_card"
+                android:gravity="center"
+                android:padding="12dp"
+                android:textColor="#FFFFFFFF"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/reader_click_region_top_center"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_margin="3dp"
+                android:layout_weight="1"
+                android:background="@drawable/reader_click_region_card"
+                android:gravity="center"
+                android:padding="12dp"
+                android:textColor="#FFFFFFFF"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/reader_click_region_top_right"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_margin="3dp"
+                android:layout_weight="1"
+                android:background="@drawable/reader_click_region_card"
+                android:gravity="center"
+                android:padding="12dp"
+                android:textColor="#FFFFFFFF"
+                android:textSize="16sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/reader_click_region_middle_left"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_margin="3dp"
+                android:layout_weight="1"
+                android:background="@drawable/reader_click_region_card"
+                android:gravity="center"
+                android:padding="12dp"
+                android:textColor="#FFFFFFFF"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/reader_click_region_middle_center"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_margin="3dp"
+                android:layout_weight="1"
+                android:background="@drawable/reader_click_region_card"
+                android:gravity="center"
+                android:padding="12dp"
+                android:textColor="#FFFFFFFF"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/reader_click_region_middle_right"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_margin="3dp"
+                android:layout_weight="1"
+                android:background="@drawable/reader_click_region_card"
+                android:gravity="center"
+                android:padding="12dp"
+                android:textColor="#FFFFFFFF"
+                android:textSize="16sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/reader_click_region_bottom_left"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_margin="3dp"
+                android:layout_weight="1"
+                android:background="@drawable/reader_click_region_card"
+                android:gravity="center"
+                android:padding="12dp"
+                android:textColor="#FFFFFFFF"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/reader_click_region_bottom_center"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_margin="3dp"
+                android:layout_weight="1"
+                android:background="@drawable/reader_click_region_card"
+                android:gravity="center"
+                android:padding="12dp"
+                android:textColor="#FFFFFFFF"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/reader_click_region_bottom_right"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_margin="3dp"
+                android:layout_weight="1"
+                android:background="@drawable/reader_click_region_card"
+                android:gravity="center"
+                android:padding="12dp"
+                android:textColor="#FFFFFFFF"
+                android:textSize="16sp" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

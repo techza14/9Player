@@ -28,7 +28,7 @@
                 android:gravity="center"
                 android:paddingStart="10dp"
                 android:paddingEnd="10dp"
-                android:text="@string/reader_style_weight_normal"
+                android:text="@string/reader_style_font_weight_text"
                 android:textColor="#2C241B"
                 android:textSize="14sp" />
 
@@ -179,88 +179,67 @@
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
-                android:text="@string/reader_style_anim_cover" />
+                android:background="@drawable/reader_segment_button"
+                android:button="@null"
+                android:gravity="center"
+                android:text="@string/reader_style_anim_cover"
+                android:textColor="@color/reader_segment_text" />
 
             <RadioButton
                 android:id="@+id/style_anim_slide"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
-                android:text="@string/reader_style_anim_slide" />
+                android:background="@drawable/reader_segment_button"
+                android:button="@null"
+                android:gravity="center"
+                android:text="@string/reader_style_anim_slide"
+                android:textColor="@color/reader_segment_text" />
 
             <RadioButton
                 android:id="@+id/style_anim_scroll"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
-                android:text="@string/reader_style_anim_scroll" />
+                android:background="@drawable/reader_segment_button"
+                android:button="@null"
+                android:gravity="center"
+                android:text="@string/reader_style_anim_scroll"
+                android:textColor="@color/reader_segment_text" />
 
             <RadioButton
                 android:id="@+id/style_anim_none"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
+                android:background="@drawable/reader_segment_button"
+                android:button="@null"
                 android:checked="true"
-                android:text="@string/reader_style_anim_none" />
+                android:gravity="center"
+                android:text="@string/reader_style_anim_none"
+                android:textColor="@color/reader_segment_text" />
         </RadioGroup>
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="32dp"
             android:gravity="center_vertical"
-            android:text="@string/reader_style_background"
+            android:text="@string/reader_style_color_background"
             android:textColor="#7D6E5C"
             android:textSize="12sp" />
 
-        <LinearLayout
-            android:id="@+id/style_color_row"
+        <HorizontalScrollView
             android:layout_width="match_parent"
             android:layout_height="54dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:overScrollMode="never"
+            android:scrollbars="none">
 
-            <TextView
-                android:id="@+id/style_color_paper"
-                android:layout_width="0dp"
-                android:layout_height="42dp"
-                android:layout_marginEnd="8dp"
-                android:layout_weight="1"
-                android:background="#F3E7CF"
-                android:gravity="center"
-                android:text="@string/reader_style_sample_text"
-                android:textColor="#2C241B" />
-
-            <TextView
-                android:id="@+id/style_color_white"
-                android:layout_width="0dp"
-                android:layout_height="42dp"
-                android:layout_marginEnd="8dp"
-                android:layout_weight="1"
-                android:background="#FFFFFF"
-                android:gravity="center"
-                android:text="@string/reader_style_sample_text"
-                android:textColor="#111111" />
-
-            <TextView
-                android:id="@+id/style_color_green"
-                android:layout_width="0dp"
-                android:layout_height="42dp"
-                android:layout_marginEnd="8dp"
-                android:layout_weight="1"
-                android:background="#D9E6D2"
-                android:gravity="center"
-                android:text="@string/reader_style_sample_text"
-                android:textColor="#25301F" />
-
-            <TextView
-                android:id="@+id/style_color_dark"
-                android:layout_width="0dp"
-                android:layout_height="42dp"
-                android:layout_weight="1"
-                android:background="#1F1F1F"
-                android:gravity="center"
-                android:text="@string/reader_style_sample_text"
-                android:textColor="#D8D2C5" />
-        </LinearLayout>
+            <LinearLayout
+                android:id="@+id/style_color_row"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center_vertical"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
     </LinearLayout>
 </ScrollView>

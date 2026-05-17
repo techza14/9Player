@@ -3,15 +3,18 @@ package moe.tekuza.m9player.legado.reader.provider
 import android.graphics.Paint
 import android.text.TextPaint
 import moe.tekuza.m9player.EBOOK_IMAGE_MARKER
+import moe.tekuza.m9player.EbookRubySpan
 import moe.tekuza.m9player.VerticalTextGlyphEngine
 import moe.tekuza.m9player.decodeBitmapBounds
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9ReadBookConfig
+import moe.tekuza.m9player.legado.reader.applyM9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.ImageColumn
 import moe.tekuza.m9player.legado.reader.entities.TextChapter
 import moe.tekuza.m9player.legado.reader.entities.TextColumn
 import moe.tekuza.m9player.legado.reader.entities.TextLine
 import moe.tekuza.m9player.legado.reader.entities.TextPage
+import kotlin.math.ceil
 import kotlin.math.max
 
 internal class VerticalTextChapterLayout(
@@ -22,16 +25,25 @@ internal class VerticalTextChapterLayout(
     private val contentPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = config.textSizePx
         color = config.textColor
-        isFakeBoldText = config.textBold
-        typeface = config.typeface
+        applyM9TextWeight(config.textWeight, config.typeface)
     }
     private val fontMetrics = contentPaint.fontMetrics
     private val glyphWidth = VerticalTextGlyphEngine.estimateCellWidth(contentPaint)
-    private val columnWidth = (glyphWidth + config.lineSpacingPx).coerceAtLeast(1f)
+    private val baseColumnWidth = (glyphWidth + config.lineSpacingPx).coerceAtLeast(1f)
     private val glyphHeight = (fontMetrics.descent - fontMetrics.ascent + config.letterSpacingPx).coerceAtLeast(1f)
     private val paragraphSpacing = (config.paragraphSpacingPx * 0.35f).coerceAtLeast(0f)
+    private var columnWidth = baseColumnWidth
+    private var rubyReservePx = 0f
+    private var rubyByStart: Map<Int, EbookRubySpan> = emptyMap()
 
     fun layout(chapter: TextChapter): TextChapter {
+        rubyReservePx = if (chapter.rubySpans.isNotEmpty()) {
+            (config.textSizePx * 0.58f).coerceAtLeast(8f)
+        } else {
+            0f
+        }
+        columnWidth = baseColumnWidth + rubyReservePx
+        rubyByStart = chapter.rubySpans.associateBy { it.start }
         val text = chapter.text
         if (text.isBlank()) {
             chapter.addPage(
@@ -51,7 +63,7 @@ internal class VerticalTextChapterLayout(
         }
 
         val pageColumns = mutableListOf<MutableList<TextLine>>()
-        val pageRanges = mutableListOf<IntRange>()
+        val pageStarts = mutableListOf<Int>()
         var currentColumns = mutableListOf<TextLine>()
         var pageStart = 0
         var x = (visibleWidth - columnWidth).coerceAtLeast(0f)
@@ -67,7 +79,7 @@ internal class VerticalTextChapterLayout(
                 val imageLeft = x + columnWidth - imageSize.width
                 if (currentColumns.isNotEmpty() && imageLeft < 0f) {
                     pageColumns += currentColumns
-                    pageRanges += pageStart until currentColumns.last().chapterPosition + currentColumns.last().text.length
+                    pageStarts += pageStart
                     pageStart = paragraphStart
                     currentColumns = mutableListOf()
                     x = (visibleWidth - columnWidth).coerceAtLeast(0f)
@@ -92,7 +104,7 @@ internal class VerticalTextChapterLayout(
                 }
                 if (currentColumns.isNotEmpty() && x < 0f) {
                     pageColumns += currentColumns
-                    pageRanges += pageStart until currentColumns.last().chapterPosition + currentColumns.last().text.length
+                    pageStarts += pageStart
                     pageStart = lineStart
                     currentColumns = mutableListOf()
                     x = (visibleWidth - columnWidth).coerceAtLeast(0f)
@@ -111,7 +123,7 @@ internal class VerticalTextChapterLayout(
                 }
                 if (currentColumns.isNotEmpty() && x < 0f) {
                     pageColumns += currentColumns
-                    pageRanges += pageStart until currentColumns.last().chapterPosition + currentColumns.last().text.length
+                    pageStarts += pageStart
                     pageStart = lineStart
                     currentColumns = mutableListOf()
                     x = (visibleWidth - columnWidth).coerceAtLeast(0f)
@@ -120,7 +132,12 @@ internal class VerticalTextChapterLayout(
                 val count = if (token.length == 1) {
                     adjustVerticalBreakCount(text, lineStart, paragraphEnd, capacity)
                 } else {
-                    token.length
+                    val remainingCapacity = ((visibleHeight - y) / glyphHeight).toInt().coerceAtLeast(1)
+                    if (token.heightUnits > remainingCapacity) {
+                        token.length.coerceAtMost(remainingCapacity)
+                    } else {
+                        token.length
+                    }
                 }
                 val lineEnd = (lineStart + count).coerceAtMost(paragraphEnd)
                 val lineText = text.substring(lineStart, lineEnd)
@@ -145,21 +162,24 @@ internal class VerticalTextChapterLayout(
         }
         if (currentColumns.isNotEmpty()) {
             pageColumns += currentColumns
-            pageRanges += pageStart until currentColumns.last().chapterPosition + currentColumns.last().text.length
+            pageStarts += pageStart
         }
 
         pageColumns.forEachIndexed { index, columns ->
-            val range = pageRanges[index]
+            val rangeStart = pageStarts.getOrElse(index) { 0 }.coerceIn(0, text.length)
+            val rangeEnd = pageStarts.getOrNull(index + 1)
+                ?.coerceIn(rangeStart, text.length)
+                ?: text.length
             val page = TextPage(
                 index = index,
                 pageInChapter = index,
                 chapterPageCount = pageColumns.size,
                 chapterIndex = chapter.chapterIndex,
                 chapterSize = chapter.chaptersSize,
-                charStart = range.first,
-                charEnd = range.last + 1,
+                charStart = rangeStart,
+                charEnd = rangeEnd,
                 title = chapter.title,
-                text = text.substring(range.first, (range.last + 1).coerceIn(range.first, text.length))
+                text = text.substring(rangeStart, rangeEnd.coerceIn(rangeStart, text.length))
             )
             columns.forEach { line ->
                 val rebased = line.copy(pagePosition = line.chapterPosition - page.charStart)
@@ -168,6 +188,8 @@ internal class VerticalTextChapterLayout(
                         is TextColumn -> {
                             column.sourceStart -= page.charStart
                             column.sourceEnd -= page.charStart
+                            column.rubySourceStart -= page.charStart
+                            column.rubySourceEnd -= page.charStart
                         }
                         is ImageColumn -> {
                             column.sourceStart -= page.charStart
@@ -177,6 +199,10 @@ internal class VerticalTextChapterLayout(
                 }
                 page.addLine(rebased)
             }
+            page.height = visibleHeight.toFloat()
+            page.width = page.lines.minOfOrNull { it.lineTop }
+                ?.let { minLeft -> (visibleWidth - minLeft).coerceAtLeast(columnWidth) }
+                ?: visibleWidth.toFloat()
             chapter.addPage(page)
         }
         return chapter
@@ -221,7 +247,8 @@ internal class VerticalTextChapterLayout(
             chapterPosition = chapterPosition,
             pagePosition = pagePosition,
             isParagraphEnd = isParagraphEnd,
-            layoutMode = M9LayoutMode.VERTICAL
+            layoutMode = M9LayoutMode.VERTICAL,
+            rubyReservePx = rubyReservePx
         )
         var y = startY
         var local = 0
@@ -247,13 +274,17 @@ internal class VerticalTextChapterLayout(
                 }
             } else {
                 val tokenHeight = glyphHeight * token.heightUnits.coerceAtLeast(1)
+                val ruby = rubyByStart[sourceStart]
                 line.addColumn(
                     TextColumn(
                         start = y,
                         end = y + tokenHeight,
                         charData = tokenText,
                         sourceStart = sourceStart,
-                        sourceEnd = sourceEnd
+                        sourceEnd = sourceEnd,
+                        rubyText = ruby?.text,
+                        rubySourceStart = ruby?.start ?: sourceStart,
+                        rubySourceEnd = ruby?.end ?: sourceEnd
                     )
                 )
                 y += tokenHeight
@@ -326,10 +357,16 @@ internal class VerticalTextChapterLayout(
             while (index < end && VerticalTextGlyphEngine.isAsciiWordChar(text[index])) {
                 index += 1
             }
+            val tokenText = text.substring(start, index)
+            val measuredUnits = ceil(
+                (contentPaint.measureText(tokenText) / glyphHeight)
+                    .coerceAtLeast(1f)
+                    .toDouble()
+            ).toInt()
             return VerticalToken(
-                text = text.substring(start, index),
+                text = tokenText,
                 length = index - start,
-                heightUnits = 2
+                heightUnits = (measuredUnits + 1).coerceAtLeast(2)
             )
         }
         return VerticalToken(

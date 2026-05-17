@@ -15,6 +15,8 @@ internal data class TextPage(
     var totalPages: Int = 1,
     var charStart: Int = 0,
     var charEnd: Int = 0,
+    var height: Float = 0f,
+    var width: Float = 0f,
     private val textLines: ArrayList<TextLine> = arrayListOf()
 ) {
     val lines: List<TextLine> get() = textLines
