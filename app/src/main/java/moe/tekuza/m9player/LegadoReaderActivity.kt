@@ -1524,7 +1524,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         readView.setReaderColors(readerBgColor, readerTextColor, readerTipColor, readerBgAssetName, readerBgImageUri, readerBgAlpha)
         applyReadBarStyle()
         persistReaderSettings()
-        requestBookRelayout()
     }
 
     private fun startSearch(query: String) {

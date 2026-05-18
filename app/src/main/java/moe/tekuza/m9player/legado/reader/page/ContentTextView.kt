@@ -7,7 +7,6 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.TextPaint
 import android.util.AttributeSet
-import android.util.Log
 import android.util.TypedValue
 import android.view.View
 import moe.tekuza.m9player.EbookImageRef
@@ -22,8 +21,6 @@ import moe.tekuza.m9player.legado.reader.entities.TextPage
 import java.text.BreakIterator
 import java.util.Locale
 import kotlin.math.max
-
-private const val READER_LATIN_LOG_TAG = "M9ReaderLatin"
 
 internal class ContentTextView @JvmOverloads constructor(
     context: Context,
@@ -242,13 +239,7 @@ internal class ContentTextView @JvmOverloads constructor(
                 if (column !is TextColumn) return@forEachIndexed
                 if (!VerticalTextGlyphEngine.isAsciiAssistToken(column.charData)) return@forEachIndexed
                 if (localY < column.start || localY > column.end) return@forEachIndexed
-                val token = assistTokenAround(current, lineIndex, columnIndex)
-                Log.d(
-                    READER_LATIN_LOG_TAG,
-                    "assist hit line=$lineIndex column=$columnIndex source=${column.sourceStart}-${column.sourceEnd} " +
-                        "columnText='${column.charData}' token='${token?.text}' tokenSource=${token?.sourceStart}-${token?.sourceEnd}"
-                )
-                return token
+                return assistTokenAround(current, lineIndex, columnIndex)
             }
         }
         return null
@@ -293,11 +284,6 @@ internal class ContentTextView @JvmOverloads constructor(
         if (text.isBlank()) return null
         val rect = RectF(selectedRefs.first().rect)
         selectedRefs.drop(1).forEach { rect.union(it.rect) }
-        Log.d(
-            READER_LATIN_LOG_TAG,
-            "assist merge hit=$hitIndex refs=${selectedRefs.size} indexRange=$startIndex-$endIndex " +
-                "source=${selectedRefs.minOf { it.column.sourceStart }}-${selectedRefs.maxOf { it.column.sourceEnd }} text='$text' rect=$rect"
-        )
         return AssistToken(
             text = text,
             rect = rect,

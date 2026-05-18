@@ -11,7 +11,6 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.util.AttributeSet
-import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -34,8 +33,6 @@ import moe.tekuza.m9player.legado.reader.M9PageAnim
 import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.TextPage
 import kotlin.math.abs
-
-private const val READER_LATIN_LOG_TAG = "M9ReaderLatin"
 
 internal class ReadView @JvmOverloads constructor(
     context: Context,
@@ -1006,11 +1003,6 @@ internal class ReadView @JvmOverloads constructor(
             else -> (anchor.centerX() - overlayWidth / 2f).coerceIn(margin, maxLeft)
         }
         val top = (anchor.centerY() - overlayHeight / 2f).coerceIn(margin, maxTop)
-        Log.d(
-            READER_LATIN_LOG_TAG,
-            "overlay bounds anchor=$anchor overlay=${overlayWidth}x$overlayHeight view=${width}x$height " +
-                "left=$left top=$top maxLeft=$maxLeft maxTop=$maxTop"
-        )
         return RectF(left, top, left + overlayWidth, top + overlayHeight)
     }
 

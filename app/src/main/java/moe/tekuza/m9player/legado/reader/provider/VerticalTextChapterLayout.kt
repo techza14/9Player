@@ -2,7 +2,6 @@ package moe.tekuza.m9player.legado.reader.provider
 
 import android.graphics.Paint
 import android.text.TextPaint
-import android.util.Log
 import moe.tekuza.m9player.EBOOK_IMAGE_MARKER
 import moe.tekuza.m9player.EbookRubySpan
 import moe.tekuza.m9player.VerticalTextGlyphEngine
@@ -17,8 +16,6 @@ import moe.tekuza.m9player.legado.reader.entities.TextLine
 import moe.tekuza.m9player.legado.reader.entities.TextPage
 import kotlin.math.ceil
 import kotlin.math.max
-
-private const val READER_LATIN_LOG_TAG = "M9ReaderLatin"
 
 internal class VerticalTextChapterLayout(
     private val config: M9ReadBookConfig,
@@ -416,13 +413,6 @@ internal class VerticalTextChapterLayout(
                 }
                 return (cursor + count).coerceIn(cursor + 1, paragraphEnd)
             }
-            if (token.isLatinRun) {
-                Log.d(
-                    READER_LATIN_LOG_TAG,
-                    "layout latin token start=$cursor yUsed=$usedHeight remaining=${maxHeight - usedHeight} " +
-                        "heightPx=${token.heightPx} text='${token.text}'"
-                )
-            }
             cursor += token.length
             usedHeight += height
             lastEnd = cursor
@@ -438,19 +428,8 @@ internal class VerticalTextChapterLayout(
             .substring(0, count)
             .indexOfLast(VerticalTextGlyphEngine::isAsciiRunSpace)
         if (lastSpaceBeforeBreak >= 0) {
-            val result = (lastSpaceBeforeBreak + 1).coerceAtLeast(1)
-            Log.d(
-                READER_LATIN_LOG_TAG,
-                "fit latin by space maxHeight=$maxHeightPx breakText=$count result=$result " +
-                    "part='${text.take(result)}' rest='${text.drop(result)}'"
-            )
-            return result
+            return (lastSpaceBeforeBreak + 1).coerceAtLeast(1)
         }
-        Log.d(
-            READER_LATIN_LOG_TAG,
-            "fit latin hard maxHeight=$maxHeightPx breakText=$count " +
-                "part='${text.take(count)}' rest='${text.drop(count)}'"
-        )
         return count.coerceIn(1, text.length)
     }
 
