@@ -3,9 +3,11 @@ package moe.tekuza.m9player.legado.reader.provider
 import android.graphics.Paint
 import android.text.TextPaint
 import moe.tekuza.m9player.EBOOK_IMAGE_MARKER
+import moe.tekuza.m9player.EbookRubySpan
 import moe.tekuza.m9player.decodeBitmapBounds
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9ReadBookConfig
+import moe.tekuza.m9player.legado.reader.applyM9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.ImageColumn
 import moe.tekuza.m9player.legado.reader.entities.TextChapter
 import moe.tekuza.m9player.legado.reader.entities.TextColumn
@@ -21,15 +23,24 @@ internal class TextChapterLayout(
     private val contentPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = config.textSizePx
         color = config.textColor
-        isFakeBoldText = config.textBold
-        typeface = config.typeface
+        applyM9TextWeight(config.textWeight, config.typeface)
     }
     private val fontMetrics = contentPaint.fontMetrics
-    private val lineHeight = (fontMetrics.descent - fontMetrics.ascent + config.lineSpacingPx)
+    private val baseLineHeight = (fontMetrics.descent - fontMetrics.ascent + config.lineSpacingPx)
         .coerceAtLeast(1f)
     private val paragraphSpacing = config.paragraphSpacingPx.coerceAtLeast(0f)
+    private var lineHeight = baseLineHeight
+    private var rubyReservePx = 0f
+    private var rubyByStart: Map<Int, EbookRubySpan> = emptyMap()
 
     fun layout(chapter: TextChapter): TextChapter {
+        rubyReservePx = if (chapter.rubySpans.isNotEmpty()) {
+            (config.textSizePx * 0.58f).coerceAtLeast(8f)
+        } else {
+            0f
+        }
+        lineHeight = baseLineHeight + rubyReservePx
+        rubyByStart = chapter.rubySpans.associateBy { it.start }
         val text = chapter.text
         if (text.isBlank()) {
             chapter.addPage(
@@ -49,7 +60,7 @@ internal class TextChapterLayout(
         }
 
         val pageLineGroups = mutableListOf<MutableList<TextLine>>()
-        val pageRanges = mutableListOf<IntRange>()
+        val pageStarts = mutableListOf<Int>()
         var currentLines = mutableListOf<TextLine>()
         var pageStart = 0
         var y = 0f
@@ -68,9 +79,7 @@ internal class TextChapterLayout(
                 val imageHeight = imageHeight(chapter, paragraphStart)
                 if (currentLines.isNotEmpty() && y + imageHeight > visibleHeight) {
                     pageLineGroups += currentLines
-                    pageRanges += pageStart until currentLines.last().let {
-                        it.chapterPosition + it.text.length
-                    }
+                    pageStarts += pageStart
                     pageStart = paragraphStart
                     currentLines = mutableListOf()
                     y = 0f
@@ -109,9 +118,7 @@ internal class TextChapterLayout(
                 val lineText = text.substring(lineStart, lineEnd)
                 if (currentLines.isNotEmpty() && y + lineHeight > visibleHeight) {
                     pageLineGroups += currentLines
-                    pageRanges += pageStart until currentLines.last().let {
-                        it.chapterPosition + it.text.length
-                    }
+                    pageStarts += pageStart
                     pageStart = lineStart
                     currentLines = mutableListOf()
                     y = 0f
@@ -139,24 +146,27 @@ internal class TextChapterLayout(
         }
         if (currentLines.isNotEmpty()) {
             pageLineGroups += currentLines
-            pageRanges += pageStart until currentLines.last().let { it.chapterPosition + it.text.length }
+            pageStarts += pageStart
         }
 
         pageLineGroups.forEachIndexed { index, lines ->
             if (config.textBottomJustify) {
                 justifyPageBottom(lines)
             }
-            val range = pageRanges[index]
+            val rangeStart = pageStarts.getOrElse(index) { 0 }.coerceIn(0, text.length)
+            val rangeEnd = pageStarts.getOrNull(index + 1)
+                ?.coerceIn(rangeStart, text.length)
+                ?: text.length
             val page = TextPage(
                 index = index,
                 pageInChapter = index,
                 chapterPageCount = pageLineGroups.size,
                 chapterIndex = chapter.chapterIndex,
                 chapterSize = chapter.chaptersSize,
-                charStart = range.first,
-                charEnd = range.last + 1,
+                charStart = rangeStart,
+                charEnd = rangeEnd,
                 title = chapter.title,
-                text = text.substring(range.first, (range.last + 1).coerceIn(range.first, text.length))
+                text = text.substring(rangeStart, rangeEnd.coerceIn(rangeStart, text.length))
             )
             lines.forEach { line ->
                 val rebased = line.copy(
@@ -167,6 +177,8 @@ internal class TextChapterLayout(
                         is TextColumn -> {
                             column.sourceStart -= page.charStart
                             column.sourceEnd -= page.charStart
+                            column.rubySourceStart -= page.charStart
+                            column.rubySourceEnd -= page.charStart
                         }
                         is ImageColumn -> {
                             column.sourceStart -= page.charStart
@@ -176,6 +188,8 @@ internal class TextChapterLayout(
                 }
                 page.addLine(rebased)
             }
+            page.height = page.lines.maxOfOrNull { it.crossEnd } ?: visibleHeight.toFloat()
+            page.width = visibleWidth.toFloat()
             chapter.addPage(page)
         }
         return chapter
@@ -230,7 +244,7 @@ internal class TextChapterLayout(
         val line = TextLine(
             text = text,
             lineTop = y,
-            lineBase = y - fontMetrics.ascent,
+            lineBase = y + rubyReservePx - fontMetrics.ascent,
             lineBottom = y + lineHeight,
             crossStart = y,
             crossEnd = y + lineHeight,
@@ -239,7 +253,8 @@ internal class TextChapterLayout(
             pagePosition = pagePosition,
             isParagraphEnd = isParagraphEnd,
             layoutMode = M9LayoutMode.HORIZONTAL,
-            startX = startX
+            startX = startX,
+            rubyReservePx = rubyReservePx
         )
         var x = startX
         var local = 0
@@ -264,13 +279,17 @@ internal class TextChapterLayout(
                     )
                 }
             } else {
+                val ruby = rubyByStart[sourceStart]
                 line.addColumn(
                     TextColumn(
                         start = x,
                         end = x + width,
                         charData = char,
                         sourceStart = sourceStart,
-                        sourceEnd = sourceEnd
+                        sourceEnd = sourceEnd,
+                        rubyText = ruby?.text,
+                        rubySourceStart = ruby?.start ?: sourceStart,
+                        rubySourceEnd = ruby?.end ?: sourceEnd
                     )
                 )
             }

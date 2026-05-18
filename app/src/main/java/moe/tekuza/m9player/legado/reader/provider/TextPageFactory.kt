@@ -17,10 +17,11 @@ internal class TextPageFactory(
         val chapters = document.chapters.mapIndexed { index, chapter ->
             val textChapter = TextChapter(
                 chapterIndex = index,
-                title = chapter.title.ifBlank { document.title },
+                title = chapter.title,
                 text = chapter.text,
                 chaptersSize = document.chapters.size,
-                images = chapter.images
+                images = chapter.images,
+                rubySpans = if (config.showRubyText) chapter.rubySpans else emptyList()
             )
             when (config.layoutMode) {
                 M9LayoutMode.HORIZONTAL -> TextChapterLayout(config, contentWidthPx, contentHeightPx).layout(textChapter)
@@ -49,6 +50,8 @@ internal class TextPageFactory(
         return allPages.mapIndexed { index, page ->
             page.globalIndex = index
             page.totalPages = total
+            if (page.height <= 0f) page.height = contentHeightPx.toFloat()
+            if (page.width <= 0f) page.width = contentWidthPx.toFloat()
             page
         }
     }

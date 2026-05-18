@@ -20,6 +20,7 @@ internal data class TextLine(
     var isParagraphEnd: Boolean = false,
     var layoutMode: M9LayoutMode = M9LayoutMode.HORIZONTAL,
     var startX: Float = 0f,
+    var rubyReservePx: Float = 0f,
     private val textColumns: ArrayList<BaseColumn> = arrayListOf()
 ) {
     val columns: List<BaseColumn> get() = textColumns
@@ -37,31 +38,55 @@ internal data class TextLine(
     fun draw(
         view: moe.tekuza.m9player.legado.reader.page.ContentTextView,
         canvas: Canvas,
+        selection: IntRange?,
         highlight: IntRange?,
         search: IntRange?
     ) {
+        drawRangeBackground(canvas, view.selectionPaint, selection)
         drawRangeBackground(canvas, view.highlightPaint, highlight)
         drawRangeBackground(canvas, view.searchPaint, search)
         columns.forEach { column ->
-            val selected = column.intersects(highlight) || column.intersects(search)
+            val selected = column.intersects(selection) || column.intersects(highlight) || column.intersects(search)
             column.draw(view, canvas, this, selected)
         }
     }
 
     private fun drawRangeBackground(canvas: Canvas, paint: Paint, range: IntRange?) {
         if (range == null || columns.isEmpty()) return
-        val selectedColumns = columns.filter { it.intersects(range) }
+        val selectedColumns = columns.filter { it.intersects(range) }.sortedBy { it.start }
         if (selectedColumns.isEmpty()) return
+        val mergeGap = when (layoutMode) {
+            M9LayoutMode.HORIZONTAL -> max(1f, height * 0.25f)
+            M9LayoutMode.VERTICAL -> max(1f, width * 0.25f)
+        }
+        var groupStart = selectedColumns.first()
+        var groupEnd = groupStart
+        selectedColumns.drop(1).forEach { column ->
+            val visualContinuous = column.start - groupEnd.end <= mergeGap
+            val sourceContinuous = column.sourceStart <= groupEnd.sourceEnd
+            if (visualContinuous || sourceContinuous) {
+                groupEnd = column
+            } else {
+                drawRangeSegment(canvas, paint, groupStart, groupEnd)
+                groupStart = column
+                groupEnd = column
+            }
+        }
+        drawRangeSegment(canvas, paint, groupStart, groupEnd)
+    }
+
+    private fun drawRangeSegment(
+        canvas: Canvas,
+        paint: Paint,
+        start: BaseColumn,
+        end: BaseColumn
+    ) {
         when (layoutMode) {
             M9LayoutMode.HORIZONTAL -> {
-                val left = selectedColumns.minOf { it.start }
-                val right = selectedColumns.maxOf { it.end }
-                canvas.drawRect(left, crossStart, right, crossEnd, paint)
+                canvas.drawRect(start.start, lineTop, end.end, lineBottom, paint)
             }
             M9LayoutMode.VERTICAL -> {
-                val top = selectedColumns.minOf { it.start }
-                val bottom = selectedColumns.maxOf { it.end }
-                canvas.drawRect(lineTop, top, lineBottom, bottom, paint)
+                canvas.drawRect(lineTop, start.start, lineBottom, end.end, paint)
             }
         }
     }

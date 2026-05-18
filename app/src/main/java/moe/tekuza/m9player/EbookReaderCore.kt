@@ -9,7 +9,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
 import java.io.ByteArrayInputStream
-import java.io.File
 import java.net.URLDecoder
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
@@ -27,7 +26,14 @@ internal data class EbookChapter(
     val title: String,
     val text: String,
     val sourcePath: String? = null,
-    val images: Map<Int, EbookImageRef> = emptyMap()
+    val images: Map<Int, EbookImageRef> = emptyMap(),
+    val rubySpans: List<EbookRubySpan> = emptyList()
+)
+
+internal data class EbookRubySpan(
+    val start: Int,
+    val end: Int,
+    val text: String
 )
 
 internal data class EbookImageRef(
@@ -283,28 +289,32 @@ private fun loadEpubDocument(
     val basePath = opfPath.substringBeforeLast('/', missingDelimiterValue = "")
     val title = opf.title.ifBlank { fallbackTitle }
     val epubImages = buildEpubImageMap(entries, opf.manifest, basePath)
-    val chapters = opf.spineIds.mapNotNull { id ->
-        val item = opf.manifest[id] ?: return@mapNotNull null
+    val tocTitles = buildEpubTocTitleMap(entries, opf, basePath, preferredCharsetName)
+    val chapters = opf.spineIds.mapIndexedNotNull { index, id ->
+        val item = opf.manifest[id] ?: return@mapIndexedNotNull null
         val path = resolveEpubPath(basePath, item.href)
-        val bytes = entries[path] ?: return@mapNotNull null
+        val bytes = entries[path] ?: return@mapIndexedNotNull null
         val html = bytes.decodeTextFile(preferredCharsetName)
         val content = htmlToReaderContent(html, path.substringBeforeLast('/', missingDelimiterValue = ""), epubImages)
-        if (content.text.isBlank()) return@mapNotNull null
+        if (content.text.isBlank()) return@mapIndexedNotNull null
         EbookChapter(
-            title = extractHtmlTitle(html).ifBlank { title },
+            title = tocTitles.titleForPath(path)
+                ?: fallbackEpubChapterTitle(html, isFirstSpineItem = index == 0),
             text = content.text,
             sourcePath = path,
-            images = content.images
+            images = content.images,
+            rubySpans = content.rubySpans
         )
     }.ifEmpty {
-        htmlEntries(entries).map { (path, bytes) ->
+        htmlEntries(entries).mapIndexed { index, (path, bytes) ->
             val html = bytes.decodeTextFile(preferredCharsetName)
             val content = htmlToReaderContent(html, path.substringBeforeLast('/', missingDelimiterValue = ""), epubImages)
             EbookChapter(
-                title = extractHtmlTitle(html).ifBlank { File(path).nameWithoutExtension },
+                title = fallbackEpubChapterTitle(html, isFirstSpineItem = index == 0),
                 text = content.text,
                 sourcePath = path,
-                images = content.images
+                images = content.images,
+                rubySpans = content.rubySpans
             )
         }.filter { it.text.isNotBlank() }
     }
@@ -325,13 +335,19 @@ private fun fallbackHtmlEpub(
         val html = bytes.decodeTextFile(preferredCharsetName)
         val content = htmlToReaderContent(html, path.substringBeforeLast('/', missingDelimiterValue = ""), epubImages)
         EbookChapter(
-            title = extractHtmlTitle(html).ifBlank { File(path).nameWithoutExtension },
+            title = fallbackEpubChapterTitle(html, isFirstSpineItem = false),
             text = content.text,
             sourcePath = path,
-            images = content.images
+            images = content.images,
+            rubySpans = content.rubySpans
         )
     }.filter { it.text.isNotBlank() }
     return EbookDocument(fallbackTitle, "EPUB", chapters.ifEmpty { listOf(EbookChapter(fallbackTitle, "")) })
+}
+
+private fun fallbackEpubChapterTitle(html: String, isFirstSpineItem: Boolean): String {
+    val title = extractHtmlTitle(html)
+    return if (title.isBlank() && isFirstSpineItem) "封面" else title
 }
 
 private fun htmlEntries(entries: Map<String, ByteArray>): List<Pair<String, ByteArray>> {
@@ -365,7 +381,11 @@ private fun parseContainerRootFile(xml: String): String? {
     return null
 }
 
-private data class OpfItem(val href: String, val mediaType: String?)
+private data class OpfItem(
+    val href: String,
+    val mediaType: String?,
+    val properties: String? = null
+)
 private data class OpfData(
     val title: String,
     val manifest: Map<String, OpfItem>,
@@ -390,7 +410,8 @@ private fun parseOpf(xml: String): OpfData {
                         if (id.isNotBlank() && href.isNotBlank()) {
                             manifest[id] = OpfItem(
                                 href = href,
-                                mediaType = parser.getAttributeValue(null, "media-type")
+                                mediaType = parser.getAttributeValue(null, "media-type"),
+                                properties = parser.getAttributeValue(null, "properties")
                             )
                         }
                     }
@@ -413,6 +434,116 @@ private fun parseOpf(xml: String): OpfData {
         type.contains("html", ignoreCase = true) || type.contains("xhtml", ignoreCase = true) || type.isBlank()
     }
     return OpfData(title = title, manifest = manifest, spineIds = readableSpine.ifEmpty { spine })
+}
+
+private fun buildEpubTocTitleMap(
+    entries: Map<String, ByteArray>,
+    opf: OpfData,
+    opfBasePath: String,
+    preferredCharsetName: String?
+): Map<String, String> {
+    val navItem = opf.manifest.values.firstOrNull { item ->
+        item.properties
+            ?.split(Regex("\\s+"))
+            ?.any { it.equals("nav", ignoreCase = true) } == true
+    }
+    val navTitles = navItem
+        ?.let { item -> resolveEpubPath(opfBasePath, item.href) }
+        ?.let { path ->
+            entries[path]
+                ?.decodeTextFile(preferredCharsetName)
+                ?.let { html -> parseNavHtmlToc(html, path.substringBeforeLast('/', missingDelimiterValue = "")) }
+        }
+        .orEmpty()
+    val ncxItem = opf.manifest.values.firstOrNull { item ->
+        val mediaType = item.mediaType.orEmpty()
+        mediaType.contains("dtbncx", ignoreCase = true) ||
+            item.href.endsWith(".ncx", ignoreCase = true)
+    }
+    val ncxTitles = ncxItem
+        ?.let { item -> resolveEpubPath(opfBasePath, item.href) }
+        ?.let { path ->
+            entries[path]
+                ?.decodeTextFile(preferredCharsetName)
+                ?.let { xml -> parseNcxToc(xml, path.substringBeforeLast('/', missingDelimiterValue = "")) }
+        }
+        .orEmpty()
+    return ncxTitles + navTitles
+}
+
+private fun parseNcxToc(xml: String, opfBasePath: String): Map<String, String> {
+    val parser = Xml.newPullParser()
+    parser.setInput(ByteArrayInputStream(xml.toByteArray(StandardCharsets.UTF_8)), "UTF-8")
+    val titles = linkedMapOf<String, String>()
+    var inNavPoint = false
+    var inNavLabel = false
+    var inText = false
+    var currentTitle = ""
+    var currentSrc = ""
+    while (parser.next() != XmlPullParser.END_DOCUMENT) {
+        when (parser.eventType) {
+            XmlPullParser.START_TAG -> when (parser.name) {
+                "navPoint" -> {
+                    inNavPoint = true
+                    currentTitle = ""
+                    currentSrc = ""
+                }
+                "navLabel" -> if (inNavPoint) inNavLabel = true
+                "text" -> if (inNavLabel) inText = true
+                "content" -> if (inNavPoint) {
+                    currentSrc = parser.getAttributeValue(null, "src").orEmpty()
+                }
+            }
+            XmlPullParser.TEXT -> if (inText) {
+                currentTitle += parser.text.orEmpty()
+            }
+            XmlPullParser.END_TAG -> when (parser.name) {
+                "text" -> inText = false
+                "navLabel" -> inNavLabel = false
+                "navPoint" -> {
+                    val title = currentTitle.cleanTocTitle()
+                    if (title.isNotBlank() && currentSrc.isNotBlank()) {
+                        titles[resolveEpubPath(opfBasePath, currentSrc)] = title
+                    }
+                    inNavPoint = false
+                    inNavLabel = false
+                    inText = false
+                }
+            }
+        }
+    }
+    return titles
+}
+
+private fun parseNavHtmlToc(html: String, opfBasePath: String): Map<String, String> {
+    val navBlock = Regex("""(?is)<nav\b(?=[^>]*(?:epub:type|type)\s*=\s*['"]?toc\b)[^>]*>(.*?)</nav>""")
+        .find(html)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?: html
+    return Regex("""(?is)<a\b[^>]*href\s*=\s*(['"])(.*?)\1[^>]*>(.*?)</a>""")
+        .findAll(navBlock)
+        .mapNotNull { match ->
+            val href = Html.fromHtml(match.groupValues[2], Html.FROM_HTML_MODE_LEGACY)
+                .toString()
+                .trim()
+            val title = Html.fromHtml(match.groupValues[3], Html.FROM_HTML_MODE_LEGACY)
+                .toString()
+                .cleanTocTitle()
+            if (href.isBlank() || title.isBlank()) null else resolveEpubPath(opfBasePath, href) to title
+        }
+        .toMap()
+}
+
+private fun Map<String, String>.titleForPath(path: String): String? {
+    this[path]?.let { return it }
+    return entries.firstOrNull { (href, _) ->
+        href.substringBefore('#') == path
+    }?.value
+}
+
+private fun String.cleanTocTitle(): String {
+    return replace(Regex("\\s+"), " ").trim()
 }
 
 private fun splitTxtChapters(text: String): List<EbookChapter> {
@@ -547,7 +678,18 @@ private data class HtmlImageTag(
 
 private data class ReaderHtmlContent(
     val text: String,
-    val images: Map<Int, EbookImageRef>
+    val images: Map<Int, EbookImageRef>,
+    val rubySpans: List<EbookRubySpan> = emptyList()
+)
+
+private data class ParsedReaderText(
+    val text: String,
+    val rubySpans: List<EbookRubySpan>
+)
+
+private data class NormalizedTextMap(
+    val text: String,
+    val rawToNormalized: IntArray
 )
 
 private fun buildEpubImageMap(
@@ -577,6 +719,21 @@ private fun htmlToReaderContent(
     imageResources: Map<String, Pair<String?, ByteArray>>
 ): ReaderHtmlContent {
     var body = Regex("(?is)<body[^>]*>(.*?)</body>").find(html)?.groupValues?.getOrNull(1) ?: html
+    body = Regex("(?is)<(script|style)[^>]*>.*?</\\1>").replace(body, "")
+    val rubyTexts = linkedMapOf<Int, String>()
+    var rubyId = 0
+    body = Regex("(?is)<ruby\\b[^>]*>.*?</ruby>").replace(body) { match ->
+        val rubyHtml = match.value
+        val baseText = rubyBaseText(rubyHtml)
+        val annotation = rubyAnnotationText(rubyHtml)
+        if (baseText.isBlank() || annotation.isBlank()) {
+            baseText.escapeHtmlText()
+        } else {
+            val id = rubyId++
+            rubyTexts[id] = annotation
+            "$RUBY_START_MARKER$id$RUBY_MARKER_TERMINATOR${baseText.escapeHtmlText()}$RUBY_END_MARKER$id$RUBY_MARKER_TERMINATOR"
+        }
+    }
     val imageTags = mutableListOf<HtmlImageTag>()
     body = Regex("(?is)<img\\b[^>]*>").replace(body) { match ->
         val tag = match.value
@@ -594,14 +751,15 @@ private fun htmlToReaderContent(
     body = body
         .replace(Regex("(?is)<rt[^>]*>.*?</rt>"), "")
         .replace(Regex("(?is)<rp[^>]*>.*?</rp>"), "")
-        .replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"), "")
         .replace(Regex("(?i)<br\\s*/?>"), "\n")
         .replace(Regex("(?i)</p\\s*>"), "\n\n")
         .replace(Regex("(?i)</h[1-6]\\s*>"), "\n\n")
         .replace(Regex("(?i)</div\\s*>"), "\n")
-    val text = Html.fromHtml(body, Html.FROM_HTML_MODE_LEGACY)
+    val parsedText = Html.fromHtml(body, Html.FROM_HTML_MODE_LEGACY)
         .toString()
+        .parseRubyMarkers(rubyTexts)
         .normalizeReaderWhitespace()
+    val text = parsedText.text
     val images = linkedMapOf<Int, EbookImageRef>()
     var searchStart = 0
     imageTags.forEach { tag ->
@@ -617,7 +775,203 @@ private fun htmlToReaderContent(
             bytes = resource.second
         )
     }
-    return ReaderHtmlContent(text = text, images = images)
+    return ReaderHtmlContent(text = text, images = images, rubySpans = parsedText.rubySpans)
+}
+
+private const val RUBY_START_MARKER: Char = '\uE100'
+private const val RUBY_END_MARKER: Char = '\uE101'
+private const val RUBY_MARKER_TERMINATOR: Char = '\uE102'
+
+private fun rubyBaseText(rubyHtml: String): String {
+    val baseHtml = rubyHtml
+        .replace(Regex("(?is)<rt\\b[^>]*>.*?</rt>"), "")
+        .replace(Regex("(?is)<rp\\b[^>]*>.*?</rp>"), "")
+        .replace(Regex("(?is)</?ruby\\b[^>]*>"), "")
+        .replace(Regex("(?is)</?rb\\b[^>]*>"), "")
+    return Html.fromHtml(baseHtml, Html.FROM_HTML_MODE_LEGACY).toString().trim()
+}
+
+private fun rubyAnnotationText(rubyHtml: String): String {
+    return Regex("(?is)<rt\\b[^>]*>(.*?)</rt>")
+        .findAll(rubyHtml)
+        .joinToString("") { match ->
+            Html.fromHtml(match.groupValues[1], Html.FROM_HTML_MODE_LEGACY)
+                .toString()
+                .trim()
+        }
+        .trim()
+}
+
+private fun String.escapeHtmlText(): String {
+    return replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
+}
+
+private fun String.parseRubyMarkers(rubyTexts: Map<Int, String>): ParsedReaderText {
+    if (rubyTexts.isEmpty()) return ParsedReaderText(this, emptyList())
+    val out = StringBuilder(length)
+    val activeStarts = linkedMapOf<Int, Int>()
+    val spans = mutableListOf<EbookRubySpan>()
+    var index = 0
+    while (index < length) {
+        when (this[index]) {
+            RUBY_START_MARKER -> {
+                val marker = readRubyMarkerId(index)
+                if (marker != null) {
+                    activeStarts[marker.first] = out.length
+                    index = marker.second
+                } else {
+                    out.append(this[index])
+                    index += 1
+                }
+            }
+            RUBY_END_MARKER -> {
+                val marker = readRubyMarkerId(index)
+                if (marker != null) {
+                    val start = activeStarts.remove(marker.first)
+                    val annotation = rubyTexts[marker.first]
+                    if (start != null && annotation != null && out.length > start) {
+                        spans += EbookRubySpan(
+                            start = start,
+                            end = out.length,
+                            text = annotation
+                        )
+                    }
+                    index = marker.second
+                } else {
+                    out.append(this[index])
+                    index += 1
+                }
+            }
+            else -> {
+                out.append(this[index])
+                index += 1
+            }
+        }
+    }
+    return ParsedReaderText(out.toString(), spans)
+}
+
+private fun String.readRubyMarkerId(markerIndex: Int): Pair<Int, Int>? {
+    val end = indexOf(RUBY_MARKER_TERMINATOR, startIndex = markerIndex + 1)
+    if (end < 0) return null
+    val id = substring(markerIndex + 1, end).toIntOrNull() ?: return null
+    return id to (end + 1)
+}
+
+private fun ParsedReaderText.normalizeReaderWhitespace(): ParsedReaderText {
+    val normalized = text.normalizeReaderWhitespaceWithMap()
+    val spans = rubySpans.mapNotNull { span ->
+        val start = normalized.firstMappedAtOrAfter(span.start)
+        val end = normalized.lastMappedBefore(span.end)?.plus(1)
+        if (start != null && end != null && end > start) {
+            span.copy(start = start, end = end)
+        } else {
+            null
+        }
+    }
+    return ParsedReaderText(normalized.text, spans)
+}
+
+private fun String.normalizeReaderWhitespaceWithMap(): NormalizedTextMap {
+    val lineBreaksNormalized = mutableListOf<IndexedChar>()
+    var index = 0
+    while (index < length) {
+        val char = this[index]
+        when (char) {
+            '\r' -> {
+                lineBreaksNormalized += IndexedChar('\n', index)
+                if (getOrNull(index + 1) == '\n') index += 1
+            }
+            '\u00A0' -> lineBreaksNormalized += IndexedChar(' ', index)
+            else -> lineBreaksNormalized += IndexedChar(char, index)
+        }
+        index += 1
+    }
+
+    val lineTrimmed = mutableListOf<IndexedChar>()
+    var lineStart = 0
+    while (lineStart < lineBreaksNormalized.size) {
+        var lineEnd = lineStart
+        while (lineEnd < lineBreaksNormalized.size && lineBreaksNormalized[lineEnd].char != '\n') {
+            lineEnd += 1
+        }
+        var trimmedEnd = lineEnd
+        while (trimmedEnd > lineStart && lineBreaksNormalized[trimmedEnd - 1].char.isWhitespace()) {
+            trimmedEnd -= 1
+        }
+        for (i in lineStart until trimmedEnd) {
+            lineTrimmed += lineBreaksNormalized[i]
+        }
+        if (lineEnd < lineBreaksNormalized.size && lineBreaksNormalized[lineEnd].char == '\n') {
+            lineTrimmed += lineBreaksNormalized[lineEnd]
+        }
+        lineStart = lineEnd + 1
+    }
+
+    val collapsed = mutableListOf<IndexedChar>()
+    var collapsedIndex = 0
+    while (collapsedIndex < lineTrimmed.size) {
+        val char = lineTrimmed[collapsedIndex]
+        if (char.char != '\n') {
+            collapsed += char
+            collapsedIndex += 1
+            continue
+        }
+        var runEnd = collapsedIndex
+        while (runEnd < lineTrimmed.size && lineTrimmed[runEnd].char == '\n') {
+            runEnd += 1
+        }
+        val keep = minOf(2, runEnd - collapsedIndex)
+        for (i in 0 until keep) {
+            collapsed += lineTrimmed[collapsedIndex + i]
+        }
+        collapsedIndex = runEnd
+    }
+
+    var trimStart = 0
+    var trimEnd = collapsed.size
+    while (trimStart < trimEnd && collapsed[trimStart].char.isWhitespace()) trimStart += 1
+    while (trimEnd > trimStart && collapsed[trimEnd - 1].char.isWhitespace()) trimEnd -= 1
+    val finalChars = collapsed.subList(trimStart, trimEnd)
+    val rawToNormalized = IntArray(length + 1) { -1 }
+    val builder = StringBuilder(finalChars.size)
+    finalChars.forEachIndexed { normalizedIndex, indexedChar ->
+        builder.append(indexedChar.char)
+        if (indexedChar.rawIndex in rawToNormalized.indices && rawToNormalized[indexedChar.rawIndex] < 0) {
+            rawToNormalized[indexedChar.rawIndex] = normalizedIndex
+        }
+    }
+    rawToNormalized[length] = builder.length
+    return NormalizedTextMap(builder.toString(), rawToNormalized)
+}
+
+private data class IndexedChar(
+    val char: Char,
+    val rawIndex: Int
+)
+
+private fun NormalizedTextMap.firstMappedAtOrAfter(rawIndex: Int): Int? {
+    var index = rawIndex.coerceIn(0, rawToNormalized.lastIndex)
+    while (index < rawToNormalized.size) {
+        val mapped = rawToNormalized[index]
+        if (mapped >= 0) return mapped
+        index += 1
+    }
+    return null
+}
+
+private fun NormalizedTextMap.lastMappedBefore(rawEnd: Int): Int? {
+    var index = (rawEnd - 1).coerceIn(0, rawToNormalized.lastIndex)
+    while (index >= 0) {
+        val mapped = rawToNormalized[index]
+        if (mapped >= 0) return mapped
+        index -= 1
+    }
+    return null
 }
 
 private fun extractHtmlTitle(html: String): String {

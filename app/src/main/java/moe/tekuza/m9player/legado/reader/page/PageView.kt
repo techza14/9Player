@@ -3,12 +3,16 @@ package moe.tekuza.m9player.legado.reader.page
 import android.content.Context
 import android.view.Gravity
 import android.view.View
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.Typeface
 import android.graphics.RectF
+import android.net.Uri
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.util.TypedValue
 import moe.tekuza.m9player.EbookImageRef
+import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.TextPage
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -20,6 +24,10 @@ internal class PageView(context: Context) : LinearLayout(context) {
     private val pageView = TextView(context)
     private val progressView = TextView(context)
     private val clockView = TextView(context)
+    var solidBackgroundColor: Int? = null
+        private set
+    var currentPage: TextPage? = null
+        private set
     private lateinit var headerView: LinearLayout
     private lateinit var footerView: LinearLayout
     private var showHeaderFooter: Boolean = true
@@ -58,11 +66,34 @@ internal class PageView(context: Context) : LinearLayout(context) {
     }
 
     fun setPage(page: TextPage, highlight: IntRange?, search: IntRange?) {
+        currentPage = page
         titleView.text = page.title
         clockView.text = currentClockText()
         contentView.setPage(page, highlight, search)
         pageView.text = "${page.globalIndex + 1} / ${page.totalPages}"
         progressView.text = page.readProgress
+    }
+
+    fun setScrollContext(
+        pages: List<TextPage?>,
+        centerIndex: Int,
+        offset: Float,
+        horizontal: Boolean,
+        reverse: Boolean
+    ) {
+        contentView.setScrollContext(pages, centerIndex, offset, horizontal, reverse)
+    }
+
+    fun clearScrollContext() {
+        contentView.clearScrollContext()
+    }
+
+    fun clickScrollDistance(horizontal: Boolean, direction: Int, fallback: Float): Float {
+        return contentView.clickScrollDistance(horizontal, direction, fallback)
+    }
+
+    fun pageScrollExtent(page: TextPage?, horizontal: Boolean): Float {
+        return contentView.pageScrollExtent(page, horizontal)
     }
 
     fun findImageAt(x: Float, y: Float): EbookImageRef? {
@@ -84,8 +115,50 @@ internal class PageView(context: Context) : LinearLayout(context) {
         )
     }
 
-    fun setReaderColors(bg: Int, text: Int, tip: Int) {
-        setBackgroundColor(bg)
+    fun beginTextSelectionAt(x: Float, y: Float): Boolean {
+        return contentView.beginSelectionAt(
+            x = x - contentView.left,
+            y = y - contentView.top
+        )
+    }
+
+    fun updateSelectionStartAt(x: Float, y: Float): Boolean {
+        return contentView.updateSelectionStartAt(
+            x = x - contentView.left,
+            y = y - contentView.top
+        )
+    }
+
+    fun updateSelectionEndAt(x: Float, y: Float): Boolean {
+        return contentView.updateSelectionEndAt(
+            x = x - contentView.left,
+            y = y - contentView.top
+        )
+    }
+
+    fun clearTextSelection() {
+        contentView.clearSelection()
+    }
+
+    fun selectedText(): String = contentView.selectedText()
+
+    fun selectionHandleBounds(): Pair<RectF, RectF>? {
+        val bounds = contentView.selectionHandleBounds() ?: return null
+        bounds.first.offset(contentView.left.toFloat(), contentView.top.toFloat())
+        bounds.second.offset(contentView.left.toFloat(), contentView.top.toFloat())
+        return bounds
+    }
+
+    fun setReaderColors(
+        bg: Int,
+        text: Int,
+        tip: Int,
+        bgAssetName: String? = null,
+        bgImageUri: String? = null,
+        bgAlpha: Int = 100
+    ) {
+        solidBackgroundColor = bg
+        background = readerBackground(bg, bgAssetName, bgImageUri, bgAlpha)
         contentView.setTextColor(text)
         contentView.setHighlightTextColor(text)
         titleView.setTextColor(tip)
@@ -94,14 +167,41 @@ internal class PageView(context: Context) : LinearLayout(context) {
         progressView.setTextColor(tip)
     }
 
+    fun setCueHighlightColor(color: Int) {
+        contentView.setHighlightBackgroundColor(color)
+    }
+
+    private fun readerBackground(bg: Int, bgAssetName: String?, bgImageUri: String?, bgAlpha: Int): Drawable {
+        val alpha = (bgAlpha.coerceIn(0, 100) * 255 / 100)
+        val drawable = when {
+            !bgImageUri.isNullOrBlank() -> runCatching {
+                context.contentResolver.openInputStream(Uri.parse(bgImageUri))?.use { input ->
+                    Drawable.createFromStream(input, bgImageUri)
+                }
+            }.getOrNull() ?: ColorDrawable(bg)
+            !bgAssetName.isNullOrBlank() -> runCatching {
+                context.assets.open("legado_bg/$bgAssetName").use { input ->
+                    Drawable.createFromStream(input, bgAssetName)
+                }
+            }.getOrNull() ?: ColorDrawable(bg)
+            else -> ColorDrawable(bg)
+        }
+        drawable.alpha = alpha
+        return drawable
+    }
+
     fun setTextSizeSp(sizeSp: Float) {
         contentView.setTextSizePx(
             TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, sizeSp, resources.displayMetrics)
         )
     }
 
-    fun setFakeBoldText(enabled: Boolean) {
-        contentView.setFakeBoldText(enabled)
+    fun setTextWeight(weight: M9TextWeight) {
+        contentView.setTextWeight(weight)
+    }
+
+    fun setTextUnderline(enabled: Boolean) {
+        contentView.setTextUnderline(enabled)
     }
 
     fun setReaderTypeface(typeface: Typeface?) {

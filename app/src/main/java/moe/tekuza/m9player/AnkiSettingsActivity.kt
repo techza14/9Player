@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -28,6 +29,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -42,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
 import java.util.Locale
 import moe.tekuza.m9player.ui.theme.TsetTheme
 import kotlinx.coroutines.Dispatchers
@@ -99,6 +102,33 @@ private val ANKI_FIELD_VARIABLE_CHOICES = listOf(
     "{sentence}"
 )
 
+private const val LAPIS_MODEL_NAME = "Lapis"
+
+private val LAPIS_DEFAULT_FIELD_TEMPLATES = mapOf(
+    "Expression" to "{expression}",
+    "ExpressionFurigana" to "{furigana-plain}",
+    "ExpressionReading" to "{reading}",
+    "ExpressionAudio" to "{audio}",
+    "SelectionText" to "",
+    "MainDefinition" to "{glossary-first}",
+    "DefinitionPicture" to "",
+    "Sentence" to "{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}",
+    "SentenceFurigana" to "",
+    "SentenceAudio" to "{cut-audio}",
+    "Picture" to "",
+    "Glossary" to "{glossary}",
+    "Hint" to "",
+    "IsWordAndSentenceCard" to "",
+    "IsClickCard" to "x",
+    "IsSentenceCard" to "",
+    "IsAudioCard" to "",
+    "PitchPosition" to "{pitch-accent-positions}",
+    "PitchCategories" to "",
+    "Frequency" to "{frequencies}",
+    "FreqSort" to "{frequency-harmonic-rank}",
+    "MiscInfo" to "{book-title}"
+)
+
 private const val ANKI_MODEL_TEMPLATE_SNAPSHOTS_KEY = "anki_model_template_snapshots_json"
 private const val ANKI_EXPORT_PREFS_NAME = "anki_export_config"
 private const val ANKI_CONFIG_LOG_TAG = "AnkiConfig"
@@ -149,6 +179,8 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
     var duplicateAction by remember { mutableStateOf("prevent") }
     var lookupExportFullSentence by remember { mutableStateOf(false) }
     var lookupRangeSelectionEnabled by remember { mutableStateOf(false) }
+    var showClearFieldTemplatesConfirm by remember { mutableStateOf(false) }
+    var showApplyLapisDefaultsConfirm by remember { mutableStateOf(false) }
 
     val requestAnkiPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -293,6 +325,35 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
         persistAnkiConfig()
     }
 
+    fun applyLapisDefaultTemplates() {
+        val lapisModel = ankiModels.firstOrNull { it.name == LAPIS_MODEL_NAME }
+        if (lapisModel == null) {
+            Toast.makeText(context, context.getString(R.string.anki_lapis_model_missing), Toast.LENGTH_SHORT).show()
+            return
+        }
+        val missingFields = LAPIS_DEFAULT_FIELD_TEMPLATES.keys
+            .filterNot { required -> lapisModel.fields.any { it == required } }
+        if (missingFields.isNotEmpty()) {
+            Toast.makeText(
+                context,
+                context.getString(R.string.anki_lapis_fields_invalid, missingFields.take(3).joinToString(", ")),
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        val previousModelName = ankiModelName.trim()
+        if (previousModelName.isNotBlank()) {
+            ankiModelTemplateSnapshots[previousModelName] = ankiFieldTemplates.toMap()
+        }
+        ankiModelName = lapisModel.name
+        syncTemplatesWithModelFields(
+            fields = lapisModel.fields,
+            modelTemplates = LAPIS_DEFAULT_FIELD_TEMPLATES
+        )
+        ankiModelTemplateSnapshots[lapisModel.name] = ankiFieldTemplates.toMap()
+        persistAnkiConfig()
+    }
+
     LaunchedEffect(Unit) {
         val persistedAnki = loadPersistedAnkiConfig(context)
         val duplicateConfig = loadAnkiDuplicateConfig(context)
@@ -344,6 +405,52 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
                 activity.lifecycle.removeObserver(observer)
             }
         }
+    }
+
+    if (showClearFieldTemplatesConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearFieldTemplatesConfirm = false },
+            title = { Text(stringResource(R.string.anki_clear_field_variables_confirm_title)) },
+            text = { Text(stringResource(R.string.anki_clear_field_variables_confirm_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearFieldTemplatesConfirm = false
+                        clearCurrentFieldTemplates()
+                    }
+                ) {
+                    Text(stringResource(R.string.common_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearFieldTemplatesConfirm = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+
+    if (showApplyLapisDefaultsConfirm) {
+        AlertDialog(
+            onDismissRequest = { showApplyLapisDefaultsConfirm = false },
+            title = { Text(stringResource(R.string.anki_lapis_defaults_confirm_title)) },
+            text = { Text(stringResource(R.string.anki_lapis_defaults_confirm_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showApplyLapisDefaultsConfirm = false
+                        applyLapisDefaultTemplates()
+                    }
+                ) {
+                    Text(stringResource(R.string.common_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showApplyLapisDefaultsConfirm = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
     }
 
     SettingsScaffold(
@@ -551,32 +658,37 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
                     }
                 }
 
+                Text(stringResource(R.string.anki_field_variables), style = MaterialTheme.typography.titleSmall)
                 if (ankiModelFields.isNotEmpty()) {
-                    Text(stringResource(R.string.anki_field_variables), style = MaterialTheme.typography.titleSmall)
                     OutlinedButton(
-                        onClick = { clearCurrentFieldTemplates() }
+                        onClick = { showClearFieldTemplatesConfirm = true }
                     ) {
                         Text(stringResource(R.string.anki_clear_field_variables))
                     }
-                    Text(
-                        stringResource(R.string.anki_field_variable_help)
-                    )
-                    ankiModelFields.forEach { field ->
-                        val selectedValue = ankiFieldTemplates[field].orEmpty()
-                        AnkiFieldVariableInput(
-                            fieldName = field,
-                            value = selectedValue,
-                            options = fieldVariableChoices,
-                            onValueChange = { value ->
-                                ankiFieldTemplates[field] = value
-                                val currentModelName = ankiModelName.trim()
-                                if (currentModelName.isNotBlank()) {
-                                    ankiModelTemplateSnapshots[currentModelName] = ankiFieldTemplates.toMap()
-                                }
-                                persistAnkiConfig()
+                }
+                OutlinedButton(
+                    onClick = { showApplyLapisDefaultsConfirm = true }
+                ) {
+                    Text(stringResource(R.string.anki_use_lapis_default_templates))
+                }
+                Text(
+                    stringResource(R.string.anki_field_variable_help)
+                )
+                ankiModelFields.forEach { field ->
+                    val selectedValue = ankiFieldTemplates[field].orEmpty()
+                    AnkiFieldVariableInput(
+                        fieldName = field,
+                        value = selectedValue,
+                        options = fieldVariableChoices,
+                        onValueChange = { value ->
+                            ankiFieldTemplates[field] = value
+                            val currentModelName = ankiModelName.trim()
+                            if (currentModelName.isNotBlank()) {
+                                ankiModelTemplateSnapshots[currentModelName] = ankiFieldTemplates.toMap()
                             }
-                        )
-                    }
+                            persistAnkiConfig()
+                        }
+                    )
                 }
             }
         }

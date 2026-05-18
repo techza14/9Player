@@ -205,6 +205,7 @@ companion object {
         val resultsHolder: PopupLookupResultsHolder,
         val contentReadyGate: PopupContentReadyGate = PopupContentReadyGate(),
         var shellReady: Boolean = false,
+        var contentReady: Boolean = false,
         var pendingResults: List<LookupResult> = emptyList(),
         var appliedResults: List<LookupResult>? = null,
     )
@@ -1939,8 +1940,8 @@ companion object {
                     .floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
                 fun finishRender(selectionRects: List<Rect>) {
                     if (lookupRequestNonce != requestNonce) return
-                    val anchorRects = initialAnchorRect?.let { listOf(it) }
-                        ?: selectionRects.firstOrNull()?.let { listOf(it) }
+                    val anchorRects = selectionRects.takeIf { it.isNotEmpty() }
+                        ?: initialAnchorRect?.let { listOf(it) }
                         ?: emptyList()
                     Log.d(
                         FLOATING_LOOKUP_TAP_LOG_TAG,
@@ -2230,7 +2231,7 @@ companion object {
                 placeBelow = layer.placeBelow,
                 preferSidePlacement = layer.preferSidePlacement,
                 preferredDirection = sizeSpec.preferredDirection,
-                strictNoOverlap = layerIndex > 0,
+                strictNoOverlap = layerIndex > 0 || avoidRects.isNotEmpty(),
                 gapPx = layout.gapPx,
                 screenPaddingPx = layout.screenPaddingPx
             ) ?: run {
@@ -2245,6 +2246,7 @@ companion object {
             logDebug(FLOATING_LOOKUP_LOG_TAG) {
                 "showCandidate layer=$layerIndex popupSize=${popupSize.width}x${popupSize.height} anchor=${layer.anchor?.rects?.size ?: 0} placeBelow=${layer.placeBelow} preferSide=${layer.preferSidePlacement} candidate=${candidate.x},${candidate.y}"
             }
+            host.alpha = if (isFloatingLookupHostContentReady(layerIndex, layer)) 1f else 0f
             val shown = showFloatingLookupHost(
                 layerIndex = layerIndex,
                 layer = layer,
@@ -2265,6 +2267,12 @@ companion object {
                 refreshFloatingLookupHostHighlight(layerIndex, host, layer)
             }
         }
+    }
+
+    private fun isFloatingLookupHostContentReady(layerIndex: Int, layer: ReaderLookupLayer): Boolean {
+        if (layer.hoshiResults.isEmpty()) return true
+        val tag = floatingHoshiLookupWebViews[layerIndex]?.tag as? FloatingHoshiLookupWebViewTag
+        return tag?.contentReady == true
     }
 
     private fun floatingHostSignature(layer: ReaderLookupLayer): Int {
@@ -2700,7 +2708,7 @@ companion object {
                 placeBelow = layer.placeBelow,
                 preferSidePlacement = layer.preferSidePlacement
             ).preferredDirection,
-            strictNoOverlap = layerIndex > 0,
+            strictNoOverlap = layerIndex > 0 || finalAvoidRects.isNotEmpty(),
             gapPx = layout.gapPx,
             screenPaddingPx = layout.screenPaddingPx
         ) ?: run {
@@ -2780,29 +2788,67 @@ companion object {
         val maxY = (windowSize.height - popupContentSize.height - screenPaddingPx).coerceAtLeast(screenPaddingPx)
         val preferredX = ((sourceBounds.left + sourceBounds.right) / 2 - popupContentSize.width / 2)
             .coerceIn(screenPaddingPx, maxX)
+        val preferredY = ((sourceBounds.top + sourceBounds.bottom) / 2 - popupContentSize.height / 2)
+            .coerceIn(screenPaddingPx, maxY)
         val lowerY = (guardBounds.bottom + gapPx).coerceIn(screenPaddingPx, maxY)
         val upperY = (guardBounds.top - popupContentSize.height - gapPx).coerceIn(screenPaddingPx, maxY)
         val yOrder = if (placeBelow) listOf(lowerY, upperY) else listOf(upperY, lowerY)
+        val rightX = (guardBounds.right + gapPx).coerceIn(screenPaddingPx, maxX)
+        val leftX = (guardBounds.left - popupContentSize.width - gapPx).coerceIn(screenPaddingPx, maxX)
+        val sideXOrder = when (preferredDirection) {
+            FloatingPopupDirection.RIGHT -> listOf(rightX, leftX)
+            FloatingPopupDirection.LEFT -> listOf(leftX, rightX)
+            else -> if (preferSidePlacement) listOf(rightX, leftX) else listOf(leftX, rightX)
+        }
         val forbiddenRects = (guardRects + avoidRects).distinctBy { rect ->
             "${rect.left},${rect.top},${rect.right},${rect.bottom}"
         }
 
-        yOrder.forEach { y ->
-            findFloatingNonOverlappingXAtY(
-                y = y,
-                preferredX = preferredX,
-                minX = screenPaddingPx,
-                maxX = maxX,
-                popupWidth = popupContentSize.width,
-                popupHeight = popupContentSize.height,
-                forbiddenRects = forbiddenRects
-            )?.let { x ->
-                return IntOffset(x, y)
+        fun verticalCandidate(): IntOffset? {
+            yOrder.forEach { y ->
+                findFloatingNonOverlappingXAtY(
+                    y = y,
+                    preferredX = preferredX,
+                    minX = screenPaddingPx,
+                    maxX = maxX,
+                    popupWidth = popupContentSize.width,
+                    popupHeight = popupContentSize.height,
+                    forbiddenRects = forbiddenRects
+                )?.let { x ->
+                    return IntOffset(x, y)
+                }
             }
+            return null
         }
 
-        if (strictNoOverlap) return null
+        fun sideCandidate(): IntOffset? {
+            sideXOrder.forEach { x ->
+                findFloatingNonOverlappingYAtX(
+                    x = x,
+                    preferredY = preferredY,
+                    minY = screenPaddingPx,
+                    maxY = maxY,
+                    popupWidth = popupContentSize.width,
+                    popupHeight = popupContentSize.height,
+                    forbiddenRects = forbiddenRects
+                )?.let { y ->
+                    return IntOffset(x, y)
+                }
+            }
+            return null
+        }
 
+        val preferSide = preferSidePlacement ||
+            preferredDirection == FloatingPopupDirection.LEFT ||
+            preferredDirection == FloatingPopupDirection.RIGHT
+        val candidate = if (preferSide) {
+            sideCandidate() ?: verticalCandidate()
+        } else {
+            verticalCandidate() ?: sideCandidate()
+        }
+        if (candidate != null) return candidate
+
+        if (strictNoOverlap) return null
         return yOrder.firstOrNull()?.let { y ->
             IntOffset(preferredX, y)
         }
@@ -2851,6 +2897,46 @@ companion object {
             }
         }
         return bestX
+    }
+
+    private fun findFloatingNonOverlappingYAtX(
+        x: Int,
+        preferredY: Int,
+        minY: Int,
+        maxY: Int,
+        popupWidth: Int,
+        popupHeight: Int,
+        forbiddenRects: List<IntRect>
+    ): Int? {
+        if (minY > maxY) return null
+        var segments = mutableListOf(FloatingXSegment(minY, maxY))
+        val popupLeft = x
+        val popupRight = x + popupWidth
+
+        forbiddenRects.forEach { rect ->
+            val horizontalOverlap = popupRight > rect.left && popupLeft < rect.right
+            if (!horizontalOverlap) return@forEach
+            val blockStart = rect.top - popupHeight + 1
+            val blockEnd = rect.bottom - 1
+            segments = subtractFloatingBlockedX(
+                segments = segments,
+                blockStart = blockStart,
+                blockEnd = blockEnd
+            ).toMutableList()
+            if (segments.isEmpty()) return null
+        }
+
+        var bestY: Int? = null
+        var bestDistance = Int.MAX_VALUE
+        segments.forEach { seg ->
+            val candidate = preferredY.coerceIn(seg.start, seg.end)
+            val distance = kotlin.math.abs(candidate - preferredY)
+            if (distance < bestDistance) {
+                bestDistance = distance
+                bestY = candidate
+            }
+        }
+        return bestY
     }
 
     private fun subtractFloatingBlockedX(
@@ -3533,6 +3619,7 @@ companion object {
             if (!webViewTag.shellReady || webViewTag.appliedResults === pendingResults) return
             webViewTag.appliedResults = pendingResults
             resultsHolder.results = pendingResults
+            webViewTag.contentReady = false
             webViewTag.contentReadyGate.reset()
             view.evaluateJavascript(
                 "window.replacePopupResults && window.replacePopupResults(${pendingResults.size})",
@@ -3580,7 +3667,14 @@ companion object {
                 )
             },
             onLookupRedirected = { selection, _ -> pushFloatingHoshiRecursiveLookup(layerIndex, selection) },
-            onContentReady = { scheduleFloatingLookupHostReposition(layerIndex, delayMs = 0L, reason = "hoshiContentReady") }
+            onContentReady = {
+                webViewTag.contentReady = true
+                floatingLookupHostViews[layerIndex]?.let { host ->
+                    host.alpha = 1f
+                    host.visibility = View.VISIBLE
+                }
+                scheduleFloatingLookupHostReposition(layerIndex, delayMs = 0L, reason = "hoshiContentReady")
+            }
         )
         callbackHolder.callbacks = callbacks
         val webView = existingWebView ?: FloatingHoshiLookupWebView(this).apply {
@@ -3631,6 +3725,7 @@ companion object {
         if (floatingHoshiLookupHtmlByLayer[layerIndex] != html) {
             floatingHoshiLookupHtmlByLayer[layerIndex] = html
             webViewTag.shellReady = false
+            webViewTag.contentReady = false
             webViewTag.appliedResults = null
             webViewTag.contentReadyGate.reset()
             webView.scrollTo(0, 0)
@@ -3655,6 +3750,13 @@ companion object {
             options = floatingHoshiLookupOptions(settings).copy(showRangeSelection = false),
         ) ?: return null
         val hoshiResults = popup.first.state.results
+        if (hoshiResults.isEmpty()) {
+            Log.d(
+                FLOATING_LOOKUP_TAP_LOG_TAG,
+                "floating hoshi recursive empty text='${selection.text.take(24)}'"
+            )
+            return null
+        }
         val groupedResults = groupFloatingHoshiResults(hoshiResults, dictionaries).take(3)
         val density = resources.displayMetrics.density.coerceAtLeast(0.1f)
         val rect = selection.rect
@@ -4374,14 +4476,10 @@ companion object {
             } else {
                 selectLookupScanText(tapData.scanText.ifBlank { tapData.text }, 0)?.text?.trim().orEmpty()
             }.takeIf { it.isNotBlank() } ?: run {
-                if (isEntryLikeTap) {
-                    Log.d(
-                        FLOATING_LOOKUP_TAP_LOG_TAG,
-                        "recursive keep layer on entry empty_term sourceLayer=$sourceLayerIndex"
-                    )
-                } else {
-                    truncateFloatingLookupLayersTo(sourceLayerIndex)
-                }
+                Log.d(
+                    FLOATING_LOOKUP_TAP_LOG_TAG,
+                    "recursive ignored empty_term sourceLayer=$sourceLayerIndex tapSource=${tapData.tapSource}"
+                )
                 return@launch
             }
             val requestNonce = lookupRequestNonce + 1L
@@ -4396,7 +4494,10 @@ companion object {
             )
             if (lookupRequestNonce != requestNonce) return@launch
             if (dictionaries.isEmpty()) {
-                hideFloatingLookup()
+                Log.d(
+                    FLOATING_LOOKUP_TAP_LOG_TAG,
+                    "recursive ignored no_dictionaries sourceLayer=$sourceLayerIndex term=$term"
+                )
                 return@launch
             }
             val anchorRect = tapData.screenRect ?: tapData.screenCharRects.firstOrNull() ?: Rect(
@@ -4427,48 +4528,18 @@ companion object {
                 val matchedLength = popup?.second
                     ?: hoshiResults.firstOrNull()?.matched?.length
                     ?: term.length
-                    ?: 1
                 Log.d(
                     FLOATING_LOOKUP_TAP_LOG_TAG,
                     "recursive hoshi result hits=${hoshiResults.size} term=$term matched=$matchedLength tapSource=${tapData.tapSource}"
                 )
                 if (hoshiResults.isEmpty()) {
-                    if (isEntryLikeTap) {
-                        Log.d(
-                            FLOATING_LOOKUP_TAP_LOG_TAG,
-                            "recursive keep layer on entry no_hits sourceLayer=$sourceLayerIndex term=$term"
-                        )
-                    } else {
-                        truncateFloatingLookupLayersTo(sourceLayerIndex)
-                    }
-                    Toast.makeText(
-                        this@AudiobookFloatingOverlayService,
-                        getString(R.string.bookreader_lookup_failed),
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    Log.d(
+                        FLOATING_LOOKUP_TAP_LOG_TAG,
+                        "recursive ignored no_hits sourceLayer=$sourceLayerIndex term=$term tapSource=${tapData.tapSource}"
+                    )
                     return@onSuccess
                 }
                 val resolvedRects = resolveDefinitionMatchedRects(tapData, matchedLength)
-                val rebuiltLocalRects = resolvedRects?.localCharRects
-                    ?.let { rebuildRectsFromCharacterRectsShared(it, matchedLength) }
-                    .orEmpty()
-                val fallbackLocalRects = resolvedRects?.localRects.orEmpty()
-                val finalLocalHighlightRects = sanitizeResolvedHighlightRectsShared(
-                    rebuiltRects = if (rebuiltLocalRects.isNotEmpty()) rebuiltLocalRects else fallbackLocalRects,
-                    sourceRects = tapData.localRects
-                )
-                val rebuiltScreenRects = resolvedRects?.screenCharRects
-                    ?.let { rebuildRectsFromCharacterRectsShared(it, matchedLength) }
-                    .orEmpty()
-                val fallbackScreenRects = resolvedRects?.screenRects.orEmpty()
-                val finalScreenHighlightRects =
-                    if (rebuiltScreenRects.isNotEmpty()) rebuiltScreenRects
-                    else if (fallbackScreenRects.isNotEmpty()) fallbackScreenRects
-                    else tapData.screenCharRects
-                        .takeIf { it.isNotEmpty() }
-                        ?.let { rebuildRectsFromCharacterRectsShared(it, matchedLength) }
-                        ?: tapData.screenRect?.let { listOf(it) }
-                        .orEmpty()
                 val preflightApplied = applyDefinitionMatchedHighlight(tapData, matchedLength)
                 Log.d(
                     FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG,
@@ -4477,56 +4548,53 @@ companion object {
                 if (!preflightApplied && !isEntryLikeTap) {
                     return@onSuccess
                 }
-                // Keep recursive popup anchor tied to the exact tap location.
-                // Rebuilding by matchedLength can shift anchors in dictionary web content.
-                val tapAnchorFromChars = tapData.screenCharRects
-                    .takeIf { it.isNotEmpty() }
-                val tapAnchorFromRect = tapData.screenRect?.let { listOf(it) }?.takeIf { it.isNotEmpty() }
                 val resolvedAnchorFromChars = resolvedRects?.screenCharRects
                     ?.let { rebuildRectsFromCharacterRectsShared(it, matchedLength) }
                     ?.takeIf { it.isNotEmpty() }
                 val resolvedAnchorFromRects = resolvedRects?.screenRects?.takeIf { it.isNotEmpty() }
-                val resolvedAnchorRects = tapAnchorFromChars
-                    ?: tapAnchorFromRect
-                    ?: resolvedAnchorFromChars
+                val tapAnchorFromChars = tapData.screenCharRects
+                    .takeIf { it.isNotEmpty() }
+                val tapAnchorFromRect = tapData.screenRect?.let { listOf(it) }?.takeIf { it.isNotEmpty() }
+                val resolvedAnchorRects = resolvedAnchorFromChars
                     ?: resolvedAnchorFromRects
+                    ?: tapAnchorFromChars
+                    ?: tapAnchorFromRect
                 val anchorSource = when {
-                    tapAnchorFromChars != null -> "tapChars"
-                    tapAnchorFromRect != null -> "tapRect"
                     resolvedAnchorFromChars != null -> "resolvedChars"
                     resolvedAnchorFromRects != null -> "resolvedRects"
+                    tapAnchorFromChars != null -> "tapChars"
+                    tapAnchorFromRect != null -> "tapRect"
                     else -> "none"
                 }
                 val groupedResults = groupFloatingHoshiResults(hoshiResults, dictionaries).take(3)
                 val dictionaryStyles = popup?.first?.state?.dictionaryStyles ?: currentDictionaryStyles()
-                truncateFloatingLookupLayersTo(sourceLayerIndex, render = false)
                 Log.d(
                     FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG,
-                    "setHighlight layer=$sourceLayerIndex key=$definitionKey len=$matchedLength localRects=${finalLocalHighlightRects.size} screenRects=${finalScreenHighlightRects.size}"
+                    "setHighlight layer=$sourceLayerIndex key=$definitionKey len=$matchedLength applied=$preflightApplied"
                 )
-                val layerAnchorRects = currentLayer.anchor?.rects?.takeIf { it.isNotEmpty() }
-                // Book-like recursive behavior: always prefer the current tap-derived anchor.
-                val popupAnchorRects = resolvedAnchorRects ?: layerAnchorRects
-                val popupAnchorSource = when {
-                    resolvedAnchorRects != null -> anchorSource
-                    layerAnchorRects != null -> "sourceLayer"
-                    else -> "none"
+                val popupAnchorRects = resolvedAnchorRects ?: run {
+                    Log.d(
+                        FLOATING_LOOKUP_LOG_TAG,
+                        "recursive ignored no_anchor layer=$sourceLayerIndex term=$term"
+                    )
+                    return@onSuccess
                 }
                 Log.d(
                     FLOATING_LOOKUP_LOG_TAG,
-                    "anchor layer=$sourceLayerIndex source=$popupAnchorSource rects=${popupAnchorRects?.size ?: 0}"
+                    "anchor layer=$sourceLayerIndex source=$anchorSource rects=${popupAnchorRects.size}"
                 )
                 val estimatedAnchorY = popupAnchorRects
-                    ?.minOfOrNull { it.bottom }
-                    ?: (resources.displayMetrics.heightPixels * 0.56f)
+                    .minOfOrNull { it.bottom }
+                    ?: return@onSuccess
                 val shouldPlaceBelow = estimatedAnchorY <= (resources.displayMetrics.heightPixels / 2f)
                 val finalSelectionText = term.take(matchedLength.coerceAtLeast(1)).trim().ifBlank { term }
+                truncateFloatingLookupLayersTo(sourceLayerIndex, render = false)
                 val layer = buildFloatingLookupLayer(
                     term = finalSelectionText,
                     popupSentence = tapData.sentence.trim().ifBlank { null },
                     sourceTerm = currentLayer.selectionText,
                     groupedResults = groupedResults,
-                    anchor = popupAnchorRects?.let { ReaderLookupAnchor(it) },
+                    anchor = ReaderLookupAnchor(popupAnchorRects),
                     placeBelow = shouldPlaceBelow,
                     preferSidePlacement = false,
                     selectedRange = currentLayer.selectedRange,
@@ -4537,12 +4605,10 @@ companion object {
                 floatingLookupSession.push(layer)
                 renderFloatingLookupResults(layer)
             }.onFailure {
-                truncateFloatingLookupLayersTo(sourceLayerIndex)
-                Toast.makeText(
-                    this@AudiobookFloatingOverlayService,
-                    (it.message ?: getString(R.string.bookreader_lookup_failed)).take(160),
-                    Toast.LENGTH_SHORT
-                ).show()
+                Log.d(
+                    FLOATING_LOOKUP_TAP_LOG_TAG,
+                    "recursive ignored failure sourceLayer=$sourceLayerIndex term=$term error='${it.message.orEmpty().take(120)}'"
+                )
             }
         }
     }

@@ -80,6 +80,7 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.3.1")
     implementation("androidx.media3:media3-transformer:1.3.1")
     implementation("androidx.media:media:1.7.0")
+    implementation("com.jaredrummler:colorpicker:1.1.0")
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
     implementation("com.github.ankidroid:Anki-Android:api-v1.1.0")

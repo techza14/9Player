@@ -514,6 +514,13 @@
     <string name="anki_tags_label">タグ（スペース/カンマ区切り）</string>
     <string name="anki_field_variables">フィールド変数</string>
     <string name="anki_clear_field_variables">フィールド変数をクリア</string>
+    <string name="anki_clear_field_variables_confirm_title">フィールド変数をクリアしますか？</string>
+    <string name="anki_clear_field_variables_confirm_message">現在のテンプレートのフィールド変数をすべてクリアします。</string>
+    <string name="anki_use_lapis_default_templates">Lapis の既定テンプレートとフィールド変数を使用</string>
+    <string name="anki_lapis_defaults_confirm_title">Lapis の既定設定を使用しますか？</string>
+    <string name="anki_lapis_defaults_confirm_message">テンプレートを Lapis に切り替え、現在のフィールド変数を上書きします。</string>
+    <string name="anki_lapis_model_missing">Lapis テンプレートが見つかりません。</string>
+    <string name="anki_lapis_fields_invalid">Lapis のフィールドが一致しません：%1$s</string>
     <string name="anki_field_variable_help">{audio} は辞書音声、{cut-audio} は切り出し音声を書き出します。</string>
     <string name="anki_field_placeholder">プレースホルダーを入力するか、一覧から選択</string>
     <string name="anki_duplicate_check_label">重複カードを確認</string>

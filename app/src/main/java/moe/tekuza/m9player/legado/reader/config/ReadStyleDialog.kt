@@ -1,13 +1,20 @@
 package moe.tekuza.m9player.legado.reader.config
 
 import android.app.Activity
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.ViewGroup
+import android.view.WindowManager
+import android.graphics.drawable.GradientDrawable
+import android.widget.LinearLayout
 import android.widget.RadioGroup
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import moe.tekuza.m9player.legado.reader.M9PageAnim
+import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.R
 
 internal data class ReadStyleState(
@@ -15,7 +22,20 @@ internal data class ReadStyleState(
     val letterSpacingDp: Int,
     val lineSpacingDp: Int,
     val paragraphSpacingDp: Int,
+    val textWeight: M9TextWeight,
+    val backgroundStyleIndex: Int,
+    val backgroundStyles: List<ReadStyleColorItem>,
     val pageAnim: M9PageAnim
+)
+
+internal data class ReadStyleColorItem(
+    val name: String,
+    val bgColor: Int,
+    val textColor: Int,
+    val tipColor: Int,
+    val bgAlpha: Int,
+    val bgAssetName: String?,
+    val bgImageUri: String?
 )
 
 internal class ReadStyleDialog(
@@ -33,14 +53,17 @@ internal class ReadStyleDialog(
         fun onLineSpacingChangeFinished(valueDp: Int) {}
         fun onParagraphSpacingChangeFinished(valueDp: Int) {}
         fun onInfoClicked()
-        fun onWeightClicked()
+        fun onWeightClicked(onChanged: (M9TextWeight) -> Unit)
         fun onFontClicked()
         fun onIndentClicked()
         fun onPaddingClicked()
         fun onTipClicked()
         fun onPageAnimClicked(animIndex: Int)
         fun onBackgroundClicked(index: Int)
+        fun onBackgroundLongClicked(index: Int)
+        fun onBackgroundAddClicked()
     }
+    private var dialog: AlertDialog? = null
 
     fun show() {
         val view = activity.layoutInflater.inflate(R.layout.dialog_m9_read_style, null, false)
@@ -54,7 +77,6 @@ internal class ReadStyleDialog(
                 M9PageAnim.COVER -> R.id.style_anim_cover
                 M9PageAnim.SLIDE -> R.id.style_anim_slide
                 M9PageAnim.SCROLL -> R.id.style_anim_scroll
-                M9PageAnim.SIMULATION,
                 M9PageAnim.NONE -> R.id.style_anim_none
             }
         )
@@ -62,33 +84,87 @@ internal class ReadStyleDialog(
             val group = view.findViewById<RadioGroup>(R.id.style_page_anim)
             callback.onPageAnimClicked(group.indexOfChild(group.findViewById(group.checkedRadioButtonId)))
         }
-        listOf(
-            R.id.style_color_paper,
-            R.id.style_color_white,
-            R.id.style_color_green,
-            R.id.style_color_dark
-        ).forEachIndexed { index, id ->
-            view.findViewById<TextView>(id).setOnClickListener {
-                callback.onBackgroundClicked(index)
-            }
-        }
+        bindBackgroundStyles(view)
 
-        val dialog = AlertDialog.Builder(activity).setView(view).create()
-        dialog.setOnShowListener {
-            dialog.window?.run {
+        dialog = AlertDialog.Builder(activity).setView(view).create()
+        dialog?.setOnShowListener {
+            dialog?.window?.run {
+                clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
                 setBackgroundDrawableResource(android.R.color.transparent)
+                decorView.setPadding(0, 0, 0, 0)
                 val attr = attributes
+                attr.dimAmount = 0f
                 attr.gravity = Gravity.BOTTOM
                 attributes = attr
                 setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             }
         }
-        dialog.show()
+        dialog?.show()
+    }
+
+    private fun bindBackgroundStyles(view: android.view.View) {
+        val row = view.findViewById<LinearLayout>(R.id.style_color_row)
+        row.removeAllViews()
+        state.backgroundStyles.forEachIndexed { index, item ->
+            val selected = index == state.backgroundStyleIndex
+            val textView = TextView(activity)
+            textView.text = item.name.ifBlank { activity.getString(R.string.reader_style_sample_text) }
+            textView.setTextColor(item.textColor)
+            textView.gravity = android.view.Gravity.CENTER
+            textView.textSize = 11f
+            textView.maxLines = 2
+            textView.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                alpha = (item.bgAlpha.coerceIn(0, 100) * 255 / 100)
+                setColor(item.bgColor)
+                setStroke(
+                    dp(if (selected) 2 else 1),
+                    if (selected) 0xFF2E9F6E.toInt() else item.tipColor
+                )
+            }
+            textView.setOnClickListener {
+                callback.onBackgroundClicked(index)
+            }
+            textView.setOnLongClickListener {
+                dialog?.dismiss()
+                callback.onBackgroundLongClicked(index)
+                true
+            }
+            row.addView(textView, LinearLayout.LayoutParams(dp(52), dp(52)).apply {
+                marginEnd = dp(8)
+            })
+        }
+        row.addView(TextView(activity).apply {
+            text = "+"
+            textSize = 24f
+            gravity = android.view.Gravity.CENTER
+            setTextColor(0xFF7D6E5C.toInt())
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0x22FFFFFF)
+                setStroke(dp(1), 0xFF7D6E5C.toInt())
+            }
+            setOnClickListener {
+                dialog?.dismiss()
+                callback.onBackgroundAddClicked()
+            }
+        }, LinearLayout.LayoutParams(dp(52), dp(52)))
     }
 
     private fun bindTopButtons(view: android.view.View) {
+        val weightView = view.findViewById<TextView>(R.id.style_weight)
+        var currentTextWeight = state.textWeight
+        fun updateWeightLabel() {
+            weightView.text = fontWeightLabel(currentTextWeight)
+        }
+        updateWeightLabel()
         view.findViewById<TextView>(R.id.style_info).setOnClickListener { callback.onInfoClicked() }
-        view.findViewById<TextView>(R.id.style_weight).setOnClickListener { callback.onWeightClicked() }
+        weightView.setOnClickListener {
+            callback.onWeightClicked { nextWeight ->
+                currentTextWeight = nextWeight
+                updateWeightLabel()
+            }
+        }
         view.findViewById<TextView>(R.id.style_font).setOnClickListener { callback.onFontClicked() }
         view.findViewById<TextView>(R.id.style_indent).setOnClickListener { callback.onIndentClicked() }
         view.findViewById<TextView>(R.id.style_padding).setOnClickListener { callback.onPaddingClicked() }
@@ -96,6 +172,24 @@ internal class ReadStyleDialog(
             callback.onTipClicked()
             true
         }
+    }
+
+    private fun fontWeightLabel(weight: M9TextWeight): SpannableString {
+        val label = SpannableString(activity.getString(R.string.reader_style_font_weight_text))
+        val selectedIndex = when (weight) {
+            M9TextWeight.NORMAL -> 0
+            M9TextWeight.BOLD -> 2
+            M9TextWeight.LIGHT -> 4
+        }
+        if (selectedIndex < label.length) {
+            label.setSpan(
+                ForegroundColorSpan(0xFF2E9F6E.toInt()),
+                selectedIndex,
+                (selectedIndex + 1).coerceAtMost(label.length),
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+        }
+        return label
     }
 
     private fun bindSeekBar(
@@ -127,5 +221,7 @@ internal class ReadStyleDialog(
             }
         })
     }
+
+    private fun dp(value: Int): Int = (value * activity.resources.displayMetrics.density).toInt()
 
 }

@@ -12,9 +12,10 @@
     <LinearLayout
         android:id="@+id/reader_title_bar"
         android:layout_width="match_parent"
-        android:layout_height="64dp"
+        android:layout_height="56dp"
         android:layout_gravity="top"
         android:background="@drawable/reader_toolbar_bg"
+        android:elevation="4dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingStart="8dp"
@@ -22,13 +23,13 @@
 
         <TextView
             android:id="@+id/reader_back"
-            android:layout_width="52dp"
+            android:layout_width="48dp"
             android:layout_height="match_parent"
             android:background="@drawable/reader_menu_touch"
             android:gravity="center"
             android:text="‹"
             android:textColor="#2C241B"
-            android:textSize="34sp" />
+            android:textSize="32sp" />
 
         <TextView
             android:id="@+id/reader_toolbar_title"
@@ -39,21 +40,22 @@
             android:gravity="center_vertical"
             android:singleLine="true"
             android:textColor="#2C241B"
-            android:textSize="22sp" />
+            android:textSize="18sp" />
 
         <TextView
             android:id="@+id/reader_encoding"
-            android:layout_width="82dp"
+            android:layout_width="0dp"
             android:layout_height="match_parent"
             android:background="@drawable/reader_menu_touch"
             android:gravity="center"
             android:text="@string/reader_encoding_set"
             android:textColor="#2C241B"
-            android:textSize="15sp" />
+            android:textSize="15sp"
+            android:visibility="gone" />
 
         <TextView
             android:id="@+id/reader_overflow"
-            android:layout_width="46dp"
+            android:layout_width="48dp"
             android:layout_height="match_parent"
             android:background="@drawable/reader_menu_touch"
             android:gravity="center"
@@ -136,7 +138,7 @@
                 android:layout_width="56dp"
                 android:layout_height="56dp"
                 android:background="@drawable/reader_fab_bg"
-                android:contentDescription="@string/replace"
+                android:contentDescription="@string/reader_match_title"
                 android:elevation="2dp"
                 android:padding="15dp"
                 android:src="@drawable/reader_ic_find_replace"
@@ -153,10 +155,10 @@
                 android:layout_width="56dp"
                 android:layout_height="56dp"
                 android:background="@drawable/reader_fab_bg"
-                android:contentDescription="@string/reader_playback_bar"
+                android:contentDescription="@string/reader_convert"
                 android:elevation="2dp"
                 android:padding="15dp"
-                android:src="@drawable/reader_ic_play_24dp"
+                android:src="@drawable/reader_ic_swap_horiz"
                 android:tint="#2C241B"
                 android:translationZ="2dp" />
 

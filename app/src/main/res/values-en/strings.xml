@@ -507,6 +507,13 @@
     <string name="anki_tags_label">Tags (space/comma separated)</string>
     <string name="anki_field_variables">Field variables</string>
     <string name="anki_clear_field_variables">Clear field variables</string>
+    <string name="anki_clear_field_variables_confirm_title">Clear field variables?</string>
+    <string name="anki_clear_field_variables_confirm_message">This clears all field variables for the current model.</string>
+    <string name="anki_use_lapis_default_templates">Use Lapis default model and field variables</string>
+    <string name="anki_lapis_defaults_confirm_title">Use Lapis defaults?</string>
+    <string name="anki_lapis_defaults_confirm_message">This switches the model to Lapis and overwrites the current field variables.</string>
+    <string name="anki_lapis_model_missing">Lapis model was not found.</string>
+    <string name="anki_lapis_fields_invalid">Lapis fields do not match: %1$s</string>
     <string name="anki_field_variable_help">{audio} exports lookup audio, {cut-audio} exports clipped audio.</string>
     <string name="anki_field_placeholder">Type a placeholder or choose from the list</string>
     <string name="common_pause">Pause</string>

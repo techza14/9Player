@@ -525,6 +525,13 @@
     <string name="anki_tags_label">标签（空格/逗号分隔）</string>
     <string name="anki_field_variables">字段变量</string>
     <string name="anki_clear_field_variables">清空字段变量</string>
+    <string name="anki_clear_field_variables_confirm_title">清空字段变量？</string>
+    <string name="anki_clear_field_variables_confirm_message">这会清空当前模板的全部字段变量。</string>
+    <string name="anki_use_lapis_default_templates">使用 Lapis 默认模板和字段变量</string>
+    <string name="anki_lapis_defaults_confirm_title">使用 Lapis 默认模板？</string>
+    <string name="anki_lapis_defaults_confirm_message">这会把模板切换到 Lapis，并用默认字段变量覆盖当前配置。</string>
+    <string name="anki_lapis_model_missing">未找到 Lapis 模板。</string>
+    <string name="anki_lapis_fields_invalid">Lapis 字段不匹配：%1$s</string>
     <string name="anki_field_variable_help">{audio} 用于导出查词发音，{cut-audio} 用于导出剪切音频。</string>
     <string name="anki_field_placeholder">可输入占位符或从列表选择</string>
     <string name="anki_duplicate_check_label">检查重复卡片</string>
