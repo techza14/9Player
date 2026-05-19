@@ -384,6 +384,9 @@
     <string name="bookreader_progress_plain">進度：%1$d%%</string>
     <string name="bookreader_playback_mode_normal_label">播放：正常</string>
     <string name="bookreader_playback_mode_condensed_label">播放：濃縮</string>
+    <string name="bookreader_ui_layout_restore_default">恢復預設</string>
+    <string name="bookreader_ui_layout_side_rail_to_left">側邊欄移到左</string>
+    <string name="bookreader_ui_layout_side_rail_to_right">側邊欄移到右</string>
     <string name="bookreader_playback_mode_normal">正常</string>
     <string name="bookreader_playback_mode_condensed">濃縮</string>
     <string name="bookreader_jump_by_cue">按台詞</string>
