@@ -684,19 +684,34 @@ private fun BookReaderScreen(
         player.volume = 1f
         if (play) player.play() else player.pause()
     }
-    val notificationController = remember(context, player, title, audioUri, srtUri, coverUri) {
-        PlaybackNotificationController(
-            context = context,
-            player = player,
-            title = title,
-            contentIntent = buildBookReaderNotificationPendingIntent(
+    fun setReaderPlaybackState(play: Boolean) {
+        if (uiTestMode) {
+            isPlaying = play
+        } else {
+            setLookupPlaybackState(play)
+        }
+    }
+    fun toggleReaderPlaybackState() {
+        val currentlyPlaying = if (uiTestMode) isPlaying else player.isPlaying
+        setReaderPlaybackState(!currentlyPlaying)
+    }
+    val notificationController = remember(context, player, title, audioUri, srtUri, coverUri, uiTestMode) {
+        if (uiTestMode) {
+            null
+        } else {
+            PlaybackNotificationController(
                 context = context,
+                player = player,
                 title = title,
-                audioUri = audioUri,
-                srtUri = srtUri,
-                coverUri = coverUri
+                contentIntent = buildBookReaderNotificationPendingIntent(
+                    context = context,
+                    title = title,
+                    audioUri = audioUri,
+                    srtUri = srtUri,
+                    coverUri = coverUri
+                )
             )
-        )
+        }
     }
     val lyricsListState = rememberLazyListState()
     val collectedCueKeys = remember { hashSetOf<String>() }
@@ -774,7 +789,7 @@ private fun BookReaderScreen(
     }
 
     DisposableEffect(notificationController) {
-        onDispose { notificationController.release() }
+        onDispose { notificationController?.release() }
     }
     DisposableEffect(Unit) {
         onDispose { pendingSingleTapJob?.cancel() }
@@ -1120,8 +1135,8 @@ private fun BookReaderScreen(
     }
 
     LaunchedEffect(playbackSpeed, uiTestMode) {
-        player.playbackParameters = PlaybackParameters(playbackSpeed)
         if (!uiTestMode) {
+            player.playbackParameters = PlaybackParameters(playbackSpeed)
             BookReaderFloatingBridge.notifyPlaybackSpeed(playbackSpeed)
         }
     }
@@ -1323,7 +1338,7 @@ private fun BookReaderScreen(
         val deadline = sleepTimerDeadlineMs ?: return@LaunchedEffect
         while (sleepTimerDeadlineMs == deadline) {
             if (System.currentTimeMillis() >= deadline) {
-                player.pause()
+                setReaderPlaybackState(false)
                 sleepTimerDeadlineMs = null
                 val statusParts = mutableListOf<String>()
                 if (sleepDisconnectControllerBluetoothWhenDone) {
@@ -1494,8 +1509,13 @@ private fun BookReaderScreen(
     fun jumpToCue(index: Int, showStatus: Boolean = true) {
         val cue = cues.getOrNull(index) ?: return
         resumePlaybackAfterLookupDismiss = false
-        player.seekTo(cue.startMs)
-        player.play()
+        if (uiTestMode) {
+            positionMs = cue.startMs.coerceAtLeast(0L)
+            isPlaying = true
+        } else {
+            player.seekTo(cue.startMs)
+            player.play()
+        }
         controlTargetCueIndex = if (controlModeEnabled) index else null
         if (showStatus) {
             controlModeStatus = context.getString(R.string.status_jump_to_cue, index + 1, cues.size)
@@ -1571,7 +1591,11 @@ private fun BookReaderScreen(
         pendingSingleTapBaseCueIndex = null
         controlTargetCueIndex = null
         resumePlaybackAfterLookupDismiss = false
-        player.seekTo(target)
+        if (uiTestMode) {
+            positionMs = target
+        } else {
+            player.seekTo(target)
+        }
         if (controlModeEnabled) {
             controlModeStatus = context.getString(R.string.status_manual_seek)
         }
@@ -1582,7 +1606,7 @@ private fun BookReaderScreen(
             val stepMillis = loadAudiobookSettingsConfig(context).seekStepMillis
             val delta = if (step < 0) -stepMillis else stepMillis
             seekToManual(positionMs + delta)
-            player.play()
+            setReaderPlaybackState(true)
             return
         }
         if (cues.isEmpty()) return
@@ -1638,15 +1662,20 @@ private fun BookReaderScreen(
 
     fun playCueForControl(index: Int) {
         val cue = cues.getOrNull(index) ?: return
-        player.seekTo(cue.startMs)
-        player.play()
+        if (uiTestMode) {
+            positionMs = cue.startMs.coerceAtLeast(0L)
+            isPlaying = true
+        } else {
+            player.seekTo(cue.startMs)
+            player.play()
+        }
         controlTargetCueIndex = index
         controlModeStatus = context.getString(R.string.status_play_cue, index + 1, cues.size)
     }
 
     fun jumpToChapter(chapter: ReaderAudioChapter) {
         seekToManual(chapter.startMs)
-        player.play()
+        setReaderPlaybackState(true)
         chapterOptionsVisible = false
         controlModeStatus = context.getString(R.string.status_jump_chapter, chapter.title)
     }
@@ -2044,7 +2073,7 @@ private fun BookReaderScreen(
 
     val latestIsPlaying by rememberUpdatedState(isPlaying)
     val latestTogglePlayPause by rememberUpdatedState<() -> Unit>({
-        if (player.isPlaying) player.pause() else player.play()
+        toggleReaderPlaybackState()
     })
     val latestSeekPrevious by rememberUpdatedState<() -> Unit>({
         if (cueLoopEnabled) {
@@ -2092,9 +2121,14 @@ private fun BookReaderScreen(
     val latestReplayCurrentCue by rememberUpdatedState<() -> Unit>({
         val cue = activeCue
         if (cue != null) {
-            player.seekTo(cue.startMs.coerceAtLeast(0L))
-            if (!player.isPlaying) {
-                player.play()
+            if (uiTestMode) {
+                positionMs = cue.startMs.coerceAtLeast(0L)
+                isPlaying = true
+            } else {
+                player.seekTo(cue.startMs.coerceAtLeast(0L))
+                if (!player.isPlaying) {
+                    player.play()
+                }
             }
         }
     })
@@ -2442,7 +2476,7 @@ private fun BookReaderScreen(
                                         contentDescription = "Previous"
                                     )
                                 }
-                                IconButton(onClick = { if (player.isPlaying) player.pause() else player.play() }) {
+                                IconButton(onClick = { toggleReaderPlaybackState() }) {
                                     Icon(
                                         painter = painterResource(
                                             id = if (isPlaying) R.drawable.ic_overlay_pause else R.drawable.ic_overlay_play
@@ -2821,7 +2855,11 @@ private fun BookReaderScreen(
                                     text = { Text(stringResource(R.string.bookreader_replace_srt)) },
                                     onClick = {
                                         topActionsExpanded = false
-                                        if (player.isPlaying) player.pause()
+                                        if (uiTestMode) {
+                                            isPlaying = false
+                                        } else if (player.isPlaying) {
+                                            player.pause()
+                                        }
                                         replaceSrtLauncher.launch(arrayOf("application/x-subrip"))
                                     }
                                 )
@@ -3306,7 +3344,7 @@ private fun BookReaderScreen(
                         activeChapterStartMs = activeChapterStartMs,
                         timelineRangeMs = timelineRangeMs,
                         durationMs = durationMs,
-                        isPlaying = player.isPlaying,
+                        isPlaying = isPlaying,
                         onToggleDurationMode = { showOverallDuration = !showOverallDuration },
                         onLeftRailMeasured = { coordinates ->
                             leftControlsWidthDp = with(density) { coordinates.size.width.toDp() }
@@ -3320,7 +3358,7 @@ private fun BookReaderScreen(
                         },
                         onPrevious = { jumpToAdjacentCue(-1) },
                         onPlayPause = {
-                            if (player.isPlaying) player.pause() else player.play()
+                            toggleReaderPlaybackState()
                         },
                         onNext = { jumpToAdjacentCue(1) }
                     )

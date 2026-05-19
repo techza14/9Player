@@ -267,9 +267,6 @@ object BookReaderFloatingBridge {
     fun setUiTestModeActive(active: Boolean) {
         synchronized(this) {
             uiTestModeSnapshot = active
-            if (active) {
-                currentAudioUriSnapshot = null
-            }
         }
     }
 
