@@ -1027,7 +1027,7 @@ internal class ReadView @JvmOverloads constructor(
 
     private fun horizontalDragDirection(dx: Float): Int {
         return if (layoutMode == M9LayoutMode.VERTICAL) {
-            if (dx < 0f) 1 else -1
+            if (dx > 0f) 1 else -1
         } else {
             if (dx < 0f) 1 else -1
         }

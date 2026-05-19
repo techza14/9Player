@@ -563,6 +563,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             }
             findViewById<ImageButton>(R.id.reader_playback_bar).also {
                 floatingPlaybackBarButton = it
+                it.setOnClickListener { togglePlaybackBar() }
             }
             findViewById<ImageButton>(R.id.reader_night).also {
                 floatingNightButton = it
@@ -2865,6 +2866,26 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             updateAudioControlLabels()
             loadSrtSyncIfNeeded()
         }
+    }
+
+    private fun togglePlaybackBar() {
+        playbackBarPinnedVisible = !playbackBarPinnedVisible
+        playbackBar.visibility = if (playbackBarPinnedVisible) View.VISIBLE else View.GONE
+        if (playbackBarPinnedVisible) {
+            readMenu.visibility = View.GONE
+            playbackBar.post {
+                val newHeight = playbackBar.height.coerceAtLeast(0)
+                if (newHeight > 0) {
+                    playbackBarHeightPx = newHeight
+                }
+                applyReadViewViewportInset(reload = true)
+            }
+        } else {
+            playbackBarHeightPx = 0
+            applyReadViewViewportInset(reload = true)
+        }
+        persistReaderSettings()
+        updateAudioControlLabels()
     }
 
     private fun toggleAudioPlayback() {
