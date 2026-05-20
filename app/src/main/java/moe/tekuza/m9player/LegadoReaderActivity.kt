@@ -191,6 +191,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var readerLayoutMode: M9LayoutMode = M9LayoutMode.HORIZONTAL
     private var readerPageAnim: M9PageAnim = M9PageAnim.NONE
     private var readerStyleSelect: Int = 0
+    private var readerNightMode: Boolean = false
     private var readerStyleConfigs: MutableList<LegadoReaderStyleConfig> =
         defaultLegadoReaderStyleConfigs().toMutableList()
     private var readerBgColor: Int = READER_PAGE_BG
@@ -1058,7 +1059,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         hideSearchPanel()
     }
 
-    private fun isNightReaderTheme(): Boolean = readerBgColor == 0xFF1F1F1F.toInt()
+    private fun isNightReaderTheme(): Boolean = readerNightMode
 
     private fun currentMenuTextColor(): Int = if (isNightReaderTheme()) 0xFFF4F0E6.toInt() else 0xFF2C241B.toInt()
 
@@ -1512,19 +1513,11 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun toggleNightMode() {
-        if (isNightReaderTheme()) {
-            readerBgColor = READER_PAGE_BG
-            readerTextColor = READER_TEXT
-            readerTipColor = READER_TIP
-        } else {
-            readerBgColor = 0xFF1F1F1F.toInt()
-            readerTextColor = 0xFFD8D2C5.toInt()
-            readerTipColor = 0xFF948B7D.toInt()
-        }
+        readerNightMode = !readerNightMode
+        applySelectedReaderStyleFields()
         closeReaderChrome()
-        readView.setReaderColors(readerBgColor, readerTextColor, readerTipColor, readerBgAssetName, readerBgImageUri, readerBgAlpha)
-        applyReadBarStyle()
-        persistReaderSettings()
+        applyReaderVisualStyle()
+        persistReaderSettings(updateAnchor = false)
     }
 
     private fun startSearch(query: String) {
@@ -1946,8 +1939,16 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun selectReaderStyle(index: Int) {
-        val style = readerStyleConfigs.getOrNull(index) ?: return
+        readerStyleConfigs.getOrNull(index) ?: return
         readerStyleSelect = index
+        applySelectedReaderStyleFields()
+        applyReaderVisualStyle()
+        persistReaderSettings()
+    }
+
+    private fun applySelectedReaderStyleFields() {
+        val style = readerStyleConfigs.getOrNull(readerStyleSelect)
+            ?: defaultLegadoReaderStyleConfigs().first()
         readerBgColor = style.bgColor
         readerTextColor = style.textColor
         readerTipColor = style.tipColor
@@ -1956,8 +1957,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         readerUnderline = style.underline
         readerBgAssetName = style.bgAssetName
         readerBgImageUri = style.bgImageUri
-        applyReaderVisualStyle()
-        persistReaderSettings()
+        if (readerNightMode) {
+            readerBgColor = 0xFF1F1F1F.toInt()
+            readerTextColor = 0xFFD8D2C5.toInt()
+            readerTipColor = 0xFF948B7D.toInt()
+            readerDarkStatusIcon = false
+        }
     }
 
     private fun applyReaderVisualStyle() {
@@ -3231,16 +3236,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             ?.toMutableList()
             ?: defaultLegadoReaderStyleConfigs().toMutableList()
         readerStyleSelect = state.readerStyleSelect.coerceIn(0, readerStyleConfigs.lastIndex)
-        readerStyleConfigs[readerStyleSelect].let { style ->
-            readerBgColor = style.bgColor
-            readerTextColor = style.textColor
-            readerTipColor = style.tipColor
-            readerBgAlpha = style.bgAlpha
-            readerDarkStatusIcon = style.darkStatusIcon
-            readerUnderline = style.underline
-            readerBgAssetName = style.bgAssetName
-            readerBgImageUri = style.bgImageUri
-        }
+        readerNightMode = state.readerNightMode
+        applySelectedReaderStyleFields()
         readerCueHighlightColor = state.cueHighlightColor
         hideStatusBar = state.hideStatusBar
         readBodyToLh = state.readBodyToLh
@@ -3283,13 +3280,43 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun attachSavedAnchorIfNeeded() {
         val bookUri = importedBook?.uri?.toString()
+        loadLegadoReaderBookAnchor(this, bookUri)?.let { anchor ->
+            pendingRestoreAnchor = ReaderPageAnchor(
+                chapterIndex = anchor.chapterIndex,
+                charPosition = anchor.charPosition
+            )
+            return
+        }
         val persisted = loadLegadoReaderPersistedState(this)
         if (bookUri != null && persisted.currentBookUri == bookUri) return
         pendingRestoreAnchor = null
     }
 
-    private fun persistReaderSettings() {
-        val anchor = currentPageAnchor()
+    private fun persistReaderSettings(updateAnchor: Boolean = true) {
+        val previous = loadLegadoReaderPersistedState(this)
+        val bookUri = importedBook?.uri?.toString()
+        val anchor = if (updateAnchor) currentPageAnchor() else null
+        if (updateAnchor && anchor != null) {
+            saveLegadoReaderBookAnchor(
+                this,
+                bookUri,
+                LegadoReaderBookAnchor(
+                    chapterIndex = anchor.chapterIndex,
+                    charPosition = anchor.charPosition
+                )
+            )
+        }
+        val persistedBookUri = if (updateAnchor && anchor != null) bookUri else previous.currentBookUri
+        val persistedChapterIndex = if (updateAnchor && anchor != null) {
+            anchor.chapterIndex
+        } else {
+            previous.currentChapterIndex
+        }
+        val persistedCharPosition = if (updateAnchor && anchor != null) {
+            anchor.charPosition
+        } else {
+            previous.currentCharPosition
+        }
         saveLegadoReaderPersistedState(
             this,
             LegadoReaderPersistedState(
@@ -3304,6 +3331,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 layoutMode = readerLayoutMode,
                 pageAnim = readerPageAnim,
                 readerStyleSelect = readerStyleSelect,
+                readerNightMode = readerNightMode,
                 readerStyleConfigs = readerStyleConfigs.toList(),
                 cueHighlightColor = readerCueHighlightColor,
                 hideStatusBar = hideStatusBar,
@@ -3327,9 +3355,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 playbackBarPinnedVisible = playbackBarPinnedVisible,
                 showRubyText = showRubyText,
                 preferredCharsetName = preferredCharsetName,
-                currentBookUri = importedBook?.uri?.toString(),
-                currentChapterIndex = anchor?.chapterIndex ?: 0,
-                currentCharPosition = anchor?.charPosition ?: 0
+                currentBookUri = persistedBookUri,
+                currentChapterIndex = persistedChapterIndex,
+                currentCharPosition = persistedCharPosition
             )
         )
     }

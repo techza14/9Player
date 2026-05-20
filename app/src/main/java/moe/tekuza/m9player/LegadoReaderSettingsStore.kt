@@ -10,6 +10,7 @@ import org.json.JSONObject
 
 private const val LEGADO_READER_SETTINGS_PREFS = "legado_reader_settings"
 private const val LEGADO_READER_SETTINGS_KEY = "legado_reader_settings_json"
+private const val LEGADO_READER_BOOK_ANCHORS_KEY = "legado_reader_book_anchors_json"
 
 internal data class LegadoReaderStyleConfig(
     val name: String = "",
@@ -44,6 +45,7 @@ internal data class LegadoReaderPersistedState(
     val layoutMode: M9LayoutMode = M9LayoutMode.HORIZONTAL,
     val pageAnim: M9PageAnim = M9PageAnim.NONE,
     val readerStyleSelect: Int = 0,
+    val readerNightMode: Boolean = false,
     val readerStyleConfigs: List<LegadoReaderStyleConfig> = defaultLegadoReaderStyleConfigs(),
     val cueHighlightColor: Int = 0xFFFFEFF6.toInt(),
     val hideStatusBar: Boolean = false,
@@ -70,6 +72,11 @@ internal data class LegadoReaderPersistedState(
     val currentBookUri: String? = null,
     val currentChapterIndex: Int = 0,
     val currentCharPosition: Int = 0
+)
+
+internal data class LegadoReaderBookAnchor(
+    val chapterIndex: Int,
+    val charPosition: Int
 )
 
 internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersistedState {
@@ -100,6 +107,7 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
             ?.let { runCatching { M9PageAnim.valueOf(it) }.getOrNull() }
             ?: M9PageAnim.NONE,
         readerStyleSelect = json.optInt("readerStyleSelect", 0).coerceIn(0, styleConfigs.lastIndex),
+        readerNightMode = json.optBoolean("readerNightMode", false),
         readerStyleConfigs = styleConfigs,
         cueHighlightColor = json.optInt("cueHighlightColor", 0xFFFFEFF6.toInt()),
         hideStatusBar = json.optBoolean("hideStatusBar", false),
@@ -177,6 +185,7 @@ internal fun saveLegadoReaderPersistedState(context: Context, state: LegadoReade
         put("layoutMode", state.layoutMode.name)
         put("pageAnim", state.pageAnim.name)
         put("readerStyleSelect", state.readerStyleSelect)
+        put("readerNightMode", state.readerNightMode)
         put("readerStyleConfigs", JSONArray().apply {
             state.readerStyleConfigs.forEach { style ->
                 put(JSONObject().apply {
@@ -223,5 +232,41 @@ internal fun saveLegadoReaderPersistedState(context: Context, state: LegadoReade
     context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
         .edit()
         .putString(LEGADO_READER_SETTINGS_KEY, json.toString())
+        .apply()
+}
+
+internal fun loadLegadoReaderBookAnchor(context: Context, bookUri: String?): LegadoReaderBookAnchor? {
+    val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    val raw = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .getString(LEGADO_READER_BOOK_ANCHORS_KEY, null)
+        ?: return null
+    val root = runCatching { JSONObject(raw) }.getOrNull() ?: return null
+    val item = root.optJSONObject(key) ?: return null
+    return LegadoReaderBookAnchor(
+        chapterIndex = item.optInt("chapterIndex", 0),
+        charPosition = item.optInt("charPosition", 0)
+    )
+}
+
+internal fun saveLegadoReaderBookAnchor(
+    context: Context,
+    bookUri: String?,
+    anchor: LegadoReaderBookAnchor?
+) {
+    val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return
+    val safeAnchor = anchor ?: return
+    val prefs = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
+    val root = prefs.getString(LEGADO_READER_BOOK_ANCHORS_KEY, null)
+        ?.let { runCatching { JSONObject(it) }.getOrNull() }
+        ?: JSONObject()
+    root.put(
+        key,
+        JSONObject().apply {
+            put("chapterIndex", safeAnchor.chapterIndex.coerceAtLeast(0))
+            put("charPosition", safeAnchor.charPosition.coerceAtLeast(0))
+        }
+    )
+    prefs.edit()
+        .putString(LEGADO_READER_BOOK_ANCHORS_KEY, root.toString())
         .apply()
 }
