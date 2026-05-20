@@ -6,6 +6,14 @@ import java.io.File
 
 class LookupPopupHtmlShimTest {
     @Test
+    fun lookupPopupHtmlExposesDictionaryCollapseAndCustomCssSettings() {
+        val htmlSource = File("src/main/java/moe/tekuza/m9player/hoshi/features/dictionary/LookupPopupHtml.kt").readText()
+
+        assertTrue(htmlSource.contains("""window.collapsedDictionaries = ${'$'}collapsedDictionaries;"""))
+        assertTrue(htmlSource.contains("""window.customCSS = ${'$'}{JSONObject.quote(normalizedSettings.customCSS)};"""))
+    }
+
+    @Test
     fun androidWebKitShimExposesHandlersPopupJsCallsDuringEntryRender() {
         val htmlSource = File("src/main/java/moe/tekuza/m9player/hoshi/features/dictionary/LookupPopupHtml.kt").readText()
 
@@ -44,6 +52,17 @@ class LookupPopupHtmlShimTest {
         assertTrue(popupJsSource.contains("normalizeDuplicateCheckResult("))
         assertTrue(bridgeSource.contains("fun duplicateCheck(expression: String): String"))
         assertTrue(bridgeSource.contains("fun viewDuplicate(noteIdsJson: String): Boolean"))
+    }
+
+    @Test
+    fun popupScopesDictionaryCssBeforeInjectingIt() {
+        val popupJsSource = File("src/main/assets/hoshi-popup/popup.js").readText()
+
+        assertTrue(popupJsSource.contains("function scopeCssRules(css, scopeSelector)"))
+        assertTrue(popupJsSource.contains("const scopedDictStyle = constructDictCss(dictStyle, dictName);"))
+        assertTrue(popupJsSource.contains("textContent: [scopedDictStyle, defaultDictStyle].filter(Boolean).join('\\n')"))
+        assertTrue(!popupJsSource.contains("""${'$'}{dictStyle}
+                color: var(--text-color)"""))
     }
 
     @Test

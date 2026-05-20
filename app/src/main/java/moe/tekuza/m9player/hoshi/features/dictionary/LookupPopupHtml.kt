@@ -69,6 +69,9 @@ internal object LookupPopupHtml {
             dictionaryStyles.forEach { (dictionary, css) -> put(dictionary, css) }
         }.toString()
         val normalizedSettings = settings.normalized()
+        val collapsedDictionaries = JSONArray().apply {
+            normalizedSettings.collapsedDictionaries.forEach { put(it) }
+        }.toString()
         val effectiveSwipeThreshold = if (swipeToDismiss) swipeThreshold.coerceAtLeast(0) else 0
         val colorScheme = if (darkMode) "dark" else "light"
         val popupCss = assets?.let { """<style>${it.popupCss}</style>""" }
@@ -176,7 +179,7 @@ internal object LookupPopupHtml {
                             } }
                         }
                     };
-                    window.collapseDictionaries = ${normalizedSettings.collapseDictionaries};
+                    window.collapsedDictionaries = $collapsedDictionaries;
                     window.compactGlossaries = ${normalizedSettings.compactGlossaries};
                     window.showExpressionTags = ${normalizedSettings.showExpressionTags};
                     window.harmonicFrequency = false;

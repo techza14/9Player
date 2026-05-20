@@ -57,7 +57,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import moe.tekuza.m9player.hoshi.features.dictionary.DictionarySettings
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupAssets
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupHtml
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupOptions
@@ -68,6 +67,7 @@ import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewBridge
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbackHolder
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbacks
 import moe.tekuza.m9player.hoshi.features.dictionary.currentDictionaryStyles
+import moe.tekuza.m9player.hoshi.features.dictionary.loadDictionarySettings
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
 import org.json.JSONObject
@@ -2135,7 +2135,7 @@ companion object {
             swipeThreshold = 40,
             topInset = 0.0,
             bottomInset = 0.0,
-            dictionarySettings = DictionarySettings(),
+            dictionarySettings = loadDictionarySettings(this),
             darkMode = isSystemDarkMode(),
             eInkMode = false,
             audioSettings = settings,
@@ -3696,7 +3696,7 @@ companion object {
             results = emptyList(),
             assets = floatingHoshiLookupAssets,
             dictionaryStyles = layer.hoshiDictionaryStyles,
-            settings = DictionarySettings(),
+            settings = loadDictionarySettings(this),
             audioSettings = audiobookSettings,
             showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
             showRangeSelection = false,
@@ -3760,10 +3760,11 @@ companion object {
             onCloseAll = { hideFloatingLookup() },
             onTextSelected = { selection -> pushFloatingHoshiRecursiveLookup(layerIndex, selection) },
             onLookupRedirect = { query ->
+                val dictionarySettings = loadDictionarySettings(this@AudiobookFloatingOverlayService)
                 floatingHoshiLookupSession.lookup(
                     query,
-                    moe.tekuza.m9player.hoshi.features.dictionary.DictionarySettings().maxResults,
-                    moe.tekuza.m9player.hoshi.features.dictionary.DictionarySettings().scanLength,
+                    dictionarySettings.maxResults,
+                    dictionarySettings.scanLength,
                 )
             },
             onLookupRedirected = { selection, _ -> pushFloatingHoshiRecursiveLookup(layerIndex, selection) },

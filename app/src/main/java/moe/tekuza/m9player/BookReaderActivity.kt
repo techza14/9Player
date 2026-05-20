@@ -158,11 +158,11 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import moe.tekuza.m9player.ui.theme.TsetTheme
-import moe.tekuza.m9player.hoshi.features.dictionary.DictionarySettings
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupItem
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupOptions
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupStackView
+import moe.tekuza.m9player.hoshi.features.dictionary.loadDictionarySettings
 import kotlinx.coroutines.CancellationException
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
 import kotlinx.coroutines.Dispatchers
@@ -1916,7 +1916,7 @@ private fun BookReaderScreen(
             swipeThreshold = 40,
             topInset = 0.0,
             bottomInset = navigationBarBottomInsetDp,
-            dictionarySettings = DictionarySettings(),
+            dictionarySettings = loadDictionarySettings(context),
             darkMode = isDarkTheme,
             eInkMode = false,
                     audioSettings = audiobookSettings,
@@ -4102,7 +4102,7 @@ private fun BookReaderScreen(
                     swipeThreshold = 40,
                     topInset = 0.0,
                     bottomInset = navigationBarBottomInsetDp,
-                    dictionarySettings = DictionarySettings(),
+                    dictionarySettings = loadDictionarySettings(context),
                     darkMode = isDarkTheme,
                     eInkMode = false,
                     audioSettings = audiobookSettings,
@@ -4120,10 +4120,11 @@ private fun BookReaderScreen(
             popup
         },
         onLookupRedirect = { query ->
+            val dictionarySettings = loadDictionarySettings(context)
             bookHoshiLookupSession.lookup(
                 query,
-                DictionarySettings().maxResults,
-                DictionarySettings().scanLength,
+                dictionarySettings.maxResults,
+                dictionarySettings.scanLength,
             )
         },
         onRangeSelection = {

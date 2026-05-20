@@ -271,85 +271,157 @@ function constructFuriganaPlain(expression, reading) {
     return result;
 }
 
-// !AI SLOP! function to preprocess css
-function constructDictCss(css, dictName) {
-    if (!css) {
-        return '';
+function cssDoubleQuotedContent(value) {
+    return String(value ?? '').replace(/[\\\"\n\r\f]/g, ch => {
+        switch (ch) {
+            case '\\': return '\\\\';
+            case '"': return '\\"';
+            case '\n': return '\\a ';
+            case '\r': return '';
+            case '\f': return '\\c ';
+            default: return ch;
+        }
+    });
+}
+
+function splitCssSelectorList(selectorText) {
+    const selectors = [];
+    let start = 0;
+    let depth = 0;
+    let quote = null;
+    let escaped = false;
+    for (let i = 0; i < selectorText.length; i++) {
+        const ch = selectorText[i];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (ch === '\\') {
+            escaped = true;
+            continue;
+        }
+        if (quote) {
+            if (ch === quote) quote = null;
+            continue;
+        }
+        if (ch === '"' || ch === "'") {
+            quote = ch;
+            continue;
+        }
+        if (ch === '(' || ch === '[') {
+            depth++;
+            continue;
+        }
+        if (ch === ')' || ch === ']') {
+            depth = Math.max(0, depth - 1);
+            continue;
+        }
+        if (ch === ',' && depth === 0) {
+            selectors.push(selectorText.slice(start, i));
+            start = i + 1;
+        }
     }
-    const prefix = `.yomitan-glossary [data-dictionary="${dictName}"]`;
+    selectors.push(selectorText.slice(start));
+    return selectors;
+}
+
+function findCssRuleBlockEnd(css, blockStart) {
+    let depth = 1;
+    let quote = null;
+    let escaped = false;
+    for (let i = blockStart; i < css.length; i++) {
+        const ch = css[i];
+        const next = css[i + 1];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (ch === '\\') {
+            escaped = true;
+            continue;
+        }
+        if (quote) {
+            if (ch === quote) quote = null;
+            continue;
+        }
+        if (ch === '"' || ch === "'") {
+            quote = ch;
+            continue;
+        }
+        if (ch === '/' && next === '*') {
+            const commentEnd = css.indexOf('*/', i + 2);
+            if (commentEnd === -1) return css.length;
+            i = commentEnd + 1;
+            continue;
+        }
+        if (ch === '{') {
+            depth++;
+        } else if (ch === '}') {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+    return css.length;
+}
+
+function scopeCssRules(css, scopeSelector) {
     const parts = [];
     let i = 0;
     while (i < css.length) {
-        while (i < css.length && /\s/.test(css[i])) {
-            parts.push(css[i++]);
+        const bracePos = css.indexOf('{', i);
+        if (bracePos === -1) {
+            parts.push(css.slice(i));
+            break;
         }
-        if (css.slice(i, i + 2) === '/*') {
-            const end = css.indexOf('*/', i + 2);
-            if (end === -1) break;
-            parts.push(css.slice(i, end + 2));
-            i = end + 2;
+        const prelude = css.slice(i, bracePos);
+        const trimmedPrelude = prelude.trim();
+        if (!trimmedPrelude) {
+            parts.push(prelude);
+            i = bracePos + 1;
             continue;
         }
-        const bracePos = css.indexOf('{', i);
-        if (bracePos === -1) break;
-        const selectorPart = css.slice(i, bracePos);
-        const selectors = selectorPart.split(',').map(s => {
-            const trimmed = s.trim();
-            if (!trimmed) return '';
-            if (trimmed.startsWith('&')) {
-                return s;
-            }
-            return `${prefix} ${trimmed}`;
-        });
-        parts.push(selectors.join(', '), ' {');
-        i = bracePos + 1;
-        let depth = 1;
-        let blockStart = i;
-        while (i < css.length && depth > 0) {
-            if (css[i] === '{') depth++;
-            else if (css[i] === '}') depth--;
-            i++;
-        }
-        const blockContent = css.slice(blockStart, i - 1);
-        if (blockContent.includes('{')) {
-            let pos = 0;
-            let properties = '';
-            let nestedRules = '';
-            while (pos < blockContent.length) {
-                while (pos < blockContent.length && /\s/.test(blockContent[pos])) {
-                    pos++;
-                }
-                if (pos >= blockContent.length) break;
-                let nextSemi = blockContent.indexOf(';', pos);
-                let nextBrace = blockContent.indexOf('{', pos);
-                if (nextBrace !== -1 && (nextSemi === -1 || nextBrace < nextSemi)) {
-                    let nestedDepth = 1;
-                    let nestedEnd = nextBrace + 1;
-                    while (nestedEnd < blockContent.length && nestedDepth > 0) {
-                        if (blockContent[nestedEnd] === '{') nestedDepth++;
-                        else if (blockContent[nestedEnd] === '}') nestedDepth--;
-                        nestedEnd++;
-                    }
-                    nestedRules += blockContent.slice(pos, nestedEnd);
-                    pos = nestedEnd;
-                } else if (nextSemi !== -1) {
-                    properties += blockContent.slice(pos, nextSemi + 1);
-                    pos = nextSemi + 1;
-                } else {
-                    properties += blockContent.slice(pos);
-                    break;
-                }
-            }
-            parts.push(properties);
-            if (nestedRules) {
-                parts.push(constructDictCss(nestedRules, dictName));
+        const blockStart = bracePos + 1;
+        const blockEnd = findCssRuleBlockEnd(css, blockStart);
+        const blockContent = css.slice(blockStart, blockEnd);
+        const afterBlock = blockEnd < css.length ? blockEnd + 1 : blockEnd;
+
+        if (trimmedPrelude.startsWith('@')) {
+            const lowerPrelude = trimmedPrelude.toLowerCase();
+            if (
+                lowerPrelude.startsWith('@media') ||
+                lowerPrelude.startsWith('@supports') ||
+                lowerPrelude.startsWith('@container') ||
+                lowerPrelude.startsWith('@layer')
+            ) {
+                parts.push(prelude, '{', scopeCssRules(blockContent, scopeSelector), '}');
+            } else {
+                parts.push(css.slice(i, afterBlock));
             }
         } else {
-            parts.push(blockContent);
+            const scopedSelectors = splitCssSelectorList(prelude)
+                .map(selector => selector.trim())
+                .filter(Boolean)
+                .map(selector => `${scopeSelector} ${selector}`)
+                .join(', ');
+            if (scopedSelectors) {
+                parts.push(scopedSelectors, '{', blockContent, '}');
+            }
         }
-        parts.push('}');
+        i = afterBlock;
     }
     return parts.join('');
+}
+
+function constructDictCss(css, dictName) {
+    const trimmedCss = String(css ?? '').trim();
+    if (!trimmedCss) {
+        return '';
+    }
+    const scopeSelector = `[data-dictionary="${cssDoubleQuotedContent(dictName)}"]`;
+    if (!trimmedCss.includes('{')) {
+        return `${scopeSelector}{${trimmedCss}}`;
+    }
+    return scopeCssRules(trimmedCss, scopeSelector);
 }
 
 function applyTableStyles(html) {
@@ -1547,9 +1619,10 @@ function createEntryHeader(entry, idx) {
     return header;
 }
 
-function createGlossarySection(dictName, contents, isFirst, entryIdx) {
+function createGlossarySection(dictName, contents, entryIdx) {
     const details = el('details', { className: 'glossary-group' });
-    if (!window.collapseDictionaries || isFirst) {
+    const collapsedDictionaries = Array.isArray(window.collapsedDictionaries) ? window.collapsedDictionaries : [];
+    if (!collapsedDictionaries.includes(dictName)) {
         details.open = true;
     }
 
@@ -1574,20 +1647,22 @@ function createGlossarySection(dictName, contents, isFirst, entryIdx) {
     const cancel = () => { clearTimeout(timer); };
     summary.addEventListener('pointerup', cancel);
     summary.addEventListener('pointercancel', cancel);
-    summary.addEventListener('click', (e) => { if (longPressed) e.preventDefault(); });
+    summary.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (longPressed) return;
+        details.open = !details.open;
+    });
     details.appendChild(summary);
 
     const dictWrapper = document.createElement('div');
     dictWrapper.setAttribute('data-dictionary', dictName);
 
     const dictStyle = window.dictionaryStyles?.[dictName] ?? '';
+    const scopedDictStyle = constructDictCss(dictStyle, dictName);
+    const defaultDictStyle = `[data-dictionary="${cssDoubleQuotedContent(dictName)}"] { color: var(--text-color) !important; }`;
     dictWrapper.appendChild(el('style', {
-        textContent: `
-            [data-dictionary="${dictName}"] {
-                ${dictStyle}
-                color: var(--text-color) !important;
-            }
-        `.trim()
+        textContent: [scopedDictStyle, defaultDictStyle].filter(Boolean).join('\n')
     }));
 
     const termTags = [...new Set(parseTags(contents[0]?.termTags))];
@@ -1797,7 +1872,7 @@ window.renderPopup = function() {
 
             const dictNames = Object.keys(grouped);
             for (let dictIdx = 0; dictIdx < dictNames.length; dictIdx++) {
-                entryDiv.appendChild(createGlossarySection(dictNames[dictIdx], grouped[dictNames[dictIdx]], dictIdx === 0, idx));
+                entryDiv.appendChild(createGlossarySection(dictNames[dictIdx], grouped[dictNames[dictIdx]], idx));
                 await new Promise(r => requestAnimationFrame(r));
             }
         }

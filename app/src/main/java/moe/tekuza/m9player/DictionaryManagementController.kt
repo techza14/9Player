@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import moe.tekuza.m9player.hoshi.features.dictionary.removeCollapsedDictionaryName
 import java.util.Locale
 
 internal class DictionaryManagementController(
@@ -145,9 +146,11 @@ internal class DictionaryManagementController(
     ) {
         val ref = dictionaryRefs.getOrNull(index) ?: return
         val removedId = importedDictionaryId(ref)
+        val removedName = loadedDictionaries.getOrNull(index)?.name ?: ref.name
 
         dictionaryRefs = dictionaryRefs.filterIndexed { i, _ -> i != index }
         loadedDictionaries = loadedDictionaries.filterIndexed { i, _ -> i != index }
+        removeCollapsedDictionaryName(context, removedName)
         ref.cacheKey?.let { cacheKey ->
             scope.launch(Dispatchers.IO) {
                 deleteDictionaryStorage(context, cacheKey)
@@ -164,8 +167,15 @@ internal class DictionaryManagementController(
         onLookupDataChanged: () -> Unit
     ) {
         if (cacheKey.isBlank()) return
+        val removedName = mdxMountState.entries
+            .firstOrNull { it.cacheKey == cacheKey }
+            ?.displayName
+            ?.ifBlank { "MDX" }
+            ?.substringBeforeLast('.')
+            .orEmpty()
         mdxMountState = mdxMountState.copy(entries = mdxMountState.entries.filterNot { it.cacheKey == cacheKey })
         saveMdxMountState(context, mdxMountState)
+        removeCollapsedDictionaryName(context, removedName)
         dictionaryOrderIds = removeDictionaryOrderId(dictionaryOrderIds, "mnt:$cacheKey")
         saveDictionaryOrderIds(context, dictionaryOrderIds)
         onLookupDataChanged()

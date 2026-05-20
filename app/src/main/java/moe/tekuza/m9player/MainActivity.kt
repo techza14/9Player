@@ -144,13 +144,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import moe.tekuza.m9player.hoshi.features.dictionary.DictionarySettings
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupHtml
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupItem
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupAssets
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupOptions
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupStackView
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbacks
+import moe.tekuza.m9player.hoshi.features.dictionary.loadDictionarySettings
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
 import de.manhhao.hoshi.LookupResult
@@ -1664,7 +1664,7 @@ private fun ReaderSyncScreen() {
             swipeThreshold = 40,
             topInset = 0.0,
             bottomInset = navigationBarBottomInsetDp,
-            dictionarySettings = DictionarySettings(),
+            dictionarySettings = loadDictionarySettings(context),
             darkMode = isDarkTheme,
             eInkMode = false,
             audioSettings = audiobookSettings,
@@ -2737,10 +2737,11 @@ private fun ReaderSyncScreen() {
                                             }
                                         },
                                         onLookupRedirect = { query ->
+                                            val dictionarySettings = loadDictionarySettings(context)
                                             mainHoshiLookupSession.lookup(
                                                 query,
-                                                DictionarySettings().maxResults,
-                                                DictionarySettings().scanLength,
+                                                dictionarySettings.maxResults,
+                                                dictionarySettings.scanLength,
                                             )
                                         },
                                         onLookupRedirected = { selection, results ->
@@ -3125,10 +3126,11 @@ private fun ReaderSyncScreen() {
                     }
                 },
                 onLookupRedirect = { query ->
+                    val dictionarySettings = loadDictionarySettings(context)
                     mainHoshiLookupSession.lookup(
                         query,
-                        DictionarySettings().maxResults,
-                        DictionarySettings().scanLength,
+                        dictionarySettings.maxResults,
+                        dictionarySettings.scanLength,
                     )
                 },
                 onResultRedirected = { selection, results ->
@@ -3177,10 +3179,11 @@ private fun ReaderSyncScreen() {
                 )
             },
             onLookupRedirect = { query ->
+                val dictionarySettings = loadDictionarySettings(context)
                 mainHoshiLookupSession.lookup(
                     query,
-                    DictionarySettings().maxResults,
-                    DictionarySettings().scanLength,
+                    dictionarySettings.maxResults,
+                    dictionarySettings.scanLength,
                 )
             },
             onPlayWordAudio = { _url, term, reading ->
