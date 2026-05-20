@@ -38,12 +38,13 @@ internal object VerticalSubtitleLayoutEngine {
         paint: TextPaint,
         viewHeight: Int,
         lineHeightPx: Float = paint.textSize,
-        singleColumn: Boolean = false
+        singleColumn: Boolean = false,
+        cellWidthPx: Float = VerticalTextGlyphEngine.estimateCellWidth(paint)
     ): VerticalSubtitleLayout? {
         if (text.isBlank() || viewHeight <= 0) return null
 
         val cellHeight = lineHeightPx.coerceAtLeast(paint.textSize).coerceAtLeast(1f)
-        val cellWidth = VerticalTextGlyphEngine.estimateCellWidth(paint)
+        val cellWidth = cellWidthPx.coerceAtLeast(1f)
         val rows = if (singleColumn) {
             text.count { it != '\r' && it != '\n' }.coerceAtLeast(1)
         } else {

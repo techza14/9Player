@@ -358,6 +358,15 @@
     <string name="audiobook_overlay_help">懸浮球：單擊播放/暫停，雙擊展開前進/後退/收藏。</string>
     <string name="audiobook_overlay_subtitle_help">懸浮字幕會顯示目前播放到的字幕文字。</string>
     <string name="audiobook_overlay_subtitle_style">字幕樣式</string>
+    <string name="audiobook_book_subtitle_typography">排版</string>
+    <string name="audiobook_book_subtitle_active_size">目前句字號</string>
+    <string name="audiobook_book_subtitle_inactive_size">未播放句字號</string>
+    <string name="audiobook_book_subtitle_horizontal_line_height">橫書行高</string>
+    <string name="audiobook_book_subtitle_vertical_column_spacing">縱書列距</string>
+    <string name="audiobook_book_subtitle_sp_value">%1$dsp</string>
+    <string name="audiobook_book_subtitle_percent_value">%1$d%%</string>
+    <string name="audiobook_book_subtitle_typography_reset">恢復預設排版</string>
+    <string name="audiobook_book_subtitle_typography_reset_done">已恢復有聲書字幕預設排版。</string>
     <string name="audiobook_overlay_subtitle_scroll">字幕滾動</string>
     <string name="audiobook_overlay_subtitle_writing_mode">字幕書寫方向</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">橫書</string>

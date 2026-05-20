@@ -579,6 +579,7 @@ private fun BookReaderScreen(
     var controlTargetCueIndex by remember { mutableStateOf<Int?>(null) }
     var bottomControlsVisible by remember { mutableStateOf(true) }
     var topActionsExpanded by remember { mutableStateOf(false) }
+    var typographyPanelVisible by remember { mutableStateOf(false) }
     var speedMenuExpanded by remember { mutableStateOf(false) }
     var sleepTimerDeadlineMs by remember { mutableStateOf<Long?>(null) }
     var sleepTimerOptionsVisible by remember { mutableStateOf(false) }
@@ -1140,12 +1141,39 @@ private fun BookReaderScreen(
             runCatching { FontFamily(typeface) }.getOrNull()
         }
     }
+    val currentBookVerticalWriting = readerUiWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
+    val bookSubtitleActiveSizeSp = if (currentBookVerticalWriting) {
+        audiobookSettings.bookSubtitleVerticalActiveSizeSp
+    } else {
+        audiobookSettings.bookSubtitleActiveSizeSp
+    }
+    val bookSubtitleInactiveSizeSp = if (currentBookVerticalWriting) {
+        audiobookSettings.bookSubtitleVerticalInactiveSizeSp
+    } else {
+        audiobookSettings.bookSubtitleInactiveSizeSp
+    }
+    val bookSubtitleHorizontalLineHeightSp = audiobookSettings.bookSubtitleHorizontalLineHeightSp
+        .coerceAtLeast(bookSubtitleActiveSizeSp)
+    val inactiveSubtitleHorizontalLineHeightSp = (
+        bookSubtitleInactiveSizeSp +
+            (bookSubtitleHorizontalLineHeightSp - bookSubtitleActiveSizeSp).coerceAtLeast(0)
+        ).coerceAtLeast(bookSubtitleInactiveSizeSp)
+    val bookVerticalColumnSpacingScale = audiobookSettings.bookSubtitleVerticalColumnSpacingPercent / 100f
     val activeSubtitleStyle = MaterialTheme.typography.headlineMedium.copy(
-        fontSize = 34.sp,
-        lineHeight = 42.sp,
+        fontSize = bookSubtitleActiveSizeSp.sp,
+        lineHeight = if (currentBookVerticalWriting) bookSubtitleActiveSizeSp.sp else bookSubtitleHorizontalLineHeightSp.sp,
         fontFamily = subtitleFontFamily,
         color = MaterialTheme.colorScheme.onSurface
     )
+    val inactiveSubtitleStyle = MaterialTheme.typography.titleLarge.copy(
+        fontSize = bookSubtitleInactiveSizeSp.sp,
+        lineHeight = if (currentBookVerticalWriting) bookSubtitleInactiveSizeSp.sp else inactiveSubtitleHorizontalLineHeightSp.sp,
+        fontFamily = subtitleFontFamily,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    val reloadAudiobookSettings = {
+        audiobookSettings = loadAudiobookSettingsConfig(context)
+    }
 
     LaunchedEffect(context) {
         val options = loadBookReaderSleepOptions(context)
@@ -2344,6 +2372,7 @@ private fun BookReaderScreen(
                     hoshiLookupSelectionRange = null
                 }
                 sleepTimerOptionsVisible -> sleepTimerOptionsVisible = false
+                typographyPanelVisible -> typographyPanelVisible = false
                 topActionsExpanded -> topActionsExpanded = false
                 speedMenuExpanded -> speedMenuExpanded = false
                 chapterOptionsVisible -> chapterOptionsVisible = false
@@ -2940,6 +2969,16 @@ private fun BookReaderScreen(
                             }
                             if (uiLayoutEditMode) {
                                 DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.audiobook_book_subtitle_typography)) },
+                                    onClick = {
+                                        typographyPanelVisible = true
+                                        topActionsExpanded = false
+                                    },
+                                    enabled = true
+                                )
+                            }
+                            if (uiLayoutEditMode) {
+                                DropdownMenuItem(
                                     text = { Text(stringResource(R.string.bookreader_ui_layout_restore_default)) },
                                     onClick = {
                                         val defaultLayout = defaultBookReaderUiLayoutConfig(useSideRail = legacyUseSideRailLayout)
@@ -3299,10 +3338,7 @@ private fun BookReaderScreen(
                                                 val cueStyle = if (isActive) {
                                                     activeSubtitleStyle
                                                 } else {
-                                                    MaterialTheme.typography.titleLarge.copy(
-                                                        fontFamily = subtitleFontFamily,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
+                                                    inactiveSubtitleStyle
                                                 }
                                                 if (bookVerticalWriting) {
                                                     if (isActive) {
@@ -3310,13 +3346,15 @@ private fun BookReaderScreen(
                                                             text = cue.text,
                                                             style = cueStyle,
                                                             rowsPerColumn = verticalRowsPerColumn,
-                                                            compact = true
+                                                            compact = true,
+                                                            columnSpacingScale = bookVerticalColumnSpacingScale
                                                         )
                                                         VerticalLookupClickableSubtitle(
                                                             sourceText = cue.text,
                                                             style = cueStyle,
                                                             typeface = subtitleTypeface,
                                                             rowsPerColumn = verticalRowsPerColumn,
+                                                            columnSpacingScale = bookVerticalColumnSpacingScale,
                                                             selectedSourceRange = visibleSelectedRange,
                                                             compactVerticalLayout = true,
                                                             lookupEnabled = !cueRangeSelectionMode,
@@ -3345,13 +3383,15 @@ private fun BookReaderScreen(
                                                             text = cue.text,
                                                             style = cueStyle,
                                                             rowsPerColumn = verticalRowsPerColumn,
-                                                            compact = true
+                                                            compact = true,
+                                                            columnSpacingScale = bookVerticalColumnSpacingScale
                                                         )
                                                         VerticalSubtitleText(
                                                             text = cue.text,
                                                             style = cueStyle,
                                                             typeface = subtitleTypeface,
                                                             rowsPerColumn = verticalRowsPerColumn,
+                                                            columnSpacingScale = bookVerticalColumnSpacingScale,
                                                             compactVerticalLayout = true,
                                                             onClick = {
                                                                 if (cueRangeSelectionMode) {
@@ -3370,13 +3410,15 @@ private fun BookReaderScreen(
                                                         text = cue.text,
                                                         style = cueStyle,
                                                         rowsPerColumn = verticalRowsPerColumn,
-                                                        compact = true
+                                                        compact = true,
+                                                        columnSpacingScale = bookVerticalColumnSpacingScale
                                                     )
                                                     VerticalSubtitleText(
                                                         text = cue.text,
                                                         style = cueStyle,
                                                         typeface = subtitleTypeface,
                                                         rowsPerColumn = verticalRowsPerColumn,
+                                                        columnSpacingScale = bookVerticalColumnSpacingScale,
                                                         compactVerticalLayout = true,
                                                         onClick = { jumpToCue(index) },
                                                         modifier = Modifier
@@ -3466,10 +3508,7 @@ private fun BookReaderScreen(
                                                     style = if (isActive) {
                                                         activeSubtitleStyle
                                                     } else {
-                                                        MaterialTheme.typography.titleLarge.copy(
-                                                            fontFamily = subtitleFontFamily,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
+                                                        inactiveSubtitleStyle
                                                     },
                                                     onSelectedRangeAnchorChanged = if (isActive) {
                                                         { anchor ->
@@ -3523,6 +3562,7 @@ private fun BookReaderScreen(
                                             style = activeSubtitleStyle,
                                             typeface = subtitleTypeface,
                                             rowsPerColumn = verticalRowsPerColumn,
+                                            columnSpacingScale = bookVerticalColumnSpacingScale,
                                             selectedSourceRange = visibleSelectedRange,
                                             lookupEnabled = !cueRangeSelectionMode,
                                             modifier = Modifier.fillMaxSize(),
@@ -3922,6 +3962,30 @@ private fun BookReaderScreen(
                         }
                     }
                 }
+            }
+        }
+
+        if (typographyPanelVisible) {
+            Popup(
+                alignment = Alignment.BottomCenter,
+                offset = IntOffset(0, -16),
+                onDismissRequest = { typographyPanelVisible = false },
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnBackPress = true,
+                    dismissOnClickOutside = true
+                )
+            ) {
+                BookReaderTypographyPanel(
+                    settings = audiobookSettings,
+                    writingMode = readerUiWritingMode,
+                    onDismiss = { typographyPanelVisible = false },
+                    onSettingsChanged = reloadAudiobookSettings,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .navigationBarsPadding()
+                )
             }
         }
 
@@ -4657,6 +4721,179 @@ private fun mapSourceRangeToDisplayRange(
 }
 
 @Composable
+private fun BookReaderTypographyPanel(
+    settings: AudiobookSettingsConfig,
+    writingMode: FloatingSubtitleWritingMode,
+    onDismiss: () -> Unit,
+    onSettingsChanged: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val verticalWriting = writingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
+    val activeSize = if (verticalWriting) {
+        settings.bookSubtitleVerticalActiveSizeSp
+    } else {
+        settings.bookSubtitleActiveSizeSp
+    }
+    val inactiveSize = if (verticalWriting) {
+        settings.bookSubtitleVerticalInactiveSizeSp
+    } else {
+        settings.bookSubtitleInactiveSizeSp
+    }
+    val visibleLineHeight = maxOf(
+        settings.bookSubtitleHorizontalLineHeightSp,
+        settings.bookSubtitleActiveSizeSp
+    )
+
+    fun changeActiveSize(delta: Int) {
+        val nextSize = (activeSize + delta)
+            .coerceIn(MIN_BOOK_SUBTITLE_ACTIVE_SIZE_SP, MAX_BOOK_SUBTITLE_ACTIVE_SIZE_SP)
+        if (verticalWriting) {
+            saveAudiobookBookSubtitleVerticalActiveSizeSp(context, nextSize)
+        } else {
+            saveAudiobookBookSubtitleActiveSizeSp(context, nextSize)
+        }
+        if (!verticalWriting && settings.bookSubtitleHorizontalLineHeightSp < nextSize) {
+            saveAudiobookBookSubtitleHorizontalLineHeightSp(context, nextSize)
+        }
+        onSettingsChanged()
+    }
+
+    fun changeInactiveSize(delta: Int) {
+        if (verticalWriting) {
+            saveAudiobookBookSubtitleVerticalInactiveSizeSp(context, inactiveSize + delta)
+        } else {
+            saveAudiobookBookSubtitleInactiveSizeSp(context, inactiveSize + delta)
+        }
+        onSettingsChanged()
+    }
+
+    fun changeLineHeight(delta: Int) {
+        saveAudiobookBookSubtitleHorizontalLineHeightSp(context, visibleLineHeight + delta)
+        onSettingsChanged()
+    }
+
+    fun changeColumnSpacing(delta: Int) {
+        saveAudiobookBookSubtitleVerticalColumnSpacingPercent(
+            context,
+            settings.bookSubtitleVerticalColumnSpacingPercent + delta
+        )
+        onSettingsChanged()
+    }
+
+    Card(modifier = modifier) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.audiobook_book_subtitle_typography),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.common_close))
+                }
+            }
+            BookReaderTypographyStepper(
+                title = stringResource(R.string.audiobook_book_subtitle_active_size),
+                valueText = stringResource(
+                    R.string.audiobook_book_subtitle_sp_value,
+                    activeSize
+                ),
+                decreaseEnabled = activeSize > MIN_BOOK_SUBTITLE_ACTIVE_SIZE_SP,
+                increaseEnabled = activeSize < MAX_BOOK_SUBTITLE_ACTIVE_SIZE_SP,
+                onDecrease = { changeActiveSize(-1) },
+                onIncrease = { changeActiveSize(1) }
+            )
+            BookReaderTypographyStepper(
+                title = stringResource(R.string.audiobook_book_subtitle_inactive_size),
+                valueText = stringResource(
+                    R.string.audiobook_book_subtitle_sp_value,
+                    inactiveSize
+                ),
+                decreaseEnabled = inactiveSize > MIN_BOOK_SUBTITLE_INACTIVE_SIZE_SP,
+                increaseEnabled = inactiveSize < MAX_BOOK_SUBTITLE_INACTIVE_SIZE_SP,
+                onDecrease = { changeInactiveSize(-1) },
+                onIncrease = { changeInactiveSize(1) }
+            )
+            if (verticalWriting) {
+                BookReaderTypographyStepper(
+                    title = stringResource(R.string.audiobook_book_subtitle_vertical_column_spacing),
+                    valueText = stringResource(
+                        R.string.audiobook_book_subtitle_percent_value,
+                        settings.bookSubtitleVerticalColumnSpacingPercent
+                    ),
+                    decreaseEnabled = settings.bookSubtitleVerticalColumnSpacingPercent > MIN_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT,
+                    increaseEnabled = settings.bookSubtitleVerticalColumnSpacingPercent < MAX_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT,
+                    onDecrease = { changeColumnSpacing(-5) },
+                    onIncrease = { changeColumnSpacing(5) }
+                )
+            } else {
+                BookReaderTypographyStepper(
+                    title = stringResource(R.string.audiobook_book_subtitle_horizontal_line_height),
+                    valueText = stringResource(R.string.audiobook_book_subtitle_sp_value, visibleLineHeight),
+                    decreaseEnabled = visibleLineHeight > maxOf(
+                        MIN_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP,
+                        settings.bookSubtitleActiveSizeSp
+                    ),
+                    increaseEnabled = visibleLineHeight < MAX_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP,
+                    onDecrease = { changeLineHeight(-1) },
+                    onIncrease = { changeLineHeight(1) }
+                )
+            }
+            OutlinedButton(
+                onClick = {
+                    if (verticalWriting) {
+                        resetAudiobookBookSubtitleVerticalTypography(context)
+                    } else {
+                        resetAudiobookBookSubtitleHorizontalTypography(context)
+                    }
+                    onSettingsChanged()
+                }
+            ) {
+                Text(stringResource(R.string.audiobook_book_subtitle_typography_reset))
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookReaderTypographyStepper(
+    title: String,
+    valueText: String,
+    decreaseEnabled: Boolean,
+    increaseEnabled: Boolean,
+    onDecrease: () -> Unit,
+    onIncrease: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = valueText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        OutlinedButton(onClick = onDecrease, enabled = decreaseEnabled) {
+            Text("-")
+        }
+        OutlinedButton(onClick = onIncrease, enabled = increaseEnabled) {
+            Text("+")
+        }
+    }
+}
+
+@Composable
 private fun ReaderLookupClickableSubtitle(
     text: AnnotatedString,
     selectedRange: IntRange?,
@@ -4795,6 +5032,7 @@ private fun VerticalSubtitleText(
     style: androidx.compose.ui.text.TextStyle,
     typeface: Typeface?,
     rowsPerColumn: Int,
+    columnSpacingScale: Float,
     compactVerticalLayout: Boolean = false,
     onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -4819,7 +5057,7 @@ private fun VerticalSubtitleText(
         update = { view ->
             view.isClickable = onClick != null
             view.setOnClickListener { onClick?.invoke() }
-            view.bind(text, textColor.toArgb(), textSizePx, typeface)
+            view.bind(text, textColor.toArgb(), textSizePx, typeface, columnSpacingScale)
         }
     )
 }
@@ -4829,10 +5067,11 @@ private fun rememberVerticalCueWidth(
     text: String,
     style: androidx.compose.ui.text.TextStyle,
     rowsPerColumn: Int,
+    columnSpacingScale: Float,
     compact: Boolean = false
 ): Dp {
     val density = LocalDensity.current
-    return remember(text, style.fontSize, rowsPerColumn, compact, density) {
+    return remember(text, style.fontSize, rowsPerColumn, columnSpacingScale, compact, density) {
         val fontSizeDp = with(density) {
             if (style.fontSize.isSpecified) style.fontSize.toDp() else 22.sp.toDp()
         }
@@ -4840,10 +5079,10 @@ private fun rememberVerticalCueWidth(
             .toInt()
             .coerceAtLeast(1)
         if (compact) {
-            (fontSizeDp * (columns * BOOK_VERTICAL_COLUMN_WIDTH_FACTOR) + 8.dp + BOOK_VERTICAL_CUE_GLYPH_SAFETY_WIDTH)
+            (fontSizeDp * (columns * BOOK_VERTICAL_COLUMN_WIDTH_FACTOR * columnSpacingScale) + 8.dp + BOOK_VERTICAL_CUE_GLYPH_SAFETY_WIDTH)
                 .coerceIn(36.dp, 420.dp)
         } else {
-            (fontSizeDp * (columns * BOOK_VERTICAL_COLUMN_WIDTH_FACTOR) + 40.dp + BOOK_VERTICAL_CUE_GLYPH_SAFETY_WIDTH)
+            (fontSizeDp * (columns * BOOK_VERTICAL_COLUMN_WIDTH_FACTOR * columnSpacingScale) + 40.dp + BOOK_VERTICAL_CUE_GLYPH_SAFETY_WIDTH)
                 .coerceIn(72.dp, 420.dp)
         }
     }
@@ -4855,6 +5094,7 @@ private fun VerticalLookupClickableSubtitle(
     style: androidx.compose.ui.text.TextStyle,
     typeface: Typeface?,
     rowsPerColumn: Int,
+    columnSpacingScale: Float,
     selectedSourceRange: IntRange? = null,
     compactVerticalLayout: Boolean = false,
     lookupEnabled: Boolean = true,
@@ -4890,6 +5130,7 @@ private fun VerticalLookupClickableSubtitle(
                 typeface = typeface,
                 lineHeightPx = lineHeightPx,
                 rowsPerColumn = rowsPerColumn,
+                columnSpacingScale = columnSpacingScale,
                 selectedSourceRange = selectedSourceRange,
                 onSelectionAnchorChanged = onSelectedRangeAnchorChanged,
                 onTap = { sourceOffset, rectInWindow ->
@@ -4925,17 +5166,21 @@ private class VerticalSubtitleView(context: Context) : android.view.View(context
     private var cachedHeight: Int = -1
     private var cachedTextSize: Float = Float.NaN
     private var cachedTypeface: Typeface? = null
+    private var columnSpacingScale: Float = 1f
 
-    fun bind(newText: String, color: Int, sizePx: Float, typeface: Typeface?) {
+    fun bind(newText: String, color: Int, sizePx: Float, typeface: Typeface?, columnSpacingScale: Float) {
+        val normalizedColumnSpacingScale = columnSpacingScale.coerceIn(0.5f, 2f)
         val changed = content != newText ||
             paint.color != color ||
             paint.textSize != sizePx ||
-            paint.typeface != typeface
+            paint.typeface != typeface ||
+            this.columnSpacingScale != normalizedColumnSpacingScale
         if (!changed) return
         content = newText
         paint.color = color
         paint.textSize = sizePx
         paint.typeface = typeface
+        this.columnSpacingScale = normalizedColumnSpacingScale
         cachedLayout = null
         cachedHeight = -1
         cachedTypeface = null
@@ -4975,7 +5220,8 @@ private class VerticalSubtitleView(context: Context) : android.view.View(context
             content,
             paint,
             targetHeight,
-            paint.textSize.coerceAtLeast(1f)
+            paint.textSize.coerceAtLeast(1f),
+            cellWidthPx = VerticalTextGlyphEngine.estimateCellWidth(paint) * columnSpacingScale
         )
         cachedHeight = targetHeight
         cachedTextSize = paint.textSize
@@ -4992,6 +5238,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
     }
     private var lineHeightPx: Float = 1f
     private var rowsPerColumn: Int = BOOK_VERTICAL_ROWS_PER_COLUMN
+    private var columnSpacingScale: Float = 1f
     private var selectedSourceRange: IntRange? = null
     private var onSelectionAnchorChanged: ((ReaderLookupAnchor?) -> Unit)? = null
     private var onTap: ((sourceOffset: Int, rectInWindow: android.graphics.RectF) -> Unit)? = null
@@ -5017,16 +5264,19 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         typeface: Typeface?,
         lineHeightPx: Float,
         rowsPerColumn: Int,
+        columnSpacingScale: Float,
         selectedSourceRange: IntRange?,
         onSelectionAnchorChanged: ((ReaderLookupAnchor?) -> Unit)?,
         onTap: (sourceOffset: Int, rectInWindow: android.graphics.RectF) -> Unit
     ) {
+        val normalizedColumnSpacingScale = columnSpacingScale.coerceIn(0.5f, 2f)
         val changed = content != newText ||
             paint.color != color ||
             paint.textSize != sizePx ||
             paint.typeface != typeface ||
             this.lineHeightPx != lineHeightPx ||
             this.rowsPerColumn != rowsPerColumn ||
+            this.columnSpacingScale != normalizedColumnSpacingScale ||
             this.selectedSourceRange != selectedSourceRange
         this.onTap = onTap
         this.selectedSourceRange = selectedSourceRange
@@ -5038,6 +5288,7 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
         paint.typeface = typeface
         this.lineHeightPx = lineHeightPx.coerceAtLeast(1f)
         this.rowsPerColumn = rowsPerColumn.coerceAtLeast(2)
+        this.columnSpacingScale = normalizedColumnSpacingScale
         lastSelectionDebugSignature = null
         lastSelectionAnchorSignature = null
         lastLayoutMetricsSignature = null
@@ -5156,7 +5407,8 @@ private class VerticalLookupSubtitleView(context: Context) : android.view.View(c
             content,
             paint,
             targetHeight,
-            effectiveCellHeightPx()
+            effectiveCellHeightPx(),
+            cellWidthPx = VerticalTextGlyphEngine.estimateCellWidth(paint) * columnSpacingScale
         )
         cachedVerticalLayoutHeight = targetHeight
         cachedVerticalLayoutTypeface = paint.typeface

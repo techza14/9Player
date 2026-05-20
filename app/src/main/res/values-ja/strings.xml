@@ -360,6 +360,15 @@
     <string name="audiobook_overlay_help">バブル：タップで再生/一時停止、ダブルタップで戻る/進む/お気に入りを表示。</string>
     <string name="audiobook_overlay_subtitle_help">フローティング字幕には現在再生中の字幕テキストが表示されます。</string>
     <string name="audiobook_overlay_subtitle_style">字幕スタイル</string>
+    <string name="audiobook_book_subtitle_typography">組版</string>
+    <string name="audiobook_book_subtitle_active_size">再生中の文の文字サイズ</string>
+    <string name="audiobook_book_subtitle_inactive_size">未再生の文の文字サイズ</string>
+    <string name="audiobook_book_subtitle_horizontal_line_height">横書きの行高</string>
+    <string name="audiobook_book_subtitle_vertical_column_spacing">縦書きの列間</string>
+    <string name="audiobook_book_subtitle_sp_value">%1$dsp</string>
+    <string name="audiobook_book_subtitle_percent_value">%1$d%%</string>
+    <string name="audiobook_book_subtitle_typography_reset">組版設定をデフォルトに戻す</string>
+    <string name="audiobook_book_subtitle_typography_reset_done">有声書字幕の組版をデフォルトに戻しました。</string>
     <string name="audiobook_overlay_subtitle_scroll">字幕スクロール</string>
     <string name="audiobook_overlay_subtitle_writing_mode">字幕表示方向</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">横書き</string>

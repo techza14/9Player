@@ -358,6 +358,15 @@
     <string name="audiobook_overlay_help">Bubble: tap to play/pause, double tap to show seek back/forward/bookmark.</string>
     <string name="audiobook_overlay_subtitle_help">Floating subtitles show the currently playing subtitle text.</string>
     <string name="audiobook_overlay_subtitle_style">Subtitle style</string>
+    <string name="audiobook_book_subtitle_typography">Typography</string>
+    <string name="audiobook_book_subtitle_active_size">Current line size</string>
+    <string name="audiobook_book_subtitle_inactive_size">Inactive line size</string>
+    <string name="audiobook_book_subtitle_horizontal_line_height">Horizontal line height</string>
+    <string name="audiobook_book_subtitle_vertical_column_spacing">Vertical column spacing</string>
+    <string name="audiobook_book_subtitle_sp_value">%1$dsp</string>
+    <string name="audiobook_book_subtitle_percent_value">%1$d%%</string>
+    <string name="audiobook_book_subtitle_typography_reset">Restore typography defaults</string>
+    <string name="audiobook_book_subtitle_typography_reset_done">Audiobook subtitle typography restored.</string>
     <string name="audiobook_overlay_subtitle_scroll">Subtitle scrolling</string>
     <string name="audiobook_overlay_subtitle_writing_mode">Subtitle writing mode</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">Horizontal</string>
