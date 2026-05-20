@@ -457,17 +457,6 @@ internal fun saveAudiobookBookSubtitleVerticalColumnSpacingPercent(context: Cont
         .apply()
 }
 
-internal fun resetAudiobookBookSubtitleTypography(context: Context) {
-    audiobookSettingsEditor(context)
-        .remove(AUDIOBOOK_BOOK_SUBTITLE_ACTIVE_SIZE_SP_KEY)
-        .remove(AUDIOBOOK_BOOK_SUBTITLE_INACTIVE_SIZE_SP_KEY)
-        .remove(AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_ACTIVE_SIZE_SP_KEY)
-        .remove(AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_INACTIVE_SIZE_SP_KEY)
-        .remove(AUDIOBOOK_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP_KEY)
-        .remove(AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT_KEY)
-        .apply()
-}
-
 internal fun resetAudiobookBookSubtitleHorizontalTypography(context: Context) {
     audiobookSettingsEditor(context)
         .remove(AUDIOBOOK_BOOK_SUBTITLE_ACTIVE_SIZE_SP_KEY)

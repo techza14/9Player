@@ -366,7 +366,6 @@
     <string name="audiobook_book_subtitle_sp_value">%1$dsp</string>
     <string name="audiobook_book_subtitle_percent_value">%1$d%%</string>
     <string name="audiobook_book_subtitle_typography_reset">Restore typography defaults</string>
-    <string name="audiobook_book_subtitle_typography_reset_done">Audiobook subtitle typography restored.</string>
     <string name="audiobook_overlay_subtitle_scroll">Subtitle scrolling</string>
     <string name="audiobook_overlay_subtitle_writing_mode">Subtitle writing mode</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">Horizontal</string>

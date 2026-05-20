@@ -368,7 +368,6 @@
     <string name="audiobook_book_subtitle_sp_value">%1$dsp</string>
     <string name="audiobook_book_subtitle_percent_value">%1$d%%</string>
     <string name="audiobook_book_subtitle_typography_reset">組版設定をデフォルトに戻す</string>
-    <string name="audiobook_book_subtitle_typography_reset_done">有声書字幕の組版をデフォルトに戻しました。</string>
     <string name="audiobook_overlay_subtitle_scroll">字幕スクロール</string>
     <string name="audiobook_overlay_subtitle_writing_mode">字幕表示方向</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">横書き</string>

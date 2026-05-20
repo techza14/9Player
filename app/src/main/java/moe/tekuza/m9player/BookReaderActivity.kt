@@ -4740,10 +4740,6 @@ private fun BookReaderTypographyPanel(
     } else {
         settings.bookSubtitleInactiveSizeSp
     }
-    val visibleLineHeight = maxOf(
-        settings.bookSubtitleHorizontalLineHeightSp,
-        settings.bookSubtitleActiveSizeSp
-    )
 
     fun changeActiveSize(delta: Int) {
         val nextSize = (activeSize + delta)
@@ -4765,19 +4761,6 @@ private fun BookReaderTypographyPanel(
         } else {
             saveAudiobookBookSubtitleInactiveSizeSp(context, inactiveSize + delta)
         }
-        onSettingsChanged()
-    }
-
-    fun changeLineHeight(delta: Int) {
-        saveAudiobookBookSubtitleHorizontalLineHeightSp(context, visibleLineHeight + delta)
-        onSettingsChanged()
-    }
-
-    fun changeColumnSpacing(delta: Int) {
-        saveAudiobookBookSubtitleVerticalColumnSpacingPercent(
-            context,
-            settings.bookSubtitleVerticalColumnSpacingPercent + delta
-        )
         onSettingsChanged()
     }
 
@@ -4830,10 +4813,26 @@ private fun BookReaderTypographyPanel(
                     ),
                     decreaseEnabled = settings.bookSubtitleVerticalColumnSpacingPercent > MIN_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT,
                     increaseEnabled = settings.bookSubtitleVerticalColumnSpacingPercent < MAX_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT,
-                    onDecrease = { changeColumnSpacing(-5) },
-                    onIncrease = { changeColumnSpacing(5) }
+                    onDecrease = {
+                        saveAudiobookBookSubtitleVerticalColumnSpacingPercent(
+                            context,
+                            settings.bookSubtitleVerticalColumnSpacingPercent - 5
+                        )
+                        onSettingsChanged()
+                    },
+                    onIncrease = {
+                        saveAudiobookBookSubtitleVerticalColumnSpacingPercent(
+                            context,
+                            settings.bookSubtitleVerticalColumnSpacingPercent + 5
+                        )
+                        onSettingsChanged()
+                    }
                 )
             } else {
+                val visibleLineHeight = maxOf(
+                    settings.bookSubtitleHorizontalLineHeightSp,
+                    settings.bookSubtitleActiveSizeSp
+                )
                 BookReaderTypographyStepper(
                     title = stringResource(R.string.audiobook_book_subtitle_horizontal_line_height),
                     valueText = stringResource(R.string.audiobook_book_subtitle_sp_value, visibleLineHeight),
@@ -4842,8 +4841,14 @@ private fun BookReaderTypographyPanel(
                         settings.bookSubtitleActiveSizeSp
                     ),
                     increaseEnabled = visibleLineHeight < MAX_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP,
-                    onDecrease = { changeLineHeight(-1) },
-                    onIncrease = { changeLineHeight(1) }
+                    onDecrease = {
+                        saveAudiobookBookSubtitleHorizontalLineHeightSp(context, visibleLineHeight - 1)
+                        onSettingsChanged()
+                    },
+                    onIncrease = {
+                        saveAudiobookBookSubtitleHorizontalLineHeightSp(context, visibleLineHeight + 1)
+                        onSettingsChanged()
+                    }
                 )
             }
             OutlinedButton(

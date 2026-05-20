@@ -375,7 +375,6 @@
     <string name="audiobook_book_subtitle_sp_value">%1$dsp</string>
     <string name="audiobook_book_subtitle_percent_value">%1$d%%</string>
     <string name="audiobook_book_subtitle_typography_reset">恢复默认排版</string>
-    <string name="audiobook_book_subtitle_typography_reset_done">已恢复有声书字幕默认排版。</string>
     <string name="audiobook_overlay_subtitle_scroll">字幕滚动</string>
     <string name="audiobook_overlay_subtitle_writing_mode">字幕书写方向</string>
     <string name="audiobook_overlay_subtitle_writing_mode_horizontal">横书</string>
