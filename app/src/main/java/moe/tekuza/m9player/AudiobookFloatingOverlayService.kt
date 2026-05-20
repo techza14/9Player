@@ -71,6 +71,7 @@ import moe.tekuza.m9player.hoshi.features.dictionary.currentDictionaryStyles
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
 import org.json.JSONObject
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
@@ -200,6 +201,28 @@ companion object {
         }
     }
 
+    private class HorizontalSubtitleOutlineTextView(context: Context) : AppCompatTextView(context) {
+        private var outlineStrokeWidth: Float = 1f
+
+        fun configureOutline(strokeWidth: Float) {
+            outlineStrokeWidth = strokeWidth.coerceAtLeast(1f)
+            invalidate()
+        }
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            val previousStyle = paint.style
+            val previousStrokeWidth = paint.strokeWidth
+            val previousStrokeJoin = paint.strokeJoin
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = outlineStrokeWidth
+            paint.strokeJoin = Paint.Join.ROUND
+            super.onDraw(canvas)
+            paint.style = previousStyle
+            paint.strokeWidth = previousStrokeWidth
+            paint.strokeJoin = previousStrokeJoin
+        }
+    }
+
     private data class FloatingHoshiLookupWebViewTag(
         val callbackHolder: PopupWebViewCallbackHolder,
         val resultsHolder: PopupLookupResultsHolder,
@@ -212,7 +235,6 @@ companion object {
 
     private inner class FloatingVerticalSubtitleCanvasView(context: Context) : View(context) {
         private var content: String = ""
-        private var textSizeSp: Float = 28f
         private var selectedRange: IntRange? = null
         private var lastAnchorRect: Rect? = null
         private var cachedLayout: VerticalSubtitleLayout? = null
@@ -220,6 +242,9 @@ companion object {
         private var cachedText: String = ""
         private var cachedTextSize: Float = Float.NaN
         private var cachedTypeface: Typeface? = null
+        private var cachedSingleColumn: Boolean = false
+        private var singleColumnLayout: Boolean = false
+        private var contentScrollY: Float = 0f
         private val screenLocation = IntArray(2)
         private val paint = TextPaint().apply {
             isAntiAlias = true
@@ -251,7 +276,6 @@ companion object {
                 paint.textSize != sizePx ||
                 paint.typeface != typeface
             content = text
-            textSizeSp = sizeSp
             paint.color = color
             paint.textSize = sizePx
             paint.typeface = typeface
@@ -261,6 +285,7 @@ companion object {
             outlinePaint.strokeWidth = (resources.displayMetrics.density * 1.2f).coerceAtLeast(1f)
             if (changed) {
                 lastAnchorRect = null
+                contentScrollY = 0f
                 clearLayoutCache()
                 requestLayout()
                 invalidate()
@@ -276,6 +301,29 @@ companion object {
             invalidate()
         }
 
+        fun setSingleColumnLayout(enabled: Boolean) {
+            if (singleColumnLayout == enabled) return
+            singleColumnLayout = enabled
+            lastAnchorRect = null
+            contentScrollY = 0f
+            clearLayoutCache()
+            requestLayout()
+            invalidate()
+        }
+
+        fun setContentScrollY(scrollY: Float) {
+            val target = scrollY.coerceIn(0f, maxContentScrollY())
+            if (abs(contentScrollY - target) <= 0.5f) return
+            contentScrollY = target
+            lastAnchorRect = null
+            invalidate()
+        }
+
+        fun maxContentScrollY(): Float {
+            val layout = obtainLayout(height) ?: return 0f
+            return (layout.contentHeight() - height.toFloat()).coerceAtLeast(0f)
+        }
+
         fun selectAt(x: Float, y: Float) {
             val layout = obtainLayout(height) ?: run {
                 logDebug(FLOATING_SUBTITLE_HIT_LOG_TAG) {
@@ -289,7 +337,8 @@ companion object {
                 viewWidth = width,
                 viewHeight = height,
                 layout = layout,
-                paint = paint
+                paint = paint,
+                scrollY = contentScrollY
             ) ?: run {
                 logDebug(FLOATING_SUBTITLE_HIT_LOG_TAG) {
                     "verticalCanvasTap miss x=$x y=$y view=${width}x$height"
@@ -321,7 +370,8 @@ companion object {
                 viewWidth = width,
                 viewHeight = height,
                 layout = layout,
-                paint = paint
+                paint = paint,
+                scrollY = contentScrollY
             ).let { rects ->
                 if (rects.isEmpty()) return emptyList()
                 getLocationOnScreen(screenLocation)
@@ -333,11 +383,18 @@ companion object {
             super.onDraw(canvas)
             val layout = obtainLayout(height) ?: return
             selectedRange?.takeIf { it.first >= 0 && it.last >= it.first }?.let { range ->
-                VerticalSubtitleLayoutEngine.selectionRects(range, width, height, layout, paint)
+                VerticalSubtitleLayoutEngine.selectionRects(
+                    range = range,
+                    viewWidth = width,
+                    viewHeight = height,
+                    layout = layout,
+                    paint = paint,
+                    scrollY = contentScrollY
+                )
                     .forEach { rect -> canvas.drawRect(rect, selectionPaint) }
             }
-            VerticalSubtitleLayoutEngine.draw(canvas, outlinePaint, layout, width, height)
-            VerticalSubtitleLayoutEngine.draw(canvas, paint, layout, width, height)
+            VerticalSubtitleLayoutEngine.draw(canvas, outlinePaint, layout, width, height, scrollY = contentScrollY)
+            VerticalSubtitleLayoutEngine.draw(canvas, paint, layout, width, height, scrollY = contentScrollY)
         }
 
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -364,7 +421,8 @@ companion object {
                 cachedHeight == targetHeight &&
                 cachedText == content &&
                 cachedTextSize == paint.textSize &&
-                cachedTypeface == paint.typeface
+                cachedTypeface == paint.typeface &&
+                cachedSingleColumn == singleColumnLayout
             ) {
                 return cachedLayout
             }
@@ -372,12 +430,14 @@ companion object {
                 content,
                 paint,
                 targetHeight,
-                effectiveCellHeightPx()
+                effectiveCellHeightPx(),
+                singleColumn = singleColumnLayout
             )
             cachedHeight = targetHeight
             cachedText = content
             cachedTextSize = paint.textSize
             cachedTypeface = paint.typeface
+            cachedSingleColumn = singleColumnLayout
             return cachedLayout
         }
 
@@ -401,6 +461,7 @@ companion object {
             cachedText = ""
             cachedTextSize = Float.NaN
             cachedTypeface = null
+            cachedSingleColumn = false
         }
 
         private fun effectiveCellHeightPx(): Float =
@@ -686,7 +747,7 @@ companion object {
             }
         )
 
-        val subtitleOutlineText = AppCompatTextView(this).apply {
+        val subtitleOutlineText = HorizontalSubtitleOutlineTextView(this).apply {
             setLineSpacing(0f, 1.08f)
             maxLines = 3
             ellipsize = null
@@ -1578,9 +1639,48 @@ companion object {
             setSubtitleFrameHeight(null)
             setSubtitleTextWidthMode(matchParent = false)
             setSubtitleTranslationY(0f)
+            if (!settings.floatingOverlaySubtitleScrollEnabled) {
+                verticalSubtitleView.setSingleColumnLayout(false)
+                verticalSubtitleView.setContentScrollY(0f)
+                if (shouldLog) {
+                    logDebug(FLOATING_SUBTITLE_SCROLL_LOG_TAG) {
+                        "vertical-off pos=$positionMs view=${verticalSubtitleView.width}x${verticalSubtitleView.height}"
+                    }
+                    lastSubtitleScrollLogAtMs = now
+                }
+                return
+            }
+            verticalSubtitleView.setSingleColumnLayout(true)
+            val maxScroll = verticalSubtitleView.maxContentScrollY()
+            if (maxScroll <= 1f) {
+                verticalSubtitleView.setContentScrollY(0f)
+                if (shouldLog) {
+                    logDebug(FLOATING_SUBTITLE_SCROLL_LOG_TAG) {
+                        "vertical-fit pos=$positionMs view=${verticalSubtitleView.width}x${verticalSubtitleView.height} max=${"%.1f".format(maxScroll)}"
+                    }
+                    lastSubtitleScrollLogAtMs = now
+                }
+                return
+            }
+            if (!BookReaderFloatingBridge.isPlaying()) {
+                if (shouldLog) {
+                    logDebug(FLOATING_SUBTITLE_SCROLL_LOG_TAG) {
+                        "vertical-pause pos=$positionMs view=${verticalSubtitleView.width}x${verticalSubtitleView.height} max=${"%.1f".format(maxScroll)}"
+                    }
+                    lastSubtitleScrollLogAtMs = now
+                }
+                return
+            }
+            val cue = BookReaderFloatingBridge.currentCue() ?: return
+            val duration = (cue.endMs - cue.startMs).coerceAtLeast(1L)
+            val linear = ((positionMs - cue.startMs).toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+            val text = BookReaderFloatingBridge.currentSubtitle()?.trim().orEmpty()
+            val mapped = applyPunctuationPause(linear, text)
+            val targetScroll = maxScroll * mapped
+            verticalSubtitleView.setContentScrollY(targetScroll)
             if (shouldLog) {
                 logDebug(FLOATING_SUBTITLE_SCROLL_LOG_TAG) {
-                    "vertical-canvas-static pos=$positionMs view=${verticalSubtitleView.width}x${verticalSubtitleView.height}"
+                    "vertical-tick pos=$positionMs linear=${"%.3f".format(linear)} mapped=${"%.3f".format(mapped)} view=${verticalSubtitleView.width}x${verticalSubtitleView.height} scrollY=${"%.1f".format(targetScroll)} max=${"%.1f".format(maxScroll)} playing=${BookReaderFloatingBridge.isPlaying()} speed=${"%.2f".format(subtitlePlaybackSpeed)}"
                 }
                 lastSubtitleScrollLogAtMs = now
             }
@@ -4148,7 +4248,8 @@ companion object {
         val customTypeface = resolveSubtitleTypeface(this, settings.subtitleCustomFontUri)
         val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
         val density = resources.displayMetrics.density
-        val radius = (2.8f * density).coerceAtLeast(2f)
+        val outlineColor = Color.argb(0x59, 0, 0, 0)
+        val outlineStrokeWidth = (1.2f * density).coerceAtLeast(1f)
         Log.d(
             FLOATING_SUBTITLE_RENDER_LOG_TAG,
             "applyTypography vertical=$verticalWriting color=${settings.floatingOverlaySubtitleColor.toUInt().toString(16)} size=${settings.floatingOverlaySubtitleSizeSp}"
@@ -4158,11 +4259,7 @@ companion object {
             setTextColor(settings.floatingOverlaySubtitleColor)
             typeface = customTypeface ?: Typeface.DEFAULT
             visibility = if (verticalWriting) View.GONE else visibility
-            if (verticalWriting) {
-                setShadowLayer(0f, 0f, 0f, 0)
-            } else {
-                setShadowLayer(0f, 0f, 0f, 0)
-            }
+            setShadowLayer(0f, 0f, 0f, 0)
         }
         subtitleVerticalCanvasView?.apply {
             visibility = if (verticalWriting) visibility else View.GONE
@@ -4174,16 +4271,16 @@ companion object {
         }
         subtitleOutlineTextView?.apply {
             textSize = settings.floatingOverlaySubtitleSizeSp.toFloat()
-            setTextColor(settings.floatingOverlaySubtitleColor)
+            setTextColor(outlineColor)
             typeface = customTypeface ?: Typeface.DEFAULT
+            (this as? HorizontalSubtitleOutlineTextView)?.configureOutline(outlineStrokeWidth)
+            setShadowLayer(0f, 0f, 0f, 0)
             if (verticalWriting) {
                 visibility = View.GONE
                 alpha = 0f
-                setShadowLayer(0f, 0f, 0f, 0)
             } else {
                 visibility = View.VISIBLE
                 alpha = 1f
-                setShadowLayer(radius, 0f, 0f, 0xCC000000.toInt())
             }
         }
     }
