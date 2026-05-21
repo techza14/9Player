@@ -106,7 +106,7 @@
     <string name="home_selected">選択済み</string>
     <string name="home_opened">開いている</string>
     <string name="dictionary_title">検索</string>
-    <string name="dictionary_summary">辞書：%1$d（合計 %2$d 件）</string>
+    <string name="dictionary_summary">辞書：%1$d</string>
     <string name="dictionary_importing">辞書をインポート中...</string>
     <string name="dictionary_error">辞書エラー：%1$s</string>
     <string name="dictionary_error_missing_local_files">ローカル辞書ファイルが見つかりません。もう一度インポートしてください：%1$s</string>
@@ -115,14 +115,11 @@
     <string name="dictionary_hide_list">辞書一覧を隠す</string>
     <string name="dictionary_show_list">辞書一覧を見る</string>
     <string name="dictionary_empty">インポート済みの辞書はありません。</string>
-    <string name="dictionary_count">%1$d 件</string>
-    <string name="dictionary_unloaded">未読み込み</string>
     <string name="dictionary_default_name">辞書 %1$d</string>
     <string name="dictionary_query_label">検索</string>
     <string name="dictionary_querying">辞書を検索中...</string>
     <string name="dictionary_import_batch">%1$d/%2$d をインポート中：%3$s</string>
     <string name="dictionary_import_batch_suffix">%1$s（%2$d/%3$d）</string>
-    <string name="dictionary_loading">辞書を読み込み中</string>
     <string name="dictionary_import_stage_prepare">インポートを準備中</string>
     <string name="dictionary_import_stage_read">辞書ファイルを読み込み中</string>
     <string name="dictionary_import_stage_analyze">辞書を解析中</string>

@@ -123,6 +123,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private lateinit var searchResultInfoView: TextView
     private lateinit var searchResultListView: ListView
     private lateinit var readView: ReadView
+    private lateinit var readerRoot: View
     private lateinit var toolbarTitleText: TextView
     private lateinit var chapterSeekBar: SeekBar
     private lateinit var listenActionText: TextView
@@ -348,7 +349,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun buildLegadoReaderShell(): View {
         val root = FrameLayout(this).apply {
-            setBackgroundColor(READER_PAGE_BG)
+            readerRoot = this
+            setBackgroundColor(readerBgColor)
         }
         val contentContainer = FrameLayout(this)
         statusBarScrim = View(this).apply {
@@ -1961,11 +1963,17 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             readerBgColor = 0xFF1F1F1F.toInt()
             readerTextColor = 0xFFD8D2C5.toInt()
             readerTipColor = 0xFF948B7D.toInt()
+            readerBgAlpha = 100
             readerDarkStatusIcon = false
+            readerBgAssetName = null
+            readerBgImageUri = null
         }
     }
 
     private fun applyReaderVisualStyle() {
+        if (::readerRoot.isInitialized) {
+            readerRoot.setBackgroundColor(readerBgColor)
+        }
         readView.setReaderColors(readerBgColor, readerTextColor, readerTipColor, readerBgAssetName, readerBgImageUri, readerBgAlpha)
         readView.setCueHighlightColor(readerCueHighlightColor)
         readView.setTextUnderline(readerUnderline && readerLayoutMode == M9LayoutMode.HORIZONTAL)

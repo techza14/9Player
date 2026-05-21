@@ -104,7 +104,7 @@
     <string name="home_selected">Selected</string>
     <string name="home_opened">Opened</string>
     <string name="dictionary_title">Lookup</string>
-    <string name="dictionary_summary">Dictionaries: %1$d (%2$d entries total)</string>
+    <string name="dictionary_summary">Dictionaries: %1$d</string>
     <string name="dictionary_importing">Importing dictionary...</string>
     <string name="dictionary_error">Dictionary error: %1$s</string>
     <string name="dictionary_error_missing_local_files">Local dictionary files are missing. Please import again: %1$s</string>
@@ -113,14 +113,11 @@
     <string name="dictionary_hide_list">Hide dictionary list</string>
     <string name="dictionary_show_list">Show dictionary list</string>
     <string name="dictionary_empty">No imported dictionaries yet.</string>
-    <string name="dictionary_count">%1$d entries</string>
-    <string name="dictionary_unloaded">Not loaded</string>
     <string name="dictionary_default_name">Dictionary %1$d</string>
     <string name="dictionary_query_label">Lookup</string>
     <string name="dictionary_querying">Searching dictionaries...</string>
     <string name="dictionary_import_batch">Importing %1$d/%2$d: %3$s</string>
     <string name="dictionary_import_batch_suffix">%1$s (%2$d/%3$d)</string>
-    <string name="dictionary_loading">Loading dictionaries</string>
     <string name="dictionary_import_stage_prepare">Preparing import</string>
     <string name="dictionary_import_stage_read">Reading dictionary file</string>
     <string name="dictionary_import_stage_analyze">Analyzing dictionary</string>

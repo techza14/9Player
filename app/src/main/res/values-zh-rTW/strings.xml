@@ -104,7 +104,7 @@
     <string name="home_selected">已選中</string>
     <string name="home_opened">已打開</string>
     <string name="dictionary_title">查詢</string>
-    <string name="dictionary_summary">辭典：%1$d（共 %2$d 條）</string>
+    <string name="dictionary_summary">辭典：%1$d</string>
     <string name="dictionary_importing">正在匯入辭典...</string>
     <string name="dictionary_error">辭典錯誤：%1$s</string>
     <string name="dictionary_error_missing_local_files">本地辭典檔案缺失，請重新匯入：%1$s</string>
@@ -113,14 +113,11 @@
     <string name="dictionary_hide_list">隱藏辭典列表</string>
     <string name="dictionary_show_list">查看辭典列表</string>
     <string name="dictionary_empty">暫無已匯入辭典。</string>
-    <string name="dictionary_count">%1$d 條</string>
-    <string name="dictionary_unloaded">未載入</string>
     <string name="dictionary_default_name">辭典 %1$d</string>
     <string name="dictionary_query_label">查詞</string>
     <string name="dictionary_querying">正在查詢辭典...</string>
     <string name="dictionary_import_batch">匯入 %1$d/%2$d：%3$s</string>
     <string name="dictionary_import_batch_suffix">%1$s（%2$d/%3$d）</string>
-    <string name="dictionary_loading">載入辭典</string>
     <string name="dictionary_import_stage_prepare">準備匯入</string>
     <string name="dictionary_import_stage_read">讀取辭典檔案</string>
     <string name="dictionary_import_stage_analyze">分析辭典</string>

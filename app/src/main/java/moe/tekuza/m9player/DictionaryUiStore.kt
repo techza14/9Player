@@ -85,7 +85,7 @@ internal data class CombinedDictionaryItem(
     val id: String,
     val type: CombinedDictionaryType,
     val title: String,
-    val countText: String,
+    val detailText: String?,
     val enabled: Boolean = true
 )
 
@@ -102,18 +102,15 @@ internal fun orderedCombinedDictionaryItems(
 internal fun buildCombinedDictionaryItems(
     context: Context,
     dictionaryRefs: List<PersistedDictionaryRef>,
-    loadedDictionaries: List<LoadedDictionary>,
     dictionaryOrderIds: List<String>,
     mdxMountState: MdxMountState
 ): List<CombinedDictionaryItem> {
     val importedItems = dictionaryRefs.mapIndexed { index, ref ->
-        val loaded = loadedDictionaries.getOrNull(index)
         CombinedDictionaryItem(
             id = importedDictionaryId(ref),
             type = CombinedDictionaryType.IMPORTED,
             title = ref.name.ifBlank { context.getString(R.string.dictionary_default_name, index + 1) },
-            countText = loaded?.entryCount?.let { context.getString(R.string.dictionary_count, it) }
-                ?: context.getString(R.string.dictionary_unloaded),
+            detailText = null,
             enabled = ref.enabled
         )
     }
@@ -123,7 +120,7 @@ internal fun buildCombinedDictionaryItems(
                 id = "mnt:${entry.cacheKey}",
                 type = CombinedDictionaryType.MOUNTED,
                 title = entry.displayName.ifBlank { "mounted.mdx" },
-                countText = if (entry.enabled) {
+                detailText = if (entry.enabled) {
                     context.getString(R.string.mdx_dict_enabled)
                 } else {
                     context.getString(R.string.mdx_dict_disabled)

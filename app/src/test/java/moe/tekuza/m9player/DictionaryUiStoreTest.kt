@@ -131,7 +131,7 @@ class DictionaryUiStoreTest {
         id = id,
         type = type,
         title = id,
-        countText = "",
+        detailText = null,
         enabled = enabled
     )
 

@@ -77,7 +77,6 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
         scope = scope
     )
 
-    val loadedDictionaries = dictionaryController.loadedDictionaries
     val dictionaryRefs = dictionaryController.dictionaryRefs
     val dictionaryLoading = dictionaryController.dictionaryLoading
     val dictionaryProgressText = dictionaryController.dictionaryProgressText
@@ -124,15 +123,12 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
         uiConfig = loadDictionaryUiConfig(context)
         dictionarySettings = loadDictionarySettings(context)
         dictionaryController.reloadExternalState()
-        dictionaryController.restorePersistedDictionaries(
-            persistedRefs = loadPersistedImports(context).dictionaries,
-            onPersistDictionaryRefs = ::persistDictionaryRefs
-        )
+        dictionaryController.setPersistedDictionaryRefs(loadPersistedImports(context).dictionaries)
     }
 
-    val termDictionaryNames = remember(loadedDictionaries, mdxMountState) {
+    val termDictionaryNames = remember(dictionaryRefs, mdxMountState) {
         termDictionaryNames(
-            loadedDictionaries = loadedDictionaries,
+            dictionaryRefs = dictionaryRefs,
             mdxMountState = mdxMountState
         )
     }
@@ -246,8 +242,7 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
 
             DictionaryManagementCard(
                 context = context,
-                dictionaryCount = loadedDictionaries.size + mdxMountState.entries.count { it.enabled },
-                totalDictionaryEntries = loadedDictionaries.sumOf { it.entryCount },
+                dictionaryCount = dictionaryRefs.size + mdxMountState.entries.count { it.enabled },
                 showHeader = false,
                 containerColor = hoshiPanelBackgroundColor(),
                 itemContainerColor = hoshiCardBackgroundColor(),
@@ -258,7 +253,6 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
                 showDictionaryManager = showDictionaryManager,
                 showDictionaryDeleteActions = showDictionaryDeleteActions,
                 dictionaryRefs = dictionaryRefs,
-                loadedDictionaries = loadedDictionaries,
                 dictionaryOrderIds = dictionaryOrderIds,
                 mdxMountState = mdxMountState,
                 onImportClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) },
@@ -540,10 +534,10 @@ private fun String.cssDoubleQuotedContent(): String =
     }
 
 private fun termDictionaryNames(
-    loadedDictionaries: List<LoadedDictionary>,
+    dictionaryRefs: List<PersistedDictionaryRef>,
     mdxMountState: MdxMountState,
 ): List<String> {
-    val imported = loadedDictionaries
+    val imported = dictionaryRefs
         .asSequence()
         .filter { it.dictionaryType.equals("Term", ignoreCase = true) }
         .map { it.name.trim() }

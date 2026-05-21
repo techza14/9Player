@@ -110,7 +110,7 @@
     <string name="home_book_name">名称</string>
     <string name="dictionary_title">查询</string>
     <string name="dictionary_home_rich_mode_label">查询页显示辞典</string>
-    <string name="dictionary_summary">辞典：%1$d（共 %2$d 条）</string>
+    <string name="dictionary_summary">辞典：%1$d</string>
     <string name="dictionary_importing">正在导入辞典...</string>
     <string name="dictionary_error">辞典错误：%1$s</string>
     <string name="dictionary_error_missing_local_files">本地辞典文件缺失，请重新导入：%1$s</string>
@@ -119,14 +119,11 @@
     <string name="dictionary_hide_list">隐藏辞典列表</string>
     <string name="dictionary_show_list">查看辞典列表</string>
     <string name="dictionary_empty">暂无已导入辞典。</string>
-    <string name="dictionary_count">%1$d 条</string>
-    <string name="dictionary_unloaded">未加载</string>
     <string name="dictionary_default_name">辞典 %1$d</string>
     <string name="dictionary_query_label">查词</string>
     <string name="dictionary_querying">正在查询辞典...</string>
     <string name="dictionary_import_batch">导入 %1$d/%2$d：%3$s</string>
     <string name="dictionary_import_batch_suffix">%1$s（%2$d/%3$d）</string>
-    <string name="dictionary_loading">加载辞典</string>
     <string name="dictionary_import_stage_prepare">准备导入</string>
     <string name="dictionary_import_stage_read">读取辞典文件</string>
     <string name="dictionary_import_stage_analyze">分析辞典</string>

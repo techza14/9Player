@@ -2169,7 +2169,6 @@ private fun ReaderSyncScreen() {
 
     val mountedDictionaryCount = mdxMountState.entries.count { it.enabled }
     val dictionaryCount = loadedDictionaries.size + mountedDictionaryCount
-    val totalDictionaryEntries = loadedDictionaries.sumOf { it.entryCount }
     val cueLookupTokens = remember(activeCue?.text) {
         activeCue?.let { tokenizeLookupTerms(it.text).take(12) } ?: emptyList()
     }
@@ -2606,7 +2605,6 @@ private fun ReaderSyncScreen() {
                         DictionaryManagementCard(
                             context = context,
                             dictionaryCount = dictionaryCount,
-                            totalDictionaryEntries = totalDictionaryEntries,
                             containerColor = hoshiPanelBackgroundColor(),
                             itemContainerColor = hoshiCardBackgroundColor(),
                             dictionaryLoading = dictionaryLoading,
@@ -2616,7 +2614,6 @@ private fun ReaderSyncScreen() {
                             showDictionaryManager = showDictionaryManager,
                             showDictionaryDeleteActions = showDictionaryDeleteActions,
                             dictionaryRefs = dictionaryRefs,
-                            loadedDictionaries = loadedDictionaries,
                             dictionaryOrderIds = dictionaryOrderIds,
                             mdxMountState = mdxMountState,
                             onImportClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) },

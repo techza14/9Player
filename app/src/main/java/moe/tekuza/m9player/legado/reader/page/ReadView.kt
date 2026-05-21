@@ -143,6 +143,7 @@ internal class ReadView @JvmOverloads constructor(
         bgImageUri: String? = null,
         bgAlpha: Int = 100
     ) {
+        setBackgroundColor(bg)
         forEachPageView { it.setReaderColors(bg, text, tip, bgAssetName, bgImageUri, bgAlpha) }
         overlayTextColor = text
         overlayBgColor = if (isDarkColor(bg)) 0xCC2D2D2D.toInt() else 0xF4FFF8EC.toInt()
