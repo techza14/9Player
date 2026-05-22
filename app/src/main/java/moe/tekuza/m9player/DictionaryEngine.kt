@@ -19,7 +19,6 @@ internal fun localizeDictionaryImportStage(context: Context, stage: String): Str
         "导入辞典，可能需要几分钟" -> context.getString(R.string.dictionary_import_stage_import)
         "整理辞典" -> context.getString(R.string.dictionary_import_stage_finalize)
         "完成" -> context.getString(R.string.dictionary_import_stage_done)
-        "Loading dictionaries" -> context.getString(R.string.dictionary_loading)
         else -> stage
     }
 }

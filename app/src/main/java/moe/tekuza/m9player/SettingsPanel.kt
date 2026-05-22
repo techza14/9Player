@@ -8,17 +8,20 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FontDownload
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.LibraryAdd
 import androidx.compose.material.icons.outlined.Link
-import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.QueryStats
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.SportsEsports
+import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -27,7 +30,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 
@@ -64,12 +69,12 @@ internal fun SettingsPanel(
                 onClick = onAudiobookClick
             )
             SettingsListItem(
-                icon = Icons.Outlined.MenuBook,
+                icon = Icons.AutoMirrored.Outlined.MenuBook,
                 title = stringResource(R.string.settings_control_mode_title),
                 onClick = onControlModeClick
             )
             SettingsListItem(
-                icon = Icons.Outlined.AutoStories,
+                iconPainter = painterResource(R.drawable.ic_grid_layout_side),
                 title = stringResource(R.string.settings_audiobook_ui_title),
                 subtitle = stringResource(R.string.settings_audiobook_ui_subtitle),
                 onClick = onAudiobookUiClick
@@ -97,7 +102,7 @@ internal fun SettingsPanel(
                 showDivider = true
             )
             SettingsListItem(
-                icon = Icons.Outlined.MenuBook,
+                icon = Icons.Outlined.Translate,
                 title = stringResource(R.string.settings_dictionary_title),
                 onClick = onDictionaryClick,
                 showDivider = false
@@ -120,7 +125,7 @@ internal fun SettingsPanel(
             title = stringResource(R.string.settings_section_advanced)
         ) {
             SettingsListItem(
-                icon = Icons.Outlined.AutoStories,
+                icon = Icons.Outlined.Layers,
                 title = stringResource(R.string.audiobook_overlay_title),
                 onClick = onAdvancedOverlayClick
             )
@@ -152,7 +157,7 @@ internal fun SettingsPanel(
                 onClick = onExportDiagnosticsClick
             )
             SettingsListItem(
-                icon = Icons.Outlined.Info,
+                icon = Icons.Outlined.Download,
                 title = stringResource(R.string.settings_update_title),
                 onClick = onUpdateClick
             )
@@ -189,7 +194,8 @@ private fun SettingsSection(
 
 @Composable
 private fun SettingsListItem(
-    icon: ImageVector,
+    icon: ImageVector? = null,
+    iconPainter: Painter? = null,
     title: String,
     subtitle: String? = null,
     onClick: () -> Unit,
@@ -208,12 +214,21 @@ private fun SettingsListItem(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
+            if (iconPainter != null) {
+                Icon(
+                    painter = iconPainter,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            } else if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(3.dp)

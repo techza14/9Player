@@ -464,7 +464,7 @@ internal fun loadPersistedDictionaryFromStorage(
         fallbackDisplayName = displayName
     ) ?: return null
     return ref.copy(
-        name = displayName.ifBlank { loaded.name },
+        name = loaded.name.ifBlank { displayName },
         cacheKey = cacheKey,
         dictionaryType = loaded.dictionaryType
     ) to loaded

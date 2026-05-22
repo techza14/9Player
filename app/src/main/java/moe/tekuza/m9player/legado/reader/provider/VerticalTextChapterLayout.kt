@@ -315,7 +315,7 @@ internal class VerticalTextChapterLayout(
     }
 
     private fun imageBlockSize(chapter: TextChapter, chapterPosition: Int): ImageBlockSize {
-        val bounds = chapter.images[chapterPosition]?.let { decodeBitmapBounds(it.bytes) }
+        val bounds = chapter.images[chapterPosition]?.readBytes()?.let(::decodeBitmapBounds)
         val sourceWidth = bounds?.width?.toFloat()?.coerceAtLeast(1f) ?: visibleWidth.toFloat()
         val sourceHeight = bounds?.height?.toFloat()?.coerceAtLeast(1f) ?: visibleHeight.toFloat()
         val maxWidth = visibleWidth.toFloat().coerceAtLeast(columnWidth)

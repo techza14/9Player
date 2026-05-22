@@ -31,7 +31,6 @@ import androidx.compose.ui.unit.dp
 internal fun DictionaryManagementCard(
     context: android.content.Context = LocalContext.current,
     dictionaryCount: Int,
-    totalDictionaryEntries: Int,
     showHeader: Boolean = true,
     containerColor: Color = HoshiPanelBackground,
     itemContainerColor: Color = HoshiSoftCardBackground,
@@ -42,7 +41,6 @@ internal fun DictionaryManagementCard(
     showDictionaryManager: Boolean,
     showDictionaryDeleteActions: Boolean,
     dictionaryRefs: List<PersistedDictionaryRef>,
-    loadedDictionaries: List<LoadedDictionary>,
     dictionaryOrderIds: List<String>,
     mdxMountState: MdxMountState,
     onImportClick: () -> Unit,
@@ -65,7 +63,7 @@ internal fun DictionaryManagementCard(
             ) {
             if (showHeader) {
                 Text(stringResource(R.string.dictionary_title))
-                Text(stringResource(R.string.dictionary_summary, dictionaryCount, totalDictionaryEntries))
+                Text(stringResource(R.string.dictionary_summary, dictionaryCount))
             }
 
             if (dictionaryLoading) {
@@ -131,7 +129,6 @@ internal fun DictionaryManagementCard(
                 val combinedItems = buildCombinedDictionaryItems(
                     context = context,
                     dictionaryRefs = dictionaryRefs,
-                    loadedDictionaries = loadedDictionaries,
                     dictionaryOrderIds = dictionaryOrderIds,
                     mdxMountState = mdxMountState
                 )
@@ -162,13 +159,16 @@ internal fun DictionaryManagementCard(
                                             maxLines = 2,
                                             overflow = TextOverflow.Ellipsis
                                         )
-                                        Text(
-                                            when (item.type) {
-                                                CombinedDictionaryType.IMPORTED -> item.countText
-                                                CombinedDictionaryType.MOUNTED -> stringResource(R.string.mdx_dict_prefix, item.countText)
-                                            },
-                                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall
-                                        )
+                                        item.detailText?.let { detailText ->
+                                            Text(
+                                                if (item.type == CombinedDictionaryType.MOUNTED) {
+                                                    stringResource(R.string.mdx_dict_prefix, detailText)
+                                                } else {
+                                                    detailText
+                                                },
+                                                style = androidx.compose.material3.MaterialTheme.typography.bodySmall
+                                            )
+                                        }
                                     }
                                     Row(
                                         modifier = Modifier.width(72.dp),

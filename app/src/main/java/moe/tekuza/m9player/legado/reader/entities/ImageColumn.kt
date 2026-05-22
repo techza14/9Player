@@ -63,10 +63,11 @@ internal data class ImageColumn(
 
         @Synchronized
         fun get(image: EbookImageRef, targetWidth: Int, targetHeight: Int): Bitmap? {
-            val key = "${image.path}:${image.bytes.size}:$targetWidth:$targetHeight"
+            val key = "${image.cacheIdentity()}:$targetWidth:$targetHeight"
             cache.get(key)?.let { return it }
+            val bytes = image.readBytes() ?: return null
             val decoded = decodeSampledBitmap(
-                bytes = image.bytes,
+                bytes = bytes,
                 targetWidthPx = targetWidth,
                 targetHeightPx = targetHeight
             ) ?: return null

@@ -11,6 +11,7 @@ class AudiobookUiSettingsActivity : AppCompatActivity() {
             Intent(this, BookReaderActivity::class.java).apply {
                 putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, "第一章   この自称女神と異世界転生を!")
                 putExtra(BookReaderActivity.EXTRA_UI_TEST_MODE, true)
+                putExtra(BookReaderActivity.EXTRA_UI_LAYOUT_EDIT_MODE, true)
             }
         )
         finish()

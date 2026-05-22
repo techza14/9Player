@@ -29,6 +29,7 @@ internal data class VerticalSubtitleLayout(
     val cellHeight: Float
 ) {
     fun contentWidth(): Float = columnCount * cellWidth
+    fun contentHeight(): Float = maxRows * cellHeight
 }
 
 internal object VerticalSubtitleLayoutEngine {
@@ -36,13 +37,19 @@ internal object VerticalSubtitleLayoutEngine {
         text: String,
         paint: TextPaint,
         viewHeight: Int,
-        lineHeightPx: Float = paint.textSize
+        lineHeightPx: Float = paint.textSize,
+        singleColumn: Boolean = false,
+        cellWidthPx: Float = VerticalTextGlyphEngine.estimateCellWidth(paint)
     ): VerticalSubtitleLayout? {
         if (text.isBlank() || viewHeight <= 0) return null
 
         val cellHeight = lineHeightPx.coerceAtLeast(paint.textSize).coerceAtLeast(1f)
-        val cellWidth = VerticalTextGlyphEngine.estimateCellWidth(paint)
-        val rows = floor(viewHeight / cellHeight).toInt().coerceAtLeast(1)
+        val cellWidth = cellWidthPx.coerceAtLeast(1f)
+        val rows = if (singleColumn) {
+            text.count { it != '\r' && it != '\n' }.coerceAtLeast(1)
+        } else {
+            floor(viewHeight / cellHeight).toInt().coerceAtLeast(1)
+        }
         val cells = ArrayList<VerticalSubtitleCell>(text.length)
         var row = 0
         var column = 0
@@ -53,7 +60,9 @@ internal object VerticalSubtitleLayoutEngine {
         text.forEachIndexed { index, ch ->
             if (ch == '\r') return@forEachIndexed
             if (ch == '\n') {
-                if (row > 0 || cells.isNotEmpty()) {
+                if (singleColumn) {
+                    if (cells.isNotEmpty()) row += 1
+                } else if (row > 0 || cells.isNotEmpty()) {
                     column += 1
                     row = 0
                 }
@@ -85,15 +94,6 @@ internal object VerticalSubtitleLayoutEngine {
         )
     }
 
-    fun cellRect(
-        viewWidth: Int,
-        viewHeight: Int,
-        layout: VerticalSubtitleLayout,
-        cell: VerticalSubtitleCell
-    ): RectF {
-        return cellRect(viewWidth, viewHeight, layout, cell, layoutRightEdge(viewWidth, layout))
-    }
-
     private fun layoutRightEdge(viewWidth: Int, layout: VerticalSubtitleLayout): Float {
         val contentWidth = layout.contentWidth()
         return if (contentWidth < viewWidth) {
@@ -103,20 +103,19 @@ internal object VerticalSubtitleLayoutEngine {
         }
     }
 
-    private fun cellRect(
-        viewWidth: Int,
-        viewHeight: Int,
+    private fun cellRectUnclipped(
         layout: VerticalSubtitleLayout,
         cell: VerticalSubtitleCell,
-        rightEdge: Float
+        rightEdge: Float,
+        scrollY: Float
     ): RectF {
         val left = (rightEdge - (cell.column + 1) * layout.cellWidth)
-        val top = (cell.row * layout.cellHeight)
+        val top = (cell.row * layout.cellHeight) - scrollY.coerceAtLeast(0f)
         return RectF(
-            left.coerceAtLeast(0f),
-            top.coerceAtLeast(0f),
-            (left + layout.cellWidth).coerceAtMost(viewWidth.toFloat()),
-            (top + layout.cellHeight).coerceAtMost(viewHeight.toFloat())
+            left,
+            top,
+            left + layout.cellWidth,
+            top + layout.cellHeight
         )
     }
 
@@ -128,9 +127,23 @@ internal object VerticalSubtitleLayoutEngine {
         layout: VerticalSubtitleLayout,
         paint: TextPaint? = null
     ): VerticalSubtitleTapResult? {
+        return hitTest(x, y, viewWidth, viewHeight, layout, paint, scrollY = 0f)
+    }
+
+    fun hitTest(
+        x: Float,
+        y: Float,
+        viewWidth: Int,
+        viewHeight: Int,
+        layout: VerticalSubtitleLayout,
+        paint: TextPaint? = null,
+        scrollY: Float
+    ): VerticalSubtitleTapResult? {
         val rightEdge = layoutRightEdge(viewWidth, layout)
         for (cell in layout.cells) {
-            val rect = cellRect(viewWidth, viewHeight, layout, cell, rightEdge)
+            val rect = cellRectUnclipped(layout, cell, rightEdge, scrollY)
+            if (rect.right <= 0f || rect.left >= viewWidth.toFloat()) continue
+            if (rect.bottom <= 0f || rect.top >= viewHeight.toFloat()) continue
             if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
                 val resolvedRect = paint?.let { inkRectForCell(it, cell.char, rect) } ?: rect
                 return VerticalSubtitleTapResult(
@@ -152,13 +165,26 @@ internal object VerticalSubtitleLayoutEngine {
         layout: VerticalSubtitleLayout,
         paint: TextPaint? = null
     ): List<RectF> {
+        return selectionRects(range, viewWidth, viewHeight, layout, paint, scrollY = 0f)
+    }
+
+    fun selectionRects(
+        range: IntRange,
+        viewWidth: Int,
+        viewHeight: Int,
+        layout: VerticalSubtitleLayout,
+        paint: TextPaint? = null,
+        scrollY: Float
+    ): List<RectF> {
         val start = minOf(range.first, range.last)
         val end = maxOf(range.first, range.last)
         val selectedRectsByColumn = linkedMapOf<Int, MutableList<Pair<Int, RectF>>>()
         val rightEdge = layoutRightEdge(viewWidth, layout)
         for (cell in layout.cells) {
             if (cell.sourceOffset !in start..end) continue
-            val cellRect = cellRect(viewWidth, viewHeight, layout, cell, rightEdge)
+            val cellRect = cellRectUnclipped(layout, cell, rightEdge, scrollY)
+            if (cellRect.right <= 0f || cellRect.left >= viewWidth.toFloat()) continue
+            if (cellRect.bottom <= 0f || cellRect.top >= viewHeight.toFloat()) continue
             val rect = paint?.let { inkRectForCell(it, cell.char, cellRect) } ?: cellRect
             selectedRectsByColumn.getOrPut(cell.column) { ArrayList(4) }.add(cell.row to rect)
         }
@@ -200,9 +226,22 @@ internal object VerticalSubtitleLayoutEngine {
         viewWidth: Int,
         viewHeight: Int
     ) {
+        draw(canvas, textPaint, layout, viewWidth, viewHeight, scrollY = 0f)
+    }
+
+    fun draw(
+        canvas: Canvas,
+        textPaint: TextPaint,
+        layout: VerticalSubtitleLayout,
+        viewWidth: Int,
+        viewHeight: Int,
+        scrollY: Float
+    ) {
         val rightEdge = layoutRightEdge(viewWidth, layout)
         for (cell in layout.cells) {
-            val rect = cellRect(viewWidth, viewHeight, layout, cell, rightEdge)
+            val rect = cellRectUnclipped(layout, cell, rightEdge, scrollY)
+            if (rect.right <= 0f || rect.left >= viewWidth.toFloat()) continue
+            if (rect.bottom <= 0f || rect.top >= viewHeight.toFloat()) continue
             VerticalTextGlyphEngine.draw(canvas, textPaint, cell.char, rect)
         }
     }

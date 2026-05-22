@@ -3,18 +3,23 @@ package moe.tekuza.m9player
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.text.Html
+import android.util.Log
 import android.util.Xml
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
 import java.io.ByteArrayInputStream
+import java.io.File
 import java.net.URLDecoder
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.zip.ZipInputStream
 import kotlin.math.max
+
+private const val EBOOK_READER_CORE_LOG_TAG = "EbookReaderCore"
 
 internal data class EbookDocument(
     val title: String,
@@ -40,8 +45,21 @@ internal data class EbookImageRef(
     val path: String,
     val altText: String,
     val mediaType: String?,
-    val bytes: ByteArray
-)
+    val bytes: ByteArray? = null,
+    val filePath: String? = null
+) {
+    fun readBytes(): ByteArray? =
+        bytes ?: filePath?.let { path -> File(path).takeIf { it.isFile }?.readBytes() }
+
+    fun cacheIdentity(): String {
+        val file = filePath?.let(::File)
+        return if (file != null && file.isFile) {
+            "${file.absolutePath}:${file.length()}:${file.lastModified()}"
+        } else {
+            "${path}:${bytes?.size ?: 0}"
+        }
+    }
+}
 
 internal data class EbookSrtCue(
     val startMs: Long,
@@ -76,12 +94,12 @@ internal suspend fun loadEbookDocument(
 ): EbookDocument = withContext(Dispatchers.IO) {
     val displayTitle = book.title.ifBlank { "Untitled Book" }
     when (book.format.uppercase(Locale.US)) {
-        "EPUB" -> loadEpubDocument(context.contentResolver, book.uri, displayTitle, preferredCharsetName)
+        "EPUB" -> loadEpubDocument(context, book.uri, displayTitle, preferredCharsetName)
         "TXT" -> loadTxtDocument(context.contentResolver, book.uri, displayTitle, preferredCharsetName)
         else -> {
             val mimeFormat = inferLocalReaderBookFormat(displayTitle, context.contentResolver.getType(book.uri))
             if (mimeFormat == "EPUB") {
-                loadEpubDocument(context.contentResolver, book.uri, displayTitle, preferredCharsetName)
+                loadEpubDocument(context, book.uri, displayTitle, preferredCharsetName)
             } else {
                 loadTxtDocument(context.contentResolver, book.uri, displayTitle, preferredCharsetName)
             }
@@ -256,27 +274,74 @@ private fun loadTxtDocument(
 }
 
 private fun loadEpubDocument(
+    context: Context,
+    uri: Uri,
+    fallbackTitle: String,
+    preferredCharsetName: String?
+): EbookDocument {
+    val cacheRoot = runCatching {
+        ensureEpubReaderCache(context, uri, fallbackTitle)
+    }.onFailure { error ->
+        Log.w(EBOOK_READER_CORE_LOG_TAG, "loadEpubDocument cache unavailable, falling back to zip uri=$uri", error)
+    }.getOrNull()
+    if (cacheRoot != null) {
+        return loadEpubDocumentFromCache(cacheRoot, fallbackTitle, preferredCharsetName)
+    }
+    return loadEpubDocumentFromZip(context.contentResolver, uri, fallbackTitle, preferredCharsetName)
+}
+
+private fun loadEpubDocumentFromZip(
     contentResolver: ContentResolver,
     uri: Uri,
     fallbackTitle: String,
     preferredCharsetName: String?
 ): EbookDocument {
+    val startMs = SystemClock.elapsedRealtime()
     val entries = linkedMapOf<String, ByteArray>()
+    var entryCount = 0
+    var htmlEntryCount = 0
+    var imageEntryCount = 0
+    var imageBytes = 0L
+    var readerBytes = 0L
+    val zipStartMs = SystemClock.elapsedRealtime()
     contentResolver.openInputStream(uri)?.use { input ->
         ZipInputStream(input).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
                 if (!entry.isDirectory) {
                     val path = entry.name.normalizeZipPath()
+                    entryCount += 1
                     if (path.isReaderEpubEntry()) {
-                        entries[path] = zip.readBytes()
+                        val bytes = zip.readBytes()
+                        entries[path] = bytes
+                        readerBytes += bytes.size.toLong()
+                        if (path.isEpubImagePath()) {
+                            imageEntryCount += 1
+                            imageBytes += bytes.size.toLong()
+                        } else if (
+                            path.endsWith(".xhtml", true) ||
+                            path.endsWith(".html", true) ||
+                            path.endsWith(".htm", true)
+                        ) {
+                            htmlEntryCount += 1
+                        }
                     }
                 }
                 zip.closeEntry()
             }
         }
     }
+    Log.d(
+        EBOOK_READER_CORE_LOG_TAG,
+        "loadEpubDocument zipScan=${SystemClock.elapsedRealtime() - zipStartMs}ms " +
+            "entries=$entryCount readerEntries=${entries.size} htmlEntries=$htmlEntryCount " +
+            "imageEntries=$imageEntryCount readerBytes=$readerBytes imageBytes=$imageBytes uri=$uri"
+    )
     if (entries.isEmpty()) {
+        Log.d(
+            EBOOK_READER_CORE_LOG_TAG,
+            "loadEpubDocument empty total=${SystemClock.elapsedRealtime() - startMs}ms uri=$uri"
+        )
         return EbookDocument(fallbackTitle, "EPUB", listOf(EbookChapter(fallbackTitle, "")))
     }
     val container = entries["META-INF/container.xml"]?.toString(StandardCharsets.UTF_8)
@@ -295,29 +360,89 @@ private fun loadEpubDocument(
         val path = resolveEpubPath(basePath, item.href)
         val bytes = entries[path] ?: return@mapIndexedNotNull null
         val html = bytes.decodeTextFile(preferredCharsetName)
-        val content = htmlToReaderContent(html, path.substringBeforeLast('/', missingDelimiterValue = ""), epubImages)
-        if (content.text.isBlank()) return@mapIndexedNotNull null
-        EbookChapter(
+        buildEpubChapterFromHtml(
+            html = html,
+            path = path,
             title = tocTitles.titleForPath(path)
                 ?: fallbackEpubChapterTitle(html, isFirstSpineItem = index == 0),
-            text = content.text,
-            sourcePath = path,
-            images = content.images,
-            rubySpans = content.rubySpans
-        )
+            imageResources = epubImages
+        ).takeIf { it.text.isNotBlank() }
     }.ifEmpty {
         htmlEntries(entries).mapIndexed { index, (path, bytes) ->
             val html = bytes.decodeTextFile(preferredCharsetName)
-            val content = htmlToReaderContent(html, path.substringBeforeLast('/', missingDelimiterValue = ""), epubImages)
-            EbookChapter(
+            buildEpubChapterFromHtml(
+                html = html,
+                path = path,
                 title = fallbackEpubChapterTitle(html, isFirstSpineItem = index == 0),
-                text = content.text,
-                sourcePath = path,
-                images = content.images,
-                rubySpans = content.rubySpans
+                imageResources = epubImages
             )
         }.filter { it.text.isNotBlank() }
     }
+    Log.d(
+        EBOOK_READER_CORE_LOG_TAG,
+        "loadEpubDocument parsed total=${SystemClock.elapsedRealtime() - startMs}ms " +
+            "chapters=${chapters.size} images=${epubImages.size} title=$title"
+    )
+    return EbookDocument(
+        title = title,
+        format = "EPUB",
+        chapters = chapters.ifEmpty { listOf(EbookChapter(title, "")) }
+    )
+}
+
+private fun loadEpubDocumentFromCache(
+    root: File,
+    fallbackTitle: String,
+    preferredCharsetName: String?
+): EbookDocument {
+    val startMs = SystemClock.elapsedRealtime()
+    val container = root.resolveSafeEpubPath("META-INF/container.xml")
+        ?.takeIf { it.isFile }
+        ?.readText(StandardCharsets.UTF_8)
+    val opfPath = container?.let(::parseContainerRootFile)
+        ?: root.walkTopDown()
+            .firstOrNull { it.isFile && it.name.endsWith(".opf", ignoreCase = true) }
+            ?.relativeTo(root)
+            ?.invariantSeparatorsPath
+        ?: return fallbackHtmlEpubFromCache(root, fallbackTitle, preferredCharsetName)
+    val opfText = root.resolveSafeEpubPath(opfPath)
+        ?.takeIf { it.isFile }
+        ?.readText(StandardCharsets.UTF_8)
+        ?: return fallbackHtmlEpubFromCache(root, fallbackTitle, preferredCharsetName)
+    val opf = parseOpf(opfText)
+    val basePath = opfPath.substringBeforeLast('/', missingDelimiterValue = "")
+    val title = opf.title.ifBlank { fallbackTitle }
+    val epubImages = buildEpubImageMapFromCache(root, opf.manifest, basePath)
+    val tocTitles = buildEpubTocTitleMapFromCache(root, opf, basePath, preferredCharsetName)
+    val chapters = opf.spineIds.mapIndexedNotNull { index, id ->
+        val item = opf.manifest[id] ?: return@mapIndexedNotNull null
+        val path = resolveEpubPath(basePath, item.href)
+        val file = root.resolveSafeEpubPath(path)?.takeIf { it.isFile } ?: return@mapIndexedNotNull null
+        val html = file.readBytes().decodeTextFile(preferredCharsetName)
+        buildEpubChapterFromHtml(
+            html = html,
+            path = path,
+            title = tocTitles.titleForPath(path)
+                ?: fallbackEpubChapterTitle(html, isFirstSpineItem = index == 0),
+            imageResources = epubImages
+        ).takeIf { it.text.isNotBlank() }
+    }.ifEmpty {
+        htmlFiles(root).mapIndexed { index, file ->
+            val path = file.relativeTo(root).invariantSeparatorsPath
+            val html = file.readBytes().decodeTextFile(preferredCharsetName)
+            buildEpubChapterFromHtml(
+                html = html,
+                path = path,
+                title = fallbackEpubChapterTitle(html, isFirstSpineItem = index == 0),
+                imageResources = epubImages
+            )
+        }.filter { it.text.isNotBlank() }
+    }
+    Log.d(
+        EBOOK_READER_CORE_LOG_TAG,
+        "loadEpubDocument cacheParsed total=${SystemClock.elapsedRealtime() - startMs}ms " +
+            "chapters=${chapters.size} images=${epubImages.size} root=${root.name}"
+    )
     return EbookDocument(
         title = title,
         format = "EPUB",
@@ -331,18 +456,55 @@ private fun fallbackHtmlEpub(
     preferredCharsetName: String?
 ): EbookDocument {
     val epubImages = buildEpubImageMap(entries, emptyMap(), "")
-    val chapters = htmlEntries(entries).map { (path, bytes) ->
+    val chapters = htmlEntries(entries).mapIndexed { index, (path, bytes) ->
         val html = bytes.decodeTextFile(preferredCharsetName)
-        val content = htmlToReaderContent(html, path.substringBeforeLast('/', missingDelimiterValue = ""), epubImages)
-        EbookChapter(
-            title = fallbackEpubChapterTitle(html, isFirstSpineItem = false),
-            text = content.text,
-            sourcePath = path,
-            images = content.images,
-            rubySpans = content.rubySpans
+        buildEpubChapterFromHtml(
+            html = html,
+            path = path,
+            title = fallbackEpubChapterTitle(html, isFirstSpineItem = index == 0),
+            imageResources = epubImages
         )
     }.filter { it.text.isNotBlank() }
     return EbookDocument(fallbackTitle, "EPUB", chapters.ifEmpty { listOf(EbookChapter(fallbackTitle, "")) })
+}
+
+private fun fallbackHtmlEpubFromCache(
+    root: File,
+    fallbackTitle: String,
+    preferredCharsetName: String?
+): EbookDocument {
+    val epubImages = buildEpubImageMapFromCache(root, emptyMap(), "")
+    val chapters = htmlFiles(root).mapIndexed { index, file ->
+        val path = file.relativeTo(root).invariantSeparatorsPath
+        val html = file.readBytes().decodeTextFile(preferredCharsetName)
+        buildEpubChapterFromHtml(
+            html = html,
+            path = path,
+            title = fallbackEpubChapterTitle(html, isFirstSpineItem = index == 0),
+            imageResources = epubImages
+        )
+    }.filter { it.text.isNotBlank() }
+    return EbookDocument(fallbackTitle, "EPUB", chapters.ifEmpty { listOf(EbookChapter(fallbackTitle, "")) })
+}
+
+private fun buildEpubChapterFromHtml(
+    html: String,
+    path: String,
+    title: String,
+    imageResources: Map<String, EpubImageResource>
+): EbookChapter {
+    val content = htmlToReaderContent(
+        html = html,
+        htmlBasePath = path.substringBeforeLast('/', missingDelimiterValue = ""),
+        imageResources = imageResources
+    )
+    return EbookChapter(
+        title = title,
+        text = content.text,
+        sourcePath = path,
+        images = content.images,
+        rubySpans = content.rubySpans
+    )
 }
 
 private fun fallbackEpubChapterTitle(html: String, isFirstSpineItem: Boolean): String {
@@ -359,6 +521,24 @@ private fun htmlEntries(entries: Map<String, ByteArray>): List<Pair<String, Byte
         }
         .toList()
         .sortedBy { it.first }
+}
+
+private fun htmlFiles(root: File): List<File> {
+    val canonicalRoot = root.canonicalFile
+    return root.walkTopDown()
+        .filter { file ->
+            file.isFile && (
+                file.name.endsWith(".xhtml", true) ||
+                    file.name.endsWith(".html", true) ||
+                    file.name.endsWith(".htm", true)
+                )
+        }
+        .filter { file ->
+            val canonical = file.canonicalFile
+            canonical.path == canonicalRoot.path || canonical.path.startsWith(canonicalRoot.path + File.separator)
+        }
+        .sortedBy { it.relativeTo(root).invariantSeparatorsPath }
+        .toList()
 }
 
 private fun String.isReaderEpubEntry(): Boolean {
@@ -467,6 +647,38 @@ private fun buildEpubTocTitleMap(
                 ?.decodeTextFile(preferredCharsetName)
                 ?.let { xml -> parseNcxToc(xml, path.substringBeforeLast('/', missingDelimiterValue = "")) }
         }
+        .orEmpty()
+    return ncxTitles + navTitles
+}
+
+private fun buildEpubTocTitleMapFromCache(
+    root: File,
+    opf: OpfData,
+    opfBasePath: String,
+    preferredCharsetName: String?
+): Map<String, String> {
+    fun readText(path: String): String? =
+        root.resolveSafeEpubPath(path)
+            ?.takeIf { it.isFile }
+            ?.readBytes()
+            ?.decodeTextFile(preferredCharsetName)
+
+    val navTitles = opf.manifest.values.firstOrNull { item ->
+        item.properties
+            ?.split(Regex("\\s+"))
+            ?.any { it.equals("nav", ignoreCase = true) } == true
+    }
+        ?.let { item -> resolveEpubPath(opfBasePath, item.href) }
+        ?.let { path -> readText(path)?.let { html -> parseNavHtmlToc(html, path.substringBeforeLast('/', missingDelimiterValue = "")) } }
+        .orEmpty()
+
+    val ncxTitles = opf.manifest.values.firstOrNull { item ->
+        val mediaType = item.mediaType.orEmpty()
+        mediaType.contains("dtbncx", ignoreCase = true) ||
+            item.href.endsWith(".ncx", ignoreCase = true)
+    }
+        ?.let { item -> resolveEpubPath(opfBasePath, item.href) }
+        ?.let { path -> readText(path)?.let { xml -> parseNcxToc(xml, path.substringBeforeLast('/', missingDelimiterValue = "")) } }
         .orEmpty()
     return ncxTitles + navTitles
 }
@@ -682,6 +894,12 @@ private data class ReaderHtmlContent(
     val rubySpans: List<EbookRubySpan> = emptyList()
 )
 
+private data class EpubImageResource(
+    val mediaType: String?,
+    val bytes: ByteArray? = null,
+    val filePath: String? = null
+)
+
 private data class ParsedReaderText(
     val text: String,
     val rubySpans: List<EbookRubySpan>
@@ -696,19 +914,57 @@ private fun buildEpubImageMap(
     entries: Map<String, ByteArray>,
     manifest: Map<String, OpfItem>,
     opfBasePath: String
-): Map<String, Pair<String?, ByteArray>> {
-    val images = linkedMapOf<String, Pair<String?, ByteArray>>()
+): Map<String, EpubImageResource> {
+    val images = linkedMapOf<String, EpubImageResource>()
     manifest.values.forEach { item ->
         val mediaType = item.mediaType.orEmpty()
         if (mediaType.startsWith("image/", ignoreCase = true)) {
             val path = resolveEpubPath(opfBasePath, item.href)
-            entries[path]?.let { bytes -> images[path] = item.mediaType to bytes }
+            entries[path]?.let { bytes ->
+                images[path] = EpubImageResource(mediaType = item.mediaType, bytes = bytes)
+            }
         }
     }
     entries.forEach { (path, bytes) ->
         if (path.isEpubImagePath()) {
-            images.putIfAbsent(path, path.mediaTypeFromExtension() to bytes)
+            images.putIfAbsent(
+                path,
+                EpubImageResource(mediaType = path.mediaTypeFromExtension(), bytes = bytes)
+            )
         }
+    }
+    return images
+}
+
+private fun buildEpubImageMapFromCache(
+    root: File,
+    manifest: Map<String, OpfItem>,
+    opfBasePath: String
+): Map<String, EpubImageResource> {
+    val images = linkedMapOf<String, EpubImageResource>()
+    manifest.values.forEach { item ->
+        val mediaType = item.mediaType.orEmpty()
+        val path = resolveEpubPath(opfBasePath, item.href)
+        if (mediaType.startsWith("image/", ignoreCase = true) || path.isEpubImagePath()) {
+            val file = root.resolveSafeEpubPath(path) ?: return@forEach
+            if (file.isFile) {
+                images[path] = EpubImageResource(
+                    mediaType = item.mediaType ?: path.mediaTypeFromExtension(),
+                    filePath = file.absolutePath
+                )
+            }
+        }
+    }
+    if (manifest.isEmpty()) {
+        root.walkTopDown()
+            .filter { it.isFile && it.name.isEpubImagePath() }
+            .forEach { file ->
+                val path = file.relativeTo(root).invariantSeparatorsPath
+                images[path] = EpubImageResource(
+                    mediaType = path.mediaTypeFromExtension(),
+                    filePath = file.absolutePath
+                )
+            }
     }
     return images
 }
@@ -716,7 +972,7 @@ private fun buildEpubImageMap(
 private fun htmlToReaderContent(
     html: String,
     htmlBasePath: String,
-    imageResources: Map<String, Pair<String?, ByteArray>>
+    imageResources: Map<String, EpubImageResource>
 ): ReaderHtmlContent {
     var body = Regex("(?is)<body[^>]*>(.*?)</body>").find(html)?.groupValues?.getOrNull(1) ?: html
     body = Regex("(?is)<(script|style)[^>]*>.*?</\\1>").replace(body, "")
@@ -771,8 +1027,9 @@ private fun htmlToReaderContent(
         images[markerPosition] = EbookImageRef(
             path = imagePath,
             altText = tag.altText,
-            mediaType = resource.first,
-            bytes = resource.second
+            mediaType = resource.mediaType,
+            bytes = resource.bytes,
+            filePath = resource.filePath
         )
     }
     return ReaderHtmlContent(text = text, images = images, rubySpans = parsedText.rubySpans)
@@ -1033,6 +1290,16 @@ private fun resolveEpubPath(basePath: String, href: String): String {
         }
     }
     return out.joinToString("/")
+}
+
+private fun File.resolveSafeEpubPath(path: String): File? {
+    val root = canonicalFile
+    val target = resolve(path.normalizeZipPath()).canonicalFile
+    return if (target.path == root.path || target.path.startsWith(root.path + File.separator)) {
+        target
+    } else {
+        null
+    }
 }
 
 private fun String.htmlAttribute(name: String): String {

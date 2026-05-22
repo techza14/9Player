@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import moe.tekuza.m9player.hoshi.features.dictionary.removeCollapsedDictionaryName
 import java.util.Locale
 
 internal class DictionaryManagementController(
@@ -41,6 +42,13 @@ internal class DictionaryManagementController(
         dictionaryOrderIds = loadDictionaryOrderIds(context)
     }
 
+    fun setPersistedDictionaryRefs(persistedRefs: List<PersistedDictionaryRef>) {
+        dictionaryError = null
+        dictionaryRefs = persistedRefs.distinctBy { it.uri }
+        loadedDictionaries = emptyList()
+        normalizeOrderForCurrentDictionaries()
+    }
+
     fun normalizeOrderForCurrentDictionaries() {
         val importedIds = dictionaryRefs.map(::importedDictionaryId)
         val mountedIds = mdxMountState.entries.map { "mnt:${it.cacheKey}" }
@@ -63,7 +71,10 @@ internal class DictionaryManagementController(
             .mapIndexedNotNull { index, ref ->
                 val cached = loadedById[importedDictionaryId(ref)]
                 if (cached != null) {
-                    ref.copy(dictionaryType = cached.dictionaryType) to cached
+                    ref.copy(
+                        name = cached.name.ifBlank { ref.name },
+                        dictionaryType = cached.dictionaryType
+                    ) to cached
                 } else {
                     withContext(Dispatchers.IO) {
                         loadPersistedDictionaryFromStorage(
@@ -93,21 +104,15 @@ internal class DictionaryManagementController(
             return
         }
 
-        dictionaryLoading = true
+        val distinctRefs = persistedRefs.distinctBy { it.uri }
+        dictionaryRefs = distinctRefs
+        normalizeOrderForCurrentDictionaries()
         val restoredDictionaryList = mutableListOf<LoadedDictionary>()
         val restoredRefs = mutableListOf<PersistedDictionaryRef>()
         val missingNames = mutableListOf<String>()
-        val distinctRefs = persistedRefs.distinctBy { it.uri }
 
         distinctRefs.forEachIndexed { index, ref ->
             val displayName = ref.name.ifBlank { "Dictionary ${index + 1}" }
-            updateDictionaryProgress(
-                DictionaryImportProgress(
-                    stage = context.getString(R.string.dictionary_loading),
-                    current = index + 1,
-                    total = distinctRefs.size
-                )
-            )
             val restoredPair = withContext(Dispatchers.IO) {
                 loadPersistedDictionaryFromStorage(
                     context = context,
@@ -125,8 +130,6 @@ internal class DictionaryManagementController(
 
         loadedDictionaries = restoredDictionaryList
         dictionaryRefs = restoredRefs
-        dictionaryLoading = false
-        clearDictionaryProgress()
         normalizeOrderForCurrentDictionaries()
         if (missingNames.isNotEmpty()) {
             dictionaryError = context.getString(
@@ -145,9 +148,11 @@ internal class DictionaryManagementController(
     ) {
         val ref = dictionaryRefs.getOrNull(index) ?: return
         val removedId = importedDictionaryId(ref)
+        val removedName = loadedDictionaries.getOrNull(index)?.name ?: ref.name
 
         dictionaryRefs = dictionaryRefs.filterIndexed { i, _ -> i != index }
         loadedDictionaries = loadedDictionaries.filterIndexed { i, _ -> i != index }
+        removeCollapsedDictionaryName(context, removedName)
         ref.cacheKey?.let { cacheKey ->
             scope.launch(Dispatchers.IO) {
                 deleteDictionaryStorage(context, cacheKey)
@@ -164,8 +169,15 @@ internal class DictionaryManagementController(
         onLookupDataChanged: () -> Unit
     ) {
         if (cacheKey.isBlank()) return
+        val removedName = mdxMountState.entries
+            .firstOrNull { it.cacheKey == cacheKey }
+            ?.displayName
+            ?.ifBlank { "MDX" }
+            ?.substringBeforeLast('.')
+            .orEmpty()
         mdxMountState = mdxMountState.copy(entries = mdxMountState.entries.filterNot { it.cacheKey == cacheKey })
         saveMdxMountState(context, mdxMountState)
+        removeCollapsedDictionaryName(context, removedName)
         dictionaryOrderIds = removeDictionaryOrderId(dictionaryOrderIds, "mnt:$cacheKey")
         saveDictionaryOrderIds(context, dictionaryOrderIds)
         onLookupDataChanged()
@@ -204,7 +216,6 @@ internal class DictionaryManagementController(
         val combinedItems = buildCombinedDictionaryItems(
             context = context,
             dictionaryRefs = dictionaryRefs,
-            loadedDictionaries = loadedDictionaries,
             dictionaryOrderIds = dictionaryOrderIds,
             mdxMountState = mdxMountState
         )
@@ -293,13 +304,13 @@ internal class DictionaryManagementController(
                     return@forEachIndexed
                 }
 
-                val duplicateByName = nextLoadedDictionaries.any {
+                val duplicateByLoadedDictionary = nextLoadedDictionaries.any {
                     it.name.equals(parsedDictionary.name, ignoreCase = true) &&
                         it.entryCount > 0 &&
                         parsedDictionary.entryCount > 0 &&
                         it.entryCount == parsedDictionary.entryCount
                 }
-                if (duplicateByName) {
+                if (duplicateByLoadedDictionary) {
                     parsedDictionary.cacheKey
                         .takeIf { it.isNotBlank() }
                         ?.let { key ->
@@ -312,7 +323,7 @@ internal class DictionaryManagementController(
                 nextLoadedDictionaries = nextLoadedDictionaries + parsedDictionary
                 nextDictionaryRefs = (nextDictionaryRefs + PersistedDictionaryRef(
                     uri = uriValue,
-                    name = displayName,
+                    name = parsedDictionary.name.ifBlank { displayName },
                     cacheKey = cacheKey,
                     dictionaryType = parsedDictionary.dictionaryType,
                     enabled = true

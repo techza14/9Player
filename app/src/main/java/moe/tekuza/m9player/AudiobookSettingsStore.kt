@@ -20,6 +20,12 @@ private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_SCROLL_ENABLED_KEY = "audi
 private const val AUDIOBOOK_FLOATING_OVERLAY_SUBTITLE_WRITING_MODE_KEY = "audiobook_floating_overlay_subtitle_writing_mode"
 private const val AUDIOBOOK_BOOK_SUBTITLE_WRITING_MODE_KEY = "audiobook_book_subtitle_writing_mode"
 private const val AUDIOBOOK_READER_PLAYBACK_MODE_KEY = "audiobook_reader_playback_mode"
+private const val AUDIOBOOK_BOOK_SUBTITLE_ACTIVE_SIZE_SP_KEY = "audiobook_book_subtitle_active_size_sp"
+private const val AUDIOBOOK_BOOK_SUBTITLE_INACTIVE_SIZE_SP_KEY = "audiobook_book_subtitle_inactive_size_sp"
+private const val AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_ACTIVE_SIZE_SP_KEY = "audiobook_book_subtitle_vertical_active_size_sp"
+private const val AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_INACTIVE_SIZE_SP_KEY = "audiobook_book_subtitle_vertical_inactive_size_sp"
+private const val AUDIOBOOK_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP_KEY = "audiobook_book_subtitle_horizontal_line_height_sp"
+private const val AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT_KEY = "audiobook_book_subtitle_vertical_column_spacing_percent"
 private const val AUDIOBOOK_PAUSE_ON_LOOKUP_KEY = "audiobook_pause_on_lookup"
 private const val AUDIOBOOK_ACTIVE_CUE_AT_TOP_KEY = "audiobook_active_cue_at_top"
 private const val AUDIOBOOK_LOOKUP_AUDIO_ENABLED_KEY = "audiobook_lookup_audio_enabled"
@@ -41,6 +47,18 @@ internal const val MAX_FLOATING_OVERLAY_SIZE_DP = 72
 internal const val DEFAULT_FLOATING_OVERLAY_SUBTITLE_SIZE_SP = 26
 internal const val MIN_FLOATING_OVERLAY_SUBTITLE_SIZE_SP = 12
 internal const val MAX_FLOATING_OVERLAY_SUBTITLE_SIZE_SP = 40
+internal const val DEFAULT_BOOK_SUBTITLE_ACTIVE_SIZE_SP = 34
+internal const val MIN_BOOK_SUBTITLE_ACTIVE_SIZE_SP = 22
+internal const val MAX_BOOK_SUBTITLE_ACTIVE_SIZE_SP = 56
+internal const val DEFAULT_BOOK_SUBTITLE_INACTIVE_SIZE_SP = 22
+internal const val MIN_BOOK_SUBTITLE_INACTIVE_SIZE_SP = 14
+internal const val MAX_BOOK_SUBTITLE_INACTIVE_SIZE_SP = 40
+internal const val DEFAULT_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP = 42
+internal const val MIN_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP = 24
+internal const val MAX_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP = 72
+internal const val DEFAULT_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT = 100
+internal const val MIN_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT = 80
+internal const val MAX_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT = 150
 internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_WHITE = 0xFFFFFFFF.toInt()
 internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_YELLOW = 0xFFFFF59D.toInt()
 internal const val FLOATING_OVERLAY_SUBTITLE_COLOR_GREEN = 0xFFA5D6A7.toInt()
@@ -117,6 +135,12 @@ internal data class AudiobookSettingsConfig(
     val floatingOverlaySubtitleScrollEnabled: Boolean = true,
     val floatingOverlaySubtitleWritingMode: FloatingSubtitleWritingMode = FloatingSubtitleWritingMode.HORIZONTAL,
     val bookSubtitleWritingMode: FloatingSubtitleWritingMode = FloatingSubtitleWritingMode.HORIZONTAL,
+    val bookSubtitleActiveSizeSp: Int = DEFAULT_BOOK_SUBTITLE_ACTIVE_SIZE_SP,
+    val bookSubtitleInactiveSizeSp: Int = DEFAULT_BOOK_SUBTITLE_INACTIVE_SIZE_SP,
+    val bookSubtitleVerticalActiveSizeSp: Int = DEFAULT_BOOK_SUBTITLE_ACTIVE_SIZE_SP,
+    val bookSubtitleVerticalInactiveSizeSp: Int = DEFAULT_BOOK_SUBTITLE_INACTIVE_SIZE_SP,
+    val bookSubtitleHorizontalLineHeightSp: Int = DEFAULT_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP,
+    val bookSubtitleVerticalColumnSpacingPercent: Int = DEFAULT_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT,
     val readerPlaybackMode: ReaderPlaybackMode = ReaderPlaybackMode.NORMAL,
     val floatingOverlaySubtitleX: Int = 0,
     val floatingOverlaySubtitleY: Int = 0,
@@ -207,6 +231,33 @@ internal fun loadAudiobookSettingsConfig(context: Context): AudiobookSettingsCon
         ),
         bookSubtitleWritingMode = FloatingSubtitleWritingMode.fromStorage(
             prefs.getString(AUDIOBOOK_BOOK_SUBTITLE_WRITING_MODE_KEY, null)
+        ),
+        bookSubtitleActiveSizeSp = prefs.getInt(
+            AUDIOBOOK_BOOK_SUBTITLE_ACTIVE_SIZE_SP_KEY,
+            DEFAULT_BOOK_SUBTITLE_ACTIVE_SIZE_SP
+        ).coerceIn(MIN_BOOK_SUBTITLE_ACTIVE_SIZE_SP, MAX_BOOK_SUBTITLE_ACTIVE_SIZE_SP),
+        bookSubtitleInactiveSizeSp = prefs.getInt(
+            AUDIOBOOK_BOOK_SUBTITLE_INACTIVE_SIZE_SP_KEY,
+            DEFAULT_BOOK_SUBTITLE_INACTIVE_SIZE_SP
+        ).coerceIn(MIN_BOOK_SUBTITLE_INACTIVE_SIZE_SP, MAX_BOOK_SUBTITLE_INACTIVE_SIZE_SP),
+        bookSubtitleVerticalActiveSizeSp = prefs.getInt(
+            AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_ACTIVE_SIZE_SP_KEY,
+            DEFAULT_BOOK_SUBTITLE_ACTIVE_SIZE_SP
+        ).coerceIn(MIN_BOOK_SUBTITLE_ACTIVE_SIZE_SP, MAX_BOOK_SUBTITLE_ACTIVE_SIZE_SP),
+        bookSubtitleVerticalInactiveSizeSp = prefs.getInt(
+            AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_INACTIVE_SIZE_SP_KEY,
+            DEFAULT_BOOK_SUBTITLE_INACTIVE_SIZE_SP
+        ).coerceIn(MIN_BOOK_SUBTITLE_INACTIVE_SIZE_SP, MAX_BOOK_SUBTITLE_INACTIVE_SIZE_SP),
+        bookSubtitleHorizontalLineHeightSp = prefs.getInt(
+            AUDIOBOOK_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP_KEY,
+            DEFAULT_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP
+        ).coerceIn(MIN_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP, MAX_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP),
+        bookSubtitleVerticalColumnSpacingPercent = prefs.getInt(
+            AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT_KEY,
+            DEFAULT_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT
+        ).coerceIn(
+            MIN_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT,
+            MAX_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT
         ),
         readerPlaybackMode = ReaderPlaybackMode.fromStorage(
             prefs.getString(AUDIOBOOK_READER_PLAYBACK_MODE_KEY, null)
@@ -343,6 +394,82 @@ internal fun saveAudiobookBookSubtitleWritingMode(
 ) {
     audiobookSettingsEditor(context)
         .putString(AUDIOBOOK_BOOK_SUBTITLE_WRITING_MODE_KEY, mode.storageValue)
+        .apply()
+}
+
+internal fun saveAudiobookBookSubtitleActiveSizeSp(context: Context, sizeSp: Int) {
+    audiobookSettingsEditor(context)
+        .putInt(
+            AUDIOBOOK_BOOK_SUBTITLE_ACTIVE_SIZE_SP_KEY,
+            sizeSp.coerceIn(MIN_BOOK_SUBTITLE_ACTIVE_SIZE_SP, MAX_BOOK_SUBTITLE_ACTIVE_SIZE_SP)
+        )
+        .apply()
+}
+
+internal fun saveAudiobookBookSubtitleInactiveSizeSp(context: Context, sizeSp: Int) {
+    audiobookSettingsEditor(context)
+        .putInt(
+            AUDIOBOOK_BOOK_SUBTITLE_INACTIVE_SIZE_SP_KEY,
+            sizeSp.coerceIn(MIN_BOOK_SUBTITLE_INACTIVE_SIZE_SP, MAX_BOOK_SUBTITLE_INACTIVE_SIZE_SP)
+        )
+        .apply()
+}
+
+internal fun saveAudiobookBookSubtitleVerticalActiveSizeSp(context: Context, sizeSp: Int) {
+    audiobookSettingsEditor(context)
+        .putInt(
+            AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_ACTIVE_SIZE_SP_KEY,
+            sizeSp.coerceIn(MIN_BOOK_SUBTITLE_ACTIVE_SIZE_SP, MAX_BOOK_SUBTITLE_ACTIVE_SIZE_SP)
+        )
+        .apply()
+}
+
+internal fun saveAudiobookBookSubtitleVerticalInactiveSizeSp(context: Context, sizeSp: Int) {
+    audiobookSettingsEditor(context)
+        .putInt(
+            AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_INACTIVE_SIZE_SP_KEY,
+            sizeSp.coerceIn(MIN_BOOK_SUBTITLE_INACTIVE_SIZE_SP, MAX_BOOK_SUBTITLE_INACTIVE_SIZE_SP)
+        )
+        .apply()
+}
+
+internal fun saveAudiobookBookSubtitleHorizontalLineHeightSp(context: Context, lineHeightSp: Int) {
+    audiobookSettingsEditor(context)
+        .putInt(
+            AUDIOBOOK_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP_KEY,
+            lineHeightSp.coerceIn(
+                MIN_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP,
+                MAX_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP
+            )
+        )
+        .apply()
+}
+
+internal fun saveAudiobookBookSubtitleVerticalColumnSpacingPercent(context: Context, percent: Int) {
+    audiobookSettingsEditor(context)
+        .putInt(
+            AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT_KEY,
+            percent.coerceIn(
+                MIN_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT,
+                MAX_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT
+            )
+        )
+        .apply()
+}
+
+internal fun resetAudiobookBookSubtitleHorizontalTypography(context: Context) {
+    audiobookSettingsEditor(context)
+        .remove(AUDIOBOOK_BOOK_SUBTITLE_ACTIVE_SIZE_SP_KEY)
+        .remove(AUDIOBOOK_BOOK_SUBTITLE_INACTIVE_SIZE_SP_KEY)
+        .remove(AUDIOBOOK_BOOK_SUBTITLE_HORIZONTAL_LINE_HEIGHT_SP_KEY)
+        .apply()
+}
+
+internal fun resetAudiobookBookSubtitleVerticalTypography(context: Context) {
+    audiobookSettingsEditor(context)
+        .remove(AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_ACTIVE_SIZE_SP_KEY)
+        .remove(AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_INACTIVE_SIZE_SP_KEY)
+        .remove(AUDIOBOOK_BOOK_SUBTITLE_VERTICAL_COLUMN_SPACING_PERCENT_KEY)
         .apply()
 }
 
