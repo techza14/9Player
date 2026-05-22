@@ -341,6 +341,11 @@ internal class ReadView @JvmOverloads constructor(
                 }
                 if (isDraggingPage) {
                     finishDrag(commit = if (pageAnim == M9PageAnim.SCROLL) true else shouldCommitDrag())
+                } else if (consumedByDragProbe && dragDirection != 0) {
+                    if (shouldCommitPreviewlessTurn(event)) {
+                        invokeTurnCallback(direction = dragDirection)
+                    }
+                    resetPageLayers()
                 } else if (!consumedByDragProbe) {
                     handleTap(event)
                 }
@@ -362,6 +367,7 @@ internal class ReadView @JvmOverloads constructor(
             val direction = dragDirectionFor(dx, dy) ?: return
             val preview = onPagePreview?.invoke(direction)
             if (preview == null) {
+                dragDirection = direction
                 consumedByDragProbe = true
                 return
             }
@@ -496,6 +502,25 @@ internal class ReadView @JvmOverloads constructor(
         } else {
             abs(velocityTracker.xVelocity)
         }
+        return shouldCommitTurn(distance, size, velocity)
+    }
+
+    private fun shouldCommitPreviewlessTurn(event: MotionEvent): Boolean {
+        val distance = if (pageAnim == M9PageAnim.SCROLL && !isScrollHorizontalAxis()) {
+            abs(event.y - downY)
+        } else {
+            abs(event.x - downX)
+        }
+        val size = if (pageAnim == M9PageAnim.SCROLL && !isScrollHorizontalAxis()) height else width
+        val velocity = if (pageAnim == M9PageAnim.SCROLL && !isScrollHorizontalAxis()) {
+            abs(velocityTracker.yVelocity)
+        } else {
+            abs(velocityTracker.xVelocity)
+        }
+        return shouldCommitTurn(distance, size, velocity)
+    }
+
+    private fun shouldCommitTurn(distance: Float, size: Int, velocity: Float): Boolean {
         return distance >= size.coerceAtLeast(1) * 0.22f || velocity > MIN_FLING_VELOCITY
     }
 
@@ -896,7 +921,11 @@ internal class ReadView @JvmOverloads constructor(
 
     private fun turnPageByTap(direction: Int) {
         if (isGestureAnimating || width <= 0 || height <= 0) return
-        val preview = onPagePreview?.invoke(direction) ?: return
+        val preview = onPagePreview?.invoke(direction)
+        if (preview == null) {
+            invokeTurnCallback(direction = direction)
+            return
+        }
         abortGestureAnimation()
         beginDrag(direction, preview)
         if (pageAnim == M9PageAnim.SCROLL) {

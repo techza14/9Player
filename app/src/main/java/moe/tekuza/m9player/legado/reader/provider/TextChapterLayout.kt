@@ -338,7 +338,7 @@ internal class TextChapterLayout(
 
     private fun imageHeight(chapter: TextChapter, chapterPosition: Int): Float {
         val image = chapter.images[chapterPosition] ?: return lineHeight * 4f
-        val bounds = decodeBitmapBounds(image.bytes)
+        val bounds = image.readBytes()?.let(::decodeBitmapBounds)
         val sourceWidth = bounds?.width ?: visibleWidth
         val sourceHeight = bounds?.height ?: visibleWidth
         val ratio = sourceHeight.toFloat() / sourceWidth.toFloat().coerceAtLeast(1f)
