@@ -8,7 +8,7 @@
     <string name="reader_selection_copied">コピーしました</string>
     <string name="reader_convert">変換</string>
     <string name="reader_reset_defaults">デフォルトに戻す</string>
-    <string name="reader_reset_defaults_confirm">現在のリーダー設定を初期値に戻します。続けますか？</string>
+    <string name="reader_reset_defaults_confirm">この設定ページの項目を初期値に戻します。続けますか？</string>
     <string name="setting">設定</string>
     <string name="interface_setting">画面</string>
     <string name="chapter_list">目次</string>

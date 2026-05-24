@@ -8,7 +8,7 @@
     <string name="reader_selection_copied">已复制</string>
     <string name="reader_convert">转换</string>
     <string name="reader_reset_defaults">恢复默认设置</string>
-    <string name="reader_reset_defaults_confirm">恢复后将重置当前阅读器设置，是否继续？</string>
+    <string name="reader_reset_defaults_confirm">恢复后将重置此设置页中的阅读器选项，是否继续？</string>
     <string name="setting">设置</string>
     <string name="interface_setting">界面</string>
     <string name="chapter_list">目录</string>

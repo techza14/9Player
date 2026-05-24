@@ -59,21 +59,22 @@ internal class ReadStyleDialog(
         fun onPaddingClicked()
         fun onTipClicked()
         fun onPageAnimClicked(animIndex: Int)
-        fun onBackgroundClicked(index: Int)
+        fun onBackgroundClicked(index: Int): ReadStyleState
         fun onBackgroundLongClicked(index: Int)
         fun onBackgroundAddClicked()
     }
     private var dialog: AlertDialog? = null
+    private var currentState: ReadStyleState = state
 
     fun show() {
         val view = activity.layoutInflater.inflate(R.layout.dialog_m9_read_style, null, false)
         bindTopButtons(view)
-        bindSeekBar(view, R.id.style_text_size_label, R.id.style_text_size, activity.getString(R.string.reader_style_text_size), 14, state.textSizeSp, callback::onTextSizeChanged, callback::onTextSizeChangeFinished)
-        bindSeekBar(view, R.id.style_letter_label, R.id.style_letter_size, activity.getString(R.string.reader_style_letter_spacing), -50, state.letterSpacingDp, callback::onLetterSpacingChanged, callback::onLetterSpacingChangeFinished)
-        bindSeekBar(view, R.id.style_line_label, R.id.style_line_size, activity.getString(R.string.reader_style_line_spacing), 0, state.lineSpacingDp, callback::onLineSpacingChanged, callback::onLineSpacingChangeFinished)
-        bindSeekBar(view, R.id.style_paragraph_label, R.id.style_paragraph_size, activity.getString(R.string.reader_style_paragraph_spacing), 0, state.paragraphSpacingDp, callback::onParagraphSpacingChanged, callback::onParagraphSpacingChangeFinished)
+        bindSeekBar(view, R.id.style_text_size_label, R.id.style_text_size, activity.getString(R.string.reader_style_text_size), 14, currentState.textSizeSp, callback::onTextSizeChanged, callback::onTextSizeChangeFinished)
+        bindSeekBar(view, R.id.style_letter_label, R.id.style_letter_size, activity.getString(R.string.reader_style_letter_spacing), -50, currentState.letterSpacingDp, callback::onLetterSpacingChanged, callback::onLetterSpacingChangeFinished)
+        bindSeekBar(view, R.id.style_line_label, R.id.style_line_size, activity.getString(R.string.reader_style_line_spacing), 0, currentState.lineSpacingDp, callback::onLineSpacingChanged, callback::onLineSpacingChangeFinished)
+        bindSeekBar(view, R.id.style_paragraph_label, R.id.style_paragraph_size, activity.getString(R.string.reader_style_paragraph_spacing), 0, currentState.paragraphSpacingDp, callback::onParagraphSpacingChanged, callback::onParagraphSpacingChangeFinished)
         view.findViewById<RadioGroup>(R.id.style_page_anim).check(
-            when (state.pageAnim) {
+            when (currentState.pageAnim) {
                 M9PageAnim.COVER -> R.id.style_anim_cover
                 M9PageAnim.SLIDE -> R.id.style_anim_slide
                 M9PageAnim.SCROLL -> R.id.style_anim_scroll
@@ -102,11 +103,20 @@ internal class ReadStyleDialog(
         dialog?.show()
     }
 
+    private fun bindCurrentStyleState(view: android.view.View) {
+        bindSeekBarValue(view, R.id.style_text_size_label, R.id.style_text_size, activity.getString(R.string.reader_style_text_size), 14, currentState.textSizeSp)
+        bindSeekBarValue(view, R.id.style_letter_label, R.id.style_letter_size, activity.getString(R.string.reader_style_letter_spacing), -50, currentState.letterSpacingDp)
+        bindSeekBarValue(view, R.id.style_line_label, R.id.style_line_size, activity.getString(R.string.reader_style_line_spacing), 0, currentState.lineSpacingDp)
+        bindSeekBarValue(view, R.id.style_paragraph_label, R.id.style_paragraph_size, activity.getString(R.string.reader_style_paragraph_spacing), 0, currentState.paragraphSpacingDp)
+        view.findViewById<TextView>(R.id.style_weight).text = fontWeightLabel(currentState.textWeight)
+        bindBackgroundStyles(view)
+    }
+
     private fun bindBackgroundStyles(view: android.view.View) {
         val row = view.findViewById<LinearLayout>(R.id.style_color_row)
         row.removeAllViews()
-        state.backgroundStyles.forEachIndexed { index, item ->
-            val selected = index == state.backgroundStyleIndex
+        currentState.backgroundStyles.forEachIndexed { index, item ->
+            val selected = index == currentState.backgroundStyleIndex
             val textView = TextView(activity)
             textView.text = item.name.ifBlank { activity.getString(R.string.reader_style_sample_text) }
             textView.setTextColor(item.textColor)
@@ -123,7 +133,8 @@ internal class ReadStyleDialog(
                 )
             }
             textView.setOnClickListener {
-                callback.onBackgroundClicked(index)
+                currentState = callback.onBackgroundClicked(index)
+                bindCurrentStyleState(view)
             }
             textView.setOnLongClickListener {
                 dialog?.dismiss()
@@ -153,16 +164,12 @@ internal class ReadStyleDialog(
 
     private fun bindTopButtons(view: android.view.View) {
         val weightView = view.findViewById<TextView>(R.id.style_weight)
-        var currentTextWeight = state.textWeight
-        fun updateWeightLabel() {
-            weightView.text = fontWeightLabel(currentTextWeight)
-        }
-        updateWeightLabel()
+        weightView.text = fontWeightLabel(currentState.textWeight)
         view.findViewById<TextView>(R.id.style_info).setOnClickListener { callback.onInfoClicked() }
         weightView.setOnClickListener {
             callback.onWeightClicked { nextWeight ->
-                currentTextWeight = nextWeight
-                updateWeightLabel()
+                currentState = currentState.copy(textWeight = nextWeight)
+                weightView.text = fontWeightLabel(nextWeight)
             }
         }
         view.findViewById<TextView>(R.id.style_font).setOnClickListener { callback.onFontClicked() }
@@ -204,8 +211,7 @@ internal class ReadStyleDialog(
     ) {
         val label = view.findViewById<TextView>(labelId)
         val seek = view.findViewById<SeekBar>(seekId)
-        seek.progress = (value - min).coerceIn(0, seek.max)
-        label.text = "$title：${min + seek.progress}"
+        bindSeekBarValue(label, seek, title, min, value)
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
@@ -220,6 +226,34 @@ internal class ReadStyleDialog(
                 onChangeFinished(min + seek.progress)
             }
         })
+    }
+
+    private fun bindSeekBarValue(
+        view: android.view.View,
+        labelId: Int,
+        seekId: Int,
+        title: String,
+        min: Int,
+        value: Int
+    ) {
+        bindSeekBarValue(
+            view.findViewById(labelId),
+            view.findViewById(seekId),
+            title,
+            min,
+            value
+        )
+    }
+
+    private fun bindSeekBarValue(
+        label: TextView,
+        seek: SeekBar,
+        title: String,
+        min: Int,
+        value: Int
+    ) {
+        seek.progress = (value - min).coerceIn(0, seek.max)
+        label.text = "$title：${min + seek.progress}"
     }
 
     private fun dp(value: Int): Int = (value * activity.resources.displayMetrics.density).toInt()

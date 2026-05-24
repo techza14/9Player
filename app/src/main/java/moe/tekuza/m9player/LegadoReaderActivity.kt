@@ -201,7 +201,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var readerPaddingDp: Int = 22
     private var readerLayoutMode: M9LayoutMode = M9LayoutMode.HORIZONTAL
     private var readerPageAnim: M9PageAnim = M9PageAnim.NONE
-    private var readerStyleSelect: Int = 0
+    private var readerStyleSelect: Int = DEFAULT_LEGADO_READER_STYLE_INDEX
     private var readerNightMode: Boolean = false
     private var readerStyleConfigs: MutableList<LegadoReaderStyleConfig> =
         defaultLegadoReaderStyleConfigs().toMutableList()
@@ -297,7 +297,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onBackPressed() {
         if (disableReturnKey) {
-            readMenu.visibility = View.VISIBLE
+            setReadMenuVisible(true)
             return
         }
         when {
@@ -325,8 +325,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 moreSettingsPanel.visibility = View.GONE
                 return
             }
-            ::readMenu.isInitialized && readMenu.visibility == View.VISIBLE -> {
-                readMenu.visibility = View.GONE
+            isReadMenuVisible() -> {
+                setReadMenuVisible(false)
                 return
             }
         }
@@ -491,7 +491,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 audioControlPanel.visibility == View.VISIBLE -> audioControlPanel.visibility = View.GONE
                 moreSettingsPanel.visibility == View.VISIBLE -> moreSettingsPanel.visibility = View.GONE
                 else -> {
-                    readMenu.visibility = if (readMenu.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                    toggleReadMenuVisibility()
                 }
             }
         }
@@ -533,8 +533,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 when {
                     audioControlPanel.visibility == View.VISIBLE -> audioControlPanel.visibility = View.GONE
                     moreSettingsPanel.visibility == View.VISIBLE -> moreSettingsPanel.visibility = View.GONE
-                    else -> readMenu.visibility =
-                        if (readMenu.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                    else -> toggleReadMenuVisibility()
                 }
             }
         }
@@ -545,7 +544,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             findViewById<View>(R.id.reader_menu_scrim).setOnClickListener {
                 audioControlPanel.visibility = View.GONE
                 moreSettingsPanel.visibility = View.GONE
-                readMenu.visibility = View.GONE
+                setReadMenuVisible(false)
             }
             findViewById<TextView>(R.id.reader_back).also {
                 it.setOnClickListener {
@@ -682,7 +681,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             onResults = { showSearchPanel(searchQuery.orEmpty()) }
             onMainMenu = {
                 hideSearchMenu()
-                readMenu.visibility = View.VISIBLE
+                setReadMenuVisible(true)
             }
             onExit = {
                 searchQuery = null
@@ -837,8 +836,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val systemBarColor = currentSystemBarColor()
         window.statusBarColor = systemBarColor
         window.navigationBarColor = systemBarColor
-        controller.isAppearanceLightStatusBars = readerDarkStatusIcon
-        controller.isAppearanceLightNavigationBars = readerDarkStatusIcon
+        val useDarkSystemBarIcons = currentSystemBarUsesDarkIcons()
+        controller.isAppearanceLightStatusBars = useDarkSystemBarIcons
+        controller.isAppearanceLightNavigationBars = useDarkSystemBarIcons
         val hideTypes =
             (if (hideStatusBar) WindowInsetsCompat.Type.statusBars() else 0) or
                 (if (hideNavigationBar) WindowInsetsCompat.Type.navigationBars() else 0)
@@ -854,11 +854,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         if (!::readMenu.isInitialized) return
         val isNight = isNightReaderTheme()
         val immersiveMenu = readBarStyleFollowPage
-        val menuBgColor = when {
-            immersiveMenu -> readerBgColor
-            isNight -> NIGHT_BOTTOM_BG
-            else -> 0xFFF8F1E3.toInt()
-        }
+        val menuBgColor = currentMenuBackgroundColor()
         val textColor = when {
             immersiveMenu -> readerTextColor
             isNight -> 0xFFF4F0E6.toInt()
@@ -899,17 +895,55 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         updateFabStyle(floatingPlaybackBarButton, textColor, menuBgColor)
         updateFabStyle(floatingNightButton, textColor, menuBgColor)
         floatingNightButton.setImageResource(if (isNightReaderTheme()) R.drawable.reader_ic_daytime else R.drawable.reader_ic_brightness)
-        if (::statusBarScrim.isInitialized) {
-            statusBarScrim.setBackgroundColor(currentSystemBarColor())
+        updateSystemBarSurfaces()
+    }
+
+    private fun currentMenuBackgroundColor(): Int {
+        return when {
+            readBarStyleFollowPage -> readerBgColor
+            isNightReaderTheme() -> NIGHT_BOTTOM_BG
+            else -> 0xFFF8F1E3.toInt()
         }
-        if (::navigationBarScrim.isInitialized) {
-            navigationBarScrim.setBackgroundColor(currentSystemBarColor())
-        }
-        applySystemUiSettings()
     }
 
     private fun currentSystemBarColor(): Int {
-        return readerBgColor
+        return if (isReadMenuVisible()) currentMenuBackgroundColor() else readerBgColor
+    }
+
+    private fun currentSystemBarUsesDarkIcons(): Boolean {
+        return when {
+            !isReadMenuVisible() -> readerDarkStatusIcon
+            readBarStyleFollowPage -> readerDarkStatusIcon
+            else -> !isNightReaderTheme()
+        }
+    }
+
+    private fun isReadMenuVisible(): Boolean {
+        return ::readMenu.isInitialized && readMenu.visibility == View.VISIBLE
+    }
+
+    private fun setReadMenuVisible(visible: Boolean) {
+        if (!::readMenu.isInitialized) return
+        val targetVisibility = if (visible) View.VISIBLE else View.GONE
+        if (readMenu.visibility != targetVisibility) {
+            readMenu.visibility = targetVisibility
+        }
+        updateSystemBarSurfaces()
+    }
+
+    private fun toggleReadMenuVisibility() {
+        setReadMenuVisible(!isReadMenuVisible())
+    }
+
+    private fun updateSystemBarSurfaces() {
+        val systemBarColor = currentSystemBarColor()
+        if (::statusBarScrim.isInitialized) {
+            statusBarScrim.setBackgroundColor(systemBarColor)
+        }
+        if (::navigationBarScrim.isInitialized) {
+            navigationBarScrim.setBackgroundColor(systemBarColor)
+        }
+        applySystemUiSettings()
     }
 
     private fun tintMenuContent(view: View, textColor: Int) {
@@ -1064,7 +1098,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun closeReaderChrome() {
-        readMenu.visibility = View.GONE
+        setReadMenuVisible(false)
         audioControlPanel.visibility = View.GONE
         moreSettingsPanel.visibility = View.GONE
         hideCatalogPanel()
@@ -1203,20 +1237,45 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             .setMessage(R.string.reader_reset_defaults_confirm)
             .setNegativeButton(android.R.string.cancel, null)
             .setPositiveButton(android.R.string.ok) { _, _ ->
-                resetReaderSettingsToDefaults()
+                resetMoreSettingsToDefaults()
             }
             .show()
     }
 
-    private fun resetReaderSettingsToDefaults() {
+    private fun resetMoreSettingsToDefaults() {
         val anchor = currentPageAnchor()
-        val defaults = LegadoReaderPersistedState(
-            currentBookUri = importedBook?.uri?.toString(),
-            currentChapterIndex = anchor?.chapterIndex ?: 0,
-            currentCharPosition = anchor?.charPosition ?: 0
-        )
-        saveLegadoReaderPersistedState(this, defaults)
-        recreate()
+        val defaults = LegadoReaderPersistedState()
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        hideStatusBar = defaults.hideStatusBar
+        readBodyToLh = defaults.readBodyToLh
+        hideNavigationBar = defaults.hideNavigationBar
+        showBrightnessView = defaults.showBrightnessView
+        showReadTitleAddition = defaults.showReadTitleAddition
+        useZhLayout = defaults.useZhLayout
+        textFullJustify = defaults.textFullJustify
+        textBottomJustify = defaults.textBottomJustify
+        clickRegionActions = defaultClickRegionActionsForCurrentLayout()
+        progressByChapter = defaults.progressByChapter
+        keepScreenOn = defaults.keepScreenOn
+        noAnimScrollPage = defaults.noAnimScrollPage
+        previewImageByClick = defaults.previewImageByClick
+        disableReturnKey = defaults.disableReturnKey
+        readBarStyleFollowPage = defaults.readBarStyleFollowPage
+
+        if (keepScreenOn) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        readView.setClickRegionActions(clickRegionActions)
+        readView.setShowHeaderFooter(showReadTitleAddition)
+        readView.setNoAnimScrollPage(noAnimScrollPage)
+        brightnessPanel.visibility = if (showBrightnessView) View.VISIBLE else View.GONE
+        applyBrightnessState()
+        applyReadBarStyle()
+        persistReaderSettings()
+        if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
+        readView.post { relayoutCurrentDocument(anchor) }
     }
 
     private fun currentClickRegionSummary(): String {
@@ -1376,7 +1435,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private fun toggleReaderConvertState() {
         useZhLayout = !useZhLayout
         requestBookRelayout()
-        persistReaderSettings()
         if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
     }
 
@@ -1427,7 +1485,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                     }
                     ReaderOverflowAction.CHARSET.menuId -> showEncodingMenu(anchor)
                 }
-                persistReaderSettings()
                 true
             }
             show()
@@ -1626,7 +1683,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         audioControlPanel.visibility = View.GONE
         moreSettingsPanel.visibility = View.GONE
         catalogPanel.visibility = View.GONE
-        readMenu.visibility = View.GONE
+        setReadMenuVisible(false)
         searchPanel.visibility = View.VISIBLE
         searchInputView.setText(initialQuery)
         searchInputView.setSelection(searchInputView.text.length)
@@ -1685,7 +1742,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         audioControlPanel.visibility = View.GONE
         moreSettingsPanel.visibility = View.GONE
         searchPanel.visibility = View.GONE
-        readMenu.visibility = View.GONE
+        setReadMenuVisible(false)
         catalogPanel.visibility = View.VISIBLE
         catalogSearchInputView.setText("")
         bindCatalogList()
@@ -1865,42 +1922,27 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private fun showStyleDialog() {
         ReadStyleDialog(
             activity = this,
-            state = ReadStyleState(
-                textSizeSp = readerTextSizeSp,
-                letterSpacingDp = readerLetterSpacingDp,
-                lineSpacingDp = readerLineSpacingDp,
-                paragraphSpacingDp = readerParagraphSpacingDp,
-                textWeight = readerTextWeight,
-                backgroundStyleIndex = readerStyleSelect.coerceIn(0, readerStyleConfigs.lastIndex),
-                backgroundStyles = readerStyleConfigs.map {
-                    ReadStyleColorItem(
-                        name = it.name,
-                        bgColor = it.bgColor,
-                        textColor = it.textColor,
-                        tipColor = it.tipColor,
-                        bgAlpha = it.bgAlpha,
-                        bgAssetName = it.bgAssetName,
-                        bgImageUri = it.bgImageUri
-                    )
-                },
-                pageAnim = readerPageAnim
-            ),
+            state = currentReadStyleState(),
             callback = object : ReadStyleDialog.Callback {
                 override fun onTextSizeChanged(valueSp: Int) {
                     readerTextSizeSp = valueSp
                     readView.setTextSizeSp(valueSp.toFloat())
+                    updateSelectedReaderStyleLayoutFields()
                 }
 
                 override fun onLetterSpacingChanged(value: Int) {
                     readerLetterSpacingDp = value
+                    updateSelectedReaderStyleLayoutFields()
                 }
 
                 override fun onLineSpacingChanged(valueDp: Int) {
                     readerLineSpacingDp = valueDp
+                    updateSelectedReaderStyleLayoutFields()
                 }
 
                 override fun onParagraphSpacingChanged(valueDp: Int) {
                     readerParagraphSpacingDp = valueDp
+                    updateSelectedReaderStyleLayoutFields()
                 }
 
                 override fun onTextSizeChangeFinished(valueSp: Int) {
@@ -1962,8 +2004,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                     persistReaderSettings()
                 }
 
-                override fun onBackgroundClicked(index: Int) {
+                override fun onBackgroundClicked(index: Int): ReadStyleState {
                     selectReaderStyle(index)
+                    return currentReadStyleState()
                 }
 
                 override fun onBackgroundLongClicked(index: Int) {
@@ -1972,7 +2015,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 }
 
                 override fun onBackgroundAddClicked() {
-                    readerStyleConfigs.add(defaultLegadoReaderStyleConfigs().first().copy(name = "文字"))
+                    readerStyleConfigs.add(defaultReaderStyleConfig().copy(name = "文字"))
                     val index = readerStyleConfigs.lastIndex
                     selectReaderStyle(index)
                     showReaderStyleConfigDialog(index)
@@ -1981,17 +2024,54 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         ).show()
     }
 
+    private fun currentReadStyleState(): ReadStyleState {
+        return ReadStyleState(
+            textSizeSp = readerTextSizeSp,
+            letterSpacingDp = readerLetterSpacingDp,
+            lineSpacingDp = readerLineSpacingDp,
+            paragraphSpacingDp = readerParagraphSpacingDp,
+            textWeight = readerTextWeight,
+            backgroundStyleIndex = readerStyleSelect.coerceIn(0, readerStyleConfigs.lastIndex),
+            backgroundStyles = readerStyleConfigs.map {
+                ReadStyleColorItem(
+                    name = it.name,
+                    bgColor = it.bgColor,
+                    textColor = it.textColor,
+                    tipColor = it.tipColor,
+                    bgAlpha = it.bgAlpha,
+                    bgAssetName = it.bgAssetName,
+                    bgImageUri = it.bgImageUri
+                )
+            },
+            pageAnim = readerPageAnim
+        )
+    }
+
     private fun selectReaderStyle(index: Int) {
-        readerStyleConfigs.getOrNull(index) ?: return
+        val style = readerStyleConfigs.getOrNull(index) ?: return
+        val layoutChanged = styleReaderLayoutDiffers(style)
         readerStyleSelect = index
         applySelectedReaderStyleFields()
+        applyReaderTypography()
         applyReaderVisualStyle()
-        persistReaderSettings()
+        if (layoutChanged) {
+            requestBookRelayout(immediate = true)
+        } else {
+            persistReaderSettings()
+        }
     }
 
     private fun applySelectedReaderStyleFields() {
-        val style = readerStyleConfigs.getOrNull(readerStyleSelect)
-            ?: defaultLegadoReaderStyleConfigs().first()
+        val style = readerStyleConfigs.getOrNull(readerStyleSelect) ?: defaultReaderStyleConfig()
+        readerTextSizeSp = style.textSizeSp
+        readerLineSpacingDp = style.lineSpacingDp
+        readerParagraphSpacingDp = style.paragraphSpacingDp
+        readerLetterSpacingDp = style.letterSpacingDp
+        readerTextWeight = style.textWeight
+        readerTypefaceIndex = style.typefaceIndex
+        readerTypeface = readerTypefaceForIndex(readerTypefaceIndex)
+        readerParagraphIndentCount = style.paragraphIndentCount
+        readerPaddingDp = style.paddingDp
         readerBgColor = style.bgColor
         readerTextColor = style.textColor
         readerTipColor = style.tipColor
@@ -2008,6 +2088,57 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             readerDarkStatusIcon = false
             readerBgAssetName = null
             readerBgImageUri = null
+        }
+    }
+
+    private fun defaultReaderStyleConfig(): LegadoReaderStyleConfig {
+        val defaults = defaultLegadoReaderStyleConfigs()
+        return defaults.getOrElse(DEFAULT_LEGADO_READER_STYLE_INDEX) { defaults.first() }
+    }
+
+    private fun styleReaderLayoutDiffers(style: LegadoReaderStyleConfig): Boolean {
+        return readerTextSizeSp != style.textSizeSp ||
+            readerLineSpacingDp != style.lineSpacingDp ||
+            readerParagraphSpacingDp != style.paragraphSpacingDp ||
+            readerLetterSpacingDp != style.letterSpacingDp ||
+            readerTextWeight != style.textWeight ||
+            readerTypefaceIndex != style.typefaceIndex ||
+            readerParagraphIndentCount != style.paragraphIndentCount ||
+            readerPaddingDp != style.paddingDp
+    }
+
+    private fun updateSelectedReaderStyleLayoutFields() {
+        val style = readerStyleConfigs.getOrNull(readerStyleSelect) ?: return
+        readerStyleConfigs[readerStyleSelect] = style.copy(
+            textSizeSp = readerTextSizeSp,
+            lineSpacingDp = readerLineSpacingDp,
+            paragraphSpacingDp = readerParagraphSpacingDp,
+            letterSpacingDp = readerLetterSpacingDp,
+            textWeight = readerTextWeight,
+            typefaceIndex = readerTypefaceIndex,
+            paragraphIndentCount = readerParagraphIndentCount,
+            paddingDp = readerPaddingDp
+        )
+    }
+
+    private fun applyReaderTypography() {
+        if (!::readView.isInitialized) return
+        readView.setTextSizeSp(readerTextSizeSp.toFloat())
+        readView.setTextWeight(readerTextWeight)
+        readView.setReaderTypeface(readerTypeface)
+        readView.setReaderPadding(
+            dp(readerPaddingDp),
+            dp(34),
+            dp(readerPaddingDp),
+            currentReaderBottomPaddingPx()
+        )
+    }
+
+    private fun readerTypefaceForIndex(index: Int): Typeface {
+        return when (index) {
+            1 -> Typeface.SERIF
+            2 -> Typeface.MONOSPACE
+            else -> Typeface.DEFAULT
         }
     }
 
@@ -2072,7 +2203,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
         fun persistDraftStyle() {
-            readerStyleConfigs[index] = LegadoReaderStyleConfig(
+            val previous = readerStyleConfigs.getOrNull(index) ?: current
+            readerStyleConfigs[index] = previous.copy(
                 name = nameInput.text.toString().trim(),
                 bgColor = selectedBgColor,
                 textColor = selectedTextColor,
@@ -2151,7 +2283,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                     selectedBgAssetName = restored.bgAssetName
                     selectedBgImageUri = restored.bgImageUri
                     updateBgImageSelection(selectedBgAssetName, selectedBgImageUri)
-                    persistDraftStyle()
+                    readerStyleConfigs[index] = restored
+                    selectReaderStyle(index)
                     dialog.dismiss()
                 }
                 .create()
@@ -2193,7 +2326,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 }
             }
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                readerStyleConfigs[index] = LegadoReaderStyleConfig(
+                val previous = readerStyleConfigs.getOrNull(index) ?: current
+                readerStyleConfigs[index] = previous.copy(
                     name = nameInput.text.toString().trim(),
                     bgColor = selectedBgColor,
                     textColor = selectedTextColor,
@@ -2441,6 +2575,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 readerTextWeight = M9TextWeight.fromIndex(which)
                 readView.setTextWeight(readerTextWeight)
                 onChanged(readerTextWeight)
+                updateSelectedReaderStyleLayoutFields()
                 dialog.dismiss()
                 requestBookRelayout(immediate = true)
             }
@@ -2453,6 +2588,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             .setTitle(R.string.reader_title_indent)
             .setSingleChoiceItems(choices, readerParagraphIndentCount) { dialog, which ->
                 readerParagraphIndentCount = which
+                updateSelectedReaderStyleLayoutFields()
                 dialog.dismiss()
                 requestBookRelayout()
             }
@@ -2465,12 +2601,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             .setTitle(R.string.reader_title_font)
             .setSingleChoiceItems(choices, readerTypefaceIndex) { dialog, which ->
                 readerTypefaceIndex = which
-                readerTypeface = when (which) {
-                    1 -> Typeface.SERIF
-                    2 -> Typeface.MONOSPACE
-                    else -> Typeface.DEFAULT
-                }
+                readerTypeface = readerTypefaceForIndex(which)
                 readView.setReaderTypeface(readerTypeface)
+                updateSelectedReaderStyleLayoutFields()
                 dialog.dismiss()
                 requestBookRelayout()
             }
@@ -2527,7 +2660,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                             dp(readerPaddingDp),
                             currentReaderBottomPaddingPx()
                         )
-                        persistReaderSettings()
+                        updateSelectedReaderStyleLayoutFields()
                     }
                 }
 
@@ -3113,7 +3246,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         playbackBarPinnedVisible = !playbackBarPinnedVisible
         playbackBar.visibility = if (playbackBarPinnedVisible) View.VISIBLE else View.GONE
         if (playbackBarPinnedVisible) {
-            readMenu.visibility = View.GONE
+            setReadMenuVisible(false)
             playbackBar.post {
                 val newHeight = playbackBar.height.coerceAtLeast(0)
                 if (newHeight > 0) {
@@ -3484,11 +3617,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         readerLetterSpacingDp = state.letterSpacingDp
         readerTextWeight = state.textWeight
         readerTypefaceIndex = state.typefaceIndex
-        readerTypeface = when (readerTypefaceIndex) {
-            1 -> Typeface.SERIF
-            2 -> Typeface.MONOSPACE
-            else -> Typeface.DEFAULT
-        }
+        readerTypeface = readerTypefaceForIndex(readerTypefaceIndex)
         readerParagraphIndentCount = state.paragraphIndentCount
         readerPaddingDp = state.paddingDp
         readerLayoutMode = state.layoutMode
