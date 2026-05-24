@@ -94,6 +94,29 @@ internal fun AutoUpdateFirstPromptDialog(
 }
 
 @Composable
+internal fun AppUpdateLaunchPromptDialog(
+    releaseDisplayName: String,
+    onDismiss: () -> Unit,
+    onDownload: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.update_launch_prompt_title)) },
+        text = { Text(stringResource(R.string.update_launch_prompt_message, releaseDisplayName)) },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.update_launch_prompt_negative))
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDownload) {
+                Text(stringResource(R.string.update_launch_prompt_positive))
+            }
+        }
+    )
+}
+
+@Composable
 internal fun ClearCollectionsDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit

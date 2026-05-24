@@ -162,6 +162,8 @@ import java.util.Locale
 class MainActivity : AppCompatActivity() {
     private var floatingOverlayStartJob: Job? = null
     private var autoUpdateCheckJob: Job? = null
+    internal var launchUpdatePromptRelease by mutableStateOf<AppUpdateRelease?>(null)
+        private set
 
     override fun onCreate(savedInstanceState: Bundle?) {
         applySavedAppLanguage(this)
@@ -229,15 +231,17 @@ class MainActivity : AppCompatActivity() {
             saveAppUpdateCheckedAt(this@MainActivity, System.currentTimeMillis())
             val release = (result as? AppUpdateCheckResult.UpdateAvailable)?.release ?: return@launch
             if (isFinishing || isDestroyed) return@launch
-            android.app.AlertDialog.Builder(this@MainActivity)
-                .setTitle(getString(R.string.update_launch_prompt_title))
-                .setMessage(getString(R.string.update_launch_prompt_message, release.displayName))
-                .setPositiveButton(getString(R.string.update_launch_prompt_positive)) { _, _ ->
-                    downloadUpdateFromLaunchPrompt(release)
-                }
-                .setNegativeButton(getString(R.string.update_launch_prompt_negative), null)
-                .show()
+            launchUpdatePromptRelease = release
         }
+    }
+
+    internal fun dismissLaunchUpdatePrompt() {
+        launchUpdatePromptRelease = null
+    }
+
+    internal fun downloadLaunchUpdatePrompt(release: AppUpdateRelease) {
+        launchUpdatePromptRelease = null
+        downloadUpdateFromLaunchPrompt(release)
     }
 
     private fun downloadUpdateFromLaunchPrompt(release: AppUpdateRelease) {
@@ -351,6 +355,7 @@ private data class ReturnedBookProgress(
 private fun ReaderSyncScreen() {
     val context = LocalContext.current
     val activity = context as? Activity
+    val mainActivity = activity as? MainActivity
     val lifecycleOwner = LocalLifecycleOwner.current
     val view = LocalView.current
     val rootDensity = LocalDensity.current
@@ -545,6 +550,7 @@ private fun ReaderSyncScreen() {
             addBookDialogVisible -> addBookDialogVisible = false
             importGuideVisible -> importGuideVisible = false
             autoUpdatePromptVisible -> autoUpdatePromptVisible = false
+            mainActivity?.launchUpdatePromptRelease != null -> mainActivity.dismissLaunchUpdatePrompt()
             clearCollectionsConfirmVisible -> clearCollectionsConfirmVisible = false
             deleteBooksConfirmVisible -> deleteBooksConfirmVisible = false
             activeSection != MiningSection.MAIN -> activeSection = MiningSection.MAIN
@@ -588,7 +594,7 @@ private fun ReaderSyncScreen() {
         if (!updateConfig.firstPromptShown) {
             autoUpdatePromptVisible = true
         } else if (updateConfig.autoUpdateEnabled) {
-            (activity as? MainActivity)?.checkAppUpdateInBackground(force = false)
+            mainActivity?.checkAppUpdateInBackground(force = false)
         }
     }
 
@@ -2962,8 +2968,16 @@ private fun ReaderSyncScreen() {
                     markAutoUpdateFirstPromptShown(context)
                     saveAutoUpdateEnabled(context, true)
                     autoUpdatePromptVisible = false
-                    (activity as? MainActivity)?.checkAppUpdateInBackground(force = true)
+                    mainActivity?.checkAppUpdateInBackground(force = true)
                 }
+            )
+        }
+
+        mainActivity?.launchUpdatePromptRelease?.let { release ->
+            AppUpdateLaunchPromptDialog(
+                releaseDisplayName = release.displayName,
+                onDismiss = { mainActivity.dismissLaunchUpdatePrompt() },
+                onDownload = { mainActivity.downloadLaunchUpdatePrompt(release) }
             )
         }
 
