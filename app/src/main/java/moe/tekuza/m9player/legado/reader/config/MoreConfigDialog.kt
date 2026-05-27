@@ -13,6 +13,7 @@ internal data class MoreConfigState(
     val screenOrientationIndex: Int = 0,
     val keepScreenOn: Boolean = false,
     val progressByChapter: Boolean = true,
+    val selectionPrimaryActionSummary: String = "",
     val clickRegionSummary: String = "",
     val hideStatusBar: Boolean = false,
     val readBodyToLh: Boolean = true,
@@ -48,6 +49,7 @@ internal class MoreConfigDialog @JvmOverloads constructor(
     var onScreenOrientationClicked: (() -> Unit)? = null
     var onKeepLightClicked: (() -> Unit)? = null
     var onProgressBehaviorClicked: (() -> Unit)? = null
+    var onSelectionPrimaryActionClicked: (() -> Unit)? = null
     var onClickRegionalConfigClicked: (() -> Unit)? = null
     var onResetDefaultsClicked: (() -> Unit)? = null
 
@@ -67,6 +69,8 @@ internal class MoreConfigDialog @JvmOverloads constructor(
         findViewById<TextView>(R.id.more_progress_behavior_value).text =
             resources.getStringArray(R.array.reader_progress_behavior_titles)
                 .getOrElse(if (state.progressByChapter) 0 else 1) { resources.getString(R.string.reader_progress_behavior_page) }
+        findViewById<TextView>(R.id.more_selection_primary_action_value).text =
+            state.selectionPrimaryActionSummary
         findViewById<TextView>(R.id.more_click_regional_config_value).text = state.clickRegionSummary
         findViewById<TextView>(R.id.more_zh_layout_value).text = state.useZhLayoutLabel
         bindSwitch(R.id.more_hide_status_bar, state.hideStatusBar, onHideStatusBarChanged)
@@ -84,6 +88,7 @@ internal class MoreConfigDialog @JvmOverloads constructor(
         findViewById<View>(R.id.more_screen_orientation).setOnClickListener { onScreenOrientationClicked?.invoke() }
         findViewById<View>(R.id.more_keep_light).setOnClickListener { onKeepLightClicked?.invoke() }
         findViewById<View>(R.id.more_progress_behavior).setOnClickListener { onProgressBehaviorClicked?.invoke() }
+        findViewById<View>(R.id.more_selection_primary_action).setOnClickListener { onSelectionPrimaryActionClicked?.invoke() }
         findViewById<View>(R.id.more_click_regional_config).setOnClickListener { onClickRegionalConfigClicked?.invoke() }
         findViewById<View>(R.id.more_zh_layout_row).setOnClickListener { onUseZhLayoutChanged?.invoke(!state.useZhLayout) }
         findViewById<View>(R.id.more_reset_defaults).setOnClickListener { onResetDefaultsClicked?.invoke() }

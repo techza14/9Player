@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="search">搜索</string>
-    <string name="replace">替</string>
     <string name="reader_selection_share">分享</string>
     <string name="reader_selection_more">更多菜单</string>
+    <string name="reader_selection_process_text">选择要使用的应用</string>
     <string name="reader_selection_browser_search">网页搜索</string>
     <string name="reader_selection_copied">已复制</string>
     <string name="reader_convert">转换</string>
@@ -29,6 +29,8 @@
     <string name="show_brightness_view">显示亮度调节控件</string>
     <string name="no_anim_scroll_page">禁用滚动点击动画</string>
     <string name="progress_bar_behavior">进度条行为</string>
+    <string name="reader_selection_primary_action">选择菜单首按钮</string>
+    <string name="reader_selection_primary_default">默认</string>
     <string name="click_regional_config">点击区域设置</string>
     <string name="show_read_title_addition">展示顶部工具栏附加区域</string>
     <string name="read_bar_style_follow_page">工具栏样式跟随页面</string>
@@ -75,7 +77,9 @@
     <string name="reader_keep_light_default">默认</string>
     <string name="reader_keep_light_always">常亮</string>
     <string name="reader_progress_behavior_page">调整本章页数</string>
-    <string name="reader_progress_behavior_book">调整全书进度</string>
+    <string name="reader_progress_behavior_book">调整章节位置</string>
+    <string name="reader_chapter_jump_confirm_title">章节跳转确认</string>
+    <string name="reader_chapter_jump_confirm_message">确定要跳转章节吗？</string>
     <string name="read_body_to_lh">扩展到刘海</string>
     <string name="disable_return_key">禁用返回键</string>
     <string name="play">播放</string>
@@ -120,9 +124,6 @@
     <string name="reader_title_screen_direction">屏幕方向</string>
     <string name="reader_title_keep_light">屏幕超时</string>
     <string name="reader_title_progress_behavior">进度条行为</string>
-    <string name="reader_dialog_confirm">确定</string>
-    <string name="reader_dialog_cancel">取消</string>
-    <string name="reader_title_click_region">点击区域设置</string>
     <string name="reader_no_audio">这本书没有绑定音频</string>
     <string name="reader_search_input_required">请输入搜索内容</string>
     <string name="reader_search_no_results">没有搜索结果</string>
@@ -153,6 +154,10 @@
     <string name="reader_dialog_done">完成</string>
     <string name="reader_info_show">显示页眉页脚</string>
     <string name="reader_info_hide">隐藏页眉页脚</string>
+    <string name="reader_info_show_title">显示书名</string>
+    <string name="reader_info_show_time">显示时间</string>
+    <string name="reader_info_show_page">显示页码</string>
+    <string name="reader_info_show_progress">显示进度</string>
     <string name="reader_title_info">提示信息</string>
     <string name="reader_info_saved">页眉页脚显示状态已保存</string>
     <string name="reader_open_ebook_failed">打开 ebook 失败：%1$s</string>
@@ -162,6 +167,15 @@
     <string name="reader_no_srt">这本书没有绑定 SRT</string>
     <string name="reader_srt_parse_failed">SRT 没有解析出字幕</string>
     <string name="reader_srt_loading">正在加载 SRT...</string>
+    <string name="reader_cross_page_cue_window">跨页句子窗口</string>
+    <string name="reader_stop_on_image">遇到图片时停止播放</string>
+    <string name="reader_image_pause_seconds">图片暂停秒数（0=翻页恢复）</string>
+    <string name="reader_reverse_vertical_controls">纵书时反转听书/播放按钮动作</string>
+    <string name="reader_reverse_vertical_progress">纵书时反转章节进度方向</string>
+    <string name="reader_chapter_source">章节来源</string>
+    <string name="reader_chapter_source_book">书的章节</string>
+    <string name="reader_chapter_source_m4b">M4B章节</string>
+    <string name="reader_chapter_source_m4b_unavailable">当前音频没有可用的 M4B 章节，已回退到书的章节</string>
     <string name="reader_ebook_not_ready">ebook 还没有加载完成</string>
     <string name="reader_match_title">Match</string>
     <string name="reader_match_start">开始匹配</string>

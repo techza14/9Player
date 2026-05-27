@@ -4237,9 +4237,9 @@ private fun BookReaderChapterSelectorModule(
                     expanded = expanded,
                     onDismissRequest = onDismissExpanded
                 ) {
-                    chapters.forEachIndexed { index, chapter ->
+                    chapters.forEach { chapter ->
                         DropdownMenuItem(
-                            text = { Text("${index + 1}. ${chapter.title}") },
+                            text = { Text(chapter.title) },
                             onClick = {
                                 onJumpChapter(chapter)
                                 onDismissExpanded()
@@ -4276,9 +4276,9 @@ private fun BookReaderChapterSelectorModule(
                 expanded = expanded,
                 onDismissRequest = onDismissExpanded
             ) {
-                chapters.forEachIndexed { index, chapter ->
+                chapters.forEach { chapter ->
                     DropdownMenuItem(
-                        text = { Text("${index + 1}. ${chapter.title}") },
+                        text = { Text(chapter.title) },
                         onClick = {
                             onJumpChapter(chapter)
                             onDismissExpanded()

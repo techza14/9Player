@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="search">Search</string>
-    <string name="replace">Replace</string>
     <string name="reader_selection_share">Share</string>
     <string name="reader_selection_more">More menu</string>
+    <string name="reader_selection_process_text">Choose an app</string>
     <string name="reader_selection_browser_search">Web search</string>
     <string name="reader_selection_copied">Copied</string>
     <string name="reader_convert">Convert</string>
@@ -29,6 +29,8 @@
     <string name="show_brightness_view">Show brightness widget</string>
     <string name="no_anim_scroll_page">Disable scroll click animation</string>
     <string name="progress_bar_behavior">Progress bar behavior</string>
+    <string name="reader_selection_primary_action">Selection menu first button</string>
+    <string name="reader_selection_primary_default">Default</string>
     <string name="click_regional_config">Screen touch control</string>
     <string name="show_read_title_addition">Show read title addition area</string>
     <string name="read_bar_style_follow_page">Read bar style follows page</string>
@@ -75,7 +77,9 @@
     <string name="reader_keep_light_default">Default</string>
     <string name="reader_keep_light_always">Always</string>
     <string name="reader_progress_behavior_page">Adjust chapter pages</string>
-    <string name="reader_progress_behavior_book">Adjust whole-book progress</string>
+    <string name="reader_progress_behavior_book">Adjust chapter index</string>
+    <string name="reader_chapter_jump_confirm_title">Chapter jump confirmation</string>
+    <string name="reader_chapter_jump_confirm_message">Jump to this chapter?</string>
     <string name="read_body_to_lh">Extend into cutout</string>
     <string name="disable_return_key">Disable Back key</string>
     <string name="play">Play</string>
@@ -120,9 +124,6 @@
     <string name="reader_title_screen_direction">Screen orientation</string>
     <string name="reader_title_keep_light">Screen timeout</string>
     <string name="reader_title_progress_behavior">Progress bar behavior</string>
-    <string name="reader_dialog_confirm">OK</string>
-    <string name="reader_dialog_cancel">Cancel</string>
-    <string name="reader_title_click_region">Tap region setting</string>
     <string name="reader_no_audio">This book has no bound audio</string>
     <string name="reader_search_input_required">Enter text to search</string>
     <string name="reader_search_no_results">No results found</string>
@@ -153,6 +154,10 @@
     <string name="reader_dialog_done">Done</string>
     <string name="reader_info_show">Show header/footer</string>
     <string name="reader_info_hide">Hide header/footer</string>
+    <string name="reader_info_show_title">Show title</string>
+    <string name="reader_info_show_time">Show time</string>
+    <string name="reader_info_show_page">Show page number</string>
+    <string name="reader_info_show_progress">Show progress</string>
     <string name="reader_title_info">Info</string>
     <string name="reader_info_saved">Header/footer visibility saved</string>
     <string name="reader_open_ebook_failed">Failed to open ebook: %1$s</string>
@@ -162,6 +167,15 @@
     <string name="reader_no_srt">This book has no bound SRT</string>
     <string name="reader_srt_parse_failed">No subtitles were parsed from the SRT</string>
     <string name="reader_srt_loading">Loading SRT…</string>
+    <string name="reader_cross_page_cue_window">Cross-page sentence window</string>
+    <string name="reader_stop_on_image">Stop playback on images</string>
+    <string name="reader_image_pause_seconds">Image pause seconds (0 = resume after page turn)</string>
+    <string name="reader_reverse_vertical_controls">Reverse listen/playback button actions in vertical writing</string>
+    <string name="reader_reverse_vertical_progress">Reverse chapter progress in vertical writing</string>
+    <string name="reader_chapter_source">Chapter source</string>
+    <string name="reader_chapter_source_book">Book chapters</string>
+    <string name="reader_chapter_source_m4b">M4B chapters</string>
+    <string name="reader_chapter_source_m4b_unavailable">No usable M4B chapters found for the current audio. Reverted to book chapters.</string>
     <string name="reader_ebook_not_ready">ebook is still loading</string>
     <string name="reader_match_title">Match</string>
     <string name="reader_match_start">Start match</string>

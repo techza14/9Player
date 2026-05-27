@@ -2,10 +2,14 @@ package moe.tekuza.m9player.legado.reader.entities
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Paint.Cap
+import android.graphics.Paint.Style
 import android.graphics.RectF
 import moe.tekuza.m9player.VerticalTextGlyphEngine
 import moe.tekuza.m9player.legado.reader.page.ContentTextView
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
+import kotlin.math.max
+import kotlin.math.min
 
 internal data class TextColumn(
     override var start: Float,
@@ -35,7 +39,11 @@ internal data class TextColumn(
             M9LayoutMode.VERTICAL -> {
                 val glyphRight = (line.lineBottom - line.rubyReservePx).coerceAtLeast(line.lineTop)
                 val rect = RectF(line.lineTop, start, glyphRight, end)
-                if (VerticalTextGlyphEngine.isAsciiAssistToken(charData)) {
+                if (isVerticalDash(charData)) {
+                    if (isFirstVerticalDashInRun(line)) {
+                        drawVerticalDashRun(canvas, line, glyphRight, paint)
+                    }
+                } else if (VerticalTextGlyphEngine.isAsciiAssistToken(charData)) {
                     VerticalTextGlyphEngine.drawLatinRun(
                         canvas = canvas,
                         sourcePaint = paint,
@@ -53,6 +61,65 @@ internal data class TextColumn(
                 drawVerticalRuby(view, canvas, line)
             }
         }
+    }
+
+    private fun isFirstVerticalDashInRun(line: TextLine): Boolean {
+        val previous = line.columns
+            .filterIsInstance<TextColumn>()
+            .lastOrNull { it !== this && it.end <= start }
+            ?: return true
+        if (!isVerticalDash(previous.charData)) return true
+        if (previous.sourceEnd != sourceStart) return true
+        val gap = (start - previous.end).coerceAtLeast(0f)
+        return gap > max(1f, (end - start) * 0.25f)
+    }
+
+    private fun verticalDashRunColumns(line: TextLine): List<TextColumn> {
+        val columns = line.columns.filterIsInstance<TextColumn>()
+        val startIndex = columns.indexOfFirst { it === this }
+        if (startIndex < 0) return listOf(this)
+        val run = arrayListOf<TextColumn>()
+        var previous: TextColumn? = null
+        for (index in startIndex until columns.size) {
+            val column = columns[index]
+            if (!isVerticalDash(column.charData)) break
+            val previousColumn = previous
+            if (previousColumn != null) {
+                val sourceContinuous = previousColumn.sourceEnd == column.sourceStart
+                val visualGap = (column.start - previousColumn.end).coerceAtLeast(0f)
+                val visualContinuous = visualGap <= max(1f, (column.end - column.start) * 0.25f)
+                if (!sourceContinuous || !visualContinuous) break
+            }
+            run += column
+            previous = column
+        }
+        return run.takeIf { it.isNotEmpty() } ?: listOf(this)
+    }
+
+    private fun drawVerticalDashRun(
+        canvas: Canvas,
+        line: TextLine,
+        glyphRight: Float,
+        paint: Paint
+    ) {
+        val run = verticalDashRunColumns(line)
+        val top = run.minOf { it.start }
+        val bottom = run.maxOf { it.end }
+        val x = (line.lineTop + glyphRight) * 0.5f
+        val strokeWidth = min(
+            (glyphRight - line.lineTop).coerceAtLeast(1f) * 0.12f,
+            paint.textSize * 0.08f
+        ).coerceAtLeast(1f)
+        val oldStyle = paint.style
+        val oldStrokeWidth = paint.strokeWidth
+        val oldStrokeCap = paint.strokeCap
+        paint.style = Style.STROKE
+        paint.strokeWidth = strokeWidth
+        paint.strokeCap = Cap.SQUARE
+        canvas.drawLine(x, top - strokeWidth * 0.5f, x, bottom + strokeWidth * 0.5f, paint)
+        paint.style = oldStyle
+        paint.strokeWidth = oldStrokeWidth
+        paint.strokeCap = oldStrokeCap
     }
 
     private fun drawHorizontalRuby(view: ContentTextView, canvas: Canvas, line: TextLine) {
@@ -119,5 +186,19 @@ internal data class TextColumn(
 
     private companion object {
         private const val RUBY_TEXT_RATIO = 0.42f
+
+        private fun isVerticalDash(value: String): Boolean {
+            return value.length == 1 && value[0] in VERTICAL_DASH_CHARS
+        }
+
+        private val VERTICAL_DASH_CHARS = setOf(
+            '\u2014',
+            '\u2015',
+            '\u2212',
+            '\u2500',
+            '\u2501',
+            '\u2E3A',
+            '\u2E3B'
+        )
     }
 }

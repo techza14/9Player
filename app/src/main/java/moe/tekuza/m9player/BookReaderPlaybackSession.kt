@@ -2,10 +2,12 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.net.Uri
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import kotlin.math.abs
 
+@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 object BookReaderPlaybackSession {
     @Volatile
     private var player: ExoPlayer? = null

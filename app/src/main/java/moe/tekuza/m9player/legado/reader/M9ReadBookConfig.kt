@@ -1,6 +1,5 @@
 package moe.tekuza.m9player.legado.reader
 
-import android.os.Build
 import android.graphics.Typeface
 import android.text.TextPaint
 
@@ -55,10 +54,6 @@ internal enum class M9TextWeight(val androidWeight: Int) {
 }
 
 internal fun TextPaint.applyM9TextWeight(weight: M9TextWeight, baseTypeface: Typeface?) {
-    typeface = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-        Typeface.create(baseTypeface ?: Typeface.DEFAULT, weight.androidWeight, false)
-    } else {
-        baseTypeface
-    }
-    isFakeBoldText = Build.VERSION.SDK_INT < Build.VERSION_CODES.P && weight == M9TextWeight.BOLD
+    typeface = Typeface.create(baseTypeface ?: Typeface.DEFAULT, weight.androidWeight, false)
+    isFakeBoldText = false
 }

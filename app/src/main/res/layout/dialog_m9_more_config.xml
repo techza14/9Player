@@ -82,6 +82,18 @@
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/more_selection_primary_action"
+            style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="@string/reader_selection_primary_action" />
+            <TextView
+                android:id="@+id/more_selection_primary_action_value"
+                style="@style/ReaderMoreValue"
+                android:text="@string/reader_selection_primary_default" />
+        </LinearLayout>
+
+        <LinearLayout
             android:id="@+id/more_zh_layout_row"
             style="@style/ReaderMoreRow">
             <TextView

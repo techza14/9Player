@@ -5,11 +5,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.graphics.Color
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.util.AttributeSet
 import android.view.Gravity
 import android.view.MotionEvent
@@ -28,6 +28,10 @@ import android.view.VelocityTracker
 import android.view.ViewGroup
 import moe.tekuza.m9player.EbookImageRef
 import moe.tekuza.m9player.R
+import moe.tekuza.m9player.ReaderBodyTitleMode
+import moe.tekuza.m9player.ReaderFooterMode
+import moe.tekuza.m9player.ReaderHeaderMode
+import moe.tekuza.m9player.ReaderTipContent
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9PageAnim
 import moe.tekuza.m9player.legado.reader.M9TextWeight
@@ -38,11 +42,17 @@ internal class ReadView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : FrameLayout(context, attrs) {
+    data class SelectionPrimaryActionOption(
+        val key: String,
+        val label: String
+    )
+
     private val targetPageView = PageView(context).apply {
         visibility = GONE
     }
     private val pageView = PageView(context)
     private val assistOverlay = TextView(context)
+    private val crossPageCuePageOverlay = PageView(context)
     private val selectionStartHandle = View(context)
     private val selectionEndHandle = View(context)
     private val selectionActionMenu = SelectionActionMenu(
@@ -57,6 +67,7 @@ internal class ReadView @JvmOverloads constructor(
     var onTapAction: ((TapAction) -> Unit)? = null
     var onSelectionAction: ((SelectionAction, String) -> Unit)? = null
     var onSelectionProcessText: ((Intent, String) -> Unit)? = null
+    var onTextSelectionStateChanged: ((Boolean) -> Unit)? = null
     var onImageClick: ((EbookImageRef) -> Unit)? = null
     var onPagePreview: ((Int) -> TextPage?)? = null
     private var layoutMode: M9LayoutMode = M9LayoutMode.HORIZONTAL
@@ -113,6 +124,13 @@ internal class ReadView @JvmOverloads constructor(
             setPadding(dp(12), dp(8), dp(12), dp(8))
             setOnClickListener { hideAssistOverlay() }
         }, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        addView(crossPageCuePageOverlay.apply {
+            visibility = GONE
+            setShowHeaderFooter(false)
+            setReaderPadding(0, 0, 0, 0)
+            contentView.setPadding(dp(8), dp(8), dp(8), dp(8))
+            setOnClickListener { hideCrossPageCueOverlay() }
+        }, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         addView(selectionStartHandle.apply {
             visibility = GONE
             background = selectionHandleDrawable()
@@ -135,6 +153,52 @@ internal class ReadView @JvmOverloads constructor(
         }
     }
 
+    fun setCueHighlight(highlight: IntRange?) {
+        pageView.setHighlight(highlight)
+    }
+
+    fun showCrossPageCueOverlay(text: String, range: IntRange?, verticalPage: TextPage? = null) {
+        if (text.isBlank()) {
+            hideCrossPageCueOverlay()
+            return
+        }
+        if (verticalPage != null) {
+            showCrossPageCuePageOverlay(verticalPage, range)
+            return
+        }
+        assistToken = null
+        crossPageCuePageOverlay.visibility = GONE
+        assistOverlay.text = text
+        updateAssistOverlayStyle()
+        assistOverlay.post {
+            assistOverlay.measure(
+                MeasureSpec.makeMeasureSpec((width - dp(24)).coerceAtLeast(0), MeasureSpec.AT_MOST),
+                MeasureSpec.makeMeasureSpec((height - dp(24)).coerceAtLeast(0), MeasureSpec.AT_MOST)
+            )
+            val anchor = range?.let { pageView.rangeBounds(it) }
+                ?: RectF(width / 2f, height / 2f, width / 2f, height / 2f)
+            val target = computeCrossPageOverlayBounds(
+                anchor = anchor,
+                overlayWidth = assistOverlay.measuredWidth,
+                overlayHeight = assistOverlay.measuredHeight,
+                vertical = false
+            )
+            val params = assistOverlay.layoutParams as LayoutParams
+            params.leftMargin = target.left.toInt()
+            params.topMargin = target.top.toInt()
+            assistOverlay.layoutParams = params
+            assistOverlay.visibility = VISIBLE
+            assistOverlay.bringToFront()
+        }
+    }
+
+    fun hideCrossPageCueOverlay() {
+        if (assistToken == null) {
+            assistOverlay.visibility = GONE
+        }
+        crossPageCuePageOverlay.visibility = GONE
+    }
+
     fun setReaderColors(
         bg: Int,
         text: Int,
@@ -148,28 +212,34 @@ internal class ReadView @JvmOverloads constructor(
         overlayTextColor = text
         overlayBgColor = if (isDarkColor(bg)) 0xCC2D2D2D.toInt() else 0xF4FFF8EC.toInt()
         updateAssistOverlayStyle()
+        updateCrossPageCuePageOverlayStyle()
     }
 
     fun setCueHighlightColor(color: Int) {
         forEachPageView { it.setCueHighlightColor(color) }
+        crossPageCuePageOverlay.setCueHighlightColor(color)
     }
 
     fun setTextSizeSp(sizeSp: Float) {
         forEachPageView { it.setTextSizeSp(sizeSp) }
         assistOverlay.textSize = sizeSp
+        crossPageCuePageOverlay.setTextSizeSp(sizeSp)
     }
 
     fun setTextWeight(weight: M9TextWeight) {
         forEachPageView { it.setTextWeight(weight) }
+        crossPageCuePageOverlay.setTextWeight(weight)
     }
 
     fun setTextUnderline(enabled: Boolean) {
         forEachPageView { it.setTextUnderline(enabled) }
+        crossPageCuePageOverlay.setTextUnderline(enabled)
     }
 
     fun setReaderTypeface(typeface: Typeface?) {
         forEachPageView { it.setReaderTypeface(typeface) }
         assistOverlay.typeface = typeface ?: Typeface.DEFAULT
+        crossPageCuePageOverlay.setReaderTypeface(typeface)
     }
 
     fun setReaderPadding(left: Int, top: Int, right: Int, bottom: Int) {
@@ -179,6 +249,48 @@ internal class ReadView @JvmOverloads constructor(
 
     fun setShowHeaderFooter(show: Boolean) {
         forEachPageView { it.setShowHeaderFooter(show) }
+        requestLayout()
+    }
+
+    fun setBookTitle(title: String) {
+        forEachPageView { it.setBookTitle(title) }
+        crossPageCuePageOverlay.setBookTitle(title)
+    }
+
+    fun setReaderInfoConfig(
+        bodyTitleMode: ReaderBodyTitleMode,
+        bodyTitleSizeAddSp: Int,
+        bodyTitleTopSpacingDp: Int,
+        bodyTitleBottomSpacingDp: Int,
+        headerMode: ReaderHeaderMode,
+        footerMode: ReaderFooterMode,
+        headerLeft: ReaderTipContent,
+        headerMiddle: ReaderTipContent,
+        headerRight: ReaderTipContent,
+        footerLeft: ReaderTipContent,
+        footerMiddle: ReaderTipContent,
+        footerRight: ReaderTipContent,
+        statusBarHidden: Boolean,
+        dividerColor: Int?
+    ) {
+        forEachPageView {
+            it.setReaderInfoConfig(
+                bodyTitleMode = bodyTitleMode,
+                bodyTitleSizeAddSp = bodyTitleSizeAddSp,
+                bodyTitleTopSpacingDp = bodyTitleTopSpacingDp,
+                bodyTitleBottomSpacingDp = bodyTitleBottomSpacingDp,
+                headerMode = headerMode,
+                footerMode = footerMode,
+                headerLeft = headerLeft,
+                headerMiddle = headerMiddle,
+                headerRight = headerRight,
+                footerLeft = footerLeft,
+                footerMiddle = footerMiddle,
+                footerRight = footerRight,
+                statusBarHidden = statusBarHidden,
+                dividerColor = dividerColor
+            )
+        }
         requestLayout()
     }
 
@@ -198,6 +310,14 @@ internal class ReadView @JvmOverloads constructor(
 
     fun setClickRegionActions(actions: List<TapAction>) {
         clickRegionActions = actions.takeIf { it.size == CLICK_REGION_COUNT } ?: defaultClickRegionActions()
+    }
+
+    fun setSelectionPrimaryActionKey(key: String) {
+        selectionActionMenu.setPrimaryActionKey(key)
+    }
+
+    fun selectionPrimaryActionOptions(): List<SelectionPrimaryActionOption> {
+        return selectionActionMenu.primaryActionOptions()
     }
 
     override fun computeScroll() {
@@ -801,7 +921,7 @@ internal class ReadView @JvmOverloads constructor(
     private fun handleLongPressSelection() {
         if (isDraggingPage || isGestureAnimating) return
         if (!pageView.beginTextSelectionAt(downX, downY)) return
-        isTextSelected = true
+        setTextSelectionActive(true)
         updateSelectionOverlays()
     }
 
@@ -817,6 +937,12 @@ internal class ReadView @JvmOverloads constructor(
     private fun performSelectionAction(action: SelectionAction) {
         when (action) {
             SelectionAction.COPY -> copySelectedTextAndClear()
+            SelectionAction.PROCESS_TEXT -> {
+                val text = pageView.selectedText().trim()
+                if (text.isBlank()) return
+                selectionActionMenu.dismiss()
+                onSelectionAction?.invoke(action, text)
+            }
             else -> {
                 val text = pageView.selectedText().trim()
                 if (text.isBlank()) return
@@ -888,11 +1014,17 @@ internal class ReadView @JvmOverloads constructor(
     private fun clearTextSelection() {
         if (!isTextSelected) return
         pageView.clearTextSelection()
-        isTextSelected = false
+        setTextSelectionActive(false)
         activeSelectionHandle = SelectionHandle.NONE
         selectionActionMenu.dismiss()
         selectionStartHandle.visibility = GONE
         selectionEndHandle.visibility = GONE
+    }
+
+    private fun setTextSelectionActive(active: Boolean) {
+        if (isTextSelected == active) return
+        isTextSelected = active
+        onTextSelectionStateChanged?.invoke(active)
     }
 
     private fun selectionHandleAt(x: Float, y: Float): SelectionHandle {
@@ -973,6 +1105,7 @@ internal class ReadView @JvmOverloads constructor(
     }
 
     enum class SelectionAction {
+        PROCESS_TEXT,
         COPY,
         SHARE,
         SEARCH,
@@ -987,6 +1120,7 @@ internal class ReadView @JvmOverloads constructor(
     }
 
     private fun toggleAssistOverlay(token: ContentTextView.AssistToken) {
+        crossPageCuePageOverlay.visibility = GONE
         val current = assistToken
         if (current != null &&
             current.sourceStart == token.sourceStart &&
@@ -1021,6 +1155,7 @@ internal class ReadView @JvmOverloads constructor(
     private fun hideAssistOverlay() {
         assistToken = null
         assistOverlay.visibility = GONE
+        crossPageCuePageOverlay.visibility = GONE
     }
 
     private fun computeOverlayBounds(anchor: RectF, overlayWidth: Int, overlayHeight: Int): RectF {
@@ -1036,9 +1171,117 @@ internal class ReadView @JvmOverloads constructor(
         return RectF(left, top, left + overlayWidth, top + overlayHeight)
     }
 
+    private fun computeCrossPageOverlayBounds(
+        anchor: RectF,
+        overlayWidth: Int,
+        overlayHeight: Int,
+        vertical: Boolean
+    ): RectF {
+        val content = readableContentBounds()
+        val targetWidth = overlayWidth.toFloat().coerceAtMost(content.width().coerceAtLeast(1f))
+        val targetHeight = overlayHeight.toFloat().coerceAtMost(content.height().coerceAtLeast(1f))
+        val left: Float
+        val top: Float
+        if (vertical) {
+            val right = anchor.right.coerceIn(content.left + targetWidth, content.right)
+            left = (right - targetWidth).coerceIn(content.left, (content.right - targetWidth).coerceAtLeast(content.left))
+            top = clampCoveringAnchor(
+                preferredStart = anchor.top,
+                targetSize = targetHeight,
+                minStart = content.top,
+                maxEnd = content.bottom,
+                anchorStart = anchor.top,
+                anchorEnd = anchor.bottom
+            )
+        } else {
+            left = clampCoveringAnchor(
+                preferredStart = anchor.left,
+                targetSize = targetWidth,
+                minStart = content.left,
+                maxEnd = content.right,
+                anchorStart = anchor.left,
+                anchorEnd = anchor.right
+            )
+            top = clampCoveringAnchor(
+                preferredStart = anchor.top,
+                targetSize = targetHeight,
+                minStart = content.top,
+                maxEnd = content.bottom,
+                anchorStart = anchor.top,
+                anchorEnd = anchor.bottom
+            )
+        }
+        return RectF(left, top, left + targetWidth, top + targetHeight)
+    }
+
+    private fun clampCoveringAnchor(
+        preferredStart: Float,
+        targetSize: Float,
+        minStart: Float,
+        maxEnd: Float,
+        anchorStart: Float,
+        anchorEnd: Float
+    ): Float {
+        val maxStart = (maxEnd - targetSize).coerceAtLeast(minStart)
+        var start = preferredStart.coerceIn(minStart, maxStart)
+        if (anchorEnd > start + targetSize) {
+            start = (anchorEnd - targetSize).coerceIn(minStart, maxStart)
+        }
+        if (anchorStart < start) {
+            start = anchorStart.coerceIn(minStart, maxStart)
+        }
+        return start
+    }
+
+    private fun readableContentBounds(): RectF {
+        val content = pageView.contentView
+        return RectF(
+            content.left + content.paddingLeft.toFloat(),
+            content.top + content.paddingTop.toFloat(),
+            content.right - content.paddingRight.toFloat(),
+            content.bottom - content.paddingBottom.toFloat()
+        )
+    }
+
     private fun updateAssistOverlayStyle() {
         assistOverlay.setTextColor(overlayTextColor)
         assistOverlay.background = GradientDrawable().apply {
+            cornerRadius = dp(18).toFloat()
+            setColor(overlayBgColor)
+            setStroke(dp(1), if (isDarkColor(overlayBgColor)) 0x33FFFFFF else 0x22000000)
+        }
+    }
+
+    private fun showCrossPageCuePageOverlay(page: TextPage, range: IntRange?) {
+        assistToken = null
+        assistOverlay.visibility = GONE
+        updateCrossPageCuePageOverlayStyle()
+        crossPageCuePageOverlay.setPage(page, null, null)
+        crossPageCuePageOverlay.post {
+            val overlayWidth = page.width.toInt().coerceAtLeast(dp(48)) + dp(16)
+            val overlayHeight = page.height.toInt().coerceAtLeast(dp(48)) + dp(16)
+            val anchor = range?.let { pageView.rangeBounds(it) }
+                ?: RectF(width / 2f, height / 2f, width / 2f, height / 2f)
+            val target = computeCrossPageOverlayBounds(
+                anchor = anchor,
+                overlayWidth = overlayWidth,
+                overlayHeight = overlayHeight,
+                vertical = true
+            )
+            val params = crossPageCuePageOverlay.layoutParams as LayoutParams
+            params.width = target.width().toInt()
+            params.height = target.height().toInt()
+            params.leftMargin = target.left.toInt()
+            params.topMargin = target.top.toInt()
+            crossPageCuePageOverlay.layoutParams = params
+            crossPageCuePageOverlay.visibility = VISIBLE
+            crossPageCuePageOverlay.bringToFront()
+        }
+    }
+
+    private fun updateCrossPageCuePageOverlayStyle() {
+        crossPageCuePageOverlay.setReaderColors(overlayBgColor, overlayTextColor, overlayTextColor)
+        crossPageCuePageOverlay.background = GradientDrawable().apply {
             cornerRadius = dp(18).toFloat()
             setColor(overlayBgColor)
             setStroke(dp(1), if (isDarkColor(overlayBgColor)) 0x33FFFFFF else 0x22000000)
@@ -1125,6 +1368,7 @@ internal class ReadView @JvmOverloads constructor(
 
     companion object {
         const val CLICK_REGION_COUNT: Int = 9
+        const val DEFAULT_SELECTION_PRIMARY_ACTION_KEY: String = "default"
         private const val MIN_FLING_VELOCITY = 900f
         private const val PAGE_DRAG_ANIM_MS = 260L
         private const val PROGRAMMATIC_PAGE_ANIM_MS = 220L
@@ -1164,6 +1408,13 @@ internal class ReadView @JvmOverloads constructor(
         private val onAction: (SelectionAction) -> Unit,
         private val onProcessText: (Intent) -> Unit
     ) {
+        private data class MenuActionItem(
+            val key: String,
+            val label: String,
+            val action: SelectionAction? = null,
+            val intent: Intent? = null
+        )
+
         private val popupWindow: PopupWindow
         private val rootView: LinearLayout
         private val primaryRow: LinearLayout
@@ -1171,7 +1422,9 @@ internal class ReadView @JvmOverloads constructor(
         private val moreList: LinearLayout
         private val moreScrollView: ScrollView
         private val moreButton: TextView
-        private var expanded = false
+        private val moreMenuItems: List<MenuActionItem>
+        private var primaryActionKey: String = DEFAULT_SELECTION_PRIMARY_ACTION_KEY
+        private var moreExpanded = false
         private var lastAnchor: View? = null
         private var lastStartX: Int = 0
         private var lastStartTopY: Int = 0
@@ -1189,7 +1442,7 @@ internal class ReadView @JvmOverloads constructor(
                 visibility = View.GONE
                 addView(row(context).apply {
                     gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                    addView(backButton(context) { toggleExpanded() })
+                    addView(backButton(context, context.getString(R.string.reader_selection_more)) { collapseMorePage() })
                 })
                 moreScrollView = ScrollView(context).apply {
                     isFillViewport = false
@@ -1199,17 +1452,47 @@ internal class ReadView @JvmOverloads constructor(
                 addView(moreScrollView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(context, 240)))
             }
             moreButton = overflowButton(context) {
-                toggleExpanded()
+                toggleMoreExpanded()
             }
+            moreMenuItems = buildList {
+                add(
+                    MenuActionItem(
+                        key = "share",
+                        label = context.getString(R.string.reader_selection_share),
+                        action = SelectionAction.SHARE
+                    )
+                )
+                add(
+                    MenuActionItem(
+                        key = "browser",
+                        label = context.getString(R.string.reader_selection_browser_search),
+                        action = SelectionAction.BROWSER
+                    )
+                )
+                processTextIntents(context).forEach { item ->
+                    add(
+                        MenuActionItem(
+                            key = item.intent.component?.flattenToString()?.let { "process:$it" }
+                                ?: "process:${item.label}",
+                            label = item.label,
+                            intent = item.intent
+                        )
+                    )
+                }
+            }
+            primaryRow.addView(buildPrimaryActionButton(context))
             primaryRow.addView(actionButton(context, context.getString(android.R.string.copy)) { onAction(SelectionAction.COPY) })
             primaryRow.addView(actionButton(context, context.getString(R.string.reader_menu_add_bookmark)) { onAction(SelectionAction.ADD_BOOKMARK) })
             primaryRow.addView(actionButton(context, context.getString(R.string.search_content)) { onAction(SelectionAction.SEARCH) })
             primaryRow.addView(moreButton)
 
-            moreList.addView(moreActionButton(context, context.getString(R.string.reader_selection_share)) { onAction(SelectionAction.SHARE) })
-            moreList.addView(moreActionButton(context, context.getString(R.string.reader_selection_browser_search)) { onAction(SelectionAction.BROWSER) })
-            processTextIntents(context).forEach { item ->
-                moreList.addView(moreActionButton(context, item.label) { onProcessText(item.intent) })
+            moreMenuItems.forEach { item ->
+                moreList.addView(moreActionButton(context, item.label) {
+                    when {
+                        item.intent != null -> onProcessText(item.intent)
+                        item.action != null -> onAction(item.action)
+                    }
+                })
             }
 
             rootView = LinearLayout(context).apply {
@@ -1234,6 +1517,25 @@ internal class ReadView @JvmOverloads constructor(
                 isFocusable = false
                 isOutsideTouchable = false
                 setBackgroundDrawable(null)
+            }
+        }
+
+        fun setPrimaryActionKey(key: String) {
+            primaryActionKey = key
+            rebuildPrimaryActionButton(rootView.context)
+        }
+
+        fun primaryActionOptions(): List<SelectionPrimaryActionOption> {
+            return buildList {
+                add(
+                    SelectionPrimaryActionOption(
+                        key = DEFAULT_SELECTION_PRIMARY_ACTION_KEY,
+                        label = rootView.context.getString(R.string.reader_selection_primary_default)
+                    )
+                )
+                moreMenuItems.forEach { item ->
+                    add(SelectionPrimaryActionOption(key = item.key, label = item.label))
+                }
             }
         }
 
@@ -1292,16 +1594,25 @@ internal class ReadView @JvmOverloads constructor(
         }
 
         private fun restoreDefaultPage() {
-            expanded = false
+            moreExpanded = false
             primaryRow.visibility = View.VISIBLE
             morePage.visibility = View.GONE
             moreScrollView.scrollTo(0, 0)
         }
 
-        private fun toggleExpanded() {
-            expanded = !expanded
-            primaryRow.visibility = if (expanded) View.GONE else View.VISIBLE
-            morePage.visibility = if (expanded) View.VISIBLE else View.GONE
+        private fun toggleMoreExpanded() {
+            moreExpanded = !moreExpanded
+            primaryRow.visibility = if (moreExpanded) View.GONE else View.VISIBLE
+            morePage.visibility = if (moreExpanded) View.VISIBLE else View.GONE
+            updateLastPopupPosition()
+        }
+
+        private fun collapseMorePage() {
+            restoreDefaultPage()
+            updateLastPopupPosition()
+        }
+
+        private fun updateLastPopupPosition() {
             val anchor = lastAnchor ?: return
             show(
                 anchor = anchor,
@@ -1312,6 +1623,29 @@ internal class ReadView @JvmOverloads constructor(
                 endBottomY = lastEndBottomY,
                 resetToDefault = false
             )
+        }
+
+        private fun rebuildPrimaryActionButton(context: Context) {
+            if (primaryRow.childCount <= 0) return
+            primaryRow.removeViewAt(0)
+            primaryRow.addView(buildPrimaryActionButton(context), 0)
+        }
+
+        private fun buildPrimaryActionButton(context: Context): View {
+            val item = moreMenuItems.firstOrNull { it.key == primaryActionKey }
+            if (primaryActionKey == DEFAULT_SELECTION_PRIMARY_ACTION_KEY || item == null) {
+                return processTextButton(context) { onAction(SelectionAction.PROCESS_TEXT) }
+            }
+            return processTextButton(
+                context = context,
+                text = primaryActionGlyph(item.label),
+                description = item.label
+            ) {
+                when {
+                    item.intent != null -> onProcessText(item.intent)
+                    item.action != null -> onAction(item.action)
+                }
+            }
         }
 
         private fun row(context: Context): LinearLayout {
@@ -1335,6 +1669,44 @@ internal class ReadView @JvmOverloads constructor(
             }
         }
 
+        private fun processTextButton(
+            context: Context,
+            text: String = "▽",
+            description: String = context.getString(R.string.reader_selection_process_text),
+            onClick: () -> Unit
+        ): TextView {
+            return TextView(context).apply {
+                this.text = text
+                gravity = Gravity.CENTER
+                includeFontPadding = false
+                setSingleLine(true)
+                setTextColor(0xFF8A837A.toInt())
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                contentDescription = description
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.TRANSPARENT)
+                    setStroke(dp(context, 1), 0x668A837A)
+                }
+                setPadding(0, 0, 0, dp(context, 1))
+                layoutParams = LinearLayout.LayoutParams(dp(context, 20), dp(context, 20)).apply {
+                    marginEnd = dp(context, 6)
+                }
+                setOnClickListener { onClick() }
+            }
+        }
+
+        private fun primaryActionGlyph(label: String): String {
+            val trimmed = label.trim()
+            if (trimmed.isEmpty()) return "▽"
+            return when {
+                trimmed == rootView.context.getString(R.string.reader_selection_share) -> "分"
+                trimmed == rootView.context.getString(R.string.reader_selection_browser_search) -> "搜"
+                else -> trimmed.take(1)
+            }
+        }
+
         private fun moreActionButton(context: Context, label: String, onClick: () -> Unit): TextView {
             return TextView(context).apply {
                 text = label
@@ -1348,14 +1720,14 @@ internal class ReadView @JvmOverloads constructor(
             }
         }
 
-        private fun backButton(context: Context, onClick: () -> Unit): TextView {
+        private fun backButton(context: Context, description: String, onClick: () -> Unit): TextView {
             return TextView(context).apply {
                 text = "‹"
                 gravity = Gravity.CENTER
                 setTextColor(0xFF2C241B.toInt())
                 textSize = 22f
                 setPadding(dp(context, 10), dp(context, 2), dp(context, 10), dp(context, 2))
-                contentDescription = context.getString(R.string.reader_selection_more)
+                contentDescription = description
                 setOnClickListener { onClick() }
             }
         }
@@ -1410,4 +1782,5 @@ internal class ReadView @JvmOverloads constructor(
             val intent: Intent
         )
     }
+
 }

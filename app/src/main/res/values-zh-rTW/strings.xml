@@ -404,8 +404,6 @@
     <string name="bookreader_ui_layout_restore_default">恢復預設</string>
     <string name="bookreader_ui_layout_side_rail_to_left">側邊欄移到左</string>
     <string name="bookreader_ui_layout_side_rail_to_right">側邊欄移到右</string>
-    <string name="bookreader_playback_mode_normal">正常</string>
-    <string name="bookreader_playback_mode_condensed">濃縮</string>
     <string name="bookreader_jump_by_cue">按台詞</string>
     <string name="bookreader_jump_by_duration">按時長(%1$d秒)</string>
     <string name="bookreader_sleep_timer">計時</string>
@@ -527,6 +525,13 @@
     <string name="anki_tags_label">標籤（空格/逗號分隔）</string>
     <string name="anki_field_variables">欄位變數</string>
     <string name="anki_clear_field_variables">清空欄位變數</string>
+    <string name="anki_clear_field_variables_confirm_title">清空欄位變數？</string>
+    <string name="anki_clear_field_variables_confirm_message">這會清空目前模板的全部欄位變數。</string>
+    <string name="anki_use_lapis_default_templates">使用 Lapis 預設模板和欄位變數</string>
+    <string name="anki_lapis_defaults_confirm_title">使用 Lapis 預設模板？</string>
+    <string name="anki_lapis_defaults_confirm_message">這會把模板切換到 Lapis，並用預設欄位變數覆蓋目前設定。</string>
+    <string name="anki_lapis_model_missing">找不到 Lapis 模板。</string>
+    <string name="anki_lapis_fields_invalid">Lapis 欄位不相符：%1$s</string>
     <string name="anki_field_variable_help">{audio} 用於匯出查詞發音，{cut-audio} 用於匯出剪切音訊。</string>
     <string name="anki_field_placeholder">可輸入佔位符或從清單選擇</string>
     <string name="common_pause">暫停</string>

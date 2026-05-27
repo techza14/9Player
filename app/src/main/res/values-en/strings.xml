@@ -404,8 +404,6 @@
     <string name="bookreader_ui_layout_restore_default">Restore default</string>
     <string name="bookreader_ui_layout_side_rail_to_left">Move side rail left</string>
     <string name="bookreader_ui_layout_side_rail_to_right">Move side rail right</string>
-    <string name="bookreader_playback_mode_normal">Normal</string>
-    <string name="bookreader_playback_mode_condensed">Condensed</string>
     <string name="bookreader_jump_by_cue">By subtitle</string>
     <string name="bookreader_jump_by_duration">By time (%1$ds)</string>
     <string name="bookreader_sleep_timer">Timer</string>

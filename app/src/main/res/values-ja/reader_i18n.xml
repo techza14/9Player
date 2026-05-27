@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="search">検索</string>
-    <string name="replace">置換</string>
     <string name="reader_selection_share">共有</string>
     <string name="reader_selection_more">その他メニュー</string>
+    <string name="reader_selection_process_text">使用するアプリを選択</string>
     <string name="reader_selection_browser_search">Web検索</string>
     <string name="reader_selection_copied">コピーしました</string>
     <string name="reader_convert">変換</string>
@@ -29,6 +29,8 @@
     <string name="show_brightness_view">明るさ調整を表示</string>
     <string name="no_anim_scroll_page">スクロール時のタップアニメーションを無効化</string>
     <string name="progress_bar_behavior">進度条行为</string>
+    <string name="reader_selection_primary_action">選択メニューの先頭ボタン</string>
+    <string name="reader_selection_primary_default">デフォルト</string>
     <string name="click_regional_config">タップ領域設定</string>
     <string name="show_read_title_addition">上部ツールバー追加エリアを表示</string>
     <string name="read_bar_style_follow_page">ツールバーの見た目をページに合わせる</string>
@@ -75,7 +77,9 @@
     <string name="reader_keep_light_default">デフォルト</string>
     <string name="reader_keep_light_always">常時点灯</string>
     <string name="reader_progress_behavior_page">現在の章のページ数を調整</string>
-    <string name="reader_progress_behavior_book">書籍全体の進捗を調整</string>
+    <string name="reader_progress_behavior_book">章位置を調整</string>
+    <string name="reader_chapter_jump_confirm_title">章ジャンプの確認</string>
+    <string name="reader_chapter_jump_confirm_message">この章へ移動しますか？</string>
     <string name="read_body_to_lh">ノッチまで拡張</string>
     <string name="disable_return_key">戻るキーを無効化</string>
     <string name="play">再生</string>
@@ -120,9 +124,6 @@
     <string name="reader_title_screen_direction">画面の向き</string>
     <string name="reader_title_keep_light">画面タイムアウト</string>
     <string name="reader_title_progress_behavior">進捗バーの動作</string>
-    <string name="reader_dialog_confirm">確認</string>
-    <string name="reader_dialog_cancel">キャンセル</string>
-    <string name="reader_title_click_region">タップ領域設定</string>
     <string name="reader_no_audio">この本には音声が紐付いていません</string>
     <string name="reader_search_input_required">検索内容を入力してください</string>
     <string name="reader_search_no_results">検索結果がありません</string>
@@ -153,6 +154,10 @@
     <string name="reader_dialog_done">完了</string>
     <string name="reader_info_show">ヘッダー/フッターを表示</string>
     <string name="reader_info_hide">ヘッダー/フッターを非表示</string>
+    <string name="reader_info_show_title">書名を表示</string>
+    <string name="reader_info_show_time">時刻を表示</string>
+    <string name="reader_info_show_page">ページ番号を表示</string>
+    <string name="reader_info_show_progress">進捗を表示</string>
     <string name="reader_title_info">補足情報</string>
     <string name="reader_info_saved">ヘッダー/フッター表示状態を保存しました</string>
     <string name="reader_open_ebook_failed">ebook を開けませんでした：%1$s</string>
@@ -162,6 +167,15 @@
     <string name="reader_no_srt">この本には SRT が紐付いていません</string>
     <string name="reader_srt_parse_failed">SRT から字幕を解析できませんでした</string>
     <string name="reader_srt_loading">SRT を読み込み中...</string>
+    <string name="reader_cross_page_cue_window">ページまたぎ文ウィンドウ</string>
+    <string name="reader_stop_on_image">画像で再生を停止</string>
+    <string name="reader_image_pause_seconds">画像で一時停止する秒数（0=ページ移動で再開）</string>
+    <string name="reader_reverse_vertical_controls">縦書き時に聴く/再生ボタンの動作を反転</string>
+    <string name="reader_reverse_vertical_progress">縦書き時に章進捗の方向を反転</string>
+    <string name="reader_chapter_source">章の参照元</string>
+    <string name="reader_chapter_source_book">本の章</string>
+    <string name="reader_chapter_source_m4b">M4B の章</string>
+    <string name="reader_chapter_source_m4b_unavailable">現在の音声には利用できる M4B 章がないため、本の章に戻しました</string>
     <string name="reader_ebook_not_ready">ebook はまだ読み込み中です</string>
     <string name="reader_match_title">マッチ</string>
     <string name="reader_match_start">マッチ開始</string>
