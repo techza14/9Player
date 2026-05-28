@@ -333,6 +333,21 @@ internal class VerticalTextChapterLayout(
     private fun nextToken(text: String, start: Int, end: Int, splitLatinWords: Boolean): VerticalToken {
         if (start >= end) return VerticalToken("", 0, 0, 0f, false)
         val first = text[start]
+        if (first.isDigit()) {
+            var index = start + 1
+            while (index < end && text[index].isDigit()) {
+                index += 1
+            }
+            val isRunStart = start == 0 || !text[start - 1].isDigit()
+            val tokenLength = if (isRunStart && index - start == 2) 2 else 1
+            return VerticalToken(
+                text = text.substring(start, start + tokenLength),
+                length = tokenLength,
+                heightUnits = 1,
+                heightPx = glyphHeight,
+                isLatinRun = false
+            )
+        }
         if (VerticalTextGlyphEngine.isAsciiWordChar(first)) {
             var index = start + 1
             while (index < end) {

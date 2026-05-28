@@ -43,7 +43,14 @@ internal data class TextColumn(
                     if (isFirstVerticalDashInRun(line)) {
                         drawVerticalDashRun(canvas, line, glyphRight, paint)
                     }
-                } else if (VerticalTextGlyphEngine.isAsciiAssistToken(charData)) {
+                } else if (VerticalTextGlyphEngine.isTwoDigitToken(charData)) {
+                    VerticalTextGlyphEngine.drawTateChuYoko(
+                        canvas = canvas,
+                        sourcePaint = paint,
+                        text = charData,
+                        rect = rect
+                    )
+                } else if (VerticalTextGlyphEngine.isSidewaysAsciiToken(charData)) {
                     VerticalTextGlyphEngine.drawLatinRun(
                         canvas = canvas,
                         sourcePaint = paint,

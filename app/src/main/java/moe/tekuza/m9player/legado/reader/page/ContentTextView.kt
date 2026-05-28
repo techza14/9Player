@@ -242,7 +242,7 @@ internal class ContentTextView @JvmOverloads constructor(
             if (!inLineBounds) return@forEachIndexed
             line.columns.forEachIndexed { columnIndex, column ->
                 if (column !is TextColumn) return@forEachIndexed
-                if (!VerticalTextGlyphEngine.isAsciiAssistToken(column.charData)) return@forEachIndexed
+                if (!VerticalTextGlyphEngine.isSidewaysAsciiToken(column.charData)) return@forEachIndexed
                 if (localY < column.start || localY > column.end) return@forEachIndexed
                 return assistTokenAround(current, lineIndex, columnIndex)
             }
@@ -255,7 +255,7 @@ internal class ContentTextView @JvmOverloads constructor(
             page.lines.forEachIndexed { pageLineIndex, line ->
                 if (line.layoutMode != M9LayoutMode.VERTICAL) return@forEachIndexed
                 line.columns.forEachIndexed { pageColumnIndex, column ->
-                    if (column is TextColumn && VerticalTextGlyphEngine.isAsciiAssistToken(column.charData)) {
+                    if (column is TextColumn && VerticalTextGlyphEngine.isSidewaysAsciiToken(column.charData)) {
                         add(
                             AssistColumnRef(
                                 lineIndex = pageLineIndex,

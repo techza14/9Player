@@ -127,6 +127,20 @@ internal object VerticalTextGlyphEngine {
             trimmed.all { isAsciiWordChar(it) || isAsciiRunSpace(it) }
     }
 
+    fun isSidewaysAsciiToken(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.length <= 1) return false
+        if (trimmed.all { it.isDigit() }) return false
+        val compact = trimmed.filterNot(::isAsciiRunSpace)
+        if (compact.length <= 3 && compact.all { it.isLetterOrDigit() }) return false
+        return trimmed.any { it.isLetterOrDigit() } &&
+            trimmed.all { isAsciiWordChar(it) || isAsciiRunSpace(it) }
+    }
+
+    fun isTwoDigitToken(text: String): Boolean {
+        return text.length == 2 && text.all { it.isDigit() }
+    }
+
     fun estimateCellWidth(paint: TextPaint): Float {
         val sampleWidth = maxOf(
             paint.measureText("国"),
@@ -164,6 +178,22 @@ internal object VerticalTextGlyphEngine {
             canvas.rotate(90f, cx, cy)
             canvas.drawText(displayText, drawX, drawY, paint)
             canvas.restore()
+        }
+    }
+
+    fun drawTateChuYoko(canvas: Canvas, sourcePaint: TextPaint, text: String, rect: RectF) {
+        val displayText = text.trim()
+        if (displayText.isEmpty()) return
+        withPaint(sourcePaint, Paint.Align.CENTER) { paint ->
+            val oldSize = paint.textSize
+            val baselineAdjust = -(paint.ascent() + paint.descent()) * 0.5f
+            val maxWidth = rect.width() * 0.92f
+            val measured = paint.measureText(displayText).coerceAtLeast(1f)
+            if (measured > maxWidth) {
+                paint.textSize = (oldSize * maxWidth / measured).coerceAtLeast(oldSize * 0.72f)
+            }
+            canvas.drawText(displayText, rect.centerX(), rect.centerY() + baselineAdjust, paint)
+            paint.textSize = oldSize
         }
     }
 
