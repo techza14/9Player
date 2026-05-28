@@ -359,13 +359,11 @@ internal class PageView(context: Context) : LinearLayout(context) {
             ReaderTipContent.BOOK_NAME -> bookTitle.ifBlank { page.title }
             ReaderTipContent.CHAPTER_TITLE -> page.title
             ReaderTipContent.TIME -> currentClockText()
-            ReaderTipContent.BATTERY -> "${batteryPercent()}%"
             ReaderTipContent.BATTERY_PERCENTAGE -> "${batteryPercent()}%"
             ReaderTipContent.PAGE -> "${page.globalIndex + 1} / ${page.totalPages}"
             ReaderTipContent.TOTAL_PROGRESS -> page.readProgress
             ReaderTipContent.CHAPTER_PROGRESS -> "${page.pageInChapter + 1}/${page.chapterPageCount}"
             ReaderTipContent.PAGE_AND_TOTAL -> "${page.globalIndex + 1} / ${page.totalPages}  ${page.readProgress}"
-            ReaderTipContent.TIME_BATTERY -> "${currentClockText()} ${batteryPercent()}%"
             ReaderTipContent.TIME_BATTERY_PERCENTAGE -> "${currentClockText()} ${batteryPercent()}%"
         }
     }

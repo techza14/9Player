@@ -88,22 +88,12 @@ private fun Context.isSystemDarkMode(): Boolean =
 internal fun startAudiobookFloatingOverlayService(context: Context) {
     val hasPermission = hasOverlayPermission(context)
     if (!hasPermission) {
-        Log.d(FLOATING_OVERLAY_LOG_TAG, "start skipped: overlay permission missing")
         return
     }
     val settings = loadAudiobookSettingsConfig(context)
     if (!settings.floatingOverlayEnabled && !settings.floatingOverlaySubtitleEnabled) {
-        Log.d(
-            FLOATING_OVERLAY_LOG_TAG,
-            "start skipped: disabled bubble=${settings.floatingOverlayEnabled} subtitle=${settings.floatingOverlaySubtitleEnabled}"
-        )
         return
     }
-    Log.d(
-        FLOATING_OVERLAY_LOG_TAG,
-        "start requested bubble=${settings.floatingOverlayEnabled} subtitle=${settings.floatingOverlaySubtitleEnabled} " +
-            "showOnReaderExit=${settings.floatingOverlayShowOnReaderExit}"
-    )
     val intent = Intent(context, AudiobookFloatingOverlayService::class.java).apply {
         action = AudiobookFloatingOverlayService.ACTION_SHOW
     }
@@ -112,7 +102,6 @@ internal fun startAudiobookFloatingOverlayService(context: Context) {
 
 internal fun refreshAudiobookFloatingOverlayService(context: Context) {
     if (!hasOverlayPermission(context)) {
-        Log.d(FLOATING_OVERLAY_LOG_TAG, "refresh skipped: overlay permission missing")
         return
     }
     val intent = Intent(context, AudiobookFloatingOverlayService::class.java).apply {
@@ -574,7 +563,6 @@ companion object {
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as? WindowManager
-        Log.d(FLOATING_OVERLAY_LOG_TAG, "service onCreate wm=${windowManager != null}")
         BookReaderFloatingBridge.addPlaybackStateListener(playbackListener)
         BookReaderFloatingBridge.addFavoriteStateListener(favoriteListener)
         BookReaderFloatingBridge.addCueLoopStateListener(cueLoopListener)
@@ -587,35 +575,26 @@ companion object {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(FLOATING_OVERLAY_LOG_TAG, "onStartCommand action=${intent?.action} startId=$startId")
         when (intent?.action) {
             ACTION_HIDE -> {
-                Log.d(FLOATING_OVERLAY_LOG_TAG, "onStartCommand hide -> stopSelf")
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_SHOW, null -> {
-                Log.d(FLOATING_OVERLAY_LOG_TAG, "onStartCommand show -> ensureOverlayVisible")
                 ensureOverlayVisible()
                 return START_STICKY
             }
             ACTION_REFRESH -> {
-                Log.d(FLOATING_OVERLAY_LOG_TAG, "onStartCommand refresh -> rebuildOverlay")
                 rebuildOverlay()
                 return START_STICKY
             }
             else -> {
-                Log.d(FLOATING_OVERLAY_LOG_TAG, "onStartCommand unknown action -> not sticky")
                 return START_NOT_STICKY
             }
         }
     }
 
     override fun onDestroy() {
-        Log.d(
-            FLOATING_OVERLAY_LOG_TAG,
-            "service onDestroy root=${rootView != null} bubble=${bubbleRootView != null}"
-        )
         BookReaderFloatingBridge.removePlaybackStateListener(playbackListener)
         BookReaderFloatingBridge.removeFavoriteStateListener(favoriteListener)
         BookReaderFloatingBridge.removeCueLoopStateListener(cueLoopListener)
@@ -639,21 +618,15 @@ companion object {
 
     private fun ensureOverlayVisible() {
         if (!hasOverlayPermission(this)) {
-            Log.d(FLOATING_OVERLAY_LOG_TAG, "ensure skipped: overlay permission missing")
             stopSelf()
             return
         }
         val settings = loadAudiobookSettingsConfig(this)
         if (!settings.floatingOverlayEnabled && !settings.floatingOverlaySubtitleEnabled) {
-            Log.d(
-                FLOATING_OVERLAY_LOG_TAG,
-                "ensure skipped: disabled bubble=${settings.floatingOverlayEnabled} subtitle=${settings.floatingOverlaySubtitleEnabled}"
-            )
             stopSelf()
             return
         }
         val wm = windowManager ?: run {
-            Log.d(FLOATING_OVERLAY_LOG_TAG, "ensure skipped: windowManager null")
             stopSelf()
             return
         }
@@ -661,14 +634,7 @@ companion object {
         val subtitleText = BookReaderFloatingBridge.currentSubtitle()
         val hasSubtitleData = hasSubtitleData(subtitleText)
         val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleData
-        Log.d(
-            FLOATING_OVERLAY_LOG_TAG,
-            "ensure begin bubble=${settings.floatingOverlayEnabled} subtitle=${settings.floatingOverlaySubtitleEnabled} " +
-                "hasTimeline=$hasTimeline hasSubtitleData=$hasSubtitleData subtitleEnabledByData=$subtitleEnabledByData " +
-                "currentSubtitleLen=${subtitleText?.length ?: 0} root=${rootView != null} bubbleRoot=${bubbleRootView != null}"
-        )
         if (!settings.floatingOverlayEnabled && !subtitleEnabledByData) {
-            Log.d(FLOATING_OVERLAY_LOG_TAG, "ensure skipped: subtitle requested but no subtitle timeline")
             stopSelf()
             return
         }
@@ -688,12 +654,6 @@ companion object {
                     y = initialSubtitleOverlayY(settings, density)
                 )
                 runCatching { wm.addView(container, params) }
-                    .onSuccess {
-                        Log.d(
-                            FLOATING_OVERLAY_LOG_TAG,
-                            "subtitle addView success x=${params.x} y=${params.y} vertical=${settings.floatingOverlaySubtitleWritingMode}"
-                        )
-                    }
                     .onFailure { error ->
                         Log.w(FLOATING_OVERLAY_LOG_TAG, "subtitle addView failed: ${error.message}", error)
                         stopSelf()
@@ -703,13 +663,11 @@ companion object {
                 windowLayoutParams = params
                 container.post { alignOverlayWindow(force = true) }
             } else {
-                Log.d(FLOATING_OVERLAY_LOG_TAG, "subtitle update existing")
                 applySubtitleTypography(settings)
                 updateSubtitleText(BookReaderFloatingBridge.currentSubtitle())
                 updateSubtitleControlsVisibility(settings)
             }
         } else {
-            Log.d(FLOATING_OVERLAY_LOG_TAG, "subtitle disabled by settings/data -> remove")
             removeSubtitleOverlay()
         }
         if (settings.floatingOverlayEnabled) {
@@ -720,9 +678,6 @@ companion object {
                     y = settings.floatingOverlayBubbleY.coerceAtLeast(0)
                 )
                 runCatching { wm.addView(bubblePanel, params) }
-                    .onSuccess {
-                        Log.d(FLOATING_OVERLAY_LOG_TAG, "bubble addView success x=${params.x} y=${params.y}")
-                    }
                     .onFailure { error ->
                         Log.w(FLOATING_OVERLAY_LOG_TAG, "bubble addView failed: ${error.message}", error)
                         stopSelf()
@@ -730,11 +685,8 @@ companion object {
                     }
                 bubbleRootView = bubblePanel
                 bubbleWindowLayoutParams = params
-            } else {
-                Log.d(FLOATING_OVERLAY_LOG_TAG, "bubble already visible")
             }
         } else {
-            Log.d(FLOATING_OVERLAY_LOG_TAG, "bubble disabled -> remove")
             removeBubbleOverlay()
         }
         updateBubbleIcon(BookReaderFloatingBridge.isPlaying())
@@ -744,10 +696,6 @@ companion object {
             updateSubtitleControlsVisibility(settings)
         }
         updateFloatingLookupPanelPosition()
-        Log.d(
-            FLOATING_OVERLAY_LOG_TAG,
-            "ensure done root=${rootView != null} bubble=${bubbleRootView != null}"
-        )
     }
 
     private fun createOverlayLayoutParams(x: Int, y: Int): WindowManager.LayoutParams {

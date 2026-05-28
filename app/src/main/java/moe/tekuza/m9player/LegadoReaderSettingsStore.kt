@@ -80,13 +80,11 @@ internal enum class ReaderTipContent {
     BOOK_NAME,
     CHAPTER_TITLE,
     TIME,
-    BATTERY,
     BATTERY_PERCENTAGE,
     PAGE,
     TOTAL_PROGRESS,
     CHAPTER_PROGRESS,
     PAGE_AND_TOTAL,
-    TIME_BATTERY,
     TIME_BATTERY_PERCENTAGE
 }
 
@@ -247,21 +245,21 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
             "footerMode",
             if (json.optBoolean("showReadTitleAddition", true)) ReaderFooterMode.SHOW else ReaderFooterMode.HIDE
         ),
-        tipHeaderLeft = json.optEnum(
+        tipHeaderLeft = json.optTipContent(
             "tipHeaderLeft",
             if (json.optBoolean("showHeaderTitle", true)) ReaderTipContent.CHAPTER_TITLE else ReaderTipContent.NONE
         ),
-        tipHeaderMiddle = json.optEnum("tipHeaderMiddle", ReaderTipContent.NONE),
-        tipHeaderRight = json.optEnum(
+        tipHeaderMiddle = json.optTipContent("tipHeaderMiddle", ReaderTipContent.NONE),
+        tipHeaderRight = json.optTipContent(
             "tipHeaderRight",
             if (json.optBoolean("showHeaderClock", true)) ReaderTipContent.TIME else ReaderTipContent.NONE
         ),
-        tipFooterLeft = json.optEnum(
+        tipFooterLeft = json.optTipContent(
             "tipFooterLeft",
             ReaderTipContent.BOOK_NAME
         ),
-        tipFooterMiddle = json.optEnum("tipFooterMiddle", ReaderTipContent.NONE),
-        tipFooterRight = json.optEnum(
+        tipFooterMiddle = json.optTipContent("tipFooterMiddle", ReaderTipContent.NONE),
+        tipFooterRight = json.optTipContent(
             "tipFooterRight",
             when {
                 json.has("tipFooterRight") -> ReaderTipContent.PAGE_AND_TOTAL
@@ -324,6 +322,15 @@ private inline fun <reified T : Enum<T>> JSONObject.optEnum(name: String, fallba
         .takeIf { it.isNotBlank() }
         ?.let { runCatching { enumValueOf<T>(it) }.getOrNull() }
         ?: fallback
+}
+
+private fun JSONObject.optTipContent(name: String, fallback: ReaderTipContent): ReaderTipContent {
+    return when (val raw = optString(name).takeIf { it.isNotBlank() }) {
+        "BATTERY" -> ReaderTipContent.BATTERY_PERCENTAGE
+        "TIME_BATTERY" -> ReaderTipContent.TIME_BATTERY_PERCENTAGE
+        null -> fallback
+        else -> runCatching { ReaderTipContent.valueOf(raw) }.getOrNull() ?: fallback
+    }
 }
 
 private fun readStyleConfigs(

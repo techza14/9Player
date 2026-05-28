@@ -20,7 +20,6 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.util.AttributeSet
-import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -128,7 +127,6 @@ internal class ReadView @JvmOverloads constructor(
     private var simulationCornerY: Int = 0
     private var simulationCurlSide: Int = 1
     private var simulationCommitAfterAnim: Boolean = false
-    private var simulationDebugFrame: Int = 0
     private val simulationRenderer = SimulationCurlRenderer()
 
     val contentWidth: Int get() = pageView.contentView.width
@@ -643,30 +641,15 @@ internal class ReadView @JvmOverloads constructor(
         simulationTouchX = downX.coerceIn(0.1f, (width - 0.1f).coerceAtLeast(0.1f))
         simulationTouchY = simulationTouchYForDrag(direction, downY)
         simulationCommitAfterAnim = false
-        simulationDebugFrame = 0
         simulationCurrentBitmap = pageView.captureToBitmap(simulationCurrentBitmap)
         simulationTargetBitmap = targetPageView.captureToBitmap(simulationTargetBitmap)
         targetPageView.visibility = INVISIBLE
-        Log.d(
-            TAG_SIMULATION,
-            "begin direction=$direction layout=$layoutMode side=$simulationCurlSide " +
-                "corner=($simulationCornerX,$simulationCornerY) down=(${downX.fmt()},${downY.fmt()}) " +
-                "touch=(${simulationTouchX.fmt()},${simulationTouchY.fmt()})"
-        )
         postInvalidateOnAnimation()
     }
 
     private fun updateSimulationDrag(x: Float, y: Float) {
         simulationTouchX = x.coerceIn(0.1f, (width - 0.1f).coerceAtLeast(0.1f))
         simulationTouchY = simulationTouchYForDrag(dragDirection, y)
-        simulationDebugFrame++
-        if (simulationDebugFrame % 6 == 0) {
-            Log.d(
-                TAG_SIMULATION,
-                "drag direction=$dragDirection side=$simulationCurlSide " +
-                    "raw=(${x.fmt()},${y.fmt()}) touch=(${simulationTouchX.fmt()},${simulationTouchY.fmt()})"
-            )
-        }
         postInvalidateOnAnimation()
     }
 
@@ -866,12 +849,6 @@ internal class ReadView @JvmOverloads constructor(
         val progress = (abs(startX - downX) / width.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
         val duration = (PAGE_DRAG_ANIM_MS * (1f - progress).coerceIn(0.25f, 1f)).toLong()
         simulationCommitAfterAnim = commit
-        Log.d(
-            TAG_SIMULATION,
-            "finishDrag commit=$commit direction=$dragDirection side=$simulationCurlSide " +
-                "start=(${startX.fmt()},${startY.fmt()}) target=(${targetX.fmt()},${targetY.fmt()}) " +
-                "progress=${progress.fmt()} duration=$duration"
-        )
         simulationAnimator?.cancel()
         simulationAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
             this.duration = duration
@@ -902,18 +879,11 @@ internal class ReadView @JvmOverloads constructor(
     private fun finishSimulationMotion() {
         if (simulationCommitAfterAnim) {
             val committedPage = targetPageView.currentPage
-            Log.d(
-                TAG_SIMULATION,
-                "finishMotion commit=true direction=$dragDirection side=$simulationCurlSide " +
-                    "targetPage=${committedPage?.globalIndex ?: -1}"
-            )
             suppressNextSetAnimation = true
             invokeTurnCallback()
             committedPage?.let {
                 pageView.setPage(it, null, null)
             }
-        } else {
-            Log.d(TAG_SIMULATION, "finishMotion commit=false direction=$dragDirection side=$simulationCurlSide")
         }
         simulationCommitAfterAnim = false
         resetPageLayers()
@@ -1063,8 +1033,6 @@ internal class ReadView @JvmOverloads constructor(
 
     private fun resetPageLayers() {
         abortGestureAnimation()
-        simulationAnimator?.cancel()
-        simulationAnimator = null
         isDraggingPage = false
         dragDirection = 0
         targetPageView.visibility = GONE
@@ -1102,8 +1070,7 @@ internal class ReadView @JvmOverloads constructor(
             width = width,
             height = height,
             backgroundColor = currentReaderMeanColor(),
-            debug = simulationDebugFrame % 6 == 0,
-            previous = dragDirection < 0
+            curlCurrentPage = layoutMode == M9LayoutMode.VERTICAL || dragDirection >= 0
         )
     }
 
@@ -1612,8 +1579,6 @@ internal class ReadView @JvmOverloads constructor(
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private fun Float.fmt(): String = String.format(java.util.Locale.US, "%.1f", this)
-
     private class SimulationCurlRenderer {
         private val path0 = Path()
         private val path1 = Path()
@@ -1687,8 +1652,7 @@ internal class ReadView @JvmOverloads constructor(
             width: Int,
             height: Int,
             backgroundColor: Int,
-            debug: Boolean,
-            previous: Boolean
+            curlCurrentPage: Boolean
         ) {
             if (width <= 0 || height <= 0) return
             val leftCurl = cornerX == 0
@@ -1709,12 +1673,9 @@ internal class ReadView @JvmOverloads constructor(
                 this.touchX = touchX.coerceIn(-width.toFloat(), width * 2f)
                 this.isRtOrLb = (cornerY == height)
             }
-            if (debug) {
-                Log.d(TAG_SIMULATION, "geometry left=$leftCurl previous=$previous ${geometrySummary()}")
-            }
             canvas.save()
-            val curlBitmap = if (previous) target else current
-            val baseBitmap = if (previous) current else target
+            val curlBitmap = if (curlCurrentPage) current else target
+            val baseBitmap = if (curlCurrentPage) target else current
             drawCurrentPageArea(canvas, curlBitmap)
             drawTargetPageAreaAndShadow(canvas, baseBitmap)
             drawCurrentPageShadow(canvas)
@@ -1736,16 +1697,6 @@ internal class ReadView @JvmOverloads constructor(
             mirror(bezierEnd2)
             middleX = viewWidth - middleX
         }
-
-        private fun geometrySummary(): String {
-            return "corner=($cornerX,$cornerY) touch=(${fmt(touchX)},${fmt(touchY)}) " +
-                "s1=(${fmt(bezierStart1.x)},${fmt(bezierStart1.y)}) " +
-                "s2=(${fmt(bezierStart2.x)},${fmt(bezierStart2.y)}) " +
-                "c1=(${fmt(bezierControl1.x)},${fmt(bezierControl1.y)}) " +
-                "c2=(${fmt(bezierControl2.x)},${fmt(bezierControl2.y)})"
-        }
-
-        private fun fmt(value: Float): String = String.format(java.util.Locale.US, "%.1f", value)
 
         private fun drawCurrentPageArea(canvas: Canvas, bitmap: Bitmap) {
             path0.reset()
@@ -2043,8 +1994,6 @@ internal class ReadView @JvmOverloads constructor(
                 )
             }
         }
-
-        private const val TAG_SIMULATION = "M9PageSimulation"
     }
 
     private class SelectionActionMenu(

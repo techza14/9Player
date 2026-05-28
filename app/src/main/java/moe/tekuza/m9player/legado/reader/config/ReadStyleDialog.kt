@@ -40,7 +40,7 @@ internal data class ReadStyleColorItem(
 
 internal class ReadStyleDialog(
     private val activity: Activity,
-    private val state: ReadStyleState,
+    state: ReadStyleState,
     private val callback: Callback
 ) {
     interface Callback {
@@ -69,10 +69,58 @@ internal class ReadStyleDialog(
     fun show() {
         val view = activity.layoutInflater.inflate(R.layout.dialog_m9_read_style, null, false)
         bindTopButtons(view)
-        bindSeekBar(view, R.id.style_text_size_label, R.id.style_text_size, activity.getString(R.string.reader_style_text_size), 14, currentState.textSizeSp, callback::onTextSizeChanged, callback::onTextSizeChangeFinished)
-        bindSeekBar(view, R.id.style_letter_label, R.id.style_letter_size, activity.getString(R.string.reader_style_letter_spacing), -50, currentState.letterSpacingDp, callback::onLetterSpacingChanged, callback::onLetterSpacingChangeFinished)
-        bindSeekBar(view, R.id.style_line_label, R.id.style_line_size, activity.getString(R.string.reader_style_line_spacing), 0, currentState.lineSpacingDp, callback::onLineSpacingChanged, callback::onLineSpacingChangeFinished)
-        bindSeekBar(view, R.id.style_paragraph_label, R.id.style_paragraph_size, activity.getString(R.string.reader_style_paragraph_spacing), 0, currentState.paragraphSpacingDp, callback::onParagraphSpacingChanged, callback::onParagraphSpacingChangeFinished)
+        bindSeekBar(
+            view,
+            R.id.style_text_size_label,
+            R.id.style_text_size,
+            activity.getString(R.string.reader_style_text_size),
+            14,
+            currentState.textSizeSp,
+            onChanged = { value ->
+                currentState = currentState.copy(textSizeSp = value)
+                callback.onTextSizeChanged(value)
+            },
+            onChangeFinished = callback::onTextSizeChangeFinished
+        )
+        bindSeekBar(
+            view,
+            R.id.style_letter_label,
+            R.id.style_letter_size,
+            activity.getString(R.string.reader_style_letter_spacing),
+            -50,
+            currentState.letterSpacingDp,
+            onChanged = { value ->
+                currentState = currentState.copy(letterSpacingDp = value)
+                callback.onLetterSpacingChanged(value)
+            },
+            onChangeFinished = callback::onLetterSpacingChangeFinished
+        )
+        bindSeekBar(
+            view,
+            R.id.style_line_label,
+            R.id.style_line_size,
+            activity.getString(R.string.reader_style_line_spacing),
+            0,
+            currentState.lineSpacingDp,
+            onChanged = { value ->
+                currentState = currentState.copy(lineSpacingDp = value)
+                callback.onLineSpacingChanged(value)
+            },
+            onChangeFinished = callback::onLineSpacingChangeFinished
+        )
+        bindSeekBar(
+            view,
+            R.id.style_paragraph_label,
+            R.id.style_paragraph_size,
+            activity.getString(R.string.reader_style_paragraph_spacing),
+            0,
+            currentState.paragraphSpacingDp,
+            onChanged = { value ->
+                currentState = currentState.copy(paragraphSpacingDp = value)
+                callback.onParagraphSpacingChanged(value)
+            },
+            onChangeFinished = callback::onParagraphSpacingChangeFinished
+        )
         view.findViewById<RadioGroup>(R.id.style_page_anim).check(
             when (currentState.pageAnim) {
                 M9PageAnim.COVER -> R.id.style_anim_cover
@@ -84,7 +132,17 @@ internal class ReadStyleDialog(
         )
         view.findViewById<RadioGroup>(R.id.style_page_anim).setOnCheckedChangeListener { _, _ ->
             val group = view.findViewById<RadioGroup>(R.id.style_page_anim)
-            callback.onPageAnimClicked(group.indexOfChild(group.findViewById(group.checkedRadioButtonId)))
+            val animIndex = group.indexOfChild(group.findViewById(group.checkedRadioButtonId))
+            currentState = currentState.copy(
+                pageAnim = when (animIndex) {
+                    0 -> M9PageAnim.COVER
+                    1 -> M9PageAnim.SLIDE
+                    2 -> M9PageAnim.SIMULATION
+                    3 -> M9PageAnim.SCROLL
+                    else -> M9PageAnim.NONE
+                }
+            )
+            callback.onPageAnimClicked(animIndex)
         }
         bindBackgroundStyles(view)
 
