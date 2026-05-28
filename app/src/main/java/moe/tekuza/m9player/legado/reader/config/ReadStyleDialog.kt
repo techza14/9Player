@@ -77,6 +77,7 @@ internal class ReadStyleDialog(
             when (currentState.pageAnim) {
                 M9PageAnim.COVER -> R.id.style_anim_cover
                 M9PageAnim.SLIDE -> R.id.style_anim_slide
+                M9PageAnim.SIMULATION -> R.id.style_anim_simulation
                 M9PageAnim.SCROLL -> R.id.style_anim_scroll
                 M9PageAnim.NONE -> R.id.style_anim_none
             }

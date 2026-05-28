@@ -35,6 +35,7 @@ internal enum class M9LayoutMode {
 internal enum class M9PageAnim {
     COVER,
     SLIDE,
+    SIMULATION,
     SCROLL,
     NONE
 }

@@ -57,6 +57,7 @@
     <string name="reader_style_page_anim">翻頁動畫</string>
     <string name="reader_style_anim_cover">覆蓋</string>
     <string name="reader_style_anim_slide">滑動</string>
+    <string name="reader_style_anim_simulation">仿真</string>
     <string name="reader_style_anim_scroll">捲動</string>
     <string name="reader_style_anim_none">無</string>
     <string name="reader_style_color_background">文字顏色和背景(長按自訂)</string>

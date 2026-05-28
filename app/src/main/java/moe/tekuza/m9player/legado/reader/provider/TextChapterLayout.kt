@@ -31,16 +31,16 @@ internal class TextChapterLayout(
     private val paragraphSpacing = config.paragraphSpacingPx.coerceAtLeast(0f)
     private var lineHeight = baseLineHeight
     private var rubyReservePx = 0f
-    private var rubyByStart: Map<Int, EbookRubySpan> = emptyMap()
+    private var rubyByStart: Map<Int, RubyPlacement> = emptyMap()
 
     fun layout(chapter: TextChapter): TextChapter {
         rubyReservePx = if (chapter.rubySpans.isNotEmpty()) {
-            (config.textSizePx * 0.58f).coerceAtLeast(8f)
+            (config.textSizePx * 0.62f).coerceAtLeast(8f)
         } else {
             0f
         }
         lineHeight = baseLineHeight + rubyReservePx
-        rubyByStart = chapter.rubySpans.associateBy { it.start }
+        rubyByStart = buildRubyPlacements(chapter.rubySpans)
         val text = chapter.text
         if (text.isBlank()) {
             chapter.addPage(
@@ -280,6 +280,8 @@ internal class TextChapterLayout(
                 }
             } else {
                 val ruby = rubyByStart[sourceStart]
+                val rubyStart = ruby?.absoluteStart ?: sourceStart
+                val rubyEnd = ruby?.absoluteEnd ?: sourceEnd
                 line.addColumn(
                     TextColumn(
                         start = x,
@@ -288,8 +290,9 @@ internal class TextChapterLayout(
                         sourceStart = sourceStart,
                         sourceEnd = sourceEnd,
                         rubyText = ruby?.text,
-                        rubySourceStart = ruby?.start ?: sourceStart,
-                        rubySourceEnd = ruby?.end ?: sourceEnd
+                        rubySourceStart = rubyStart,
+                        rubySourceEnd = rubyEnd,
+                        rubySpan = ruby?.span
                     )
                 )
             }

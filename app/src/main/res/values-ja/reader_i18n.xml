@@ -57,6 +57,7 @@
     <string name="reader_style_page_anim">ページアニメーション</string>
     <string name="reader_style_anim_cover">カバー</string>
     <string name="reader_style_anim_slide">スライド</string>
+    <string name="reader_style_anim_simulation">シミュレーション</string>
     <string name="reader_style_anim_scroll">スクロール</string>
     <string name="reader_style_anim_none">なし</string>
     <string name="reader_style_color_background">文字色と背景（長押しでカスタム）</string>

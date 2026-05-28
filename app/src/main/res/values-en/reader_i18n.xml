@@ -57,6 +57,7 @@
     <string name="reader_style_page_anim">Page animation</string>
     <string name="reader_style_anim_cover">Cover</string>
     <string name="reader_style_anim_slide">Slide</string>
+    <string name="reader_style_anim_simulation">Simulation</string>
     <string name="reader_style_anim_scroll">Scroll</string>
     <string name="reader_style_anim_none">None</string>
     <string name="reader_style_color_background">Color and background (long tap to customize)</string>

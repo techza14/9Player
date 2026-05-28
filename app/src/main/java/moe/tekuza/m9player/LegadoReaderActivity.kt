@@ -2417,7 +2417,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                     readerPageAnim = when (animIndex) {
                         0 -> M9PageAnim.COVER
                         1 -> M9PageAnim.SLIDE
-                        2 -> M9PageAnim.SCROLL
+                        2 -> M9PageAnim.SIMULATION
+                        3 -> M9PageAnim.SCROLL
                         else -> M9PageAnim.NONE
                     }
                     readView.setPageAnim(readerPageAnim)

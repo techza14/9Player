@@ -38,6 +38,21 @@ internal data class EbookChapter(
 internal data class EbookRubySpan(
     val start: Int,
     val end: Int,
+    val text: String,
+    val kind: EbookRubyKind = EbookRubyKind.UNKNOWN,
+    val segments: List<EbookRubySegment> = emptyList()
+)
+
+internal enum class EbookRubyKind {
+    MONO,
+    GROUP,
+    JUKUGO,
+    UNKNOWN
+}
+
+internal data class EbookRubySegment(
+    val baseStart: Int,
+    val baseEnd: Int,
     val text: String
 )
 
@@ -976,18 +991,17 @@ private fun htmlToReaderContent(
 ): ReaderHtmlContent {
     var body = Regex("(?is)<body[^>]*>(.*?)</body>").find(html)?.groupValues?.getOrNull(1) ?: html
     body = Regex("(?is)<(script|style)[^>]*>.*?</\\1>").replace(body, "")
-    val rubyTexts = linkedMapOf<Int, String>()
+    val rubyTexts = linkedMapOf<Int, ParsedRubyHtml>()
     var rubyId = 0
     body = Regex("(?is)<ruby\\b[^>]*>.*?</ruby>").replace(body) { match ->
         val rubyHtml = match.value
-        val baseText = rubyBaseText(rubyHtml)
-        val annotation = rubyAnnotationText(rubyHtml)
-        if (baseText.isBlank() || annotation.isBlank()) {
-            baseText.escapeHtmlText()
+        val ruby = parseRubyHtml(rubyHtml, htmlBasePath)
+        if (ruby.baseText.isBlank() || ruby.annotation.isBlank()) {
+            ruby.baseText.escapeHtmlText()
         } else {
             val id = rubyId++
-            rubyTexts[id] = annotation
-            "$RUBY_START_MARKER$id$RUBY_MARKER_TERMINATOR${baseText.escapeHtmlText()}$RUBY_END_MARKER$id$RUBY_MARKER_TERMINATOR"
+            rubyTexts[id] = ruby
+            "$RUBY_START_MARKER$id$RUBY_MARKER_TERMINATOR${ruby.baseText.escapeHtmlText()}$RUBY_END_MARKER$id$RUBY_MARKER_TERMINATOR"
         }
     }
     val imageTags = mutableListOf<HtmlImageTag>()
@@ -1039,24 +1053,106 @@ private const val RUBY_START_MARKER: Char = '\uE100'
 private const val RUBY_END_MARKER: Char = '\uE101'
 private const val RUBY_MARKER_TERMINATOR: Char = '\uE102'
 
+private data class ParsedRubyHtml(
+    val baseText: String,
+    val annotation: String,
+    val kind: EbookRubyKind,
+    val segments: List<EbookRubySegment> = emptyList()
+)
+
+private fun parseRubyHtml(rubyHtml: String, sourcePath: String): ParsedRubyHtml {
+    val rbTexts = Regex("(?is)<rb\\b[^>]*>(.*?)</rb>")
+        .findAll(rubyHtml)
+        .map { it.groupValues[1].htmlText() }
+        .filter { it.isNotBlank() }
+        .toList()
+    val rtTexts = Regex("(?is)<rt\\b[^>]*>(.*?)</rt>")
+        .findAll(rubyHtml)
+        .map { it.groupValues[1].htmlText() }
+        .filter { it.isNotBlank() }
+        .toList()
+    if (rbTexts.isNotEmpty() && rtTexts.isNotEmpty()) {
+        if (rbTexts.size == rtTexts.size) {
+            val segments = mutableListOf<EbookRubySegment>()
+            val baseBuilder = StringBuilder()
+            val annotationBuilder = StringBuilder()
+            rbTexts.zip(rtTexts).forEach { (base, annotation) ->
+                val start = baseBuilder.length
+                baseBuilder.append(base)
+                val end = baseBuilder.length
+                annotationBuilder.append(annotation)
+                segments += EbookRubySegment(start, end, annotation)
+            }
+            val base = baseBuilder.toString()
+            val annotation = annotationBuilder.toString()
+            return ParsedRubyHtml(
+                baseText = base,
+                annotation = annotation,
+                kind = rubyKindFor(base, segments),
+                segments = segments
+            )
+        }
+        logRubyWarning(
+            sourcePath = sourcePath,
+            reason = "rb/rt count mismatch rb=${rbTexts.size} rt=${rtTexts.size}",
+            rubyHtml = rubyHtml
+        )
+    }
+    val baseText = rubyBaseText(rubyHtml)
+    val annotation = rubyAnnotationText(rubyHtml)
+    if (baseText.isBlank()) {
+        logRubyWarning(sourcePath, "empty base", rubyHtml)
+    }
+    if (annotation.isBlank()) {
+        logRubyWarning(sourcePath, "empty annotation", rubyHtml)
+    }
+    return ParsedRubyHtml(
+        baseText = baseText,
+        annotation = annotation,
+        kind = if (baseText.codePointCountSafe() == 1) EbookRubyKind.MONO else EbookRubyKind.GROUP
+    )
+}
+
+private fun rubyKindFor(baseText: String, segments: List<EbookRubySegment>): EbookRubyKind {
+    if (segments.size == 1 && baseText.codePointCountSafe() == 1) return EbookRubyKind.MONO
+    if (segments.size > 1 && segments.all { segment ->
+            baseText.substring(segment.baseStart, segment.baseEnd).codePointCountSafe() == 1
+        }
+    ) {
+        return EbookRubyKind.JUKUGO
+    }
+    return EbookRubyKind.GROUP
+}
+
 private fun rubyBaseText(rubyHtml: String): String {
     val baseHtml = rubyHtml
         .replace(Regex("(?is)<rt\\b[^>]*>.*?</rt>"), "")
         .replace(Regex("(?is)<rp\\b[^>]*>.*?</rp>"), "")
         .replace(Regex("(?is)</?ruby\\b[^>]*>"), "")
         .replace(Regex("(?is)</?rb\\b[^>]*>"), "")
-    return Html.fromHtml(baseHtml, Html.FROM_HTML_MODE_LEGACY).toString().trim()
+    return baseHtml.htmlText().trim()
 }
 
 private fun rubyAnnotationText(rubyHtml: String): String {
     return Regex("(?is)<rt\\b[^>]*>(.*?)</rt>")
         .findAll(rubyHtml)
         .joinToString("") { match ->
-            Html.fromHtml(match.groupValues[1], Html.FROM_HTML_MODE_LEGACY)
-                .toString()
-                .trim()
+            match.groupValues[1].htmlText().trim()
         }
         .trim()
+}
+
+private fun String.htmlText(): String =
+    Html.fromHtml(this, Html.FROM_HTML_MODE_LEGACY).toString()
+
+private fun String.codePointCountSafe(): Int =
+    codePointCount(0, length)
+
+private fun logRubyWarning(sourcePath: String, reason: String, rubyHtml: String) {
+    val snippet = rubyHtml
+        .replace(Regex("\\s+"), " ")
+        .take(120)
+    Log.w(EBOOK_READER_CORE_LOG_TAG, "ruby parse warning source=$sourcePath reason=$reason html=$snippet")
 }
 
 private fun String.escapeHtmlText(): String {
@@ -1067,7 +1163,7 @@ private fun String.escapeHtmlText(): String {
         .replace("'", "&#39;")
 }
 
-private fun String.parseRubyMarkers(rubyTexts: Map<Int, String>): ParsedReaderText {
+private fun String.parseRubyMarkers(rubyTexts: Map<Int, ParsedRubyHtml>): ParsedReaderText {
     if (rubyTexts.isEmpty()) return ParsedReaderText(this, emptyList())
     val out = StringBuilder(length)
     val activeStarts = linkedMapOf<Int, Int>()
@@ -1089,12 +1185,14 @@ private fun String.parseRubyMarkers(rubyTexts: Map<Int, String>): ParsedReaderTe
                 val marker = readRubyMarkerId(index)
                 if (marker != null) {
                     val start = activeStarts.remove(marker.first)
-                    val annotation = rubyTexts[marker.first]
-                    if (start != null && annotation != null && out.length > start) {
+                    val ruby = rubyTexts[marker.first]
+                    if (start != null && ruby != null && out.length > start) {
                         spans += EbookRubySpan(
                             start = start,
                             end = out.length,
-                            text = annotation
+                            text = ruby.annotation,
+                            kind = ruby.kind,
+                            segments = ruby.segments
                         )
                     }
                     index = marker.second

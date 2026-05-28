@@ -197,6 +197,17 @@
                 android:textColor="@color/reader_segment_text" />
 
             <RadioButton
+                android:id="@+id/style_anim_simulation"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/reader_segment_button"
+                android:button="@null"
+                android:gravity="center"
+                android:text="@string/reader_style_anim_simulation"
+                android:textColor="@color/reader_segment_text" />
+
+            <RadioButton
                 android:id="@+id/style_anim_scroll"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"

@@ -1,16 +1,26 @@
 package moe.tekuza.m9player.legado.reader.page
 
+import android.animation.ValueAnimator
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.content.Context
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.util.AttributeSet
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -37,6 +47,11 @@ import moe.tekuza.m9player.legado.reader.M9PageAnim
 import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.TextPage
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.min
+import kotlin.math.sin
 
 internal class ReadView @JvmOverloads constructor(
     context: Context,
@@ -104,6 +119,17 @@ internal class ReadView @JvmOverloads constructor(
     private var scrollStartOffset: Float = 0f
     private var scrollPageStep: Float = 1f
     private var scrollAnchorDelta: Int = 0
+    private var simulationAnimator: ValueAnimator? = null
+    private var simulationCurrentBitmap: Bitmap? = null
+    private var simulationTargetBitmap: Bitmap? = null
+    private var simulationTouchX: Float = 0.1f
+    private var simulationTouchY: Float = 0.1f
+    private var simulationCornerX: Int = 0
+    private var simulationCornerY: Int = 0
+    private var simulationCurlSide: Int = 1
+    private var simulationCommitAfterAnim: Boolean = false
+    private var simulationDebugFrame: Int = 0
+    private val simulationRenderer = SimulationCurlRenderer()
 
     val contentWidth: Int get() = pageView.contentView.width
     val contentHeight: Int
@@ -339,6 +365,15 @@ internal class ReadView @JvmOverloads constructor(
         }
     }
 
+    override fun dispatchDraw(canvas: Canvas) {
+        if (pageAnim == M9PageAnim.SIMULATION && (isDraggingPage || isGestureAnimating)) {
+            drawSimulationPage(canvas)
+            drawOverlayChildren(canvas)
+            return
+        }
+        super.dispatchDraw(canvas)
+    }
+
     private fun runPageAnimation(forward: Boolean) {
         resetPageLayers()
         if (pageAnim == M9PageAnim.NONE || width <= 0 || height <= 0) return
@@ -353,6 +388,14 @@ internal class ReadView @JvmOverloads constructor(
                     .start()
             }
             M9PageAnim.SLIDE -> {
+                pageView.translationX = horizontalPageSide(direction) * width.toFloat()
+                pageView.animate()
+                    .translationX(0f)
+                    .setInterpolator(pageInterpolator)
+                    .setDuration(PROGRAMMATIC_PAGE_ANIM_MS)
+                    .start()
+            }
+            M9PageAnim.SIMULATION -> {
                 pageView.translationX = horizontalPageSide(direction) * width.toFloat()
                 pageView.animate()
                     .translationX(0f)
@@ -493,6 +536,10 @@ internal class ReadView @JvmOverloads constructor(
             }
             beginDrag(direction, preview)
         }
+        if (pageAnim == M9PageAnim.SIMULATION) {
+            updateSimulationDrag(event.x, event.y)
+            return
+        }
         if (pageAnim == M9PageAnim.SCROLL) {
             val axisDelta = if (isScrollHorizontalAxis()) {
                 event.x - lastTouchX
@@ -553,6 +600,11 @@ internal class ReadView @JvmOverloads constructor(
                 targetPageView.translationX = horizontalPageSide(direction) * width.toFloat()
                 targetPageView.translationY = 0f
             }
+            M9PageAnim.SIMULATION -> {
+                targetPageView.translationX = 0f
+                targetPageView.translationY = 0f
+                beginSimulationCurl(direction)
+            }
             else -> {
                 targetPageView.translationX = 0f
                 targetPageView.translationY = 0f
@@ -565,6 +617,7 @@ internal class ReadView @JvmOverloads constructor(
             M9PageAnim.SCROLL -> updateScrollDrag(if (isScrollHorizontalAxis()) dx else dy)
             M9PageAnim.COVER -> updateCoverDrag(dx)
             M9PageAnim.SLIDE -> updateSlideDrag(dx)
+            M9PageAnim.SIMULATION -> updateSimulationDrag(downX + dx, downY + dy)
             M9PageAnim.NONE -> Unit
         }
     }
@@ -580,6 +633,61 @@ internal class ReadView @JvmOverloads constructor(
         val offset = clampPageOffset(dx, side, width.toFloat())
         pageView.translationX = offset
         targetPageView.translationX = side * width.toFloat() + offset
+    }
+
+    private fun beginSimulationCurl(direction: Int) {
+        simulationAnimator?.cancel()
+        simulationCurlSide = horizontalPageSide(direction)
+        simulationCornerX = if (simulationCurlSide > 0) width else 0
+        simulationCornerY = simulationCornerYForStart(direction)
+        simulationTouchX = downX.coerceIn(0.1f, (width - 0.1f).coerceAtLeast(0.1f))
+        simulationTouchY = simulationTouchYForDrag(direction, downY)
+        simulationCommitAfterAnim = false
+        simulationDebugFrame = 0
+        simulationCurrentBitmap = pageView.captureToBitmap(simulationCurrentBitmap)
+        simulationTargetBitmap = targetPageView.captureToBitmap(simulationTargetBitmap)
+        targetPageView.visibility = INVISIBLE
+        Log.d(
+            TAG_SIMULATION,
+            "begin direction=$direction layout=$layoutMode side=$simulationCurlSide " +
+                "corner=($simulationCornerX,$simulationCornerY) down=(${downX.fmt()},${downY.fmt()}) " +
+                "touch=(${simulationTouchX.fmt()},${simulationTouchY.fmt()})"
+        )
+        postInvalidateOnAnimation()
+    }
+
+    private fun updateSimulationDrag(x: Float, y: Float) {
+        simulationTouchX = x.coerceIn(0.1f, (width - 0.1f).coerceAtLeast(0.1f))
+        simulationTouchY = simulationTouchYForDrag(dragDirection, y)
+        simulationDebugFrame++
+        if (simulationDebugFrame % 6 == 0) {
+            Log.d(
+                TAG_SIMULATION,
+                "drag direction=$dragDirection side=$simulationCurlSide " +
+                    "raw=(${x.fmt()},${y.fmt()}) touch=(${simulationTouchX.fmt()},${simulationTouchY.fmt()})"
+            )
+        }
+        postInvalidateOnAnimation()
+    }
+
+    private fun simulationCornerYForStart(direction: Int): Int {
+        if (direction < 0) return height
+        return when {
+            downY > height / 3f && downY < height / 2f -> 0
+            downY > height / 3f && downY < height * 2f / 3f -> height
+            downY <= height / 2f -> 0
+            else -> height
+        }
+    }
+
+    private fun simulationTouchYForDrag(direction: Int, y: Float): Float {
+        val safeBottom = (height - 0.1f).coerceAtLeast(0.1f)
+        return when {
+            direction < 0 -> safeBottom
+            downY > height / 3f && downY < height / 2f -> 0.1f
+            downY > height / 3f && downY < height * 2f / 3f -> safeBottom
+            else -> y.coerceIn(0.1f, safeBottom)
+        }
     }
 
     private fun updateScrollDrag(axisDelta: Float) {
@@ -609,6 +717,8 @@ internal class ReadView @JvmOverloads constructor(
             abs(scrollContentOffset)
         } else if (pageAnim == M9PageAnim.SCROLL) {
             abs(scrollContentOffset)
+        } else if (pageAnim == M9PageAnim.SIMULATION) {
+            abs(simulationTouchX - downX)
         } else {
             abs(pageView.translationX)
         }
@@ -666,6 +776,10 @@ internal class ReadView @JvmOverloads constructor(
         isGestureAnimating = true
         if (pageAnim == M9PageAnim.SCROLL) {
             finishScrollDrag(commit)
+            return
+        }
+        if (pageAnim == M9PageAnim.SIMULATION) {
+            finishSimulationDrag(commit)
             return
         }
         val size = width.toFloat()
@@ -734,6 +848,75 @@ internal class ReadView @JvmOverloads constructor(
             )
         }
         postInvalidateOnAnimation()
+    }
+
+    private fun finishSimulationDrag(commit: Boolean) {
+        val startX = simulationTouchX
+        val startY = simulationTouchY
+        val targetX = if (commit) {
+            if (simulationCurlSide > 0) -width.toFloat() else width.toFloat() * 2f
+        } else {
+            simulationCornerX.toFloat()
+        }
+        val targetY = if (commit) {
+            if (simulationCornerY > 0) height.toFloat() else 0.1f
+        } else {
+            simulationCornerY.toFloat().coerceIn(0.1f, (height - 0.1f).coerceAtLeast(0.1f))
+        }
+        val progress = (abs(startX - downX) / width.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
+        val duration = (PAGE_DRAG_ANIM_MS * (1f - progress).coerceIn(0.25f, 1f)).toLong()
+        simulationCommitAfterAnim = commit
+        Log.d(
+            TAG_SIMULATION,
+            "finishDrag commit=$commit direction=$dragDirection side=$simulationCurlSide " +
+                "start=(${startX.fmt()},${startY.fmt()}) target=(${targetX.fmt()},${targetY.fmt()}) " +
+                "progress=${progress.fmt()} duration=$duration"
+        )
+        simulationAnimator?.cancel()
+        simulationAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            this.duration = duration
+            interpolator = pageInterpolator
+            addUpdateListener { animator ->
+                val fraction = animator.animatedFraction
+                simulationTouchX = startX + (targetX - startX) * fraction
+                simulationTouchY = startY + (targetY - startY) * fraction
+                postInvalidateOnAnimation()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                private var canceled = false
+
+                override fun onAnimationCancel(animation: Animator) {
+                    canceled = true
+                }
+
+                override fun onAnimationEnd(animation: Animator) {
+                    if (!canceled) {
+                        finishSimulationMotion()
+                    }
+                }
+            })
+            start()
+        }
+    }
+
+    private fun finishSimulationMotion() {
+        if (simulationCommitAfterAnim) {
+            val committedPage = targetPageView.currentPage
+            Log.d(
+                TAG_SIMULATION,
+                "finishMotion commit=true direction=$dragDirection side=$simulationCurlSide " +
+                    "targetPage=${committedPage?.globalIndex ?: -1}"
+            )
+            suppressNextSetAnimation = true
+            invokeTurnCallback()
+            committedPage?.let {
+                pageView.setPage(it, null, null)
+            }
+        } else {
+            Log.d(TAG_SIMULATION, "finishMotion commit=false direction=$dragDirection side=$simulationCurlSide")
+        }
+        simulationCommitAfterAnim = false
+        resetPageLayers()
     }
 
     private fun startScrollSettle(targetOffset: Float, duration: Long) {
@@ -872,12 +1055,16 @@ internal class ReadView @JvmOverloads constructor(
     private fun abortGestureAnimation() {
         pageView.animate().cancel()
         targetPageView.animate().cancel()
+        simulationAnimator?.cancel()
+        simulationAnimator = null
         if (!scrollScroller.isFinished) scrollScroller.abortAnimation()
         isGestureAnimating = false
     }
 
     private fun resetPageLayers() {
         abortGestureAnimation()
+        simulationAnimator?.cancel()
+        simulationAnimator = null
         isDraggingPage = false
         dragDirection = 0
         targetPageView.visibility = GONE
@@ -895,6 +1082,65 @@ internal class ReadView @JvmOverloads constructor(
         pageView.translationX = 0f
         pageView.translationY = 0f
         pageView.rotationY = 0f
+    }
+
+    private fun drawSimulationPage(canvas: Canvas) {
+        val current = simulationCurrentBitmap
+        val target = simulationTargetBitmap
+        if (current == null || target == null) {
+            super.dispatchDraw(canvas)
+            return
+        }
+        simulationRenderer.draw(
+            canvas = canvas,
+            current = current,
+            target = target,
+            touchX = simulationTouchX,
+            touchY = simulationTouchY,
+            cornerX = simulationCornerX,
+            cornerY = simulationCornerY,
+            width = width,
+            height = height,
+            backgroundColor = currentReaderMeanColor(),
+            debug = simulationDebugFrame % 6 == 0,
+            previous = dragDirection < 0
+        )
+    }
+
+    private fun drawOverlayChildren(canvas: Canvas) {
+        for (i in 0 until childCount) {
+            val child = getChildAt(i)
+            if (child !== pageView && child !== targetPageView && child.visibility == VISIBLE) {
+                drawChild(canvas, child, drawingTime)
+            }
+        }
+    }
+
+    private fun View.captureToBitmap(reuse: Bitmap?): Bitmap? {
+        if (width <= 0 || height <= 0) return null
+        val bitmap = if (reuse != null && !reuse.isRecycled && reuse.width == width && reuse.height == height) {
+            reuse.eraseColor(Color.TRANSPARENT)
+            reuse
+        } else {
+            reuse?.recycle()
+            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        }
+        Canvas(bitmap).also { canvas ->
+            canvas.translate(-scrollX.toFloat(), -scrollY.toFloat())
+            draw(canvas)
+        }
+        bitmap.prepareToDraw()
+        return bitmap
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        simulationAnimator?.cancel()
+        simulationAnimator = null
+        simulationCurrentBitmap?.recycle()
+        simulationCurrentBitmap = null
+        simulationTargetBitmap?.recycle()
+        simulationTargetBitmap = null
     }
 
     private fun handleTap(event: MotionEvent) {
@@ -1366,6 +1612,402 @@ internal class ReadView @JvmOverloads constructor(
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    private fun Float.fmt(): String = String.format(java.util.Locale.US, "%.1f", this)
+
+    private class SimulationCurlRenderer {
+        private val path0 = Path()
+        private val path1 = Path()
+        private val bezierStart1 = PointF()
+        private val bezierControl1 = PointF()
+        private val bezierVertex1 = PointF()
+        private var bezierEnd1 = PointF()
+        private val bezierStart2 = PointF()
+        private val bezierControl2 = PointF()
+        private val bezierVertex2 = PointF()
+        private var bezierEnd2 = PointF()
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.TRANSPARENT
+        }
+        private val matrix = Matrix()
+        private val matrixArray = floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 1f)
+        private val frontShadowVlr = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(0x80FFFFFF.toInt(), 0x111111)
+        )
+        private val frontShadowVrl = GradientDrawable(
+            GradientDrawable.Orientation.RIGHT_LEFT,
+            intArrayOf(0x80FFFFFF.toInt(), 0x111111)
+        )
+        private val frontShadowHtb = GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(0x80FFFFFF.toInt(), 0x111111)
+        )
+        private val frontShadowHbt = GradientDrawable(
+            GradientDrawable.Orientation.BOTTOM_TOP,
+            intArrayOf(0x80FFFFFF.toInt(), 0x111111)
+        )
+        private val backShadowLr = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(0x11FFFFFF, 0x66000000)
+        )
+        private val backShadowRl = GradientDrawable(
+            GradientDrawable.Orientation.RIGHT_LEFT,
+            intArrayOf(0x11FFFFFF, 0x66000000)
+        )
+        private val foldShadowLr = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(0x44333333, 0x00CCCCCC)
+        )
+        private val foldShadowRl = GradientDrawable(
+            GradientDrawable.Orientation.RIGHT_LEFT,
+            intArrayOf(0x44333333, 0x00CCCCCC)
+        )
+        private var touchX = 0.1f
+        private var touchY = 0.1f
+        private var cornerX = 0
+        private var cornerY = 0
+        private var viewWidth = 0
+        private var viewHeight = 0
+        private var middleX = 0f
+        private var middleY = 0f
+        private var degrees = 0f
+        private var touchToCornerDistance = 0f
+        private var maxLength = 1f
+        private var isRtOrLb = false
+
+        fun draw(
+            canvas: Canvas,
+            current: Bitmap,
+            target: Bitmap,
+            touchX: Float,
+            touchY: Float,
+            cornerX: Int,
+            cornerY: Int,
+            width: Int,
+            height: Int,
+            backgroundColor: Int,
+            debug: Boolean,
+            previous: Boolean
+        ) {
+            if (width <= 0 || height <= 0) return
+            val leftCurl = cornerX == 0
+            this.viewWidth = width
+            this.viewHeight = height
+            this.cornerX = if (leftCurl) width else cornerX
+            this.cornerY = cornerY
+            this.touchX = (if (leftCurl) width - touchX else touchX)
+                .coerceIn(-width.toFloat(), width * 2f)
+            this.touchY = touchY.coerceIn(0.1f, (height - 0.1f).coerceAtLeast(0.1f))
+            this.maxLength = hypot(width.toDouble(), height.toDouble()).toFloat()
+            this.isRtOrLb = (this.cornerX == 0 && cornerY == height) || (cornerY == 0 && this.cornerX == width)
+
+            calcPoints()
+            if (leftCurl) {
+                mirrorCalculatedGeometry()
+                this.cornerX = 0
+                this.touchX = touchX.coerceIn(-width.toFloat(), width * 2f)
+                this.isRtOrLb = (cornerY == height)
+            }
+            if (debug) {
+                Log.d(TAG_SIMULATION, "geometry left=$leftCurl previous=$previous ${geometrySummary()}")
+            }
+            canvas.save()
+            val curlBitmap = if (previous) target else current
+            val baseBitmap = if (previous) current else target
+            drawCurrentPageArea(canvas, curlBitmap)
+            drawTargetPageAreaAndShadow(canvas, baseBitmap)
+            drawCurrentPageShadow(canvas)
+            drawCurrentBackArea(canvas, curlBitmap, backgroundColor)
+            canvas.restore()
+        }
+
+        private fun mirrorCalculatedGeometry() {
+            fun mirror(point: PointF) {
+                point.x = viewWidth - point.x
+            }
+            mirror(bezierStart1)
+            mirror(bezierControl1)
+            mirror(bezierVertex1)
+            mirror(bezierEnd1)
+            mirror(bezierStart2)
+            mirror(bezierControl2)
+            mirror(bezierVertex2)
+            mirror(bezierEnd2)
+            middleX = viewWidth - middleX
+        }
+
+        private fun geometrySummary(): String {
+            return "corner=($cornerX,$cornerY) touch=(${fmt(touchX)},${fmt(touchY)}) " +
+                "s1=(${fmt(bezierStart1.x)},${fmt(bezierStart1.y)}) " +
+                "s2=(${fmt(bezierStart2.x)},${fmt(bezierStart2.y)}) " +
+                "c1=(${fmt(bezierControl1.x)},${fmt(bezierControl1.y)}) " +
+                "c2=(${fmt(bezierControl2.x)},${fmt(bezierControl2.y)})"
+        }
+
+        private fun fmt(value: Float): String = String.format(java.util.Locale.US, "%.1f", value)
+
+        private fun drawCurrentPageArea(canvas: Canvas, bitmap: Bitmap) {
+            path0.reset()
+            path0.moveTo(bezierStart1.x, bezierStart1.y)
+            path0.quadTo(bezierControl1.x, bezierControl1.y, bezierEnd1.x, bezierEnd1.y)
+            path0.lineTo(touchX, touchY)
+            path0.lineTo(bezierEnd2.x, bezierEnd2.y)
+            path0.quadTo(bezierControl2.x, bezierControl2.y, bezierStart2.x, bezierStart2.y)
+            path0.lineTo(cornerX.toFloat(), cornerY.toFloat())
+            path0.close()
+
+            canvas.save()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                canvas.clipOutPath(path0)
+            } else {
+                @Suppress("DEPRECATION")
+                canvas.clipPath(path0, android.graphics.Region.Op.XOR)
+            }
+            canvas.drawBitmap(bitmap, 0f, 0f, null)
+            canvas.restore()
+        }
+
+        private fun drawTargetPageAreaAndShadow(canvas: Canvas, bitmap: Bitmap) {
+            path1.reset()
+            path1.moveTo(bezierStart1.x, bezierStart1.y)
+            path1.lineTo(bezierVertex1.x, bezierVertex1.y)
+            path1.lineTo(bezierVertex2.x, bezierVertex2.y)
+            path1.lineTo(bezierStart2.x, bezierStart2.y)
+            path1.lineTo(cornerX.toFloat(), cornerY.toFloat())
+            path1.close()
+
+            degrees = Math.toDegrees(
+                atan2(
+                    (bezierControl1.x - cornerX).toDouble(),
+                    bezierControl2.y - cornerY.toDouble()
+                )
+            ).toFloat()
+            val leftX: Int
+            val rightX: Int
+            val shadow: GradientDrawable
+            if (isRtOrLb) {
+                leftX = bezierStart1.x.toInt()
+                rightX = (bezierStart1.x + touchToCornerDistance / 4).toInt()
+                shadow = backShadowLr
+            } else {
+                leftX = (bezierStart1.x - touchToCornerDistance / 4).toInt()
+                rightX = bezierStart1.x.toInt()
+                shadow = backShadowRl
+            }
+
+            canvas.save()
+            canvas.clipPath(path0)
+            @Suppress("DEPRECATION")
+            canvas.clipPath(path1, android.graphics.Region.Op.INTERSECT)
+            canvas.drawBitmap(bitmap, 0f, 0f, null)
+            canvas.rotate(degrees, bezierStart1.x, bezierStart1.y)
+            shadow.setBounds(leftX, bezierStart1.y.toInt(), rightX, (maxLength + bezierStart1.y).toInt())
+            shadow.draw(canvas)
+            canvas.restore()
+        }
+
+        private fun drawCurrentPageShadow(canvas: Canvas) {
+            val degree = if (isRtOrLb) {
+                Math.PI / 4 - atan2(bezierControl1.y - touchY, touchX - bezierControl1.x)
+            } else {
+                Math.PI / 4 - atan2(touchY - bezierControl1.y, touchX - bezierControl1.x)
+            }
+            val d1 = (25f * 1.414f * cos(degree)).toFloat()
+            val d2 = (25f * 1.414f * sin(degree)).toFloat()
+            val x = touchX + d1
+            val y = if (isRtOrLb) touchY + d2 else touchY - d2
+
+            path1.reset()
+            path1.moveTo(x, y)
+            path1.lineTo(touchX, touchY)
+            path1.lineTo(bezierControl1.x, bezierControl1.y)
+            path1.lineTo(bezierStart1.x, bezierStart1.y)
+            path1.close()
+            canvas.save()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                canvas.clipOutPath(path0)
+            } else {
+                @Suppress("DEPRECATION")
+                canvas.clipPath(path0, android.graphics.Region.Op.XOR)
+            }
+            @Suppress("DEPRECATION")
+            canvas.clipPath(path1, android.graphics.Region.Op.INTERSECT)
+            val verticalShadow = if (isRtOrLb) frontShadowVlr else frontShadowVrl
+            val left = if (isRtOrLb) bezierControl1.x.toInt() else (bezierControl1.x - 25).toInt()
+            val right = if (isRtOrLb) (bezierControl1.x + 25).toInt() else (bezierControl1.x + 1).toInt()
+            val rotateDegrees = Math.toDegrees(
+                atan2(touchX - bezierControl1.x, bezierControl1.y - touchY).toDouble()
+            ).toFloat()
+            canvas.rotate(rotateDegrees, bezierControl1.x, bezierControl1.y)
+            verticalShadow.setBounds(left, (bezierControl1.y - maxLength).toInt(), right, bezierControl1.y.toInt())
+            verticalShadow.draw(canvas)
+            canvas.restore()
+
+            path1.reset()
+            path1.moveTo(x, y)
+            path1.lineTo(touchX, touchY)
+            path1.lineTo(bezierControl2.x, bezierControl2.y)
+            path1.lineTo(bezierStart2.x, bezierStart2.y)
+            path1.close()
+            canvas.save()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                canvas.clipOutPath(path0)
+            } else {
+                @Suppress("DEPRECATION")
+                canvas.clipPath(path0, android.graphics.Region.Op.XOR)
+            }
+            canvas.clipPath(path1)
+            val horizontalShadow = if (isRtOrLb) frontShadowHtb else frontShadowHbt
+            val top = if (isRtOrLb) bezierControl2.y.toInt() else (bezierControl2.y - 25).toInt()
+            val bottom = if (isRtOrLb) (bezierControl2.y + 25).toInt() else (bezierControl2.y + 1).toInt()
+            val rotateDegrees2 = Math.toDegrees(
+                atan2(bezierControl2.y - touchY, bezierControl2.x - touchX).toDouble()
+            ).toFloat()
+            canvas.rotate(rotateDegrees2, bezierControl2.x, bezierControl2.y)
+            val temp = if (bezierControl2.y < 0) bezierControl2.y - viewHeight else bezierControl2.y
+            val hmg = hypot(bezierControl2.x.toDouble(), temp.toDouble())
+            if (hmg > maxLength) {
+                horizontalShadow.setBounds(
+                    (bezierControl2.x - 25 - hmg).toInt(),
+                    top,
+                    (bezierControl2.x + maxLength - hmg).toInt(),
+                    bottom
+                )
+            } else {
+                horizontalShadow.setBounds((bezierControl2.x - maxLength).toInt(), top, bezierControl2.x.toInt(), bottom)
+            }
+            horizontalShadow.draw(canvas)
+            canvas.restore()
+        }
+
+        private fun drawCurrentBackArea(canvas: Canvas, bitmap: Bitmap, backgroundColor: Int) {
+            val i = ((bezierStart1.x + bezierControl1.x) / 2).toInt()
+            val f1 = abs(i - bezierControl1.x)
+            val i1 = ((bezierStart2.y + bezierControl2.y) / 2).toInt()
+            val f2 = abs(i1 - bezierControl2.y)
+            val f3 = min(f1, f2)
+            path1.reset()
+            path1.moveTo(bezierVertex2.x, bezierVertex2.y)
+            path1.lineTo(bezierVertex1.x, bezierVertex1.y)
+            path1.lineTo(bezierEnd1.x, bezierEnd1.y)
+            path1.lineTo(touchX, touchY)
+            path1.lineTo(bezierEnd2.x, bezierEnd2.y)
+            path1.close()
+
+            val left: Int
+            val right: Int
+            val foldShadow: GradientDrawable
+            if (isRtOrLb) {
+                left = (bezierStart1.x - 1).toInt()
+                right = (bezierStart1.x + f3 + 1).toInt()
+                foldShadow = foldShadowLr
+            } else {
+                left = (bezierStart1.x - f3 - 1).toInt()
+                right = (bezierStart1.x + 1).toInt()
+                foldShadow = foldShadowRl
+            }
+
+            canvas.save()
+            canvas.clipPath(path0)
+            @Suppress("DEPRECATION")
+            canvas.clipPath(path1, android.graphics.Region.Op.INTERSECT)
+            val dis = hypot(
+                cornerX - bezierControl1.x.toDouble(),
+                bezierControl2.y - cornerY.toDouble()
+            ).toFloat().coerceAtLeast(0.1f)
+            val f8 = (cornerX - bezierControl1.x) / dis
+            val f9 = (bezierControl2.y - cornerY) / dis
+            matrixArray[0] = 1 - 2 * f9 * f9
+            matrixArray[1] = 2 * f8 * f9
+            matrixArray[3] = matrixArray[1]
+            matrixArray[4] = 1 - 2 * f8 * f8
+            matrix.reset()
+            matrix.setValues(matrixArray)
+            matrix.preTranslate(-bezierControl1.x, -bezierControl1.y)
+            matrix.postTranslate(bezierControl1.x, bezierControl1.y)
+            canvas.drawColor(backgroundColor)
+            paint.alpha = 150
+            canvas.drawBitmap(bitmap, matrix, paint)
+            paint.alpha = 255
+            canvas.rotate(degrees, bezierStart1.x, bezierStart1.y)
+            foldShadow.setBounds(left, bezierStart1.y.toInt(), right, (bezierStart1.y + maxLength).toInt())
+            foldShadow.draw(canvas)
+            canvas.restore()
+        }
+
+        private fun calcPoints() {
+            middleX = (touchX + cornerX) / 2
+            middleY = (touchY + cornerY) / 2
+            val control1Denominator = (cornerX - middleX).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            bezierControl1.x = middleX - (cornerY - middleY) * (cornerY - middleY) / control1Denominator
+            bezierControl1.y = cornerY.toFloat()
+            bezierControl2.x = cornerX.toFloat()
+            val control2Denominator = (cornerY - middleY).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            bezierControl2.y = middleY - (cornerX - middleX) * (cornerX - middleX) / control2Denominator
+            bezierStart1.x = bezierControl1.x - (cornerX - bezierControl1.x) / 2
+            bezierStart1.y = cornerY.toFloat()
+
+            if (touchX > 0 && touchX < viewWidth && (bezierStart1.x < 0 || bezierStart1.x > viewWidth)) {
+                if (bezierStart1.x < 0) {
+                    bezierStart1.x = viewWidth - bezierStart1.x
+                }
+                val f1 = abs(cornerX - touchX).coerceAtLeast(0.1f)
+                val f2 = viewWidth * f1 / bezierStart1.x.coerceAtLeast(0.1f)
+                touchX = abs(cornerX - f2)
+                val f3 = abs(cornerX - touchX) * abs(cornerY - touchY) / f1
+                touchY = abs(cornerY - f3).coerceIn(0.1f, (viewHeight - 0.1f).coerceAtLeast(0.1f))
+                middleX = (touchX + cornerX) / 2
+                middleY = (touchY + cornerY) / 2
+                val d1 = (cornerX - middleX).let {
+                    if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+                }
+                val d2 = (cornerY - middleY).let {
+                    if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+                }
+                bezierControl1.x = middleX - (cornerY - middleY) * (cornerY - middleY) / d1
+                bezierControl1.y = cornerY.toFloat()
+                bezierControl2.x = cornerX.toFloat()
+                bezierControl2.y = middleY - (cornerX - middleX) * (cornerX - middleX) / d2
+                bezierStart1.x = bezierControl1.x - (cornerX - bezierControl1.x) / 2
+            }
+
+            bezierStart2.x = cornerX.toFloat()
+            bezierStart2.y = bezierControl2.y - (cornerY - bezierControl2.y) / 2
+            touchToCornerDistance = hypot((touchX - cornerX).toDouble(), (touchY - cornerY).toDouble()).toFloat()
+            bezierEnd1 = getCross(PointF(touchX, touchY), bezierControl1, bezierStart1, bezierStart2)
+            bezierEnd2 = getCross(PointF(touchX, touchY), bezierControl2, bezierStart1, bezierStart2)
+            bezierVertex1.x = (bezierStart1.x + 2 * bezierControl1.x + bezierEnd1.x) / 4
+            bezierVertex1.y = (2 * bezierControl1.y + bezierStart1.y + bezierEnd1.y) / 4
+            bezierVertex2.x = (bezierStart2.x + 2 * bezierControl2.x + bezierEnd2.x) / 4
+            bezierVertex2.y = (2 * bezierControl2.y + bezierStart2.y + bezierEnd2.y) / 4
+        }
+
+        private fun getCross(p1: PointF, p2: PointF, p3: PointF, p4: PointF): PointF {
+            val a1 = (p2.y - p1.y) / (p2.x - p1.x).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            val b1 = (p1.x * p2.y - p2.x * p1.y) / (p1.x - p2.x).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            val a2 = (p4.y - p3.y) / (p4.x - p3.x).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            val b2 = (p3.x * p4.y - p4.x * p3.y) / (p3.x - p4.x).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            val denominator = (a1 - a2).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            val x = (b2 - b1) / denominator
+            return PointF(x, a1 * x + b1)
+        }
+    }
+
     companion object {
         const val CLICK_REGION_COUNT: Int = 9
         const val DEFAULT_SELECTION_PRIMARY_ACTION_KEY: String = "default"
@@ -1401,6 +2043,8 @@ internal class ReadView @JvmOverloads constructor(
                 )
             }
         }
+
+        private const val TAG_SIMULATION = "M9PageSimulation"
     }
 
     private class SelectionActionMenu(

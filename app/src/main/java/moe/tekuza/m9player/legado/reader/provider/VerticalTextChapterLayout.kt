@@ -34,16 +34,16 @@ internal class VerticalTextChapterLayout(
     private val paragraphSpacing = (config.paragraphSpacingPx * 0.35f).coerceAtLeast(0f)
     private var columnWidth = baseColumnWidth
     private var rubyReservePx = 0f
-    private var rubyByStart: Map<Int, EbookRubySpan> = emptyMap()
+    private var rubyByStart: Map<Int, RubyPlacement> = emptyMap()
 
     fun layout(chapter: TextChapter): TextChapter {
         rubyReservePx = if (chapter.rubySpans.isNotEmpty()) {
-            (config.textSizePx * 0.58f).coerceAtLeast(8f)
+            (config.textSizePx * 0.54f).coerceAtLeast(8f)
         } else {
             0f
         }
         columnWidth = baseColumnWidth + rubyReservePx
-        rubyByStart = chapter.rubySpans.associateBy { it.start }
+        rubyByStart = buildRubyPlacements(chapter.rubySpans)
         val text = chapter.text
         if (text.isBlank()) {
             chapter.addPage(
@@ -256,6 +256,8 @@ internal class VerticalTextChapterLayout(
                     glyphHeight * token.heightUnits.coerceAtLeast(1)
                 }
                 val ruby = rubyByStart[sourceStart]
+                val rubyStart = ruby?.absoluteStart ?: sourceStart
+                val rubyEnd = ruby?.absoluteEnd ?: sourceEnd
                 line.addColumn(
                     TextColumn(
                         start = y,
@@ -264,8 +266,9 @@ internal class VerticalTextChapterLayout(
                         sourceStart = sourceStart,
                         sourceEnd = sourceEnd,
                         rubyText = ruby?.text,
-                        rubySourceStart = ruby?.start ?: sourceStart,
-                        rubySourceEnd = ruby?.end ?: sourceEnd
+                        rubySourceStart = rubyStart,
+                        rubySourceEnd = rubyEnd,
+                        rubySpan = ruby?.span
                     )
                 )
                 y += tokenHeight
