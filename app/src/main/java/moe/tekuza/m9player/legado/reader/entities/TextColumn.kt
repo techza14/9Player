@@ -5,7 +5,7 @@ import android.graphics.Paint
 import android.graphics.Paint.Cap
 import android.graphics.Paint.Style
 import android.graphics.RectF
-import android.text.TextPaint
+import moe.tekuza.m9player.EbookRubyKind
 import moe.tekuza.m9player.EbookRubySpan
 import moe.tekuza.m9player.VerticalTextGlyphEngine
 import moe.tekuza.m9player.legado.reader.page.ContentTextView
@@ -142,10 +142,10 @@ internal data class TextColumn(
         val oldSize = paint.textSize
         val oldAlign = paint.textAlign
         val oldBold = paint.isFakeBoldText
-        paint.textSize = (oldSize * RUBY_TEXT_RATIO).coerceAtLeast(8f)
+        paint.textSize = RubyLayoutEngine.rubyTextSize(oldSize)
         paint.textAlign = Paint.Align.CENTER
         paint.isFakeBoldText = false
-        fitHorizontalRubyText(
+        RubyLayoutEngine.fitHorizontalRubyText(
             paint = paint,
             annotation = annotation,
             baseWidth = (right - left).coerceAtLeast(1f),
@@ -155,7 +155,7 @@ internal data class TextColumn(
         )
         val baseline = line.lineTop + line.rubyReservePx.coerceAtLeast(paint.textSize) -
             (paint.ascent() + paint.descent()) * 0.5f - paint.textSize * 0.18f
-        if (shouldDistributeRuby(annotation, (right - left).coerceAtLeast(1f), paint)) {
+        if (RubyLayoutEngine.shouldDistributeHorizontal(annotation, (right - left).coerceAtLeast(1f), paint)) {
             drawDistributedHorizontalRuby(canvas, paint, annotation, left, right, baseline)
         } else {
             canvas.drawText(annotation, (left + right) / 2f, baseline, paint)
@@ -175,76 +175,36 @@ internal data class TextColumn(
         val oldSize = paint.textSize
         val oldAlign = paint.textAlign
         val oldBold = paint.isFakeBoldText
-        paint.textSize = (oldSize * RUBY_TEXT_RATIO).coerceAtLeast(8f)
+        paint.textSize = RubyLayoutEngine.rubyTextSize(oldSize)
         paint.textAlign = Paint.Align.CENTER
         paint.isFakeBoldText = false
         val stripWidth = line.rubyReservePx.coerceAtLeast(paint.textSize)
         val glyphRight = (line.lineBottom - line.rubyReservePx).coerceAtLeast(line.lineTop)
-        val gap = (paint.textSize * RUBY_GAP_EM).coerceAtLeast(1f)
+        val gap = (paint.textSize * RubyLayoutEngine.GAP_EM).coerceAtLeast(1f)
         val left = (glyphRight + gap).coerceAtMost(line.lineBottom - paint.textSize)
         val right = (left + stripWidth).coerceAtMost(line.lineBottom)
-        if (tryDrawDistributedVerticalRuby(canvas, paint, annotation, columns, left, right)) {
-            paint.textSize = oldSize
-            paint.textAlign = oldAlign
-            paint.isFakeBoldText = oldBold
-            return
-        }
-        val baseHeight = (bottom - top).coerceAtLeast(1f)
-        val naturalUnitHeight = paint.textSize * RUBY_VERTICAL_UNIT_RATIO
-        val naturalHeight = naturalUnitHeight * annotation.length.coerceAtLeast(1)
-        val beforeOverhang = rubyOverhangBefore(line, paint.textSize)
-        val afterOverhang = rubyOverhangAfter(line, paint.textSize)
-        val allowedHeight = (baseHeight + beforeOverhang + afterOverhang)
-            .coerceAtLeast(baseHeight)
-        val unitHeight = if (naturalHeight > allowedHeight) {
-            (allowedHeight / annotation.length.coerceAtLeast(1)).coerceAtLeast(paint.textSize * RUBY_MIN_UNIT_RATIO)
-        } else {
-            naturalUnitHeight
-        }
-        val totalHeight = unitHeight * annotation.length.coerceAtLeast(1)
-        val minY = top - beforeOverhang
-        val maxY = bottom + afterOverhang - totalHeight
-        val centeredY = (top + bottom) * 0.5f - totalHeight * 0.5f
-        var y = if (maxY >= minY) centeredY.coerceIn(minY, maxY) else minY
-        annotation.forEach { char ->
+        val boxes = RubyLayoutEngine.verticalGlyphBoxes(
+            annotation = annotation,
+            baseColumns = columns,
+            top = top,
+            bottom = bottom,
+            rubySize = paint.textSize,
+            beforeOverhang = rubyOverhangBefore(line, paint.textSize),
+            afterOverhang = rubyOverhangAfter(line, paint.textSize),
+            rubyKind = rubySpan?.kind ?: EbookRubyKind.UNKNOWN,
+            segmented = rubySpan?.segments?.isNotEmpty() == true
+        )
+        boxes.forEach { box ->
             VerticalTextGlyphEngine.draw(
                 canvas = canvas,
                 sourcePaint = paint,
-                text = char.toString(),
-                rect = RectF(left, y, right, y + unitHeight)
+                text = box.text,
+                rect = RectF(left, box.start, right, box.end)
             )
-            y += unitHeight
         }
         paint.textSize = oldSize
         paint.textAlign = oldAlign
         paint.isFakeBoldText = oldBold
-    }
-
-    private fun tryDrawDistributedVerticalRuby(
-        canvas: Canvas,
-        paint: TextPaint,
-        annotation: String,
-        columns: List<TextColumn>,
-        left: Float,
-        right: Float
-    ): Boolean {
-        val rubyChars = annotation.codePoints()
-            .toArray()
-            .map { String(Character.toChars(it)) }
-        if (rubyChars.size <= 1 || rubyChars.size != columns.size) return false
-        if (columns.any { it.charData.codePointCount(0, it.charData.length) != 1 }) return false
-        rubyChars.forEachIndexed { index, rubyChar ->
-            val base = columns[index]
-            val baseCenter = (base.start + base.end) * 0.5f
-            val unitHeight = paint.textSize * RUBY_VERTICAL_UNIT_RATIO
-            VerticalTextGlyphEngine.draw(
-                canvas = canvas,
-                sourcePaint = paint,
-                text = rubyChar,
-                rect = RectF(left, baseCenter - unitHeight * 0.5f, right, baseCenter + unitHeight * 0.5f)
-            )
-        }
-        return true
     }
 
     private fun rubyGroupColumns(line: TextLine): List<TextColumn> {
@@ -255,27 +215,6 @@ internal data class TextColumn(
             }
     }
 
-    private fun fitHorizontalRubyText(
-        paint: Paint,
-        annotation: String,
-        baseWidth: Float,
-        beforeOverhang: Float,
-        afterOverhang: Float,
-        originalSize: Float
-    ) {
-        val allowedWidth = (baseWidth + beforeOverhang + afterOverhang).coerceAtLeast(baseWidth)
-        val measured = paint.measureText(annotation).coerceAtLeast(1f)
-        if (measured <= allowedWidth) return
-        paint.textSize = (paint.textSize * allowedWidth / measured)
-            .coerceAtLeast(originalSize * RUBY_TEXT_RATIO * RUBY_MIN_SCALE)
-    }
-
-    private fun shouldDistributeRuby(annotation: String, baseWidth: Float, paint: Paint): Boolean {
-        val count = annotation.codePointCount(0, annotation.length)
-        if (count <= 1) return false
-        return paint.measureText(annotation) < baseWidth * RUBY_DISTRIBUTE_THRESHOLD
-    }
-
     private fun drawDistributedHorizontalRuby(
         canvas: Canvas,
         paint: Paint,
@@ -284,9 +223,7 @@ internal data class TextColumn(
         right: Float,
         baseline: Float
     ) {
-        val chars = annotation.codePoints()
-            .toArray()
-            .map { String(Character.toChars(it)) }
+        val chars = RubyLayoutEngine.codePointStrings(annotation)
         if (chars.isEmpty()) return
         val width = (right - left).coerceAtLeast(1f)
         chars.forEachIndexed { index, char ->
@@ -296,20 +233,20 @@ internal data class TextColumn(
     }
 
     private fun rubyOverhangBefore(line: TextLine, rubySize: Float): Float {
-        if (rubySpan?.segments?.isNotEmpty() == true) return rubySize * RUBY_SEGMENT_OVERHANG_EM
+        if (rubySpan?.segments?.isNotEmpty() == true) return rubySize * RubyLayoutEngine.SEGMENT_OVERHANG_EM
         val previous = line.columns
             .filterIsInstance<TextColumn>()
             .lastOrNull { it !== this && it.end <= start }
-            ?: return rubySize * RUBY_EDGE_OVERHANG_EM
+            ?: return rubySize * RubyLayoutEngine.EDGE_OVERHANG_EM
         return allowedRubyOverhang(previous.charData, rubySize)
     }
 
     private fun rubyOverhangAfter(line: TextLine, rubySize: Float): Float {
-        if (rubySpan?.segments?.isNotEmpty() == true) return rubySize * RUBY_SEGMENT_OVERHANG_EM
+        if (rubySpan?.segments?.isNotEmpty() == true) return rubySize * RubyLayoutEngine.SEGMENT_OVERHANG_EM
         val next = line.columns
             .filterIsInstance<TextColumn>()
             .firstOrNull { it !== this && it.start >= end }
-            ?: return rubySize * RUBY_EDGE_OVERHANG_EM
+            ?: return rubySize * RubyLayoutEngine.EDGE_OVERHANG_EM
         return allowedRubyOverhang(next.charData, rubySize)
     }
 
@@ -319,20 +256,11 @@ internal data class TextColumn(
             isJapaneseIdeograph(first) -> 0f
             first in RUBY_FULL_OVERHANG_CHARS -> rubySize
             first in RUBY_PUNCTUATION_OVERHANG_CHARS -> rubySize * 0.5f
-            else -> rubySize * RUBY_EDGE_OVERHANG_EM
+            else -> rubySize * RubyLayoutEngine.EDGE_OVERHANG_EM
         }
     }
 
     private companion object {
-        private const val RUBY_TEXT_RATIO = 0.5f
-        private const val RUBY_VERTICAL_UNIT_RATIO = 0.88f
-        private const val RUBY_MIN_UNIT_RATIO = 0.62f
-        private const val RUBY_EDGE_OVERHANG_EM = 0.55f
-        private const val RUBY_SEGMENT_OVERHANG_EM = 0.18f
-        private const val RUBY_MIN_SCALE = 0.78f
-        private const val RUBY_GAP_EM = 0.08f
-        private const val RUBY_DISTRIBUTE_THRESHOLD = 0.82f
-
         private fun isVerticalDash(value: String): Boolean {
             return value.length == 1 && value[0] in VERTICAL_DASH_CHARS
         }

@@ -9,6 +9,7 @@ import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9ReadBookConfig
 import moe.tekuza.m9player.legado.reader.applyM9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.ImageColumn
+import moe.tekuza.m9player.legado.reader.entities.RubyLayoutEngine
 import moe.tekuza.m9player.legado.reader.entities.TextChapter
 import moe.tekuza.m9player.legado.reader.entities.TextColumn
 import moe.tekuza.m9player.legado.reader.entities.TextLine
@@ -35,7 +36,7 @@ internal class TextChapterLayout(
 
     fun layout(chapter: TextChapter): TextChapter {
         rubyReservePx = if (chapter.rubySpans.isNotEmpty()) {
-            (config.textSizePx * 0.62f).coerceAtLeast(8f)
+            (config.textSizePx * RubyLayoutEngine.RESERVE_RATIO).coerceAtLeast(8f)
         } else {
             0f
         }
