@@ -85,7 +85,9 @@ internal fun LookupPopupView(
     onTextSelected: (ReaderSelectionData) -> Int? = { null },
     onRangeSelection: (() -> Unit)? = null,
     onMineEntry: ((String) -> Boolean)? = null,
+    onMineEntryAsync: ((String, (Boolean) -> Unit) -> Unit)? = null,
     onDuplicateCheck: ((String) -> AnkiDuplicateCheckResult)? = null,
+    onDuplicateCheckAsync: ((String, (AnkiDuplicateCheckResult) -> Unit) -> Unit)? = null,
     onViewDuplicate: ((List<Long>) -> Boolean)? = null,
     onPlayWordAudio: ((String, String?, String?) -> Unit)? = null,
     onImageTap: ((String) -> Unit)? = null,
@@ -260,7 +262,9 @@ internal fun LookupPopupView(
                                 }
                             },
                             onMineEntry = onMineEntry ?: { false },
+                            onMineEntryAsync = onMineEntryAsync,
                             onDuplicateCheck = onDuplicateCheck ?: { AnkiDuplicateCheckResult() },
+                            onDuplicateCheckAsync = onDuplicateCheckAsync,
                             onViewDuplicate = onViewDuplicate ?: { false },
                             onOpenLink = { rawUrl ->
                                 val uri = runCatching { Uri.parse(rawUrl.trim()) }.getOrNull() ?: return@PopupWebViewCallbacks

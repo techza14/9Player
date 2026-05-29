@@ -6,7 +6,7 @@ use std::ffi::{CStr, CString};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::os::raw::c_char;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -36,6 +36,32 @@ fn c_ptr_to_string(ptr: *const c_char) -> Result<String, String> {
     cstr.to_str()
         .map(|s| s.to_string())
         .map_err(|e| format!("invalid utf8 input: {e}"))
+}
+
+fn safe_relative_output_path(raw: &str) -> Option<PathBuf> {
+    let normalized = raw.trim().replace('\\', "/").trim_start_matches('/').to_string();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let mut out = PathBuf::new();
+    for component in Path::new(&normalized).components() {
+        match component {
+            Component::Normal(part) => out.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    if out.as_os_str().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn safe_output_child(root: &Path, raw_relative_path: &str) -> Option<PathBuf> {
+    safe_relative_output_path(raw_relative_path).map(|relative| root.join(relative))
 }
 
 fn make_json_ptr(value: serde_json::Value) -> *mut c_char {
@@ -835,12 +861,12 @@ pub extern "C" fn mdict_native_import_json(
             for item in mdd.entries() {
                 match item {
                     Ok(resource) => {
-                        let mut rel = resource.key.trim().trim_start_matches('/').trim_start_matches('\\').to_string();
-                        if rel.is_empty() {
+                        let Some(target) = safe_output_child(&media_dir, &resource.key) else {
+                            if errors.len() < 16 {
+                                errors.push(format!("skip unsafe media path: {}", resource.key));
+                            }
                             continue;
-                        }
-                        rel = rel.replace('\\', "/");
-                        let target = media_dir.join(&rel);
+                        };
                         if let Some(parent) = target.parent() {
                             if let Err(e) = fs::create_dir_all(parent) {
                                 if errors.len() < 16 {
@@ -958,11 +984,12 @@ pub extern "C" fn mdict_native_extract_mdd_json(
         for item in mdd.entries() {
             match item {
                 Ok(record) => {
-                    let rel = record.key.replace('\\', "/").trim_start_matches('/').to_string();
-                    if rel.is_empty() {
+                    let Some(target) = safe_output_child(Path::new(&output_dir), &record.key) else {
+                        if errors.len() < 16 {
+                            errors.push(format!("skip unsafe media path: {}", record.key));
+                        }
                         continue;
-                    }
-                    let target = Path::new(&output_dir).join(&rel);
+                    };
                     if let Some(parent) = target.parent() {
                         if let Err(e) = fs::create_dir_all(parent) {
                             if errors.len() < 16 {
@@ -1060,5 +1087,29 @@ pub extern "C" fn mdict_native_free_string(ptr: *mut c_char) {
     }
     unsafe {
         let _ = CString::from_raw(ptr);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_relative_output_path_accepts_normal_dictionary_media_paths() {
+        assert_eq!(
+            safe_relative_output_path(r#"\images\cover.png"#),
+            Some(PathBuf::from("images").join("cover.png"))
+        );
+        assert_eq!(
+            safe_relative_output_path("./audio/example.mp3"),
+            Some(PathBuf::from("audio").join("example.mp3"))
+        );
+    }
+
+    #[test]
+    fn safe_relative_output_path_rejects_parent_traversal() {
+        assert!(safe_relative_output_path("../escape.txt").is_none());
+        assert!(safe_relative_output_path("images/../../escape.txt").is_none());
+        assert!(safe_relative_output_path("").is_none());
     }
 }

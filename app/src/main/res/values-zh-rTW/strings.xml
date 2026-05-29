@@ -353,6 +353,8 @@
     <string name="audiobook_overlay_mode_changed">已切換懸浮窗：%1$s</string>
     <string name="audiobook_overlay_test_button">測試懸浮窗</string>
     <string name="audiobook_overlay_preview_swipe_hint">左右滑動切換真實懸浮元件，雙擊退出並套用</string>
+    <string name="audiobook_overlay_playback_active">背景播放中</string>
+    <string name="audiobook_overlay_playback_paused">播放已暫停</string>
     <string name="audiobook_overlay_mode_subtitle">懸浮字幕</string>
     <string name="audiobook_overlay_mode_bubble">懸浮球</string>
     <string name="audiobook_overlay_mode_both">懸浮字幕 + 懸浮球</string>
@@ -535,6 +537,7 @@
     <string name="anki_field_variable_help">{audio} 用於匯出查詞發音，{cut-audio} 用於匯出剪切音訊。</string>
     <string name="anki_field_placeholder">可輸入佔位符或從清單選擇</string>
     <string name="common_pause">暫停</string>
+    <string name="common_stop">停止</string>
     <string name="home_subtitle_attached">附字幕</string>
     <string name="bookreader_ui_test_chapter_on">章節開</string>
     <string name="bookreader_ui_test_chapter_off">章節關</string>

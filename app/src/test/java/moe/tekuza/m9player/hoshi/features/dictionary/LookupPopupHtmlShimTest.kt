@@ -22,6 +22,10 @@ class LookupPopupHtmlShimTest {
         assertTrue(htmlSource.contains("mineEntry: { postMessage: async function(content)"))
         assertTrue(htmlSource.contains("getEntry: { postMessage: async function(index)"))
         assertTrue(htmlSource.contains("playWordAudio: { postMessage: function(content)"))
+        assertTrue(htmlSource.contains("window.HoshiAndroidPopupBridge"))
+        assertTrue(htmlSource.contains("makeRequestId(name)"))
+        assertTrue(htmlSource.contains("window.HoshiPopup.mineEntryAsync(requestId, body)"))
+        assertTrue(htmlSource.contains("window.HoshiPopup.duplicateCheckAsync(requestId, body)"))
     }
 
     @Test
@@ -51,6 +55,9 @@ class LookupPopupHtmlShimTest {
         assertTrue(popupJsSource.contains("webkit.messageHandlers.viewDuplicate.postMessage(noteIds)"))
         assertTrue(popupJsSource.contains("normalizeDuplicateCheckResult("))
         assertTrue(bridgeSource.contains("fun duplicateCheck(expression: String): String"))
+        assertTrue(bridgeSource.contains("fun duplicateCheckAsync(requestId: String, expression: String)"))
+        assertTrue(bridgeSource.contains("fun mineEntryAsync(requestId: String, content: String)"))
+        assertTrue(bridgeSource.contains("postAsyncBridgeResult(requestId"))
         assertTrue(bridgeSource.contains("fun viewDuplicate(noteIdsJson: String): Boolean"))
     }
 

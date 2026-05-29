@@ -11,6 +11,7 @@
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -29,6 +30,7 @@ void mdict_native_free_string(char* ptr);
 }
 
 namespace {
+constexpr uint32_t kMaxJavaMediaBytes = 8u * 1024u * 1024u;
 
 struct MediaIndexEntry {
   uint64_t offset = 0;
@@ -137,7 +139,8 @@ std::unordered_map<std::string, MediaIndexEntry> read_media_index(const std::fil
 }
 
 std::vector<char> read_media_blob(const std::filesystem::path& root, const MediaIndexEntry& entry) {
-  if (entry.size == 0 || entry.size > static_cast<uint32_t>(std::numeric_limits<jsize>::max())) {
+  if (entry.size == 0 || entry.size > kMaxJavaMediaBytes ||
+      entry.size > static_cast<uint32_t>(std::numeric_limits<jsize>::max())) {
     return {};
   }
 
@@ -166,6 +169,51 @@ std::vector<char> get_imported_media_file(LookupContext* obj,
   const auto media_it = index_it->second.find(media_path);
   if (media_it == index_it->second.end()) return {};
   return read_media_blob(root_path, media_it->second);
+}
+
+bool path_starts_with(const std::filesystem::path& root, const std::filesystem::path& child) {
+  auto root_it = root.begin();
+  auto child_it = child.begin();
+  for (; root_it != root.end(); ++root_it, ++child_it) {
+    if (child_it == child.end() || *root_it != *child_it) return false;
+  }
+  return true;
+}
+
+std::optional<std::filesystem::path> safe_relative_media_path(std::string_view raw) {
+  std::string normalized(raw);
+  std::replace(normalized.begin(), normalized.end(), '\\', '/');
+  if (normalized.empty() || normalized.front() == '/') return std::nullopt;
+
+  std::filesystem::path out;
+  for (const auto& component : std::filesystem::path(normalized)) {
+    if (component == "." || component.empty()) continue;
+    if (component == ".." || component == "/" || component.has_root_path()) {
+      return std::nullopt;
+    }
+    out /= component;
+  }
+  if (out.empty()) return std::nullopt;
+  return out;
+}
+
+std::optional<std::filesystem::path> safe_media_candidate(const std::string& root,
+                                                          const std::string& media_path) {
+  const auto relative = safe_relative_media_path(media_path);
+  if (!relative.has_value()) return std::nullopt;
+
+  std::error_code ec;
+  auto root_path = std::filesystem::weakly_canonical(std::filesystem::path(root), ec);
+  if (ec) {
+    root_path = std::filesystem::absolute(std::filesystem::path(root)).lexically_normal();
+  }
+  const auto candidate = (root_path / relative.value()).lexically_normal();
+  auto canonical_candidate = std::filesystem::weakly_canonical(candidate, ec);
+  if (ec) {
+    canonical_candidate = std::filesystem::absolute(candidate).lexically_normal();
+  }
+  if (!path_starts_with(root_path, canonical_candidate)) return std::nullopt;
+  return canonical_candidate;
 }
 
 void append_json_string(std::ostringstream& out, std::string_view value) {
@@ -381,8 +429,8 @@ std::string build_import_json(const ImportResult& result, const std::string& out
   out << ",\"mediaCount\":" << result.media_count;
 
   std::string dict_path;
-  if (result.success && !result.title.empty()) {
-    dict_path = (std::filesystem::path(output_dir) / result.title).string();
+  if (result.success && !result.dict_path.empty()) {
+    dict_path = result.dict_path;
   }
   out << ",\"dictPath\":";
   append_json_string(out, dict_path);
@@ -634,14 +682,14 @@ Java_de_manhhao_hoshi_HoshiDicts_importDictionary(JNIEnv* env,
     const std::string zip_path_str = jstring_to_string(env, zip_path);
     const std::string output_dir_str = jstring_to_string(env, output_dir);
     if (zip_path_str.empty() || output_dir_str.empty()) {
-      return new_import_result(env, ImportResult{false, "", 0, 0, 0, {"invalid import path"}});
+      return new_import_result(env, ImportResult{false, "", "", 0, 0, 0, {"invalid import path"}});
     }
     const ImportResult result = dictionary_importer::import(zip_path_str, output_dir_str, true);
     return new_import_result(env, result);
   } catch (const std::exception& e) {
-    return new_import_result(env, ImportResult{false, "", 0, 0, 0, {e.what()}});
+    return new_import_result(env, ImportResult{false, "", "", 0, 0, 0, {e.what()}});
   } catch (...) {
-    return new_import_result(env, ImportResult{false, "", 0, 0, 0, {"unknown native import error"}});
+    return new_import_result(env, ImportResult{false, "", "", 0, 0, 0, {"unknown native import error"}});
   }
 }
 
@@ -708,13 +756,21 @@ Java_de_manhhao_hoshi_HoshiDicts_getMediaFile(JNIEnv* env,
       return result;
     }
 
-    const std::filesystem::path candidate = std::filesystem::path(root) / media_path_str;
-    if (!std::filesystem::is_regular_file(candidate)) continue;
-    std::ifstream input(candidate, std::ios::binary);
+    const auto candidate = safe_media_candidate(root, media_path_str);
+    if (!candidate.has_value()) continue;
+    if (!std::filesystem::is_regular_file(candidate.value())) continue;
+    std::error_code size_error;
+    const auto file_size = std::filesystem::file_size(candidate.value(), size_error);
+    if (size_error || file_size == 0 ||
+        file_size > static_cast<uintmax_t>(std::numeric_limits<jsize>::max())) {
+      continue;
+    }
+    std::ifstream input(candidate.value(), std::ios::binary);
     if (!input) continue;
     std::vector<char> data((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
     if (data.empty()) continue;
     jbyteArray result = env->NewByteArray(static_cast<jsize>(data.size()));
+    if (result == nullptr) return nullptr;
     env->SetByteArrayRegion(result, 0, static_cast<jsize>(data.size()),
                             reinterpret_cast<const jbyte*>(data.data()));
     return result;

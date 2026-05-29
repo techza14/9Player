@@ -178,6 +178,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var activeCueIndex: Int = -1
     private var textSelectionActive: Boolean = false
     private var player: ExoPlayer? = null
+    private var returnToPlayerOnBack: Boolean = false
     private var syncJob: Job? = null
     private var reloadBookJob: Job? = null
     private var paginationJob: Job? = null
@@ -372,6 +373,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         attachSavedAnchorIfNeeded()
         audioUri = intent.getStringExtra(EXTRA_AUDIO_URI)?.trim()?.takeIf { it.isNotBlank() }?.let(Uri::parse)
         srtUri = intent.getStringExtra(EXTRA_SRT_URI)?.trim()?.takeIf { it.isNotBlank() }?.let(Uri::parse)
+        returnToPlayerOnBack = intent.getBooleanExtra(EXTRA_RETURN_TO_PLAYER_ON_BACK, false)
         pendingAudioRestorePositionMs = intent.getLongExtra(EXTRA_AUDIO_POSITION_MS, -1L).coerceAtLeast(0L)
         pendingAudioRestoreDurationMs = intent.getLongExtra(EXTRA_AUDIO_DURATION_MS, -1L).coerceAtLeast(0L)
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -1898,6 +1900,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun returnToPlayerIfShared(): Boolean {
+        if (!returnToPlayerOnBack) return false
         if (!bridgeCanReturnToPlayer()) return false
         return returnToSharedPlayer()
     }
@@ -5454,6 +5457,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         const val EXTRA_SRT_URI = "extra_srt_uri"
         const val EXTRA_AUDIO_POSITION_MS = "extra_audio_position_ms"
         const val EXTRA_AUDIO_DURATION_MS = "extra_audio_duration_ms"
+        const val EXTRA_RETURN_TO_PLAYER_ON_BACK = "extra_return_to_player_on_back"
         private const val DEFAULT_MATCH_SEARCH_WINDOW = 200
         private const val MATCH_SEARCH_WINDOW_MIN = 50
         private const val MATCH_SEARCH_WINDOW_MAX = 1000

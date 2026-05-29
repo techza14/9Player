@@ -324,10 +324,19 @@ private fun loadEpubDocumentFromZip(
             while (true) {
                 val entry = zip.nextEntry ?: break
                 if (!entry.isDirectory) {
-                    val path = entry.name.normalizeZipPath()
                     entryCount += 1
-                    if (path.isReaderEpubEntry()) {
-                        val bytes = zip.readBytes()
+                    requireEpubEntryBudget(entryCount)
+                    requireEpubReaderMemoryEntryBudget(entryCount)
+                    requireKnownEpubEntrySize(
+                        size = entry.size,
+                        maxEntryBytes = EPUB_READER_MEMORY_MAX_ENTRY_BYTES
+                    )
+                    val path = normalizeSafeEpubArchivePath(entry.name)
+                    if (path != null && path.isReaderEpubEntry()) {
+                        val bytes = zip.readBytesLimited(
+                            maxEntryBytes = EPUB_READER_MEMORY_MAX_ENTRY_BYTES,
+                            remainingTotalBytes = EPUB_READER_MEMORY_MAX_TOTAL_BYTES - readerBytes
+                        )
                         entries[path] = bytes
                         readerBytes += bytes.size.toLong()
                         if (path.isEpubImagePath()) {

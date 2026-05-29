@@ -2,7 +2,10 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
 import android.os.SystemClock
+import android.os.Build
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -10,10 +13,12 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.util.Locale
 
 private const val GITHUB_LATEST_RELEASE_URL = "https://api.github.com/repos/techza14/9Player/releases/latest"
 private const val UPDATE_APK_CACHE_DIR = "update_apk"
+private const val UPDATE_APK_DOWNLOAD_SUFFIX = ".download"
 private val UPDATE_APK_VERSION_REGEX = Regex(
     """(?:^|[-_])v?(\d+(?:\.\d+)+)(?:[-_][^.]*)?\.apk$""",
     RegexOption.IGNORE_CASE
@@ -45,42 +50,47 @@ internal suspend fun checkLatestAppUpdate(context: Context): AppUpdateCheckResul
             setRequestProperty("Accept", "application/vnd.github+json")
             setRequestProperty("User-Agent", "9Player/${resolveAppVersionName(context)}")
         }
-        connection.inputStream.bufferedReader().use { reader ->
-            val json = JSONObject(reader.readText())
-            val tagName = json.optString("tag_name").ifBlank { json.optString("name") }
-            val displayName = json.optString("name").ifBlank { tagName }
-            val pageUrl = json.optString("html_url")
-            val assets = json.optJSONArray("assets")
-            var apkName = ""
-            var apkUrl = ""
-            if (assets != null) {
-                for (i in 0 until assets.length()) {
-                    val asset = assets.optJSONObject(i) ?: continue
-                    val name = asset.optString("name")
-                    val url = asset.optString("browser_download_url")
-                    if (name.endsWith(".apk", ignoreCase = true) && url.isNotBlank()) {
-                        apkName = name
-                        apkUrl = url
-                        break
+        try {
+            connection.requireSuccessfulResponse()
+            connection.inputStream.bufferedReader().use { reader ->
+                val json = JSONObject(reader.readText())
+                val tagName = json.optString("tag_name").ifBlank { json.optString("name") }
+                val displayName = json.optString("name").ifBlank { tagName }
+                val pageUrl = json.optString("html_url")
+                val assets = json.optJSONArray("assets")
+                var apkName = ""
+                var apkUrl = ""
+                if (assets != null) {
+                    for (i in 0 until assets.length()) {
+                        val asset = assets.optJSONObject(i) ?: continue
+                        val name = asset.optString("name")
+                        val url = asset.optString("browser_download_url")
+                        if (name.endsWith(".apk", ignoreCase = true) && url.isNotBlank()) {
+                            apkName = name
+                            apkUrl = url
+                            break
+                        }
                     }
                 }
-            }
-            val currentVersion = resolveAppVersionName(context)
-            if (compareAppVersions(tagName, currentVersion) <= 0) {
-                AppUpdateCheckResult.UpToDate(tagName.ifBlank { currentVersion })
-            } else if (apkUrl.isBlank()) {
-                AppUpdateCheckResult.NoApkAsset(tagName, pageUrl)
-            } else {
-                AppUpdateCheckResult.UpdateAvailable(
-                    AppUpdateRelease(
-                        tagName = tagName,
-                        displayName = displayName,
-                        pageUrl = pageUrl,
-                        apkName = apkName,
-                        apkUrl = apkUrl
+                val currentVersion = resolveAppVersionName(context)
+                if (compareAppVersions(tagName, currentVersion) <= 0) {
+                    AppUpdateCheckResult.UpToDate(tagName.ifBlank { currentVersion })
+                } else if (apkUrl.isBlank()) {
+                    AppUpdateCheckResult.NoApkAsset(tagName, pageUrl)
+                } else {
+                    AppUpdateCheckResult.UpdateAvailable(
+                        AppUpdateRelease(
+                            tagName = tagName,
+                            displayName = displayName,
+                            pageUrl = pageUrl,
+                            apkName = apkName,
+                            apkUrl = apkUrl
+                        )
                     )
-                )
+                }
             }
+        } finally {
+            connection.disconnect()
         }
     }.getOrElse { error ->
         AppUpdateCheckResult.Failed(error.message ?: error.javaClass.simpleName)
@@ -95,35 +105,57 @@ internal suspend fun downloadAppUpdateApk(
     runCatching {
         val updateDir = updateApkCacheDir(context)
         val outputFile = File(updateDir, updateApkFileName(release))
+        val tempFile = File(updateDir, "${outputFile.name}$UPDATE_APK_DOWNLOAD_SUFFIX")
         cleanupUpdateApksExcept(updateDir, outputFile)
-        if (outputFile.exists()) outputFile.delete()
+        if (tempFile.exists()) tempFile.delete()
         val connection = (URL(release.apkUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 10_000
             readTimeout = 30_000
             setRequestProperty("User-Agent", "9Player/${resolveAppVersionName(context)}")
         }
-        val total = connection.contentLengthLong.takeIf { it > 0L }
-        connection.inputStream.use { input ->
-            outputFile.outputStream().use { output ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                var copied = 0L
-                var lastProgressEmitAt = 0L
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read < 0) break
-                    output.write(buffer, 0, read)
-                    copied += read
-                    val now = SystemClock.elapsedRealtime()
-                    if (now - lastProgressEmitAt >= 120L) {
-                        onProgress(total?.let { (copied.toFloat() / it.toFloat()).coerceIn(0f, 1f) })
-                        lastProgressEmitAt = now
+        try {
+            connection.requireSuccessfulResponse()
+            val total = connection.contentLengthLong.takeIf { it > 0L }
+            var copied = 0L
+            connection.inputStream.use { input ->
+                tempFile.outputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var lastProgressEmitAt = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        copied += read
+                        val now = SystemClock.elapsedRealtime()
+                        if (now - lastProgressEmitAt >= 120L) {
+                            onProgress(total?.let { (copied.toFloat() / it.toFloat()).coerceIn(0f, 1f) })
+                            lastProgressEmitAt = now
+                        }
                     }
+                    onProgress(total?.let { (copied.toFloat() / it.toFloat()).coerceIn(0f, 1f) })
                 }
-                onProgress(total?.let { (copied.toFloat() / it.toFloat()).coerceIn(0f, 1f) })
             }
+            if (copied <= 0L) error("Downloaded APK is empty")
+            if (total != null && copied != total) {
+                error("Downloaded APK size mismatch: expected $total bytes, got $copied bytes")
+            }
+            if (outputFile.exists() && !outputFile.delete()) {
+                error("Unable to replace cached APK: ${outputFile.name}")
+            }
+            if (!tempFile.renameTo(outputFile)) {
+                tempFile.copyTo(outputFile, overwrite = true)
+                runCatching { tempFile.delete() }
+            }
+            validateDownloadedUpdateApk(context, outputFile)
+            outputFile
+        } catch (error: Throwable) {
+            runCatching { tempFile.delete() }
+            runCatching { outputFile.delete() }
+            throw error
+        } finally {
+            connection.disconnect()
         }
-        outputFile
     }
 }
 
@@ -168,12 +200,91 @@ internal fun cleanupUpdateApksExcept(updateDir: File, keepFile: File) {
     updateDir.mkdirs()
     val keepPath = keepFile.toPath().toAbsolutePath().normalize().toString()
     updateDir.listFiles { file ->
-        file.isFile && file.extension.equals("apk", ignoreCase = true)
+        file.isFile && (
+            file.extension.equals("apk", ignoreCase = true) ||
+                file.name.endsWith(UPDATE_APK_DOWNLOAD_SUFFIX, ignoreCase = true)
+            )
     }?.forEach { file ->
         if (file.toPath().toAbsolutePath().normalize().toString() != keepPath) {
             file.delete()
         }
     }
+}
+
+private fun HttpURLConnection.requireSuccessfulResponse() {
+    val code = responseCode
+    if (code !in 200..299) {
+        val status = responseMessage?.takeIf { it.isNotBlank() } ?: "HTTP $code"
+        error("Update request failed: $code $status")
+    }
+}
+
+private fun validateDownloadedUpdateApk(context: Context, apkFile: File) {
+    val packageManager = context.packageManager
+    val flags = packageSignatureFlags()
+    val archiveInfo = packageManager.getPackageArchiveInfoCompat(apkFile.absolutePath, flags)
+        ?: error("Downloaded APK is not a readable Android package")
+    if (archiveInfo.packageName != context.packageName) {
+        error("Downloaded APK package mismatch: ${archiveInfo.packageName}")
+    }
+
+    val installedInfo = packageManager.getPackageInfoCompat(context.packageName, flags)
+    if (archiveInfo.longVersionCodeCompat() <= installedInfo.longVersionCodeCompat()) {
+        error("Downloaded APK is not newer than the installed app")
+    }
+
+    val archiveSignatures = archiveInfo.signatureDigests()
+    val installedSignatures = installedInfo.signatureDigests()
+    if (archiveSignatures.isEmpty() || installedSignatures.isEmpty() || archiveSignatures != installedSignatures) {
+        error("Downloaded APK signature does not match the installed app")
+    }
+}
+
+private fun packageSignatureFlags(): Int =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        PackageManager.GET_SIGNING_CERTIFICATES
+    } else {
+        @Suppress("DEPRECATION")
+        PackageManager.GET_SIGNATURES
+    }
+
+@Suppress("DEPRECATION")
+private fun PackageManager.getPackageArchiveInfoCompat(path: String, flags: Int): PackageInfo? =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getPackageArchiveInfo(path, PackageManager.PackageInfoFlags.of(flags.toLong()))
+    } else {
+        getPackageArchiveInfo(path, flags)
+    }
+
+@Suppress("DEPRECATION")
+private fun PackageManager.getPackageInfoCompat(packageName: String, flags: Int): PackageInfo =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(flags.toLong()))
+    } else {
+        getPackageInfo(packageName, flags)
+    }
+
+private fun PackageInfo.longVersionCodeCompat(): Long =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) longVersionCode else {
+        @Suppress("DEPRECATION")
+        versionCode.toLong()
+    }
+
+@Suppress("DEPRECATION")
+private fun PackageInfo.signatureDigests(): Set<String> {
+    val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        signingInfo?.apkContentsSigners.orEmpty()
+    } else {
+        signatures.orEmpty()
+    }
+    return signatures
+        .map { signature -> sha256Hex(signature.toByteArray()) }
+        .toSet()
+}
+
+private fun sha256Hex(bytes: ByteArray): String {
+    val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+    return digest.joinToString(separator = "") { byte -> "%02x".format(byte) }
 }
 
 private fun updateApkCacheDir(context: Context): File {

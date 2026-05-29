@@ -353,6 +353,8 @@
     <string name="audiobook_overlay_mode_changed">Floating overlay changed to: %1$s</string>
     <string name="audiobook_overlay_test_button">Test overlay</string>
     <string name="audiobook_overlay_preview_swipe_hint">Swipe left or right to switch real overlay components. Double tap to exit and apply.</string>
+    <string name="audiobook_overlay_playback_active">Playing in background</string>
+    <string name="audiobook_overlay_playback_paused">Playback paused</string>
     <string name="audiobook_overlay_mode_subtitle">Floating subtitles</string>
     <string name="audiobook_overlay_mode_bubble">Floating bubble</string>
     <string name="audiobook_overlay_mode_both">Subtitles + bubble</string>
@@ -535,6 +537,7 @@
     <string name="anki_field_variable_help">{audio} exports lookup audio, {cut-audio} exports clipped audio.</string>
     <string name="anki_field_placeholder">Type a placeholder or choose from the list</string>
     <string name="common_pause">Pause</string>
+    <string name="common_stop">Stop</string>
     <string name="home_subtitle_attached">Subtitles attached</string>
     <string name="bookreader_ui_test_chapter_on">Chapters: on</string>
     <string name="bookreader_ui_test_chapter_off">Chapters: off</string>

@@ -28,7 +28,9 @@ internal class PopupWebViewCallbacks(
     val onOpenLink: (String) -> Unit = {},
     val onImageTap: (String) -> Unit = {},
     val onMineEntry: (String) -> Boolean = { false },
+    val onMineEntryAsync: ((String, (Boolean) -> Unit) -> Unit)? = null,
     val onDuplicateCheck: (String) -> AnkiDuplicateCheckResult = { AnkiDuplicateCheckResult() },
+    val onDuplicateCheckAsync: ((String, (AnkiDuplicateCheckResult) -> Unit) -> Unit)? = null,
     val onViewDuplicate: (List<Long>) -> Boolean = { false },
     val onRangeSelection: () -> Unit = {},
     val onPlayWordAudio: (String, String?, String?) -> Unit = { _, _, _ -> },
@@ -52,7 +54,9 @@ internal fun PopupWebViewCallbacks.withAdditionalImageTap(
         }
     },
     onMineEntry = onMineEntry,
+    onMineEntryAsync = onMineEntryAsync,
     onDuplicateCheck = onDuplicateCheck,
+    onDuplicateCheckAsync = onDuplicateCheckAsync,
     onViewDuplicate = onViewDuplicate,
     onRangeSelection = onRangeSelection,
     onPlayWordAudio = onPlayWordAudio,
@@ -150,7 +154,10 @@ internal class PopupMessageWebViewClient(
     }
 
     private fun handlePopupUrl(uri: Uri): Boolean {
-        if (uri.scheme != "hoshi-popup") return false
+        if (uri.scheme != "hoshi-popup") {
+            logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) { "blocked popup navigation uri=$uri" }
+            return true
+        }
         when (uri.host) {
             "tapOutside" -> callbackHolder.callbacks.onTapOutside()
             "swipeDismiss" -> callbackHolder.callbacks.onSwipeDismiss()
@@ -380,6 +387,28 @@ internal class PopupWebViewBridge(
     }
 
     @JavascriptInterface
+    fun mineEntryAsync(requestId: String, content: String) {
+        if (requestId.isBlank()) return
+        val callbacks = callbackHolder.callbacks
+        val asyncHandler = callbacks.onMineEntryAsync
+        if (asyncHandler == null) {
+            postAsyncBridgeResult(requestId, mineEntry(content))
+            return
+        }
+        runCatching {
+            logDebug("AnkiExportDebug") {
+                "bridge mineEntryAsync dispatch requestId=$requestId contentSize=${content.length}"
+            }
+            asyncHandler(content) { accepted ->
+                postAsyncBridgeResult(requestId, accepted)
+            }
+        }.onFailure {
+            Log.w("HoshiLookupPopup", "mineEntryAsync failed", it)
+            postAsyncBridgeResult(requestId, false)
+        }
+    }
+
+    @JavascriptInterface
     fun duplicateCheck(expression: String): String {
         val callbacks = callbackHolder.callbacks
         return runCatching {
@@ -400,6 +429,28 @@ internal class PopupWebViewBridge(
     }
 
     @JavascriptInterface
+    fun duplicateCheckAsync(requestId: String, expression: String) {
+        if (requestId.isBlank()) return
+        val callbacks = callbackHolder.callbacks
+        val asyncHandler = callbacks.onDuplicateCheckAsync
+        if (asyncHandler == null) {
+            postAsyncBridgeResult(requestId, JSONObject(duplicateCheck(expression)))
+            return
+        }
+        runCatching {
+            asyncHandler(expression) { result ->
+                logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
+                    "duplicateCheckAsync expression='${expression.take(32)}' duplicated=${result.duplicate} noteIds=${result.noteIds.size} allowAdd=${result.allowAdd}"
+                }
+                postAsyncBridgeResult(requestId, result.toPopupJson())
+            }
+        }.onFailure {
+            Log.w("HoshiLookupPopup", "duplicateCheckAsync failed", it)
+            postAsyncBridgeResult(requestId, AnkiDuplicateCheckResult().toPopupJson())
+        }
+    }
+
+    @JavascriptInterface
     fun viewDuplicate(noteIdsJson: String): Boolean {
         val noteIds = runCatching {
             val array = JSONArray(noteIdsJson)
@@ -415,7 +466,28 @@ internal class PopupWebViewBridge(
             false
         }
     }
+
+    private fun postAsyncBridgeResult(requestId: String, value: Any) {
+        val payload = JSONObject()
+            .put("requestId", requestId)
+            .put("ok", true)
+            .put("value", value)
+            .toString()
+        mainHandler.post {
+            webView.evaluateJavascript(
+                "window.HoshiAndroidPopupBridge && window.HoshiAndroidPopupBridge.resolve(${JSONObject.quote(payload)})",
+                null,
+            )
+        }
+    }
 }
+
+private fun AnkiDuplicateCheckResult.toPopupJson(): JSONObject =
+    JSONObject()
+        .put("duplicate", duplicate)
+        .put("allowAdd", allowAdd)
+        .put("preventAdd", preventAdd)
+        .put("noteIds", JSONArray().apply { noteIds.forEach { put(it) } })
 
 private fun JSONObject.toSelectionData(
     offsetX: Double,

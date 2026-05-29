@@ -16,6 +16,7 @@ private val MDICT_SAFE_CACHE_KEY_REGEX = Regex("[^A-Za-z0-9._-]")
 
 internal data class MountedMdictResource(
     val mimeType: String,
+    val sizeBytes: Long,
     val inputStream: InputStream
 )
 
@@ -51,17 +52,19 @@ internal fun openMountedMdictResource(
     val stream = if (targetFile?.isFile == true) {
         context.contentResolver.openInputStream(targetFile.uri)
     } else null
+    var resolvedSize = targetFile?.length() ?: -1L
     val resolvedStream = stream ?: run {
         ensureMountedMdictMediaExtracted(context, mountEntry)
         val fallback = findMountedMediaFile(
             mountedMdictMediaDir(context, cacheKey),
             scopedPath ?: decodedPath
-        )
+        ) ?: return null
         if (!fallback.isFile) return null
+        resolvedSize = fallback.length()
         FileInputStream(fallback)
     }
     val mime = guessMimeTypeFromName(targetFile?.name.orEmpty().ifBlank { decodedPath.substringAfterLast('/') })
-    return MountedMdictResource(mimeType = mime, inputStream = resolvedStream)
+    return MountedMdictResource(mimeType = mime, sizeBytes = resolvedSize, inputStream = resolvedStream)
 }
 
 internal fun mountedMdictMediaDir(context: Context, cacheKey: String): File {
@@ -126,10 +129,11 @@ private fun findTreeFileByRelativePath(root: DocumentFile, relativePath: String)
     return null
 }
 
-private fun findMountedMediaFile(root: File, relativePath: String): File {
+internal fun findMountedMediaFile(root: File, relativePath: String): File? {
+    val safeRoot = runCatching { root.canonicalFile }.getOrNull() ?: return null
     val variants = buildPathVariants(relativePath)
     variants.forEach { variant ->
-        val direct = File(root, variant)
+        val direct = safeRoot.safeChild(variant) ?: return@forEach
         if (direct.isFile) return direct
         val parent = direct.parentFile
         if (parent?.isDirectory == true) {
@@ -139,27 +143,48 @@ private fun findMountedMediaFile(root: File, relativePath: String): File {
             if (byCaseInsensitive?.isFile == true) return byCaseInsensitive
         }
     }
-    val baseName = relativePath.substringAfterLast('/').substringAfterLast('\\')
-    if (baseName.isNotBlank() && root.isDirectory) {
-        root.walkTopDown().forEach { file ->
+    val baseName = variants.firstOrNull()?.substringAfterLast('/')
+    if (!baseName.isNullOrBlank() && safeRoot.isDirectory) {
+        safeRoot.walkTopDown().forEach { file ->
             if (file.isFile && file.name.equals(baseName, ignoreCase = true)) return file
         }
     }
-    return File(root, relativePath)
+    return null
 }
 
 private fun buildPathVariants(raw: String): List<String> {
     val decoded = runCatching { URLDecoder.decode(raw, Charsets.UTF_8.name()) }.getOrDefault(raw)
     val normalized = decoded.replace('\\', '/').trim()
-    val trimmed = normalized.trimStart('/')
-    val baseName = trimmed.substringAfterLast('/')
+    if (normalized.isBlank() || normalized.startsWith("/") || normalized.isWindowsAbsolutePath()) {
+        return emptyList()
+    }
+    val parts = normalized
+        .split('/')
+        .filter { it.isNotBlank() && it != "." }
+    if (parts.isEmpty() || parts.any { it == ".." }) return emptyList()
+    val scoped = parts.joinToString("/")
+    val baseName = scoped.substringAfterLast('/')
     return linkedSetOf(
-        normalized,
-        trimmed,
-        "/$trimmed",
+        scoped,
         baseName
     ).filter { it.isNotBlank() }.toList()
 }
+
+private fun File.safeChild(relativePath: String): File? {
+    val root = canonicalFile
+    val target = File(root, relativePath).canonicalFile
+    return if (target.path == root.path || target.path.startsWith(root.path + File.separator)) {
+        target
+    } else {
+        null
+    }
+}
+
+private fun String.isWindowsAbsolutePath(): Boolean =
+    length >= 3 &&
+        this[1] == ':' &&
+        this[0].isLetter() &&
+        (this[2] == '/' || this[2] == '\\')
 
 private fun guessMimeTypeFromName(name: String): String {
     val ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)

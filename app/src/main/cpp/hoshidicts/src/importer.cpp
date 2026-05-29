@@ -4,13 +4,18 @@
 #include <zstd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -22,6 +27,16 @@
 #include "json/yomitan_parser.hpp"
 
 namespace {
+constexpr ssize_t kMaxZipEntries = 20000;
+constexpr size_t kMaxIndexBytes = 8u * 1024u * 1024u;
+constexpr size_t kMaxStyleBytes = 4u * 1024u * 1024u;
+constexpr size_t kMaxBankBytes = 64u * 1024u * 1024u;
+constexpr size_t kMaxMediaEntryBytes = 32u * 1024u * 1024u;
+constexpr uint64_t kMaxTotalMediaBytes = 256ull * 1024ull * 1024ull;
+constexpr size_t kMaxMediaFiles = 10000;
+constexpr size_t kMaxZipPathBytes = 512;
+constexpr size_t kLowRamWorkerThreads = 3;
+
 struct Files {
   std::vector<int> term_banks;
   std::vector<int> meta_banks;
@@ -40,22 +55,80 @@ struct MediaFile {
   std::vector<char> blob;
 };
 
-void setup_stream_exceptions(std::ofstream& stream) { stream.exceptions(std::ios::failbit | std::ios::badbit); }
-
-std::string read_file_by_index(zip_t* archive, int index) {
-  if (zip_entry_openbyindex(archive, index) != 0) {
-    return "";
+std::string safe_dictionary_dir_name(std::string_view raw_title) {
+  std::string out;
+  out.reserve(raw_title.size());
+  for (unsigned char ch : raw_title) {
+    if (ch < 0x20 || ch == '/' || ch == '\\' || ch == ':' || ch == '*' || ch == '?' ||
+        ch == '"' || ch == '<' || ch == '>' || ch == '|') {
+      if (out.empty() || out.back() != '_') out.push_back('_');
+    } else {
+      out.push_back(static_cast<char>(ch));
+    }
   }
 
+  while (!out.empty() && (out.front() == '.' || out.front() == ' ' || out.front() == '_')) {
+    out.erase(out.begin());
+  }
+  while (!out.empty() && (out.back() == '.' || out.back() == ' ' || out.back() == '_')) {
+    out.pop_back();
+  }
+  if (out.empty() || out == "." || out == "..") return "Dictionary";
+  if (out.size() > 120) out.resize(120);
+  return out;
+}
+
+bool path_starts_with(const std::filesystem::path& root, const std::filesystem::path& child) {
+  auto root_it = root.begin();
+  auto child_it = child.begin();
+  for (; root_it != root.end(); ++root_it, ++child_it) {
+    if (child_it == child.end() || *root_it != *child_it) return false;
+  }
+  return true;
+}
+
+std::filesystem::path safe_dictionary_output_path(const std::string& output_dir,
+                                                  std::string_view raw_title) {
+  const auto root = std::filesystem::absolute(output_dir).lexically_normal();
+  const auto target = (root / safe_dictionary_dir_name(raw_title)).lexically_normal();
+  if (!path_starts_with(root, target)) {
+    throw std::runtime_error("unsafe dictionary output path");
+  }
+  return target;
+}
+
+void setup_stream_exceptions(std::ofstream& stream) { stream.exceptions(std::ios::failbit | std::ios::badbit); }
+
+bool is_safe_zip_entry_name(std::string_view raw_name) {
+  if (raw_name.empty() || raw_name.size() > kMaxZipPathBytes || raw_name.front() == '/') return false;
+  if (raw_name.size() >= 2 && std::isalpha(static_cast<unsigned char>(raw_name[0])) && raw_name[1] == ':') {
+    return false;
+  }
+  std::string normalized(raw_name);
+  std::replace(normalized.begin(), normalized.end(), '\\', '/');
+  for (const auto& component : std::filesystem::path(normalized)) {
+    if (component == ".." || component.has_root_path()) return false;
+  }
+  return true;
+}
+
+std::string read_current_entry(zip_t* archive, size_t max_bytes) {
+  const ssize_t entry_size = zip_entry_size(archive);
+  if (entry_size < 0 || static_cast<size_t>(entry_size) > max_bytes) {
+    throw std::runtime_error("zip entry too large");
+  }
   void* raw = nullptr;
   size_t size = 0;
   ssize_t bytes_read = zip_entry_read(archive, &raw, &size);
-  zip_entry_close(archive);
   if (bytes_read < 0 || !raw) {
     if (raw) {
       free(raw);
     }
     return "";
+  }
+  if (size > max_bytes) {
+    free(raw);
+    throw std::runtime_error("zip entry exceeded size limit");
   }
 
   std::unique_ptr<void, decltype(&std::free)> buf(raw, &std::free);
@@ -63,26 +136,32 @@ std::string read_file_by_index(zip_t* archive, int index) {
   return buffer;
 }
 
-std::string read_file_by_name(zip_t* archive, const char* name) {
+std::string read_file_by_index(zip_t* archive, int index, size_t max_bytes = kMaxBankBytes) {
+  if (zip_entry_openbyindex(archive, index) != 0) {
+    return "";
+  }
+  try {
+    std::string buffer = read_current_entry(archive, max_bytes);
+    zip_entry_close(archive);
+    return buffer;
+  } catch (...) {
+    zip_entry_close(archive);
+    throw;
+  }
+}
+
+std::string read_file_by_name(zip_t* archive, const char* name, size_t max_bytes = kMaxBankBytes) {
   if (zip_entry_open(archive, name) != 0) {
     return "";
   }
-
-  void* raw = nullptr;
-  size_t size = 0;
-  ssize_t bytes_read = zip_entry_read(archive, &raw, &size);
-  zip_entry_close(archive);
-
-  if (bytes_read < 0 || !raw) {
-    if (raw) {
-      free(raw);
-    }
-    return "";
+  try {
+    std::string buffer = read_current_entry(archive, max_bytes);
+    zip_entry_close(archive);
+    return buffer;
+  } catch (...) {
+    zip_entry_close(archive);
+    throw;
   }
-
-  std::unique_ptr<void, decltype(&std::free)> buf(raw, &std::free);
-  std::string buffer(static_cast<char*>(buf.get()), size);
-  return buffer;
 }
 
 std::optional<MediaFile> read_media_by_index(zip_t* archive, int index) {
@@ -90,11 +169,21 @@ std::optional<MediaFile> read_media_by_index(zip_t* archive, int index) {
     return std::nullopt;
   }
   MediaFile out;
+  const char* raw_name = zip_entry_name(archive);
+  if (raw_name == nullptr || !is_safe_zip_entry_name(raw_name)) {
+    zip_entry_close(archive);
+    throw std::runtime_error("unsafe media entry path");
+  }
+  const ssize_t entry_size = zip_entry_size(archive);
+  if (entry_size < 0 || static_cast<size_t>(entry_size) > kMaxMediaEntryBytes) {
+    zip_entry_close(archive);
+    throw std::runtime_error("media entry too large");
+  }
+  out.path = raw_name;
 
   void* raw = nullptr;
   size_t size = 0;
   ssize_t bytes_read = zip_entry_read(archive, &raw, &size);
-  out.path = zip_entry_name(archive);
   zip_entry_close(archive);
   if (bytes_read < 0 || !raw) {
     if (raw) {
@@ -102,7 +191,10 @@ std::optional<MediaFile> read_media_by_index(zip_t* archive, int index) {
     }
     return std::nullopt;
   }
-
+  if (size > kMaxMediaEntryBytes) {
+    free(raw);
+    throw std::runtime_error("media entry exceeded size limit");
+  }
   std::unique_ptr<void, decltype(&free)> buf(raw, free);
   auto* p = static_cast<std::uint8_t*>(buf.get());
   out.blob.assign(p, p + size);
@@ -114,6 +206,9 @@ Files get_files(zip_t* archive) {
   const ssize_t num_entries = zip_entries_total(archive);
   if (num_entries < 0) {
     return files;
+  }
+  if (num_entries > kMaxZipEntries) {
+    throw std::runtime_error("dictionary zip has too many entries");
   }
 
   for (int i = 0; i < num_entries; ++i) {
@@ -129,6 +224,10 @@ Files get_files(zip_t* archive) {
     const char* raw_name = zip_entry_name(archive);
     if (raw_name != nullptr) {
       const std::string_view name(raw_name);
+      if (!is_safe_zip_entry_name(name)) {
+        zip_entry_close(archive);
+        throw std::runtime_error("unsafe zip entry path");
+      }
       if (name.starts_with("term_bank_")) {
         files.term_banks.push_back(i);
       } else if (name.starts_with("term_meta_bank_")) {
@@ -136,6 +235,10 @@ Files get_files(zip_t* archive) {
       } else if (name.starts_with("tag_bank_")) {
         files.tag_banks.push_back(i);
       } else if (!(name == "styles.css" || name == "index.json")) {
+        if (files.media_files.size() >= kMaxMediaFiles) {
+          zip_entry_close(archive);
+          throw std::runtime_error("dictionary zip has too many media files");
+        }
         files.media_files.push_back(i);
       }
     }
@@ -294,7 +397,7 @@ void write_terms(std::ofstream& file, std::unordered_map<std::string, std::vecto
     return;
   }
 
-  size_t max_threads = low_ram ? 3 : std::max<size_t>(2, static_cast<const unsigned long>(std::thread::hardware_concurrency() * 2));
+  size_t max_threads = low_ram ? kLowRamWorkerThreads : std::max<size_t>(2, static_cast<const unsigned long>(std::thread::hardware_concurrency() * 2));
   std::deque<std::future<ProcessedFile>> threads;
   auto write_processed = [&](ProcessedFile&& processed) {
     if (processed.data.empty()) {
@@ -329,7 +432,7 @@ void write_meta(std::ofstream& file, std::unordered_map<std::string, std::vector
     return;
   }
 
-  size_t max_threads = low_ram ? 3 : std::max<size_t>(2, static_cast<const unsigned long>(std::thread::hardware_concurrency() * 2));
+  size_t max_threads = low_ram ? kLowRamWorkerThreads : std::max<size_t>(2, static_cast<const unsigned long>(std::thread::hardware_concurrency() * 2));
   std::deque<std::future<ProcessedFile>> threads;
   auto write_processed = [&](ProcessedFile&& processed) {
     if (processed.data.empty()) {
@@ -385,7 +488,6 @@ void write_media(const std::string& path, zip_t* archive, const std::vector<int>
   setup_stream_exceptions(index);
 
   uint64_t write_offset = 0;
-  std::vector<char> blobs_buf;
   std::vector<char> index_buf;
   for (int file_index : files) {
     auto media = read_media_by_index(archive, file_index);
@@ -394,17 +496,25 @@ void write_media(const std::string& path, zip_t* archive, const std::vector<int>
     }
 
     const auto blob_size = media->blob.size();
-    write_bytes(blobs_buf, media->blob.data(), blob_size);
+    if (media->path.size() > std::numeric_limits<uint16_t>::max()) {
+      throw std::runtime_error("media path too long");
+    }
+    if (blob_size > std::numeric_limits<uint32_t>::max()) {
+      throw std::runtime_error("media entry too large");
+    }
+    if (write_offset > kMaxTotalMediaBytes || blob_size > kMaxTotalMediaBytes - write_offset) {
+      throw std::runtime_error("dictionary media total size exceeded");
+    }
+    blobs.write(media->blob.data(), static_cast<std::streamsize>(blob_size));
 
-    write_u16(index_buf, media->path.size());
+    write_u16(index_buf, static_cast<uint16_t>(media->path.size()));
     write_str(index_buf, media->path);
     write_u64(index_buf, write_offset);
-    write_u32(index_buf, blob_size);
+    write_u32(index_buf, static_cast<uint32_t>(blob_size));
 
     write_offset += blob_size;
     result.media_count++;
   }
-  blobs.write(blobs_buf.data(), static_cast<std::streamsize>(blobs_buf.size()));
   index.write(index_buf.data(), static_cast<std::streamsize>(index_buf.size()));
 }
 }
@@ -418,7 +528,7 @@ ImportResult dictionary_importer::import(const std::string& zip_path, const std:
       throw std::runtime_error("failed to open zip");
     }
 
-    std::string index_content = read_file_by_name(archive, "index.json");
+    std::string index_content = read_file_by_name(archive, "index.json", kMaxIndexBytes);
     if (index_content.empty()) {
       throw std::runtime_error("could not find or read index.json");
     }
@@ -430,7 +540,8 @@ ImportResult dictionary_importer::import(const std::string& zip_path, const std:
 
     result.title = index.title;
 
-    std::filesystem::path dict_path = std::filesystem::path(output_dir) / result.title;
+    std::filesystem::path dict_path = safe_dictionary_output_path(output_dir, result.title);
+    result.dict_path = dict_path.string();
     std::string path = dict_path.string();
     std::filesystem::create_directories(dict_path);
 
@@ -438,7 +549,7 @@ ImportResult dictionary_importer::import(const std::string& zip_path, const std:
       throw std::runtime_error("failed to write info.json");
     }
 
-    std::string styles = read_file_by_name(archive, "styles.css");
+    std::string styles = read_file_by_name(archive, "styles.css", kMaxStyleBytes);
     if (!styles.empty()) {
       std::ofstream styles_file(path + "/styles.css", std::ios::binary);
       setup_stream_exceptions(styles_file);
@@ -486,8 +597,12 @@ ImportResult dictionary_importer::import(const std::string& zip_path, const std:
     zip_close(archive);
   }
 
-  if (!result.success && !result.title.empty()) {
-    std::filesystem::remove_all(std::filesystem::path(output_dir) / result.title);
+  if (!result.success && !result.dict_path.empty()) {
+    const auto root = std::filesystem::absolute(output_dir).lexically_normal();
+    const auto failed_path = std::filesystem::absolute(result.dict_path).lexically_normal();
+    if (path_starts_with(root, failed_path)) {
+      std::filesystem::remove_all(failed_path);
+    }
   }
 
   return result;

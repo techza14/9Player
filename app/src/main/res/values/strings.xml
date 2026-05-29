@@ -18,6 +18,7 @@
     <string name="common_delete">删除</string>
     <string name="common_play">播放</string>
     <string name="common_pause">暂停</string>
+    <string name="common_stop">停止</string>
     <string name="common_lookup">查词</string>
     <string name="common_loading">加载中...</string>
     <string name="common_not_selected">未选择</string>
@@ -362,6 +363,8 @@
     <string name="audiobook_overlay_mode_changed">已切换悬浮窗：%1$s</string>
     <string name="audiobook_overlay_test_button">测试悬浮窗</string>
     <string name="audiobook_overlay_preview_swipe_hint">左右滑动切换真实悬浮组件，双击退出并应用</string>
+    <string name="audiobook_overlay_playback_active">后台播放中</string>
+    <string name="audiobook_overlay_playback_paused">播放已暂停</string>
     <string name="audiobook_overlay_mode_subtitle">悬浮字幕</string>
     <string name="audiobook_overlay_mode_bubble">悬浮球</string>
     <string name="audiobook_overlay_mode_both">悬浮字幕 + 悬浮球</string>

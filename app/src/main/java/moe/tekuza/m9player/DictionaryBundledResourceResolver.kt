@@ -12,6 +12,7 @@ private const val DICT_BUNDLED_RES_SCHEME = "dictres"
 
 internal data class BundledDictionaryResource(
     val mimeType: String,
+    val sizeBytes: Long,
     val inputStream: InputStream
 )
 
@@ -44,6 +45,7 @@ internal fun openBundledDictionaryResource(
     val stream = context.contentResolver.openInputStream(sourceUri) ?: return null
     val zip = ZipInputStream(stream.buffered())
     var foundEntryName: String? = null
+    var foundEntrySize = -1L
     try {
         while (true) {
             val entry = zip.nextEntry ?: break
@@ -55,6 +57,7 @@ internal fun openBundledDictionaryResource(
             }
             if (matched) {
                 foundEntryName = name
+                foundEntrySize = entry.size
                 break
             }
         }
@@ -65,6 +68,7 @@ internal fun openBundledDictionaryResource(
         val mime = guessBundledResourceMime(foundEntryName!!)
         return BundledDictionaryResource(
             mimeType = mime,
+            sizeBytes = foundEntrySize,
             inputStream = zip
         )
     } catch (_: Throwable) {

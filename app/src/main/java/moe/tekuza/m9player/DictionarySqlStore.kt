@@ -18,6 +18,7 @@ import java.io.FileOutputStream
 import java.io.InputStreamReader
 import java.io.StringReader
 import java.util.Locale
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 
 private const val DICTIONARY_ENTRY_STORE_DIR = "dictionary_entry_store"
@@ -31,6 +32,12 @@ private const val IMPORT_PROGRESS_STEP = 3
 private const val MDICT_MEDIA_LOG_TAG = "MdictMedia"
 private const val HOSHI_LOOKUP_PERF_LOG_TAG = "HoshiLookupPerf"
 private const val HOSHI_META_TYPE_SCAN_LIMIT_ROWS = 2048
+private const val HOSHI_META_TYPE_SCAN_MAX_BYTES = 8L * 1024L * 1024L
+private const val HOSHI_TYPE_SCAN_MAX_ENTRIES = 20_000
+private const val HOSHI_TYPE_SCAN_MAX_ENTRY_BYTES = 64L * 1024L * 1024L
+private const val HOSHI_TYPE_SCAN_MAX_PATH_CHARS = 512
+private const val HOSHI_IMPORT_ARCHIVE_MAX_BYTES = 2L * 1024L * 1024L * 1024L
+private const val HOSHI_IMPORT_COPY_BUFFER_BYTES = 256 * 1024
 
 private val NORMALIZE_WHITESPACE_REGEX = Regex("\\s+")
 private val STRIP_HTML_TAGS_REGEX = Regex("<[^>]+>")
@@ -50,6 +57,30 @@ private val HOSHI_TERM_META_BANK_FILE_REGEX = Regex("term_meta_bank_\\d+\\.json"
 private val HTML_TAG_NAME_SANITIZE_REGEX = Regex("[^a-z0-9-]")
 private val CSS_SIZE_UNIT_REGEX = Regex("^[a-z%]+$")
 private val CSS_NUMBER_REGEX = Regex("^[+-]?(?:\\d+\\.?\\d*|\\.\\d+)$")
+private val HOSHI_WINDOWS_ABSOLUTE_PATH_REGEX = Regex("""^[A-Za-z]:.*""")
+private val DANGEROUS_HTML_BLOCK_REGEX =
+    Regex("(?is)<\\s*(script|style|iframe|object|embed|form|textarea|select|button|svg|math)\\b[^>]*>.*?<\\s*/\\s*\\1\\s*>")
+private val DANGEROUS_HTML_TAG_REGEX =
+    Regex("(?is)<\\s*/?\\s*(script|style|link|meta|iframe|object|embed|form|input|button|textarea|select|option|base|svg|math)\\b[^>]*>")
+private val HTML_EVENT_ATTRIBUTE_REGEX =
+    Regex("(?is)\\s+on[a-z0-9_-]+\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)")
+private val HTML_SRCDOC_ATTRIBUTE_REGEX =
+    Regex("(?is)\\s+srcdoc\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)")
+private val HTML_DANGEROUS_URL_ATTRIBUTE_REGEX =
+    Regex("(?is)\\s+(href|src|xlink:href)\\s*=\\s*(\"\\s*(?:javascript:|vbscript:|data:text/html)[^\"]*\"|'\\s*(?:javascript:|vbscript:|data:text/html)[^']*'|(?:javascript:|vbscript:|data:text/html)[^\\s>]*)")
+private val STRUCTURED_ALLOWED_HTML_TAGS = setOf(
+    "a", "b", "blockquote", "br", "code", "dd", "del", "details", "dfn", "div", "dl", "dt",
+    "em", "i", "img", "ins", "kbd", "li", "mark", "ol", "p", "pre", "rp", "rt", "ruby",
+    "s", "samp", "small", "span", "strong", "sub", "summary", "sup", "table", "tbody",
+    "td", "tfoot", "th", "thead", "tr", "u", "ul", "var"
+)
+private val DANGEROUS_INLINE_STYLE_TOKENS = listOf(
+    "javascript:",
+    "vbscript:",
+    "data:text/html",
+    "expression(",
+    "-moz-binding"
+)
 private var hoshiLookupPreparedKey: String? = null
 private val hoshiLookupPreparedLock = Any()
 
@@ -100,6 +131,19 @@ private fun normalizeHoshiZipPath(path: String): String {
     return path.replace('\\', '/').trimStart('/').removePrefix("./")
 }
 
+private fun isSafeHoshiZipPath(path: String): Boolean {
+    val normalized = path.trim().replace('\\', '/')
+    if (
+        normalized.isBlank() ||
+        normalized.length > HOSHI_TYPE_SCAN_MAX_PATH_CHARS ||
+        normalized.startsWith("/") ||
+        HOSHI_WINDOWS_ABSOLUTE_PATH_REGEX.matches(normalized)
+    ) {
+        return false
+    }
+    return normalized.split('/').none { it == ".." }
+}
+
 private fun isHoshiTermBankFile(path: String): Boolean {
     val fileName = normalizeHoshiZipPath(path).substringAfterLast('/').lowercase(Locale.US)
     return HOSHI_TERM_BANK_FILE_REGEX.matches(fileName)
@@ -133,9 +177,48 @@ private fun detectHoshiDictionaryType(
 }
 
 private fun detectHoshiDictionaryType(zipFile: File): HoshiDictionaryType {
-    return zipFile.inputStream().use { stream ->
-        detectHoshiDictionaryType(stream)
+    var hasTermBank = false
+    var hasFrequencyMeta = false
+    var hasPitchMeta = false
+
+    ZipFile(zipFile).use { zip ->
+        val entries = zip.entries()
+        var entryCount = 0
+        while (entries.hasMoreElements()) {
+            val entry = entries.nextElement()
+            entryCount += 1
+            require(entryCount <= HOSHI_TYPE_SCAN_MAX_ENTRIES) {
+                "Dictionary ZIP has too many entries: $entryCount"
+            }
+            require(isSafeHoshiZipPath(entry.name)) {
+                "Unsafe dictionary ZIP entry: ${entry.name}"
+            }
+            if (entry.size >= 0L) {
+                require(entry.size <= HOSHI_TYPE_SCAN_MAX_ENTRY_BYTES) {
+                    "Dictionary ZIP entry too large: ${entry.size} bytes"
+                }
+            }
+            if (!entry.isDirectory) {
+                val path = normalizeHoshiZipPath(entry.name)
+                when {
+                    isHoshiTermBankFile(path) -> {
+                        hasTermBank = true
+                    }
+
+                    isHoshiTermMetaBankFile(path) -> {
+                        val modeFlags = zip.getInputStream(entry).use(::readHoshiMetaModeFlags)
+                        if (modeFlags.hasFrequency) hasFrequencyMeta = true
+                        if (modeFlags.hasPitch) hasPitchMeta = true
+                    }
+                }
+            }
+            if (hasFrequencyMeta) {
+                break
+            }
+        }
     }
+
+    return classifyHoshiDictionaryType(hasTermBank, hasFrequencyMeta, hasPitchMeta)
 }
 
 internal fun detectHoshiDictionaryType(
@@ -146,8 +229,21 @@ internal fun detectHoshiDictionaryType(
     var hasPitchMeta = false
 
     ZipInputStream(BufferedInputStream(stream)).use { zip ->
+        var entryCount = 0
         var entry = zip.nextEntry
         while (entry != null) {
+            entryCount += 1
+            require(entryCount <= HOSHI_TYPE_SCAN_MAX_ENTRIES) {
+                "Dictionary ZIP has too many entries: $entryCount"
+            }
+            require(isSafeHoshiZipPath(entry.name)) {
+                "Unsafe dictionary ZIP entry: ${entry.name}"
+            }
+            if (entry.size >= 0L) {
+                require(entry.size <= HOSHI_TYPE_SCAN_MAX_ENTRY_BYTES) {
+                    "Dictionary ZIP entry too large: ${entry.size} bytes"
+                }
+            }
             if (!entry.isDirectory) {
                 val path = normalizeHoshiZipPath(entry.name)
                 when {
@@ -170,6 +266,14 @@ internal fun detectHoshiDictionaryType(
         }
     }
 
+    return classifyHoshiDictionaryType(hasTermBank, hasFrequencyMeta, hasPitchMeta)
+}
+
+private fun classifyHoshiDictionaryType(
+    hasTermBank: Boolean,
+    hasFrequencyMeta: Boolean,
+    hasPitchMeta: Boolean
+): HoshiDictionaryType {
     return when {
         hasTermBank -> HoshiDictionaryType.Term
         hasFrequencyMeta && !hasPitchMeta -> HoshiDictionaryType.Frequency
@@ -186,12 +290,13 @@ private data class HoshiMetaModeFlags(
 )
 
 private fun readHoshiMetaModeFlags(stream: java.io.InputStream): HoshiMetaModeFlags {
-    return runCatching {
+    return try {
         val reader = InputStreamReader(stream, Charsets.UTF_8)
         var flags = HoshiMetaModeFlags()
         var arrayDepth = 0
         var rowFieldIndex = -1
         var rowCount = 0
+        var scannedBytes = 0L
         var inString = false
         var escaped = false
         var capturingMode = false
@@ -200,6 +305,10 @@ private fun readHoshiMetaModeFlags(stream: java.io.InputStream): HoshiMetaModeFl
         while (true) {
             val read = reader.read()
             if (read < 0) break
+            scannedBytes += 1
+            require(scannedBytes <= HOSHI_META_TYPE_SCAN_MAX_BYTES) {
+                "Dictionary meta scan exceeded byte limit"
+            }
             val char = read.toChar()
 
             if (inString) {
@@ -259,7 +368,11 @@ private fun readHoshiMetaModeFlags(stream: java.io.InputStream): HoshiMetaModeFl
             }
         }
         flags
-    }.getOrDefault(HoshiMetaModeFlags())
+    } catch (error: IllegalArgumentException) {
+        throw error
+    } catch (_: Throwable) {
+        HoshiMetaModeFlags()
+    }
 }
 
 private fun HoshiMetaModeFlags.with(other: HoshiMetaModeFlags): HoshiMetaModeFlags {
@@ -638,9 +751,14 @@ private fun importDictionaryZipWithHoshi(
     val tempZip = File.createTempFile("dict_import_", ".zip", context.cacheDir)
     try {
         val archiveSize = queryDictionaryImportSize(contentResolver, uri).takeIf { it > 0L }
+        archiveSize?.let { size ->
+            require(size <= HOSHI_IMPORT_ARCHIVE_MAX_BYTES) {
+                "Dictionary archive too large: $size bytes"
+            }
+        }
         contentResolver.openInputStream(uri)?.use { input ->
             FileOutputStream(tempZip).use { output ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                val buffer = ByteArray(HOSHI_IMPORT_COPY_BUFFER_BYTES)
                 var copied = 0L
                 var lastProgress = -1
                 while (true) {
@@ -648,6 +766,9 @@ private fun importDictionaryZipWithHoshi(
                     if (read < 0) break
                     output.write(buffer, 0, read)
                     copied += read
+                    require(copied <= HOSHI_IMPORT_ARCHIVE_MAX_BYTES) {
+                        "Dictionary archive too large: $copied bytes"
+                    }
                     archiveSize?.let { totalBytes ->
                         val progress = ((copied.toDouble() / totalBytes.toDouble()) * 30.0)
                             .toInt()
@@ -746,11 +867,9 @@ internal fun glossaryRawToDefinitionHtmlSql(glossaryRaw: String): String {
         reader.isLenient = true
         val value = readJsonValueSql(reader)
         extractGlossaryFromRawValueSql(value).firstOrNull().orEmpty()
-    }.getOrNull().orEmpty()
+    }.getOrNull()
 
-    return parsedDefinition.ifBlank {
-        normalizeDefinitionForDisplaySql(trimmed)
-    }
+    return parsedDefinition ?: normalizeDefinitionForDisplaySql(trimmed)
 }
 
 private fun readJsonValueSql(reader: JsonReader): Any? {
@@ -834,7 +953,7 @@ private fun structuredMapToHtmlSql(value: Map<*, *>): String {
             .map { mapString(it).trim() }
             .firstOrNull { it.isNotBlank() }
             .orEmpty()
-        if (path.isBlank()) return ""
+        if (path.isBlank() || !isSafeDictionaryHtmlUrlSql(path)) return ""
         val dataAttributes = extractStructuredDataAttributesSql(value["data"]).toMutableMap()
         val explicitClass = mapString("class").trim()
         if (dataAttributes["class"].isNullOrBlank() && explicitClass.isNotBlank()) {
@@ -850,7 +969,7 @@ private fun structuredMapToHtmlSql(value: Map<*, *>): String {
         val styleAttr = mergeInlineStyleSql(
             styleValueToCssSql(value["style"]),
             supplementalInlineStyleSql(value, "img")
-        ).takeIf { it.isNotBlank() }?.let {
+        ).takeIf { it.isNotBlank() }?.let(::sanitizeInlineStyleSql)?.let {
             " style=\"${escapeHtmlAttributeSql(it)}\""
         } ?: ""
         val langAttr = mapString("lang").trim().takeIf { it.isNotBlank() }?.let {
@@ -864,7 +983,7 @@ private fun structuredMapToHtmlSql(value: Map<*, *>): String {
     val content = extractTextSnippetSql(value["content"]).orEmpty()
     if (tagRaw.isNotBlank()) {
         val tag = tagRaw.replace(HTML_TAG_NAME_SANITIZE_REGEX, "")
-        if (tag.isBlank()) return content
+        if (tag.isBlank() || tag !in STRUCTURED_ALLOWED_HTML_TAGS) return content
 
         val dataAttributes = extractStructuredDataAttributesSql(value["data"]).toMutableMap()
         val explicitClass = mapString("class").trim()
@@ -878,7 +997,7 @@ private fun structuredMapToHtmlSql(value: Map<*, *>): String {
         val styleAttr = mergeInlineStyleSql(
             styleValueToCssSql(value["style"]),
             supplementalInlineStyleSql(value, tag)
-        ).takeIf { it.isNotBlank() }?.let {
+        ).takeIf { it.isNotBlank() }?.let(::sanitizeInlineStyleSql)?.let {
             " style=\"${escapeHtmlAttributeSql(it)}\""
         } ?: ""
         val inlineAttrs = buildInlineHtmlAttributesSql(value)
@@ -989,7 +1108,7 @@ private fun buildInlineHtmlAttributesSql(value: Map<*, *>): String {
         .map { key -> value[key]?.toString()?.trim().orEmpty() }
         .firstOrNull { it.isNotBlank() }
         .orEmpty()
-    if (src.isNotBlank()) attrs["src"] = src
+    if (src.isNotBlank() && isSafeDictionaryHtmlUrlSql(src)) attrs["src"] = src
     val allowed = if (suppressWidthHeightAttr) {
         listOf("href", "alt", "title", "target", "rel", "colspan", "rowspan")
     } else {
@@ -997,6 +1116,7 @@ private fun buildInlineHtmlAttributesSql(value: Map<*, *>): String {
     }
     allowed.forEach { key ->
         val raw = value[key]?.toString()?.trim().orEmpty()
+        if ((key == "href" || key == "src") && !isSafeDictionaryHtmlUrlSql(raw)) return@forEach
         if (raw.isNotBlank()) attrs[key] = raw
     }
     return attrs.entries.joinToString(separator = "") { (key, raw) ->
@@ -1073,13 +1193,13 @@ private fun compactDefinitionsSql(rawDefinitions: List<String>): List<String> {
 private fun normalizeDefinitionForDisplaySql(raw: String): String {
     val trimmed = raw.trim()
     if (trimmed.isBlank()) return ""
-    return if (looksLikeHtmlSql(trimmed)) trimmed else plainDefinitionToHtmlSql(trimmed)
+    return if (looksLikeHtmlSql(trimmed)) sanitizeDictionaryDefinitionHtmlSql(trimmed) else plainDefinitionToHtmlSql(trimmed)
 }
 
 private fun clampDefinitionLengthForStorageSql(value: String): String {
     val trimmed = value.trim()
     if (trimmed.isBlank()) return ""
-    return if (looksLikeHtmlSql(trimmed)) trimmed else trimmed.take(3200)
+    return if (looksLikeHtmlSql(trimmed)) sanitizeDictionaryDefinitionHtmlSql(trimmed) else trimmed.take(3200)
 }
 
 internal fun lookupDictionarySourceUriByCacheKey(context: Context, cacheKey: String): String? {
@@ -1094,6 +1214,41 @@ internal fun lookupDictionarySourceUriByCacheKey(context: Context, cacheKey: Str
 
 private fun looksLikeHtmlSql(text: String): Boolean {
     return LOOKS_LIKE_HTML_REGEX.containsMatchIn(text)
+}
+
+private fun sanitizeDictionaryDefinitionHtmlSql(raw: String): String {
+    return raw
+        .replace(DANGEROUS_HTML_BLOCK_REGEX, "")
+        .replace(DANGEROUS_HTML_TAG_REGEX, "")
+        .replace(HTML_EVENT_ATTRIBUTE_REGEX, "")
+        .replace(HTML_SRCDOC_ATTRIBUTE_REGEX, "")
+        .replace(HTML_DANGEROUS_URL_ATTRIBUTE_REGEX, "")
+        .trim()
+}
+
+private fun sanitizeInlineStyleSql(raw: String): String? {
+    val style = raw.trim()
+    if (style.isBlank()) return null
+    val lower = style.lowercase(Locale.ROOT)
+    if (DANGEROUS_INLINE_STYLE_TOKENS.any { lower.contains(it) }) return null
+    return style.take(2000)
+}
+
+private fun isSafeDictionaryHtmlUrlSql(raw: String): Boolean {
+    val value = raw.trim()
+    if (value.isBlank()) return false
+    val lower = value.lowercase(Locale.ROOT)
+    if (
+        lower.startsWith("javascript:") ||
+        lower.startsWith("vbscript:") ||
+        lower.startsWith("data:text/html")
+    ) {
+        return false
+    }
+    if (lower.startsWith("data:")) return lower.startsWith("data:image/")
+    val scheme = value.substringBefore(':', missingDelimiterValue = "")
+    if (scheme == value) return true
+    return scheme.lowercase(Locale.ROOT) in setOf("http", "https", "dictres", "mdictres", "image", "mailto", "tel")
 }
 
 private fun isLikelyDefinitionSql(text: String): Boolean {

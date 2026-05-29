@@ -30,10 +30,15 @@ internal fun ensureEpubReaderCache(
     runCatching {
         context.contentResolver.openInputStream(uri)?.use { input ->
             ZipInputStream(input.buffered()).use { zip ->
+                var entryCount = 0
+                var totalBytes = 0L
                 while (true) {
                     val entry = zip.nextEntry ?: break
-                    val normalized = entry.name.normalizeEpubCachePath()
-                    if (normalized.isBlank()) {
+                    entryCount += 1
+                    requireEpubEntryBudget(entryCount)
+                    requireKnownEpubEntrySize(entry.size)
+                    val normalized = normalizeSafeEpubArchivePath(entry.name)
+                    if (normalized.isNullOrBlank()) {
                         zip.closeEntry()
                         continue
                     }
@@ -45,7 +50,12 @@ internal fun ensureEpubReaderCache(
                         output.mkdirs()
                     } else {
                         output.parentFile?.mkdirs()
-                        output.outputStream().use { zip.copyTo(it) }
+                        output.outputStream().use {
+                            totalBytes += zip.copyToLimited(
+                                output = it,
+                                remainingTotalBytes = EPUB_ARCHIVE_MAX_TOTAL_BYTES - totalBytes
+                            )
+                        }
                     }
                     zip.closeEntry()
                 }
@@ -64,15 +74,4 @@ internal fun ensureEpubReaderCache(
         throw error
     }
     return root
-}
-
-private fun String.normalizeEpubCachePath(): String {
-    val parts = trim()
-        .replace('\\', '/')
-        .removePrefix("/")
-        .split('/')
-    if (parts.any { it == ".." }) return ""
-    return parts
-        .filter { part -> part.isNotBlank() && part != "." }
-        .joinToString("/")
 }
