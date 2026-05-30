@@ -55,7 +55,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupAssets
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupHtml
@@ -80,32 +79,58 @@ private fun hasOverlayPermission(context: Context): Boolean {
     return Settings.canDrawOverlays(context)
 }
 
+private const val FLOATING_OVERLAY_LOG_TAG = "FloatingOverlay"
+
 private fun Context.isSystemDarkMode(): Boolean =
     (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
 internal fun startAudiobookFloatingOverlayService(context: Context) {
-    if (!hasOverlayPermission(context)) return
+    val hasPermission = hasOverlayPermission(context)
+    if (!hasPermission) {
+        return
+    }
     val settings = loadAudiobookSettingsConfig(context)
-    if (!settings.floatingOverlayEnabled && !settings.floatingOverlaySubtitleEnabled) return
+    if (!settings.floatingOverlayEnabled && !settings.floatingOverlaySubtitleEnabled) {
+        return
+    }
     val intent = Intent(context, AudiobookFloatingOverlayService::class.java).apply {
         action = AudiobookFloatingOverlayService.ACTION_SHOW
     }
-    context.startService(intent)
+    startAudiobookFloatingOverlayServiceSafely(context, intent, "show")
 }
 
 internal fun refreshAudiobookFloatingOverlayService(context: Context) {
-    if (!hasOverlayPermission(context)) return
+    if (!hasOverlayPermission(context)) {
+        return
+    }
     val intent = Intent(context, AudiobookFloatingOverlayService::class.java).apply {
         action = AudiobookFloatingOverlayService.ACTION_REFRESH
     }
-    context.startService(intent)
+    startAudiobookFloatingOverlayServiceSafely(context, intent, "refresh")
 }
 
 internal fun stopAudiobookFloatingOverlayService(context: Context) {
     val intent = Intent(context, AudiobookFloatingOverlayService::class.java).apply {
         action = AudiobookFloatingOverlayService.ACTION_HIDE
     }
-    context.startService(intent)
+    startAudiobookFloatingOverlayServiceSafely(context, intent, "hide")
+}
+
+private fun startAudiobookFloatingOverlayServiceSafely(
+    context: Context,
+    intent: Intent,
+    reason: String
+): Boolean {
+    return runCatching {
+        context.startService(intent)
+        true
+    }.onFailure { error ->
+        Log.w(
+            FLOATING_OVERLAY_LOG_TAG,
+            "start overlay service failed reason=$reason: ${error.message ?: error.javaClass.simpleName}",
+            error
+        )
+    }.getOrDefault(false)
 }
 
 class AudiobookFloatingOverlayService : Service() {
@@ -131,8 +156,6 @@ companion object {
     private var bubbleRow: LinearLayout? = null
     private var bubbleButton: ImageButton? = null
     private var bubbleControlsRow: LinearLayout? = null
-    private var bubbleFavoriteButton: ImageButton? = null
-    private var bubbleRepeatButton: ImageButton? = null
     private var bubbleLockButton: ImageButton? = null
     private var subtitleFrameView: FrameLayout? = null
     private var subtitleTextView: TextView? = null
@@ -528,20 +551,9 @@ companion object {
             val now = SystemClock.uptimeMillis()
             val elapsed = (now - subtitleTickerBaseRealtimeMs).coerceAtLeast(0L)
             val extrapolated = subtitleTickerBasePositionMs + (elapsed * subtitlePlaybackSpeed).toLong()
+            BookReaderFloatingBridge.refreshSubtitleForCurrentPlaybackPosition()
             updateSubtitleAutoScroll(extrapolated)
             Choreographer.getInstance().postFrameCallback(this)
-        }
-    }
-
-    private val favoriteListener = object : BookReaderFloatingBridge.FavoriteStateListener {
-        override fun onFavoriteStateChanged(isFavorite: Boolean) {
-            updateBubbleFavoriteIcon(isFavorite)
-        }
-    }
-    private val cueLoopListener = object : BookReaderFloatingBridge.CueLoopStateListener {
-        override fun onCueLoopStateChanged(enabled: Boolean) {
-            Log.d(FLOATING_BUBBLE_LOG_TAG, "cue-loop state callback enabled=$enabled")
-            updateBubbleRepeatIcon(enabled)
         }
     }
 
@@ -555,11 +567,10 @@ companion object {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as? WindowManager
         BookReaderFloatingBridge.addPlaybackStateListener(playbackListener)
-        BookReaderFloatingBridge.addFavoriteStateListener(favoriteListener)
-        BookReaderFloatingBridge.addCueLoopStateListener(cueLoopListener)
         BookReaderFloatingBridge.addSubtitleStateListener(subtitleListener)
         BookReaderFloatingBridge.addPlaybackPositionListener(playbackPositionListener)
         BookReaderFloatingBridge.addPlaybackSpeedListener(playbackSpeedListener)
+        BookReaderFloatingBridge.refreshSubtitleForCurrentPlaybackPosition()
         subtitlePlaybackSpeed = BookReaderFloatingBridge.currentPlaybackSpeed()
         subtitleTickerBasePositionMs = BookReaderFloatingBridge.currentPlaybackPositionMs()
         subtitleTickerBaseRealtimeMs = SystemClock.uptimeMillis()
@@ -568,25 +579,28 @@ companion object {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_HIDE -> {
+                Log.d(FLOATING_OVERLAY_LOG_TAG, "onStartCommand hide")
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_SHOW, null -> {
+                Log.d(FLOATING_OVERLAY_LOG_TAG, "onStartCommand show")
                 ensureOverlayVisible()
                 return START_STICKY
             }
             ACTION_REFRESH -> {
+                Log.d(FLOATING_OVERLAY_LOG_TAG, "onStartCommand refresh")
                 rebuildOverlay()
                 return START_STICKY
             }
-            else -> return START_NOT_STICKY
+            else -> {
+                return START_NOT_STICKY
+            }
         }
     }
 
     override fun onDestroy() {
         BookReaderFloatingBridge.removePlaybackStateListener(playbackListener)
-        BookReaderFloatingBridge.removeFavoriteStateListener(favoriteListener)
-        BookReaderFloatingBridge.removeCueLoopStateListener(cueLoopListener)
         BookReaderFloatingBridge.removeSubtitleStateListener(subtitleListener)
         BookReaderFloatingBridge.removePlaybackPositionListener(playbackPositionListener)
         BookReaderFloatingBridge.removePlaybackSpeedListener(playbackSpeedListener)
@@ -600,6 +614,10 @@ companion object {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun hasSubtitleTimeline(): Boolean = BookReaderFloatingBridge.hasSubtitleTrack()
+
+    private fun hasSubtitleData(text: String? = BookReaderFloatingBridge.currentSubtitle()): Boolean {
+        return hasSubtitleTimeline() || !text.isNullOrBlank()
+    }
 
     private fun ensureOverlayVisible() {
         if (!hasOverlayPermission(this)) {
@@ -615,7 +633,10 @@ companion object {
             stopSelf()
             return
         }
-        val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleTimeline()
+        val hasTimeline = hasSubtitleTimeline()
+        val subtitleText = BookReaderFloatingBridge.currentSubtitle()
+        val hasSubtitleData = hasSubtitleData(subtitleText)
+        val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleData
         if (!settings.floatingOverlayEnabled && !subtitleEnabledByData) {
             stopSelf()
             return
@@ -635,7 +656,12 @@ companion object {
                     x = settings.floatingOverlaySubtitleX.coerceAtLeast(0),
                     y = initialSubtitleOverlayY(settings, density)
                 )
-                wm.addView(container, params)
+                runCatching { wm.addView(container, params) }
+                    .onFailure { error ->
+                        Log.w(FLOATING_OVERLAY_LOG_TAG, "subtitle addView failed: ${error.message}", error)
+                        stopSelf()
+                        return
+                    }
                 rootView = container
                 windowLayoutParams = params
                 container.post { alignOverlayWindow(force = true) }
@@ -654,7 +680,12 @@ companion object {
                     x = settings.floatingOverlayBubbleX.coerceAtLeast(0),
                     y = settings.floatingOverlayBubbleY.coerceAtLeast(0)
                 )
-                wm.addView(bubblePanel, params)
+                runCatching { wm.addView(bubblePanel, params) }
+                    .onFailure { error ->
+                        Log.w(FLOATING_OVERLAY_LOG_TAG, "bubble addView failed: ${error.message}", error)
+                        stopSelf()
+                        return
+                    }
                 bubbleRootView = bubblePanel
                 bubbleWindowLayoutParams = params
             }
@@ -1240,20 +1271,6 @@ companion object {
             addView(createControlButton(R.drawable.ic_overlay_next, bubbleScale) {
                 BookReaderFloatingBridge.seekNext()
             })
-            addView(createControlButton(R.drawable.ic_overlay_favorite, bubbleScale) {
-                BookReaderFloatingBridge.toggleFavorite()
-            }.also { bubbleFavoriteButton = it })
-            addView(createControlButton(R.drawable.ic_overlay_repeat, bubbleScale) {
-                Log.d(
-                    FLOATING_BUBBLE_LOG_TAG,
-                    "repeat button clicked before=${BookReaderFloatingBridge.isCueLoopEnabled()}"
-                )
-                BookReaderFloatingBridge.toggleCueLoop()
-                Log.d(
-                    FLOATING_BUBBLE_LOG_TAG,
-                    "repeat button clicked after=${BookReaderFloatingBridge.isCueLoopEnabled()}"
-                )
-            }.also { bubbleRepeatButton = it })
         }
         val bubbleParams = LinearLayout.LayoutParams(bubbleSizePx, bubbleSizePx).apply {
             marginEnd = (8 * density * bubbleScale).toInt()
@@ -1266,7 +1283,6 @@ companion object {
         }
         bubbleControlsRow = controls
         updateBubbleLockIcon()
-        updateBubbleRepeatIcon(BookReaderFloatingBridge.isCueLoopEnabled())
         row.addView(bubble)
         row.addView(controls)
         host.addView(row)
@@ -1532,8 +1548,8 @@ companion object {
         val verticalSubtitle = subtitleVerticalCanvasView
         val settings = loadAudiobookSettingsConfig(this)
         val verticalWriting = settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL
-        val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleTimeline()
         val normalized = text?.trim()?.takeIf { it.isNotEmpty() }
+        val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleData(normalized)
         val displayText = normalized
         if (!subtitleEnabledByData || normalized == null) {
             subtitle.animate().cancel()
@@ -3736,13 +3752,11 @@ companion object {
                     null
                 )
             },
-            onMineEntry = { content -> exportFloatingHoshiLookupEntryToAnki(content, layer) },
-            onDuplicateCheck = { expression ->
-                runBlocking {
-                    withContext(Dispatchers.IO) {
-                        checkAnkiDuplicateByFirstFieldAsync(this@AudiobookFloatingOverlayService, expression)
-                    }
-                }
+            onMineEntryAsync = { content, onComplete ->
+                exportFloatingHoshiLookupEntryToAnkiAsync(content, layer, onComplete)
+            },
+            onDuplicateCheckAsync = { expression, onComplete ->
+                checkFloatingAnkiDuplicateAsync(expression, onComplete)
             },
             onViewDuplicate = { noteIds ->
                 openAnkiDuplicateNotesInBrowser(this@AudiobookFloatingOverlayService, noteIds)
@@ -4292,21 +4306,6 @@ companion object {
         )
     }
 
-    private fun updateBubbleFavoriteIcon(isFavorite: Boolean) {
-        bubbleFavoriteButton?.setColorFilter(
-            if (isFavorite) 0xFFFFD54F.toInt() else 0xFFFFFFFF.toInt()
-        )
-    }
-
-    private fun updateBubbleRepeatIcon(enabled: Boolean) {
-        bubbleRepeatButton?.setImageResource(
-            if (enabled) R.drawable.ic_overlay_repeat_one else R.drawable.ic_overlay_repeat
-        )
-        bubbleRepeatButton?.setColorFilter(
-            if (enabled) 0xFF90CAF9.toInt() else 0xFFFFFFFF.toInt()
-        )
-    }
-
     private fun updatePlayPauseIcon(isPlaying: Boolean) {
         val controls = subtitleControlsRow ?: return
         val playPause = controls.findViewWithTag<ImageButton>("playPause") ?: return
@@ -4549,8 +4548,6 @@ companion object {
         bubbleRow = null
         bubbleButton = null
         bubbleControlsRow = null
-        bubbleFavoriteButton = null
-        bubbleRepeatButton = null
         bubbleLockButton = null
         bubbleControlsVisible = false
     }
@@ -4804,77 +4801,104 @@ companion object {
         return ankiExportResultMessage(this, classifyAnkiExportFailure(this, error))
     }
 
-    private fun exportFloatingHoshiLookupEntryToAnki(content: String, layer: ReaderLookupLayer): Boolean {
-        logDebug("AnkiExportDebug") {
-            "floatingHoshiExport rawContentLen=${content.length} rawPrefix=${content.take(120)}"
-        }
-        val payload = runCatching { JSONObject(content) }.getOrNull() ?: return false
-        val expression = payload.optString("expression").trim().ifBlank {
-            payload.optString("matched").trim()
-        }
-        if (expression.isBlank()) return false
-        val cueSnapshot = BookReaderFloatingBridge.currentCue() ?: return false
-        val settings = loadAudiobookSettingsConfig(this)
-        val reading = payload.optString("reading").trim().takeIf { it.isNotBlank() }
-        val glossary = payload.optString("glossary").trim().ifBlank {
-            payload.optString("glossaryFirst").trim().ifBlank { expression }
-        }
-        val frequency = payload.optString("frequenciesHtml").trim().ifBlank {
-            payload.optString("freqHarmonicRank").trim()
-        }
-        val pitch = payload.optString("pitchCategories").trim().ifBlank {
-            payload.optString("pitchPositions").trim()
-        }
-        val dictionaryName = payload.optString("selectedDictionary").trim()
-        val sentence = cueSnapshot.fullSentenceText ?: cueSnapshot.text
-        val exportResult = runBlocking {
-            withContext(Dispatchers.IO) {
-                val preparedLookupAudio = prepareLookupAudioForAnkiExport(
-                    context = this@AudiobookFloatingOverlayService,
-                    term = expression,
-                    reading = reading,
-                    settings = settings
-                )
-                try {
-                    addLookupDefinitionToAnkiShared(
-                        context = this@AudiobookFloatingOverlayService,
-                        cueText = cueSnapshot.text,
-                        cueStartMs = cueSnapshot.fullSentenceStartMs ?: cueSnapshot.startMs,
-                        cueEndMs = cueSnapshot.fullSentenceEndMs ?: cueSnapshot.endMs,
-                        audioUri = cueSnapshot.audioUri?.let { runCatching { Uri.parse(it) }.getOrNull() },
-                        lookupAudioUri = preparedLookupAudio?.uri,
-                        bookTitle = cueSnapshot.bookTitle,
-                        entry = DictionaryEntry(
-                            term = expression,
-                            reading = reading,
-                            definitions = listOf(glossary),
-                            pitch = pitch.ifBlank { null },
-                            frequency = frequency.ifBlank { null },
-                            dictionary = dictionaryName.ifBlank { expression }
-                        ),
-                        definition = glossary,
-                        glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
-                        dictionaryCss = layer.hoshiDictionaryStyles[dictionaryName],
-                        groupedDictionaries = emptyList(),
-                        popupSelectionText = payload.optString("popupSelectionText").trim().takeIf { it.isNotBlank() }
-                            ?: layer.selectionText,
-                        sentenceOverride = sentence,
-                        lookupTermOverride = expression
-                    )
-                } finally {
-                    preparedLookupAudio?.cleanup?.invoke()
-                }
+    private fun exportFloatingHoshiLookupEntryToAnkiAsync(
+        content: String,
+        layer: ReaderLookupLayer,
+        onComplete: (Boolean) -> Unit,
+    ) {
+        serviceScope.launch {
+            logDebug("AnkiExportDebug") {
+                "floatingHoshiExport rawContentLen=${content.length} rawPrefix=${content.take(120)}"
             }
+            val success = runCatching {
+                val payload = runCatching { JSONObject(content) }.getOrNull() ?: return@runCatching false
+                val expression = payload.optString("expression").trim().ifBlank {
+                    payload.optString("matched").trim()
+                }
+                if (expression.isBlank()) return@runCatching false
+                val cueSnapshot = BookReaderFloatingBridge.currentCue() ?: return@runCatching false
+                val settings = loadAudiobookSettingsConfig(this@AudiobookFloatingOverlayService)
+                val reading = payload.optString("reading").trim().takeIf { it.isNotBlank() }
+                val glossary = payload.optString("glossary").trim().ifBlank {
+                    payload.optString("glossaryFirst").trim().ifBlank { expression }
+                }
+                val frequency = payload.optString("frequenciesHtml").trim().ifBlank {
+                    payload.optString("freqHarmonicRank").trim()
+                }
+                val pitch = payload.optString("pitchCategories").trim().ifBlank {
+                    payload.optString("pitchPositions").trim()
+                }
+                val dictionaryName = payload.optString("selectedDictionary").trim()
+                val sentence = cueSnapshot.fullSentenceText ?: cueSnapshot.text
+                val exportResult = withContext(Dispatchers.IO) {
+                    val preparedLookupAudio = prepareLookupAudioForAnkiExport(
+                        context = this@AudiobookFloatingOverlayService,
+                        term = expression,
+                        reading = reading,
+                        settings = settings
+                    )
+                    try {
+                        addLookupDefinitionToAnkiShared(
+                            context = this@AudiobookFloatingOverlayService,
+                            cueText = cueSnapshot.text,
+                            cueStartMs = cueSnapshot.fullSentenceStartMs ?: cueSnapshot.startMs,
+                            cueEndMs = cueSnapshot.fullSentenceEndMs ?: cueSnapshot.endMs,
+                            audioUri = cueSnapshot.audioUri?.let { runCatching { Uri.parse(it) }.getOrNull() },
+                            lookupAudioUri = preparedLookupAudio?.uri,
+                            bookTitle = cueSnapshot.bookTitle,
+                            entry = DictionaryEntry(
+                                term = expression,
+                                reading = reading,
+                                definitions = listOf(glossary),
+                                pitch = pitch.ifBlank { null },
+                                frequency = frequency.ifBlank { null },
+                                dictionary = dictionaryName.ifBlank { expression }
+                            ),
+                            definition = glossary,
+                            glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
+                            dictionaryCss = layer.hoshiDictionaryStyles[dictionaryName],
+                            groupedDictionaries = emptyList(),
+                            popupSelectionText = payload.optString("popupSelectionText").trim().takeIf { it.isNotBlank() }
+                                ?: layer.selectionText,
+                            sentenceOverride = sentence,
+                            lookupTermOverride = expression
+                        )
+                    } finally {
+                        preparedLookupAudio?.cleanup?.invoke()
+                    }
+                }
+                val message = ankiExportResultMessage(this@AudiobookFloatingOverlayService, exportResult)
+                if (message.isNotBlank() && exportResult !is AnkiExportResult.DuplicateSkipped) {
+                    Toast.makeText(
+                        this@AudiobookFloatingOverlayService,
+                        message.take(220),
+                        if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                    ).show()
+                }
+                exportResult == AnkiExportResult.Added || exportResult is AnkiExportResult.DuplicateSkipped
+            }.getOrElse { error ->
+                Log.w("HoshiLookupPopup", "floatingHoshiExport async failed", error)
+                false
+            }
+            onComplete(success)
         }
-        val message = ankiExportResultMessage(this, exportResult)
-        if (message.isNotBlank() && exportResult !is AnkiExportResult.DuplicateSkipped) {
-            Toast.makeText(
-                this,
-                message.take(220),
-                if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
-            ).show()
+    }
+
+    private fun checkFloatingAnkiDuplicateAsync(
+        expression: String,
+        onComplete: (AnkiDuplicateCheckResult) -> Unit,
+    ) {
+        serviceScope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    checkAnkiDuplicateByFirstFieldAsync(this@AudiobookFloatingOverlayService, expression)
+                }
+            }.getOrElse { error ->
+                Log.w("HoshiLookupPopup", "floating duplicate async failed expression=${expression.take(32)}", error)
+                AnkiDuplicateCheckResult()
+            }
+            onComplete(result)
         }
-        return exportResult == AnkiExportResult.Added || exportResult is AnkiExportResult.DuplicateSkipped
     }
 
     private fun rebuildOverlay() {

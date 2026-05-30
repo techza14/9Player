@@ -142,7 +142,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupHtml
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupItem
@@ -162,6 +161,8 @@ import java.util.Locale
 class MainActivity : AppCompatActivity() {
     private var floatingOverlayStartJob: Job? = null
     private var autoUpdateCheckJob: Job? = null
+    internal var launchUpdatePromptRelease by mutableStateOf<AppUpdateRelease?>(null)
+        private set
 
     override fun onCreate(savedInstanceState: Bundle?) {
         applySavedAppLanguage(this)
@@ -184,6 +185,11 @@ class MainActivity : AppCompatActivity() {
             (settings.floatingOverlayEnabled || settings.floatingOverlaySubtitleEnabled) &&
                 BookReaderFloatingBridge.currentAudioUri() != null &&
                 BookReaderFloatingBridge.isPlaying()
+        Log.d(
+            FLOATING_OVERLAY_EXIT_LOG_TAG,
+            "Main onStart keepOverlay=$keepOverlay audio=${BookReaderFloatingBridge.currentAudioUri() != null} " +
+                "playing=${BookReaderFloatingBridge.isPlaying()}"
+        )
         if (!keepOverlay) {
             stopAudiobookFloatingOverlayService(this)
         }
@@ -229,15 +235,17 @@ class MainActivity : AppCompatActivity() {
             saveAppUpdateCheckedAt(this@MainActivity, System.currentTimeMillis())
             val release = (result as? AppUpdateCheckResult.UpdateAvailable)?.release ?: return@launch
             if (isFinishing || isDestroyed) return@launch
-            android.app.AlertDialog.Builder(this@MainActivity)
-                .setTitle(getString(R.string.update_launch_prompt_title))
-                .setMessage(getString(R.string.update_launch_prompt_message, release.displayName))
-                .setPositiveButton(getString(R.string.update_launch_prompt_positive)) { _, _ ->
-                    downloadUpdateFromLaunchPrompt(release)
-                }
-                .setNegativeButton(getString(R.string.update_launch_prompt_negative), null)
-                .show()
+            launchUpdatePromptRelease = release
         }
+    }
+
+    internal fun dismissLaunchUpdatePrompt() {
+        launchUpdatePromptRelease = null
+    }
+
+    internal fun downloadLaunchUpdatePrompt(release: AppUpdateRelease) {
+        launchUpdatePromptRelease = null
+        downloadUpdateFromLaunchPrompt(release)
     }
 
     private fun downloadUpdateFromLaunchPrompt(release: AppUpdateRelease) {
@@ -324,6 +332,7 @@ private val FIELD_VARIABLE_CHOICES = listOf(
 )
 private const val MAIN_LOOKUP_DEBUG_LOG_TAG = "MainLookupDebug"
 private const val ANKI_CONFIG_LOG_TAG = "AnkiConfig"
+private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
 
 internal data class ReaderBook(
     val id: String,
@@ -351,6 +360,7 @@ private data class ReturnedBookProgress(
 private fun ReaderSyncScreen() {
     val context = LocalContext.current
     val activity = context as? Activity
+    val mainActivity = activity as? MainActivity
     val lifecycleOwner = LocalLifecycleOwner.current
     val view = LocalView.current
     val rootDensity = LocalDensity.current
@@ -462,7 +472,6 @@ private fun ReaderSyncScreen() {
     var collectionFirstLayerHtml by remember { mutableStateOf("") }
     var collectionFirstLayerResults by remember { mutableStateOf<List<LookupResult>>(emptyList()) }
     var collectionFirstLayerClearSelectionSignal by remember { mutableStateOf(0) }
-    var mainLookupRequestNonce by remember { mutableStateOf(0L) }
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
     var versionTapCount by remember { mutableStateOf(0) }
     var showVersionEasterGif by remember { mutableStateOf(false) }
@@ -470,7 +479,6 @@ private fun ReaderSyncScreen() {
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
-    var dragProgress by remember { mutableStateOf<Float?>(null) }
     var pendingCollectionPlayMs by remember { mutableStateOf<Long?>(null) }
     var pendingCollectionStopMs by remember { mutableStateOf<Long?>(null) }
     var collectionPlayRequestNonce by remember { mutableStateOf(0L) }
@@ -545,6 +553,7 @@ private fun ReaderSyncScreen() {
             addBookDialogVisible -> addBookDialogVisible = false
             importGuideVisible -> importGuideVisible = false
             autoUpdatePromptVisible -> autoUpdatePromptVisible = false
+            mainActivity?.launchUpdatePromptRelease != null -> mainActivity.dismissLaunchUpdatePrompt()
             clearCollectionsConfirmVisible -> clearCollectionsConfirmVisible = false
             deleteBooksConfirmVisible -> deleteBooksConfirmVisible = false
             activeSection != MiningSection.MAIN -> activeSection = MiningSection.MAIN
@@ -588,7 +597,7 @@ private fun ReaderSyncScreen() {
         if (!updateConfig.firstPromptShown) {
             autoUpdatePromptVisible = true
         } else if (updateConfig.autoUpdateEnabled) {
-            (activity as? MainActivity)?.checkAppUpdateInBackground(force = false)
+            mainActivity?.checkAppUpdateInBackground(force = false)
         }
     }
 
@@ -1979,108 +1988,122 @@ private fun ReaderSyncScreen() {
         collectionFirstLayerClearSelectionSignal += 1
     }
 
-    fun exportMainHoshiLookupEntryToAnki(content: String): Boolean {
-        android.util.Log.d(
-            "AnkiExportDebug",
-            "mainHoshiExport rawContentLen=${content.length} rawPrefix=${content.take(120)}"
-        )
-        val payload = runCatching { JSONObject(content) }.getOrNull() ?: run {
-            android.util.Log.d("AnkiExportDebug", "mainHoshiExport payloadParseFailed")
-            return false
-        }
-        val expression = payload.optString("expression").trim().ifBlank {
-            payload.optString("matched").trim()
-        }
-        if (expression.isBlank()) {
+    fun exportMainHoshiLookupEntryToAnkiAsync(content: String, onComplete: (Boolean) -> Unit) {
+        scope.launch {
             android.util.Log.d(
                 "AnkiExportDebug",
-                "mainHoshiExport expressionBlank payloadKeys=${payload.keys().asSequence().joinToString(",")}"
+                "mainHoshiExport rawContentLen=${content.length} rawPrefix=${content.take(120)}"
             )
-            return false
-        }
-        val reading = payload.optString("reading").trim().takeIf { it.isNotBlank() }
-        val glossary = payload.optString("glossary").trim().ifBlank {
-            payload.optString("glossaryFirst").trim().ifBlank { expression }
-        }
-        val frequency = payload.optString("frequenciesHtml").trim().ifBlank {
-            payload.optString("freqHarmonicRank").trim()
-        }
-        val pitch = payload.optString("pitchCategories").trim().ifBlank {
-            payload.optString("pitchPositions").trim()
-        }
-        val primaryDictionaryName = payload.optString("selectedDictionary").trim()
-        val sourceCue = mainHoshiLookupCue
-        val cueText = sourceCue?.text?.trim()?.takeIf { it.isNotBlank() }
-            ?: mainHoshiLookupTitle.trim().ifBlank { expression }
-        val cue = sourceCue ?: SubtitleCue(startMs = 0L, endMs = 0L, text = cueText)
-        val popupSelectionText = payload.optString("popupSelectionText").trim().takeIf { it.isNotBlank() }
-            ?: mainHoshiLookupSelectedRange?.let { range ->
-                val start = range.first.coerceIn(0, cue.text.length)
-                val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
-                if (endExclusive > start) cue.text.substring(start, endExclusive) else null
-            }?.trim()?.takeIf { it.isNotBlank() }
-        val exportAudioUri = mainHoshiLookupAudioUri
-        android.util.Log.d(
-            "AnkiExportDebug",
-            "mainHoshiExport payload expression=$expression reading=${reading.orEmpty()} dict=$primaryDictionaryName " +
-                "glossaryLen=${glossary.length} frequencyLen=${frequency.length} pitchLen=${pitch.length} " +
-                "popupSelectionLen=${popupSelectionText.orEmpty().length} audioUri=${exportAudioUri?.toString().orEmpty()} " +
-                "lookupCue=${sourceCue?.text.orEmpty().take(48)}"
-        )
-        val exportResult = runBlocking {
-            withContext(Dispatchers.IO) {
-                val preparedLookupAudio = prepareLookupAudioForAnkiExport(
-                    context = context,
-                    term = expression,
-                    reading = reading,
-                    settings = audiobookSettings
-                )
-                try {
-                    addLookupDefinitionToAnkiMain(
-                        context = context,
-                        cue = cue,
-                        audioUri = exportAudioUri,
-                        lookupAudioUri = preparedLookupAudio?.uri,
-                        bookTitle = readerBooks.firstOrNull { it.audioUri == exportAudioUri }?.title,
-                        entry = DictionaryEntry(
-                            term = expression,
-                            reading = reading,
-                            definitions = listOf(glossary),
-                            pitch = pitch.ifBlank { null },
-                            frequency = frequency.ifBlank { null },
-                            dictionary = primaryDictionaryName.ifBlank { expression }
-                        ),
-                        definition = glossary,
-                        glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
-                        dictionaryCss = dictionaryCssByName[primaryDictionaryName],
-                        groupedDictionaries = emptyList(),
-                        popupSelectionText = popupSelectionText,
-                        lookupTermOverride = expression
-                    )
-                } finally {
-                    preparedLookupAudio?.cleanup?.invoke()
+            val success = runCatching {
+                val payload = runCatching { JSONObject(content) }.getOrNull() ?: run {
+                    android.util.Log.d("AnkiExportDebug", "mainHoshiExport payloadParseFailed")
+                    return@runCatching false
                 }
+                val expression = payload.optString("expression").trim().ifBlank {
+                    payload.optString("matched").trim()
+                }
+                if (expression.isBlank()) {
+                    android.util.Log.d(
+                        "AnkiExportDebug",
+                        "mainHoshiExport expressionBlank payloadKeys=${payload.keys().asSequence().joinToString(",")}"
+                    )
+                    return@runCatching false
+                }
+                val reading = payload.optString("reading").trim().takeIf { it.isNotBlank() }
+                val glossary = payload.optString("glossary").trim().ifBlank {
+                    payload.optString("glossaryFirst").trim().ifBlank { expression }
+                }
+                val frequency = payload.optString("frequenciesHtml").trim().ifBlank {
+                    payload.optString("freqHarmonicRank").trim()
+                }
+                val pitch = payload.optString("pitchCategories").trim().ifBlank {
+                    payload.optString("pitchPositions").trim()
+                }
+                val primaryDictionaryName = payload.optString("selectedDictionary").trim()
+                val sourceCue = mainHoshiLookupCue
+                val cueText = sourceCue?.text?.trim()?.takeIf { it.isNotBlank() }
+                    ?: mainHoshiLookupTitle.trim().ifBlank { expression }
+                val cue = sourceCue ?: SubtitleCue(startMs = 0L, endMs = 0L, text = cueText)
+                val popupSelectionText = payload.optString("popupSelectionText").trim().takeIf { it.isNotBlank() }
+                    ?: mainHoshiLookupSelectedRange?.let { range ->
+                        val start = range.first.coerceIn(0, cue.text.length)
+                        val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
+                        if (endExclusive > start) cue.text.substring(start, endExclusive) else null
+                    }?.trim()?.takeIf { it.isNotBlank() }
+                val exportAudioUri = mainHoshiLookupAudioUri
+                android.util.Log.d(
+                    "AnkiExportDebug",
+                    "mainHoshiExport payload expression=$expression reading=${reading.orEmpty()} dict=$primaryDictionaryName " +
+                        "glossaryLen=${glossary.length} frequencyLen=${frequency.length} pitchLen=${pitch.length} " +
+                        "popupSelectionLen=${popupSelectionText.orEmpty().length} audioUri=${exportAudioUri?.toString().orEmpty()} " +
+                        "lookupCue=${sourceCue?.text.orEmpty().take(48)}"
+                )
+                val exportResult = withContext(Dispatchers.IO) {
+                    val preparedLookupAudio = prepareLookupAudioForAnkiExport(
+                        context = context,
+                        term = expression,
+                        reading = reading,
+                        settings = audiobookSettings
+                    )
+                    try {
+                        addLookupDefinitionToAnkiMain(
+                            context = context,
+                            cue = cue,
+                            audioUri = exportAudioUri,
+                            lookupAudioUri = preparedLookupAudio?.uri,
+                            bookTitle = readerBooks.firstOrNull { it.audioUri == exportAudioUri }?.title,
+                            entry = DictionaryEntry(
+                                term = expression,
+                                reading = reading,
+                                definitions = listOf(glossary),
+                                pitch = pitch.ifBlank { null },
+                                frequency = frequency.ifBlank { null },
+                                dictionary = primaryDictionaryName.ifBlank { expression }
+                            ),
+                            definition = glossary,
+                            glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
+                            dictionaryCss = dictionaryCssByName[primaryDictionaryName],
+                            groupedDictionaries = emptyList(),
+                            popupSelectionText = popupSelectionText,
+                            lookupTermOverride = expression
+                        )
+                    } finally {
+                        preparedLookupAudio?.cleanup?.invoke()
+                    }
+                }
+                val message = ankiExportResultMessage(context, exportResult)
+                android.util.Log.d(
+                    "AnkiExportDebug",
+                    "mainHoshiExport result=${exportResult.javaClass.simpleName} message=${message.take(220)}"
+                )
+                if (message.isNotBlank() && exportResult !is AnkiExportResult.DuplicateSkipped) {
+                    Toast.makeText(
+                        context,
+                        message.take(220),
+                        if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                    ).show()
+                }
+                exportResult == AnkiExportResult.Added ||
+                    exportResult is AnkiExportResult.DuplicateSkipped
+            }.getOrElse { error ->
+                android.util.Log.w("AnkiExportDebug", "mainHoshiExport async failed", error)
+                false
             }
+            onComplete(success)
         }
-        val message = ankiExportResultMessage(context, exportResult)
-        android.util.Log.d(
-            "AnkiExportDebug",
-            "mainHoshiExport result=${exportResult.javaClass.simpleName} message=${message.take(220)}"
-        )
-        if (message.isNotBlank() && exportResult !is AnkiExportResult.DuplicateSkipped) {
-            Toast.makeText(
-                context,
-                message.take(220),
-                if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
-            ).show()
-        }
-        return exportResult == AnkiExportResult.Added ||
-            exportResult is AnkiExportResult.DuplicateSkipped
     }
 
-    fun checkMainAnkiDuplicate(expression: String): AnkiDuplicateCheckResult {
-        return runBlocking {
-            checkAnkiDuplicateByFirstFieldAsync(context, expression)
+    fun checkMainAnkiDuplicateAsync(expression: String, onComplete: (AnkiDuplicateCheckResult) -> Unit) {
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    checkAnkiDuplicateByFirstFieldAsync(context, expression)
+                }
+            }.getOrElse { error ->
+                android.util.Log.w("AnkiExportDebug", "main duplicate async failed expression=${expression.take(32)}", error)
+                AnkiDuplicateCheckResult()
+            }
+            onComplete(result)
         }
     }
 
@@ -2163,7 +2186,6 @@ private fun ReaderSyncScreen() {
     }
     val sliderValue = when {
         durationMs <= 0L -> 0f
-        dragProgress != null -> dragProgress!!.coerceIn(0f, 1f)
         else -> (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     }
 
@@ -2720,8 +2742,12 @@ private fun ReaderSyncScreen() {
                                     callbacks = PopupWebViewCallbacks(
                                         onTapOutside = { dictionaryFirstLayerClearSelectionSignal += 1 },
                                         onSwipeDismiss = { dictionaryFirstLayerClearSelectionSignal += 1 },
-                                        onMineEntry = { content -> exportMainHoshiLookupEntryToAnki(content) },
-                                        onDuplicateCheck = { expression -> checkMainAnkiDuplicate(expression) },
+                                        onMineEntryAsync = { content, onComplete ->
+                                            exportMainHoshiLookupEntryToAnkiAsync(content, onComplete)
+                                        },
+                                        onDuplicateCheckAsync = { expression, onComplete ->
+                                            checkMainAnkiDuplicateAsync(expression, onComplete)
+                                        },
                                         onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
                                         onTextSelected = { selection ->
                                             val popup = createMainHoshiFirstLayerPopup(selection = selection)
@@ -2962,8 +2988,16 @@ private fun ReaderSyncScreen() {
                     markAutoUpdateFirstPromptShown(context)
                     saveAutoUpdateEnabled(context, true)
                     autoUpdatePromptVisible = false
-                    (activity as? MainActivity)?.checkAppUpdateInBackground(force = true)
+                    mainActivity?.checkAppUpdateInBackground(force = true)
                 }
+            )
+        }
+
+        mainActivity?.launchUpdatePromptRelease?.let { release ->
+            AppUpdateLaunchPromptDialog(
+                releaseDisplayName = release.displayName,
+                onDismiss = { mainActivity.dismissLaunchUpdatePrompt() },
+                onDownload = { mainActivity.downloadLaunchUpdatePrompt(release) }
             )
         }
 
@@ -3141,8 +3175,14 @@ private fun ReaderSyncScreen() {
                 onTapOutside = {
                     collectionFirstLayerClearSelectionSignal += 1
                 },
-                onMineEntry = { content -> exportMainHoshiLookupEntryToAnki(content) },
-                onDuplicateCheck = { expression -> checkMainAnkiDuplicate(expression) },
+                onMineEntry = { false },
+                onMineEntryAsync = { content, onComplete ->
+                    exportMainHoshiLookupEntryToAnkiAsync(content, onComplete)
+                },
+                onDuplicateCheck = { AnkiDuplicateCheckResult() },
+                onDuplicateCheckAsync = { expression, onComplete ->
+                    checkMainAnkiDuplicateAsync(expression, onComplete)
+                },
                 onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
                 onPlayWordAudio = { term, reading ->
                     if (!term.isNullOrBlank()) {
@@ -3193,10 +3233,12 @@ private fun ReaderSyncScreen() {
                     )
                 }
             },
-            onMineEntry = { content ->
-                exportMainHoshiLookupEntryToAnki(content)
+            onMineEntryAsync = { content, onComplete ->
+                exportMainHoshiLookupEntryToAnkiAsync(content, onComplete)
             },
-            onDuplicateCheck = { expression -> checkMainAnkiDuplicate(expression) },
+            onDuplicateCheckAsync = { expression, onComplete ->
+                checkMainAnkiDuplicateAsync(expression, onComplete)
+            },
             onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
             onCloseAll = {
                 clearMainHoshiChildPopups()

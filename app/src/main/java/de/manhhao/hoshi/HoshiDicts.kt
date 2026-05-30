@@ -1,12 +1,5 @@
 package de.manhhao.hoshi
 
-class ImportResult(
-    val success: Boolean,
-    val termCount: Long,
-    val metaCount: Long,
-    val mediaCount: Long,
-)
-
 class DictionaryStyle(
     val dictName: String,
     val styles: String,
@@ -58,9 +51,7 @@ object HoshiDicts {
 
     val lookupObject: Long = createLookupObject()
 
-    external fun importDictionary(zipPath: String, outputDir: String): ImportResult
     external fun createLookupObject(): Long
-    external fun destroyLookupObject(session: Long)
     external fun rebuildQuery(
         session: Long,
         termPaths: Array<String>,

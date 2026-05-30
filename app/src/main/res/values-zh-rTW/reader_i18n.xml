@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="search">搜尋</string>
-    <string name="replace">取代</string>
     <string name="reader_selection_share">分享</string>
     <string name="reader_selection_more">更多選單</string>
+    <string name="reader_selection_process_text">選擇要使用的應用程式</string>
     <string name="reader_selection_browser_search">網頁搜尋</string>
     <string name="reader_selection_copied">已複製</string>
     <string name="reader_convert">轉換</string>
@@ -29,6 +29,8 @@
     <string name="show_brightness_view">顯示亮度調節控制項</string>
     <string name="no_anim_scroll_page">禁用捲動點擊動畫</string>
     <string name="progress_bar_behavior">進度條行為</string>
+    <string name="reader_selection_primary_action">選擇選單首按鈕</string>
+    <string name="reader_selection_primary_default">預設</string>
     <string name="click_regional_config">點擊區域設定</string>
     <string name="show_read_title_addition">展示頂部工具列附加區域</string>
     <string name="read_bar_style_follow_page">工具列樣式跟隨頁面</string>
@@ -55,6 +57,7 @@
     <string name="reader_style_page_anim">翻頁動畫</string>
     <string name="reader_style_anim_cover">覆蓋</string>
     <string name="reader_style_anim_slide">滑動</string>
+    <string name="reader_style_anim_simulation">仿真</string>
     <string name="reader_style_anim_scroll">捲動</string>
     <string name="reader_style_anim_none">無</string>
     <string name="reader_style_color_background">文字顏色和背景(長按自訂)</string>
@@ -75,7 +78,9 @@
     <string name="reader_keep_light_default">預設</string>
     <string name="reader_keep_light_always">常亮</string>
     <string name="reader_progress_behavior_page">調整本章頁數</string>
-    <string name="reader_progress_behavior_book">調整全書進度</string>
+    <string name="reader_progress_behavior_book">調整章節位置</string>
+    <string name="reader_chapter_jump_confirm_title">章節跳轉確認</string>
+    <string name="reader_chapter_jump_confirm_message">確定要跳轉章節嗎？</string>
     <string name="read_body_to_lh">擴展到瀏海</string>
     <string name="disable_return_key">禁用返回鍵</string>
     <string name="play">播放</string>
@@ -120,9 +125,6 @@
     <string name="reader_title_screen_direction">螢幕方向</string>
     <string name="reader_title_keep_light">螢幕逾時</string>
     <string name="reader_title_progress_behavior">進度條行為</string>
-    <string name="reader_dialog_confirm">確定</string>
-    <string name="reader_dialog_cancel">取消</string>
-    <string name="reader_title_click_region">點擊區域設定</string>
     <string name="reader_no_audio">這本書沒有綁定音訊</string>
     <string name="reader_search_input_required">請輸入搜尋內容</string>
     <string name="reader_search_no_results">沒有搜尋結果</string>
@@ -138,7 +140,6 @@
     <string name="reader_catalog_search_chapters">搜尋目錄</string>
     <string name="reader_catalog_search_bookmarks">搜尋書籤</string>
     <string name="reader_unknown_chapter">未知章節</string>
-    <string name="reader_info_debug">頁數 %1$d，章節 %2$d</string>
     <string name="reader_indent_none">無縮排</string>
     <string name="reader_indent_one">一字縮排</string>
     <string name="reader_indent_two">兩字縮排</string>
@@ -151,10 +152,7 @@
     <string name="reader_margin_label">邊距：%1$ddp</string>
     <string name="reader_title_margin">邊距</string>
     <string name="reader_dialog_done">完成</string>
-    <string name="reader_info_show">顯示頁眉頁腳</string>
-    <string name="reader_info_hide">隱藏頁眉頁腳</string>
     <string name="reader_title_info">提示資訊</string>
-    <string name="reader_info_saved">頁眉頁腳顯示狀態已儲存</string>
     <string name="reader_open_ebook_failed">開啟 ebook 失敗：%1$s</string>
     <string name="reader_pause">暫停</string>
     <string name="reader_listen">聽書</string>
@@ -162,6 +160,15 @@
     <string name="reader_no_srt">這本書沒有綁定 SRT</string>
     <string name="reader_srt_parse_failed">SRT 沒有解析出字幕</string>
     <string name="reader_srt_loading">正在載入 SRT...</string>
+    <string name="reader_cross_page_cue_window">跨頁句子視窗</string>
+    <string name="reader_stop_on_image">遇到圖片時停止播放</string>
+    <string name="reader_image_pause_seconds">圖片暫停秒數（0=翻頁恢復）</string>
+    <string name="reader_reverse_vertical_controls">直書時反轉聽書/播放按鈕動作</string>
+    <string name="reader_reverse_vertical_progress">直書時反轉章節進度方向</string>
+    <string name="reader_chapter_source">章節來源</string>
+    <string name="reader_chapter_source_book">書的章節</string>
+    <string name="reader_chapter_source_m4b">M4B 章節</string>
+    <string name="reader_chapter_source_m4b_unavailable">目前音訊沒有可用的 M4B 章節，已回退到書的章節</string>
     <string name="reader_ebook_not_ready">ebook 還沒載入完成</string>
     <string name="reader_match_title">Match</string>
     <string name="reader_match_start">開始匹配</string>
@@ -173,4 +180,12 @@
     <string name="reader_srt_parse_failed_detail">SRT 沒有解析出字幕，請確認檔案是標準 .srt。</string>
     <string name="reader_srt_load_failed">SRT 載入失敗：%1$s</string>
     <string name="reader_match_search_window">Search Window: %1$d</string>
+    <string name="reader_simulated_reading_title">模擬追讀</string>
+    <string name="reader_simulated_reading_switch">開關</string>
+    <string name="reader_simulated_reading_enable">啟用模擬追讀</string>
+    <string name="reader_simulated_reading_start_date">開始日期</string>
+    <string name="reader_simulated_reading_start_date_value">開始日期：%1$s</string>
+    <string name="reader_simulated_reading_start_chapter">起始章節</string>
+    <string name="reader_simulated_reading_daily_chapters">每日章節數</string>
+    <string name="reader_simulated_reading_locked">章節尚未解鎖</string>
 </resources>

@@ -5,9 +5,13 @@ import android.net.Uri
 import android.util.LruCache
 import android.webkit.WebResourceResponse
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+
+internal const val DICTIONARY_MEDIA_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L
 
 internal data class DictionaryMediaPayload(
     val mimeType: String,
@@ -107,7 +111,8 @@ internal fun loadDictionaryMediaPayload(
         val bundled = openBundledDictionaryResource(context, mappedUri)
         if (bundled != null) {
             bundled.inputStream.use { input ->
-                val bytes = input.readBytes()
+                val bytes = input.readDictionaryMediaBytesLimited(bundled.sizeBytes)
+                    ?: return@getOrLoad null
                 logDebug("BookLookupTap") {
                     "media load bundled hit uri=$mappedUri mime=${bundled.mimeType} bytes=${bytes.size}"
                 }
@@ -119,7 +124,8 @@ internal fun loadDictionaryMediaPayload(
         }
         val mounted = openMountedMdictResource(context, mappedUri) ?: return@getOrLoad null
         mounted.inputStream.use { input ->
-            val bytes = input.readBytes()
+            val bytes = input.readDictionaryMediaBytesLimited(mounted.sizeBytes)
+                ?: return@getOrLoad null
             logDebug("BookLookupTap") {
                 "media load mounted hit uri=$mappedUri mime=${mounted.mimeType} bytes=${bytes.size}"
             }
@@ -129,6 +135,21 @@ internal fun loadDictionaryMediaPayload(
             )
         }
     }
+}
+
+private fun InputStream.readDictionaryMediaBytesLimited(knownSize: Long): ByteArray? {
+    if (knownSize > DICTIONARY_MEDIA_RESPONSE_MAX_BYTES) return null
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var total = 0L
+    while (true) {
+        val read = read(buffer)
+        if (read < 0) break
+        total += read.toLong()
+        if (total > DICTIONARY_MEDIA_RESPONSE_MAX_BYTES) return null
+        output.write(buffer, 0, read)
+    }
+    return output.toByteArray()
 }
 
 private fun mapDictionaryMediaRequestUri(requestUri: Uri): Uri? {

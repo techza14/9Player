@@ -20,8 +20,6 @@ android {
         versionCode = 36
         versionName = "1.6.5"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
         externalNativeBuild {
             cmake {
                 cppFlags += listOf("-std=c++23")
@@ -94,12 +92,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation("androidx.compose.material:material-icons-extended")
     testImplementation(libs.junit)
-    androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
 val rustProjectDir = layout.projectDirectory.dir("src/main/rust/mdict_native")

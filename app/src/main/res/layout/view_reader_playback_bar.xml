@@ -1,43 +1,60 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/reader_playback_bar_root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="@drawable/reader_menu_panel_bg"
     android:elevation="8dp"
-    android:gravity="center"
-    android:orientation="horizontal"
     android:paddingStart="20dp"
     android:paddingTop="8dp"
     android:paddingEnd="20dp"
     android:paddingBottom="8dp">
 
     <ImageButton
-        android:id="@+id/reader_playback_prev"
+        android:id="@+id/reader_playback_catalog"
         android:layout_width="46dp"
         android:layout_height="46dp"
-        android:layout_marginEnd="18dp"
+        android:layout_gravity="start|center_vertical"
         android:background="@drawable/reader_menu_touch"
         android:padding="9dp"
-        android:src="@drawable/reader_ic_skip_previous"
-        android:tint="#2C241B" />
+        android:src="@drawable/reader_ic_toc"
+        app:tint="#2C241B" />
 
-    <ImageButton
-        android:id="@+id/reader_playback_toggle"
-        android:layout_width="54dp"
-        android:layout_height="54dp"
-        android:background="@drawable/reader_menu_touch"
-        android:padding="12dp"
-        android:src="@drawable/reader_ic_play_24dp"
-        android:tint="#2C241B" />
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center"
+        android:orientation="horizontal">
 
-    <ImageButton
-        android:id="@+id/reader_playback_next"
-        android:layout_width="46dp"
-        android:layout_height="46dp"
-        android:layout_marginStart="18dp"
-        android:background="@drawable/reader_menu_touch"
-        android:padding="9dp"
-        android:src="@drawable/reader_ic_skip_next"
-        android:tint="#2C241B" />
-</LinearLayout>
+        <ImageButton
+            android:id="@+id/reader_playback_prev"
+            android:layout_width="46dp"
+            android:layout_height="46dp"
+            android:layout_marginEnd="18dp"
+            android:background="@drawable/reader_menu_touch"
+            android:padding="9dp"
+            android:src="@drawable/reader_ic_skip_previous"
+            app:tint="#2C241B" />
+
+        <ImageButton
+            android:id="@+id/reader_playback_toggle"
+            android:layout_width="54dp"
+            android:layout_height="54dp"
+            android:background="@drawable/reader_menu_touch"
+            android:padding="12dp"
+            android:src="@drawable/reader_ic_play_24dp"
+            app:tint="#2C241B" />
+
+        <ImageButton
+            android:id="@+id/reader_playback_next"
+            android:layout_width="46dp"
+            android:layout_height="46dp"
+            android:layout_marginStart="18dp"
+            android:background="@drawable/reader_menu_touch"
+            android:padding="9dp"
+            android:src="@drawable/reader_ic_skip_next"
+            app:tint="#2C241B" />
+    </LinearLayout>
+</FrameLayout>

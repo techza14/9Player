@@ -10,6 +10,7 @@ import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9ReadBookConfig
 import moe.tekuza.m9player.legado.reader.applyM9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.ImageColumn
+import moe.tekuza.m9player.legado.reader.entities.RubyLayoutEngine
 import moe.tekuza.m9player.legado.reader.entities.TextChapter
 import moe.tekuza.m9player.legado.reader.entities.TextColumn
 import moe.tekuza.m9player.legado.reader.entities.TextLine
@@ -34,16 +35,16 @@ internal class VerticalTextChapterLayout(
     private val paragraphSpacing = (config.paragraphSpacingPx * 0.35f).coerceAtLeast(0f)
     private var columnWidth = baseColumnWidth
     private var rubyReservePx = 0f
-    private var rubyByStart: Map<Int, EbookRubySpan> = emptyMap()
+    private var rubyByStart: Map<Int, RubyPlacement> = emptyMap()
 
     fun layout(chapter: TextChapter): TextChapter {
         rubyReservePx = if (chapter.rubySpans.isNotEmpty()) {
-            (config.textSizePx * 0.58f).coerceAtLeast(8f)
+            (config.textSizePx * RubyLayoutEngine.RESERVE_RATIO).coerceAtLeast(8f)
         } else {
             0f
         }
         columnWidth = baseColumnWidth + rubyReservePx
-        rubyByStart = chapter.rubySpans.associateBy { it.start }
+        rubyByStart = buildRubyPlacements(chapter.rubySpans)
         val text = chapter.text
         if (text.isBlank()) {
             chapter.addPage(
@@ -256,6 +257,8 @@ internal class VerticalTextChapterLayout(
                     glyphHeight * token.heightUnits.coerceAtLeast(1)
                 }
                 val ruby = rubyByStart[sourceStart]
+                val rubyStart = ruby?.absoluteStart ?: sourceStart
+                val rubyEnd = ruby?.absoluteEnd ?: sourceEnd
                 line.addColumn(
                     TextColumn(
                         start = y,
@@ -264,8 +267,9 @@ internal class VerticalTextChapterLayout(
                         sourceStart = sourceStart,
                         sourceEnd = sourceEnd,
                         rubyText = ruby?.text,
-                        rubySourceStart = ruby?.start ?: sourceStart,
-                        rubySourceEnd = ruby?.end ?: sourceEnd
+                        rubySourceStart = rubyStart,
+                        rubySourceEnd = rubyEnd,
+                        rubySpan = ruby?.span
                     )
                 )
                 y += tokenHeight
@@ -333,6 +337,21 @@ internal class VerticalTextChapterLayout(
     private fun nextToken(text: String, start: Int, end: Int, splitLatinWords: Boolean): VerticalToken {
         if (start >= end) return VerticalToken("", 0, 0, 0f, false)
         val first = text[start]
+        if (first.isDigit()) {
+            var index = start + 1
+            while (index < end && text[index].isDigit()) {
+                index += 1
+            }
+            val isRunStart = start == 0 || !text[start - 1].isDigit()
+            val tokenLength = if (isRunStart && index - start == 2) 2 else 1
+            return VerticalToken(
+                text = text.substring(start, start + tokenLength),
+                length = tokenLength,
+                heightUnits = 1,
+                heightPx = glyphHeight,
+                isLatinRun = false
+            )
+        }
         if (VerticalTextGlyphEngine.isAsciiWordChar(first)) {
             var index = start + 1
             while (index < end) {

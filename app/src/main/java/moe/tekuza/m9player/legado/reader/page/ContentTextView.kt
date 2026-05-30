@@ -132,6 +132,11 @@ internal class ContentTextView @JvmOverloads constructor(
         invalidate()
     }
 
+    fun setHighlight(highlight: IntRange?) {
+        highlightRange = highlight
+        invalidate()
+    }
+
     fun setScrollContext(
         pages: List<TextPage?>,
         centerIndex: Int,
@@ -237,7 +242,7 @@ internal class ContentTextView @JvmOverloads constructor(
             if (!inLineBounds) return@forEachIndexed
             line.columns.forEachIndexed { columnIndex, column ->
                 if (column !is TextColumn) return@forEachIndexed
-                if (!VerticalTextGlyphEngine.isAsciiAssistToken(column.charData)) return@forEachIndexed
+                if (!VerticalTextGlyphEngine.isSidewaysAsciiToken(column.charData)) return@forEachIndexed
                 if (localY < column.start || localY > column.end) return@forEachIndexed
                 return assistTokenAround(current, lineIndex, columnIndex)
             }
@@ -250,7 +255,7 @@ internal class ContentTextView @JvmOverloads constructor(
             page.lines.forEachIndexed { pageLineIndex, line ->
                 if (line.layoutMode != M9LayoutMode.VERTICAL) return@forEachIndexed
                 line.columns.forEachIndexed { pageColumnIndex, column ->
-                    if (column is TextColumn && VerticalTextGlyphEngine.isAsciiAssistToken(column.charData)) {
+                    if (column is TextColumn && VerticalTextGlyphEngine.isSidewaysAsciiToken(column.charData)) {
                         add(
                             AssistColumnRef(
                                 lineIndex = pageLineIndex,
@@ -339,6 +344,21 @@ internal class ContentTextView @JvmOverloads constructor(
         val start = findColumnRect(range.first, preferStart = true) ?: return null
         val end = findColumnRect(range.last, preferStart = false) ?: start
         return start to end
+    }
+
+    fun rangeBounds(range: IntRange): RectF? {
+        val current = page ?: return null
+        val endExclusive = range.last + 1
+        var bounds: RectF? = null
+        current.lines.forEach { line ->
+            line.columns.filterIsInstance<TextColumn>()
+                .filter { column -> column.sourceStart < endExclusive && column.sourceEnd > range.first }
+                .forEach { column ->
+                    val rect = columnRect(line, column)
+                    bounds = bounds?.apply { union(rect) } ?: RectF(rect)
+                }
+        }
+        return bounds
     }
 
     fun findTextHitAt(x: Float, y: Float): TextHit? {

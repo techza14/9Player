@@ -7,10 +7,12 @@ import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.legado.reader.page.ReadView
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.LocalDate
 
 private const val LEGADO_READER_SETTINGS_PREFS = "legado_reader_settings"
 private const val LEGADO_READER_SETTINGS_KEY = "legado_reader_settings_json"
 private const val LEGADO_READER_BOOK_ANCHORS_KEY = "legado_reader_book_anchors_json"
+private const val LEGADO_READER_SIMULATED_READING_KEY = "legado_reader_simulated_reading_json"
 internal const val DEFAULT_LEGADO_READER_STYLE_INDEX = 1
 
 internal data class LegadoReaderStyleConfig(
@@ -53,6 +55,52 @@ internal fun defaultLegadoReaderStyleConfigs(): List<LegadoReaderStyleConfig> = 
     LegadoReaderStyleConfig("预设5", 0xFFABCEE0.toInt(), 0xFF3D4C54.toInt(), 0xFF637985.toInt(), darkStatusIcon = false)
 )
 
+internal enum class ReaderChapterSourceMode {
+    BOOK,
+    M4B
+}
+
+internal enum class ReaderBodyTitleMode {
+    LEFT,
+    CENTER,
+    HIDE
+}
+
+internal enum class ReaderHeaderMode {
+    HIDE_WHEN_STATUS_BAR_SHOW,
+    SHOW,
+    HIDE
+}
+
+internal enum class ReaderFooterMode {
+    SHOW,
+    HIDE
+}
+
+internal enum class ReaderTipContent {
+    NONE,
+    BOOK_NAME,
+    CHAPTER_TITLE,
+    TIME,
+    BATTERY_PERCENTAGE,
+    PAGE,
+    TOTAL_PROGRESS,
+    CHAPTER_PROGRESS,
+    PAGE_AND_TOTAL,
+    TIME_BATTERY_PERCENTAGE
+}
+
+internal enum class ReaderTipColorMode {
+    FOLLOW_CONTENT,
+    CUSTOM
+}
+
+internal enum class ReaderTipDividerColorMode {
+    DEFAULT,
+    FOLLOW_CONTENT,
+    CUSTOM
+}
+
 internal data class LegadoReaderPersistedState(
     val textSizeSp: Int = 20,
     val lineSpacingDp: Int = 8,
@@ -76,6 +124,21 @@ internal data class LegadoReaderPersistedState(
     val brightnessValue: Int = 160,
     val brightnessPanelOnRight: Boolean = false,
     val showReadTitleAddition: Boolean = true,
+    val bodyTitleMode: ReaderBodyTitleMode = ReaderBodyTitleMode.LEFT,
+    val bodyTitleSizeAddSp: Int = 0,
+    val bodyTitleTopSpacingDp: Int = 0,
+    val bodyTitleBottomSpacingDp: Int = 0,
+    val headerMode: ReaderHeaderMode = ReaderHeaderMode.HIDE_WHEN_STATUS_BAR_SHOW,
+    val footerMode: ReaderFooterMode = ReaderFooterMode.SHOW,
+    val tipHeaderLeft: ReaderTipContent = ReaderTipContent.CHAPTER_TITLE,
+    val tipHeaderMiddle: ReaderTipContent = ReaderTipContent.NONE,
+    val tipHeaderRight: ReaderTipContent = ReaderTipContent.TIME,
+    val tipFooterLeft: ReaderTipContent = ReaderTipContent.BOOK_NAME,
+    val tipFooterMiddle: ReaderTipContent = ReaderTipContent.NONE,
+    val tipFooterRight: ReaderTipContent = ReaderTipContent.PAGE_AND_TOTAL,
+    val tipColorMode: ReaderTipColorMode = ReaderTipColorMode.FOLLOW_CONTENT,
+    val tipDividerColorMode: ReaderTipDividerColorMode = ReaderTipDividerColorMode.DEFAULT,
+    val tipDividerColor: Int = 0x1F000000,
     val useZhLayout: Boolean = true,
     val textFullJustify: Boolean = true,
     val textBottomJustify: Boolean = true,
@@ -87,6 +150,13 @@ internal data class LegadoReaderPersistedState(
     val disableReturnKey: Boolean = false,
     val readBarStyleFollowPage: Boolean = false,
     val playbackBarPinnedVisible: Boolean = false,
+    val crossPageCueWindowEnabled: Boolean = true,
+    val stopPlaybackOnImage: Boolean = false,
+    val imagePauseSeconds: Int = 0,
+    val verticalControlDirectionReversed: Boolean = false,
+    val verticalProgressDirectionReversed: Boolean = false,
+    val selectionPrimaryActionKey: String = "default",
+    val chapterSourceMode: ReaderChapterSourceMode = ReaderChapterSourceMode.BOOK,
     val showRubyText: Boolean = true,
     val preferredCharsetName: String? = null,
     val currentBookUri: String? = null,
@@ -98,6 +168,33 @@ internal data class LegadoReaderBookAnchor(
     val chapterIndex: Int,
     val charPosition: Int
 )
+
+internal data class SimulatedReadingConfig(
+    val enabled: Boolean = false,
+    val startEpochDay: Long = currentSimulatedReadingEpochDay(),
+    val startChapter: Int = 1,
+    val dailyChapters: Int = 1
+)
+
+internal fun currentSimulatedReadingEpochDay(): Long = LocalDate.now().toEpochDay()
+
+internal fun simulatedReadingDateLabel(epochDay: Long): String {
+    return runCatching { LocalDate.ofEpochDay(epochDay).toString() }
+        .getOrDefault(LocalDate.now().toString())
+}
+
+internal fun simulatedReadingUnlockedChapterCount(
+    config: SimulatedReadingConfig,
+    realChapterCount: Int,
+    todayEpochDay: Long = currentSimulatedReadingEpochDay()
+): Int {
+    if (realChapterCount <= 0) return 0
+    if (!config.enabled) return realChapterCount
+    val daysPassed = (todayEpochDay - config.startEpochDay).coerceAtLeast(0L)
+    val unlocked = config.startChapter.coerceAtLeast(1).toLong() +
+        daysPassed * config.dailyChapters.coerceAtLeast(1).toLong()
+    return unlocked.coerceIn(1L, realChapterCount.toLong()).toInt()
+}
 
 internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersistedState {
     val raw = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
@@ -161,6 +258,50 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         brightnessValue = json.optInt("brightnessValue", 160),
         brightnessPanelOnRight = json.optBoolean("brightnessPanelOnRight", false),
         showReadTitleAddition = json.optBoolean("showReadTitleAddition", true),
+        bodyTitleMode = json.optEnum("bodyTitleMode", ReaderBodyTitleMode.LEFT),
+        bodyTitleSizeAddSp = json.optInt("bodyTitleSizeAddSp", 0).coerceIn(0, 10),
+        bodyTitleTopSpacingDp = json.optInt("bodyTitleTopSpacingDp", 0).coerceIn(0, 100),
+        bodyTitleBottomSpacingDp = json.optInt("bodyTitleBottomSpacingDp", 0).coerceIn(0, 100),
+        headerMode = json.optEnum(
+            "headerMode",
+            if (json.optBoolean("showReadTitleAddition", true)) {
+                ReaderHeaderMode.HIDE_WHEN_STATUS_BAR_SHOW
+            } else {
+                ReaderHeaderMode.HIDE
+            }
+        ),
+        footerMode = json.optEnum(
+            "footerMode",
+            if (json.optBoolean("showReadTitleAddition", true)) ReaderFooterMode.SHOW else ReaderFooterMode.HIDE
+        ),
+        tipHeaderLeft = json.optTipContent(
+            "tipHeaderLeft",
+            if (json.optBoolean("showHeaderTitle", true)) ReaderTipContent.CHAPTER_TITLE else ReaderTipContent.NONE
+        ),
+        tipHeaderMiddle = json.optTipContent("tipHeaderMiddle", ReaderTipContent.NONE),
+        tipHeaderRight = json.optTipContent(
+            "tipHeaderRight",
+            if (json.optBoolean("showHeaderClock", true)) ReaderTipContent.TIME else ReaderTipContent.NONE
+        ),
+        tipFooterLeft = json.optTipContent(
+            "tipFooterLeft",
+            ReaderTipContent.BOOK_NAME
+        ),
+        tipFooterMiddle = json.optTipContent("tipFooterMiddle", ReaderTipContent.NONE),
+        tipFooterRight = json.optTipContent(
+            "tipFooterRight",
+            when {
+                json.has("tipFooterRight") -> ReaderTipContent.PAGE_AND_TOTAL
+                json.optBoolean("showFooterPageNumber", true) && json.optBoolean("showFooterProgress", true) ->
+                    ReaderTipContent.PAGE_AND_TOTAL
+                json.optBoolean("showFooterPageNumber", true) -> ReaderTipContent.PAGE
+                json.optBoolean("showFooterProgress", true) -> ReaderTipContent.TOTAL_PROGRESS
+                else -> ReaderTipContent.NONE
+            }
+        ),
+        tipColorMode = json.optEnum("tipColorMode", ReaderTipColorMode.FOLLOW_CONTENT),
+        tipDividerColorMode = json.optEnum("tipDividerColorMode", ReaderTipDividerColorMode.DEFAULT),
+        tipDividerColor = json.optInt("tipDividerColor", 0x1F000000),
         useZhLayout = json.optBoolean("useZhLayout", true),
         textFullJustify = json.optBoolean("textFullJustify", true),
         textBottomJustify = json.optBoolean("textBottomJustify", true),
@@ -173,6 +314,18 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         disableReturnKey = json.optBoolean("disableReturnKey", false),
         readBarStyleFollowPage = json.optBoolean("readBarStyleFollowPage", false),
         playbackBarPinnedVisible = json.optBoolean("playbackBarPinnedVisible", false),
+        crossPageCueWindowEnabled = json.optBoolean("crossPageCueWindowEnabled", true),
+        stopPlaybackOnImage = json.optBoolean("stopPlaybackOnImage", false),
+        imagePauseSeconds = json.optInt("imagePauseSeconds", 0).coerceIn(0, 300),
+        verticalControlDirectionReversed = json.optBoolean("verticalControlDirectionReversed", false),
+        verticalProgressDirectionReversed = json.optBoolean("verticalProgressDirectionReversed", false),
+        selectionPrimaryActionKey = json.optString("selectionPrimaryActionKey")
+            .takeIf { it.isNotBlank() }
+            ?: "default",
+        chapterSourceMode = json.optString("chapterSourceMode")
+            .takeIf { it.isNotBlank() }
+            ?.let { runCatching { ReaderChapterSourceMode.valueOf(it) }.getOrNull() }
+            ?: ReaderChapterSourceMode.BOOK,
         showRubyText = json.optBoolean("showRubyText", true),
         preferredCharsetName = json.optString("preferredCharsetName").takeIf { it.isNotBlank() },
         currentBookUri = json.optString("currentBookUri").takeIf { it.isNotBlank() },
@@ -191,6 +344,22 @@ private fun readClickRegionActions(array: JSONArray?): List<ReadView.TapAction>?
         }
     }
     return actions.takeIf { it.size == defaults.size }
+}
+
+private inline fun <reified T : Enum<T>> JSONObject.optEnum(name: String, fallback: T): T {
+    return optString(name)
+        .takeIf { it.isNotBlank() }
+        ?.let { runCatching { enumValueOf<T>(it) }.getOrNull() }
+        ?: fallback
+}
+
+private fun JSONObject.optTipContent(name: String, fallback: ReaderTipContent): ReaderTipContent {
+    return when (val raw = optString(name).takeIf { it.isNotBlank() }) {
+        "BATTERY" -> ReaderTipContent.BATTERY_PERCENTAGE
+        "TIME_BATTERY" -> ReaderTipContent.TIME_BATTERY_PERCENTAGE
+        null -> fallback
+        else -> runCatching { ReaderTipContent.valueOf(raw) }.getOrNull() ?: fallback
+    }
 }
 
 private fun readStyleConfigs(
@@ -286,6 +455,21 @@ internal fun saveLegadoReaderPersistedState(context: Context, state: LegadoReade
         put("brightnessValue", state.brightnessValue)
         put("brightnessPanelOnRight", state.brightnessPanelOnRight)
         put("showReadTitleAddition", state.showReadTitleAddition)
+        put("bodyTitleMode", state.bodyTitleMode.name)
+        put("bodyTitleSizeAddSp", state.bodyTitleSizeAddSp)
+        put("bodyTitleTopSpacingDp", state.bodyTitleTopSpacingDp)
+        put("bodyTitleBottomSpacingDp", state.bodyTitleBottomSpacingDp)
+        put("headerMode", state.headerMode.name)
+        put("footerMode", state.footerMode.name)
+        put("tipHeaderLeft", state.tipHeaderLeft.name)
+        put("tipHeaderMiddle", state.tipHeaderMiddle.name)
+        put("tipHeaderRight", state.tipHeaderRight.name)
+        put("tipFooterLeft", state.tipFooterLeft.name)
+        put("tipFooterMiddle", state.tipFooterMiddle.name)
+        put("tipFooterRight", state.tipFooterRight.name)
+        put("tipColorMode", state.tipColorMode.name)
+        put("tipDividerColorMode", state.tipDividerColorMode.name)
+        put("tipDividerColor", state.tipDividerColor)
         put("useZhLayout", state.useZhLayout)
         put("textFullJustify", state.textFullJustify)
         put("textBottomJustify", state.textBottomJustify)
@@ -299,6 +483,13 @@ internal fun saveLegadoReaderPersistedState(context: Context, state: LegadoReade
         put("disableReturnKey", state.disableReturnKey)
         put("readBarStyleFollowPage", state.readBarStyleFollowPage)
         put("playbackBarPinnedVisible", state.playbackBarPinnedVisible)
+        put("crossPageCueWindowEnabled", state.crossPageCueWindowEnabled)
+        put("stopPlaybackOnImage", state.stopPlaybackOnImage)
+        put("imagePauseSeconds", state.imagePauseSeconds)
+        put("verticalControlDirectionReversed", state.verticalControlDirectionReversed)
+        put("verticalProgressDirectionReversed", state.verticalProgressDirectionReversed)
+        put("selectionPrimaryActionKey", state.selectionPrimaryActionKey)
+        put("chapterSourceMode", state.chapterSourceMode.name)
         put("showRubyText", state.showRubyText)
         put("preferredCharsetName", state.preferredCharsetName)
         put("currentBookUri", state.currentBookUri)
@@ -344,5 +535,44 @@ internal fun saveLegadoReaderBookAnchor(
     )
     prefs.edit()
         .putString(LEGADO_READER_BOOK_ANCHORS_KEY, root.toString())
+        .apply()
+}
+
+internal fun loadSimulatedReadingConfig(context: Context, bookUri: String?): SimulatedReadingConfig {
+    val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return SimulatedReadingConfig()
+    val raw = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .getString(LEGADO_READER_SIMULATED_READING_KEY, null)
+        ?: return SimulatedReadingConfig()
+    val root = runCatching { JSONObject(raw) }.getOrNull() ?: return SimulatedReadingConfig()
+    val item = root.optJSONObject(key) ?: return SimulatedReadingConfig()
+    return SimulatedReadingConfig(
+        enabled = item.optBoolean("enabled", false),
+        startEpochDay = item.optLong("startEpochDay", currentSimulatedReadingEpochDay()),
+        startChapter = item.optInt("startChapter", 1).coerceAtLeast(1),
+        dailyChapters = item.optInt("dailyChapters", 1).coerceAtLeast(1)
+    )
+}
+
+internal fun saveSimulatedReadingConfig(
+    context: Context,
+    bookUri: String?,
+    config: SimulatedReadingConfig
+) {
+    val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return
+    val prefs = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
+    val root = prefs.getString(LEGADO_READER_SIMULATED_READING_KEY, null)
+        ?.let { runCatching { JSONObject(it) }.getOrNull() }
+        ?: JSONObject()
+    root.put(
+        key,
+        JSONObject().apply {
+            put("enabled", config.enabled)
+            put("startEpochDay", config.startEpochDay)
+            put("startChapter", config.startChapter.coerceAtLeast(1))
+            put("dailyChapters", config.dailyChapters.coerceAtLeast(1))
+        }
+    )
+    prefs.edit()
+        .putString(LEGADO_READER_SIMULATED_READING_KEY, root.toString())
         .apply()
 }

@@ -144,6 +144,53 @@ internal object LookupPopupHtml {
                             }
                         }
                     };
+                    window.HoshiAndroidPopupBridge = window.HoshiAndroidPopupBridge || (function() {
+                        var pending = {};
+                        var nextId = 1;
+                        var prefix = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+                        function makeRequestId(name) {
+                            return name + '-' + prefix + '-' + (nextId++);
+                        }
+                        function settleTimeout(requestId, fallback) {
+                            var entry = pending[requestId];
+                            if (!entry) return;
+                            delete pending[requestId];
+                            entry.resolve(fallback);
+                        }
+                        return {
+                            call: function(name, body, fallback) {
+                                return new Promise(function(resolve) {
+                                    if (!window.HoshiPopup) {
+                                        resolve(fallback);
+                                        return;
+                                    }
+                                    var requestId = makeRequestId(name);
+                                    pending[requestId] = { resolve: resolve };
+                                    setTimeout(function() { settleTimeout(requestId, fallback); }, 60000);
+                                    try {
+                                        if (name === 'mineEntry' && window.HoshiPopup.mineEntryAsync) {
+                                            window.HoshiPopup.mineEntryAsync(requestId, body);
+                                            return;
+                                        }
+                                        if (name === 'duplicateCheck' && window.HoshiPopup.duplicateCheckAsync) {
+                                            window.HoshiPopup.duplicateCheckAsync(requestId, body);
+                                            return;
+                                        }
+                                    } catch (e) {
+                                        console.warn('HoshiPopup async bridge failed', e);
+                                    }
+                                    settleTimeout(requestId, fallback);
+                                });
+                            },
+                            resolve: function(payloadJson) {
+                                var payload = typeof payloadJson === 'string' ? JSON.parse(payloadJson) : payloadJson;
+                                var entry = pending[payload.requestId];
+                                if (!entry) return;
+                                delete pending[payload.requestId];
+                                entry.resolve(payload.ok ? payload.value : null);
+                            }
+                        };
+                    })();
                     window.webkit = {
                         messageHandlers: {
                             openLink: { postMessage: function(url) { window.HoshiAndroidPopup.postMessage('openLink', url); } },
@@ -155,8 +202,19 @@ internal object LookupPopupHtml {
                             shellReady: { postMessage: function() { window.HoshiPopup.shellReady(); } },
                             contentReady: { postMessage: function() { window.HoshiAndroidPopup.postMessage('contentReady'); } },
                             contentReadyToDraw: { postMessage: function() { window.HoshiAndroidPopup.postMessage('contentReadyToDraw'); } },
-                            mineEntry: { postMessage: async function(content) { return window.HoshiPopup.mineEntry(JSON.stringify(content)); } },
-                            duplicateCheck: { postMessage: async function(expression) { return window.HoshiPopup.duplicateCheck(expression); } },
+                            mineEntry: { postMessage: async function(content) {
+                                var body = JSON.stringify(content);
+                                if (window.HoshiAndroidPopupBridge && window.HoshiPopup && window.HoshiPopup.mineEntryAsync) {
+                                    return window.HoshiAndroidPopupBridge.call('mineEntry', body, false);
+                                }
+                                return window.HoshiPopup.mineEntry(body);
+                            } },
+                            duplicateCheck: { postMessage: async function(expression) {
+                                if (window.HoshiAndroidPopupBridge && window.HoshiPopup && window.HoshiPopup.duplicateCheckAsync) {
+                                    return window.HoshiAndroidPopupBridge.call('duplicateCheck', expression, {duplicate:false,noteIds:[]});
+                                }
+                                return window.HoshiPopup.duplicateCheck(expression);
+                            } },
                             viewDuplicate: { postMessage: function(noteIds) { return window.HoshiPopup.viewDuplicate(JSON.stringify(noteIds || [])); } },
                             getEntry: { postMessage: async function(index) {
                                 if (window.HoshiPopup && window.HoshiPopup.getEntry) {

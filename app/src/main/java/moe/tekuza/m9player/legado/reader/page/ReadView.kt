@@ -1,16 +1,26 @@
 package moe.tekuza.m9player.legado.reader.page
 
+import android.animation.ValueAnimator
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.content.Context
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.util.AttributeSet
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -28,21 +38,43 @@ import android.view.VelocityTracker
 import android.view.ViewGroup
 import moe.tekuza.m9player.EbookImageRef
 import moe.tekuza.m9player.R
+import moe.tekuza.m9player.ReaderBodyTitleMode
+import moe.tekuza.m9player.ReaderFooterMode
+import moe.tekuza.m9player.ReaderHeaderMode
+import moe.tekuza.m9player.ReaderTipContent
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9PageAnim
 import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.TextPage
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.min
+import kotlin.math.sin
+import java.util.Locale
+
+private const val M9_PAGE_SIMULATION_LOG_TAG = "M9PageSimulation"
+
+private fun m9PageSimulationFormat(value: Float): String {
+    return String.format(Locale.US, "%.1f", value)
+}
 
 internal class ReadView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : FrameLayout(context, attrs) {
+    data class SelectionPrimaryActionOption(
+        val key: String,
+        val label: String
+    )
+
     private val targetPageView = PageView(context).apply {
         visibility = GONE
     }
     private val pageView = PageView(context)
     private val assistOverlay = TextView(context)
+    private val crossPageCuePageOverlay = PageView(context)
     private val selectionStartHandle = View(context)
     private val selectionEndHandle = View(context)
     private val selectionActionMenu = SelectionActionMenu(
@@ -57,6 +89,7 @@ internal class ReadView @JvmOverloads constructor(
     var onTapAction: ((TapAction) -> Unit)? = null
     var onSelectionAction: ((SelectionAction, String) -> Unit)? = null
     var onSelectionProcessText: ((Intent, String) -> Unit)? = null
+    var onTextSelectionStateChanged: ((Boolean) -> Unit)? = null
     var onImageClick: ((EbookImageRef) -> Unit)? = null
     var onPagePreview: ((Int) -> TextPage?)? = null
     private var layoutMode: M9LayoutMode = M9LayoutMode.HORIZONTAL
@@ -93,6 +126,16 @@ internal class ReadView @JvmOverloads constructor(
     private var scrollStartOffset: Float = 0f
     private var scrollPageStep: Float = 1f
     private var scrollAnchorDelta: Int = 0
+    private var simulationAnimator: ValueAnimator? = null
+    private var simulationCurrentBitmap: Bitmap? = null
+    private var simulationTargetBitmap: Bitmap? = null
+    private var simulationTouchX: Float = 0.1f
+    private var simulationTouchY: Float = 0.1f
+    private var simulationCornerX: Int = 0
+    private var simulationCornerY: Int = 0
+    private var simulationCurlSide: Int = 1
+    private var simulationCommitAfterAnim: Boolean = false
+    private val simulationRenderer = SimulationCurlRenderer()
 
     val contentWidth: Int get() = pageView.contentView.width
     val contentHeight: Int
@@ -112,6 +155,13 @@ internal class ReadView @JvmOverloads constructor(
             includeFontPadding = false
             setPadding(dp(12), dp(8), dp(12), dp(8))
             setOnClickListener { hideAssistOverlay() }
+        }, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        addView(crossPageCuePageOverlay.apply {
+            visibility = GONE
+            setShowHeaderFooter(false)
+            setReaderPadding(0, 0, 0, 0)
+            contentView.setPadding(dp(8), dp(8), dp(8), dp(8))
+            setOnClickListener { hideCrossPageCueOverlay() }
         }, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         addView(selectionStartHandle.apply {
             visibility = GONE
@@ -135,6 +185,52 @@ internal class ReadView @JvmOverloads constructor(
         }
     }
 
+    fun setCueHighlight(highlight: IntRange?) {
+        pageView.setHighlight(highlight)
+    }
+
+    fun showCrossPageCueOverlay(text: String, range: IntRange?, verticalPage: TextPage? = null) {
+        if (text.isBlank()) {
+            hideCrossPageCueOverlay()
+            return
+        }
+        if (verticalPage != null) {
+            showCrossPageCuePageOverlay(verticalPage, range)
+            return
+        }
+        assistToken = null
+        crossPageCuePageOverlay.visibility = GONE
+        assistOverlay.text = text
+        updateAssistOverlayStyle()
+        assistOverlay.post {
+            assistOverlay.measure(
+                MeasureSpec.makeMeasureSpec((width - dp(24)).coerceAtLeast(0), MeasureSpec.AT_MOST),
+                MeasureSpec.makeMeasureSpec((height - dp(24)).coerceAtLeast(0), MeasureSpec.AT_MOST)
+            )
+            val anchor = range?.let { pageView.rangeBounds(it) }
+                ?: RectF(width / 2f, height / 2f, width / 2f, height / 2f)
+            val target = computeCrossPageOverlayBounds(
+                anchor = anchor,
+                overlayWidth = assistOverlay.measuredWidth,
+                overlayHeight = assistOverlay.measuredHeight,
+                vertical = false
+            )
+            val params = assistOverlay.layoutParams as LayoutParams
+            params.leftMargin = target.left.toInt()
+            params.topMargin = target.top.toInt()
+            assistOverlay.layoutParams = params
+            assistOverlay.visibility = VISIBLE
+            assistOverlay.bringToFront()
+        }
+    }
+
+    fun hideCrossPageCueOverlay() {
+        if (assistToken == null) {
+            assistOverlay.visibility = GONE
+        }
+        crossPageCuePageOverlay.visibility = GONE
+    }
+
     fun setReaderColors(
         bg: Int,
         text: Int,
@@ -148,28 +244,34 @@ internal class ReadView @JvmOverloads constructor(
         overlayTextColor = text
         overlayBgColor = if (isDarkColor(bg)) 0xCC2D2D2D.toInt() else 0xF4FFF8EC.toInt()
         updateAssistOverlayStyle()
+        updateCrossPageCuePageOverlayStyle()
     }
 
     fun setCueHighlightColor(color: Int) {
         forEachPageView { it.setCueHighlightColor(color) }
+        crossPageCuePageOverlay.setCueHighlightColor(color)
     }
 
     fun setTextSizeSp(sizeSp: Float) {
         forEachPageView { it.setTextSizeSp(sizeSp) }
         assistOverlay.textSize = sizeSp
+        crossPageCuePageOverlay.setTextSizeSp(sizeSp)
     }
 
     fun setTextWeight(weight: M9TextWeight) {
         forEachPageView { it.setTextWeight(weight) }
+        crossPageCuePageOverlay.setTextWeight(weight)
     }
 
     fun setTextUnderline(enabled: Boolean) {
         forEachPageView { it.setTextUnderline(enabled) }
+        crossPageCuePageOverlay.setTextUnderline(enabled)
     }
 
     fun setReaderTypeface(typeface: Typeface?) {
         forEachPageView { it.setReaderTypeface(typeface) }
         assistOverlay.typeface = typeface ?: Typeface.DEFAULT
+        crossPageCuePageOverlay.setReaderTypeface(typeface)
     }
 
     fun setReaderPadding(left: Int, top: Int, right: Int, bottom: Int) {
@@ -179,6 +281,48 @@ internal class ReadView @JvmOverloads constructor(
 
     fun setShowHeaderFooter(show: Boolean) {
         forEachPageView { it.setShowHeaderFooter(show) }
+        requestLayout()
+    }
+
+    fun setBookTitle(title: String) {
+        forEachPageView { it.setBookTitle(title) }
+        crossPageCuePageOverlay.setBookTitle(title)
+    }
+
+    fun setReaderInfoConfig(
+        bodyTitleMode: ReaderBodyTitleMode,
+        bodyTitleSizeAddSp: Int,
+        bodyTitleTopSpacingDp: Int,
+        bodyTitleBottomSpacingDp: Int,
+        headerMode: ReaderHeaderMode,
+        footerMode: ReaderFooterMode,
+        headerLeft: ReaderTipContent,
+        headerMiddle: ReaderTipContent,
+        headerRight: ReaderTipContent,
+        footerLeft: ReaderTipContent,
+        footerMiddle: ReaderTipContent,
+        footerRight: ReaderTipContent,
+        statusBarHidden: Boolean,
+        dividerColor: Int?
+    ) {
+        forEachPageView {
+            it.setReaderInfoConfig(
+                bodyTitleMode = bodyTitleMode,
+                bodyTitleSizeAddSp = bodyTitleSizeAddSp,
+                bodyTitleTopSpacingDp = bodyTitleTopSpacingDp,
+                bodyTitleBottomSpacingDp = bodyTitleBottomSpacingDp,
+                headerMode = headerMode,
+                footerMode = footerMode,
+                headerLeft = headerLeft,
+                headerMiddle = headerMiddle,
+                headerRight = headerRight,
+                footerLeft = footerLeft,
+                footerMiddle = footerMiddle,
+                footerRight = footerRight,
+                statusBarHidden = statusBarHidden,
+                dividerColor = dividerColor
+            )
+        }
         requestLayout()
     }
 
@@ -200,6 +344,14 @@ internal class ReadView @JvmOverloads constructor(
         clickRegionActions = actions.takeIf { it.size == CLICK_REGION_COUNT } ?: defaultClickRegionActions()
     }
 
+    fun setSelectionPrimaryActionKey(key: String) {
+        selectionActionMenu.setPrimaryActionKey(key)
+    }
+
+    fun selectionPrimaryActionOptions(): List<SelectionPrimaryActionOption> {
+        return selectionActionMenu.primaryActionOptions()
+    }
+
     override fun computeScroll() {
         if (!scrollScroller.computeScrollOffset()) {
             if (isGestureAnimating && pageAnim == M9PageAnim.SCROLL) {
@@ -219,6 +371,15 @@ internal class ReadView @JvmOverloads constructor(
         }
     }
 
+    override fun dispatchDraw(canvas: Canvas) {
+        if (pageAnim == M9PageAnim.SIMULATION && (isDraggingPage || isGestureAnimating)) {
+            drawSimulationPage(canvas)
+            drawOverlayChildren(canvas)
+            return
+        }
+        super.dispatchDraw(canvas)
+    }
+
     private fun runPageAnimation(forward: Boolean) {
         resetPageLayers()
         if (pageAnim == M9PageAnim.NONE || width <= 0 || height <= 0) return
@@ -233,6 +394,14 @@ internal class ReadView @JvmOverloads constructor(
                     .start()
             }
             M9PageAnim.SLIDE -> {
+                pageView.translationX = horizontalPageSide(direction) * width.toFloat()
+                pageView.animate()
+                    .translationX(0f)
+                    .setInterpolator(pageInterpolator)
+                    .setDuration(PROGRAMMATIC_PAGE_ANIM_MS)
+                    .start()
+            }
+            M9PageAnim.SIMULATION -> {
                 pageView.translationX = horizontalPageSide(direction) * width.toFloat()
                 pageView.animate()
                     .translationX(0f)
@@ -373,6 +542,10 @@ internal class ReadView @JvmOverloads constructor(
             }
             beginDrag(direction, preview)
         }
+        if (pageAnim == M9PageAnim.SIMULATION) {
+            updateSimulationDrag(event.x, event.y)
+            return
+        }
         if (pageAnim == M9PageAnim.SCROLL) {
             val axisDelta = if (isScrollHorizontalAxis()) {
                 event.x - lastTouchX
@@ -433,6 +606,11 @@ internal class ReadView @JvmOverloads constructor(
                 targetPageView.translationX = horizontalPageSide(direction) * width.toFloat()
                 targetPageView.translationY = 0f
             }
+            M9PageAnim.SIMULATION -> {
+                targetPageView.translationX = 0f
+                targetPageView.translationY = 0f
+                beginSimulationCurl(direction)
+            }
             else -> {
                 targetPageView.translationX = 0f
                 targetPageView.translationY = 0f
@@ -445,6 +623,7 @@ internal class ReadView @JvmOverloads constructor(
             M9PageAnim.SCROLL -> updateScrollDrag(if (isScrollHorizontalAxis()) dx else dy)
             M9PageAnim.COVER -> updateCoverDrag(dx)
             M9PageAnim.SLIDE -> updateSlideDrag(dx)
+            M9PageAnim.SIMULATION -> updateSimulationDrag(downX + dx, downY + dy)
             M9PageAnim.NONE -> Unit
         }
     }
@@ -460,6 +639,60 @@ internal class ReadView @JvmOverloads constructor(
         val offset = clampPageOffset(dx, side, width.toFloat())
         pageView.translationX = offset
         targetPageView.translationX = side * width.toFloat() + offset
+    }
+
+    private fun beginSimulationCurl(direction: Int) {
+        simulationAnimator?.cancel()
+        simulationCurlSide = horizontalPageSide(direction)
+        simulationCornerX = if (simulationCurlSide > 0) width else 0
+        simulationCornerY = simulationCornerYForStart(direction)
+        simulationTouchX = downX.coerceIn(0.1f, (width - 0.1f).coerceAtLeast(0.1f))
+        simulationTouchY = simulationTouchYForDrag(direction, downY)
+        simulationCommitAfterAnim = false
+        simulationCurrentBitmap = pageView.captureToBitmap(simulationCurrentBitmap)
+        simulationTargetBitmap = targetPageView.captureToBitmap(simulationTargetBitmap)
+        targetPageView.visibility = INVISIBLE
+        Log.d(
+            M9_PAGE_SIMULATION_LOG_TAG,
+            "begin direction=$direction layout=$layoutMode side=$simulationCurlSide " +
+                "corner=($simulationCornerX,$simulationCornerY) " +
+                "down=(${m9PageSimulationFormat(downX)},${m9PageSimulationFormat(downY)}) " +
+                "touch=(${m9PageSimulationFormat(simulationTouchX)},${m9PageSimulationFormat(simulationTouchY)}) " +
+                "curlCurrentPage=true"
+        )
+        postInvalidateOnAnimation()
+    }
+
+    private fun updateSimulationDrag(x: Float, y: Float) {
+        simulationTouchX = x.coerceIn(0.1f, (width - 0.1f).coerceAtLeast(0.1f))
+        simulationTouchY = simulationTouchYForDrag(dragDirection, y)
+        Log.d(
+            M9_PAGE_SIMULATION_LOG_TAG,
+            "drag direction=$dragDirection side=$simulationCurlSide " +
+                "raw=(${m9PageSimulationFormat(x)},${m9PageSimulationFormat(y)}) " +
+                "touch=(${m9PageSimulationFormat(simulationTouchX)},${m9PageSimulationFormat(simulationTouchY)})"
+        )
+        postInvalidateOnAnimation()
+    }
+
+    private fun simulationCornerYForStart(direction: Int): Int {
+        if (direction < 0) return height
+        return when {
+            downY > height / 3f && downY < height / 2f -> 0
+            downY > height / 3f && downY < height * 2f / 3f -> height
+            downY <= height / 2f -> 0
+            else -> height
+        }
+    }
+
+    private fun simulationTouchYForDrag(direction: Int, y: Float): Float {
+        val safeBottom = (height - 0.1f).coerceAtLeast(0.1f)
+        return when {
+            direction < 0 -> safeBottom
+            downY > height / 3f && downY < height / 2f -> 0.1f
+            downY > height / 3f && downY < height * 2f / 3f -> safeBottom
+            else -> y.coerceIn(0.1f, safeBottom)
+        }
     }
 
     private fun updateScrollDrag(axisDelta: Float) {
@@ -489,6 +722,8 @@ internal class ReadView @JvmOverloads constructor(
             abs(scrollContentOffset)
         } else if (pageAnim == M9PageAnim.SCROLL) {
             abs(scrollContentOffset)
+        } else if (pageAnim == M9PageAnim.SIMULATION) {
+            abs(simulationTouchX - downX)
         } else {
             abs(pageView.translationX)
         }
@@ -546,6 +781,10 @@ internal class ReadView @JvmOverloads constructor(
         isGestureAnimating = true
         if (pageAnim == M9PageAnim.SCROLL) {
             finishScrollDrag(commit)
+            return
+        }
+        if (pageAnim == M9PageAnim.SIMULATION) {
+            finishSimulationDrag(commit)
             return
         }
         val size = width.toFloat()
@@ -614,6 +853,74 @@ internal class ReadView @JvmOverloads constructor(
             )
         }
         postInvalidateOnAnimation()
+    }
+
+    private fun finishSimulationDrag(commit: Boolean) {
+        val startX = simulationTouchX
+        val startY = simulationTouchY
+        val targetX = if (commit) {
+            if (simulationCurlSide > 0) -width.toFloat() else width.toFloat() * 2f
+        } else {
+            simulationCornerX.toFloat()
+        }
+        val targetY = if (commit) {
+            if (simulationCornerY > 0) height.toFloat() else 0.1f
+        } else {
+            simulationCornerY.toFloat().coerceIn(0.1f, (height - 0.1f).coerceAtLeast(0.1f))
+        }
+        val progress = (abs(startX - downX) / width.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
+        val duration = (PAGE_DRAG_ANIM_MS * (1f - progress).coerceIn(0.25f, 1f)).toLong()
+        Log.d(
+            M9_PAGE_SIMULATION_LOG_TAG,
+            "finishDrag commit=$commit direction=$dragDirection side=$simulationCurlSide " +
+                "start=(${m9PageSimulationFormat(startX)},${m9PageSimulationFormat(startY)}) " +
+                "target=(${m9PageSimulationFormat(targetX)},${m9PageSimulationFormat(targetY)}) " +
+                "progress=${m9PageSimulationFormat(progress)} duration=$duration"
+        )
+        simulationCommitAfterAnim = commit
+        simulationAnimator?.cancel()
+        simulationAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            this.duration = duration
+            interpolator = pageInterpolator
+            addUpdateListener { animator ->
+                val fraction = animator.animatedFraction
+                simulationTouchX = startX + (targetX - startX) * fraction
+                simulationTouchY = startY + (targetY - startY) * fraction
+                postInvalidateOnAnimation()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                private var canceled = false
+
+                override fun onAnimationCancel(animation: Animator) {
+                    canceled = true
+                }
+
+                override fun onAnimationEnd(animation: Animator) {
+                    if (!canceled) {
+                        finishSimulationMotion()
+                    }
+                }
+            })
+            start()
+        }
+    }
+
+    private fun finishSimulationMotion() {
+        val committedPage = if (simulationCommitAfterAnim) targetPageView.currentPage else null
+        Log.d(
+            M9_PAGE_SIMULATION_LOG_TAG,
+            "finishMotion commit=$simulationCommitAfterAnim direction=$dragDirection side=$simulationCurlSide " +
+                "targetPage=${committedPage?.globalIndex ?: committedPage?.index}"
+        )
+        if (simulationCommitAfterAnim) {
+            suppressNextSetAnimation = true
+            invokeTurnCallback()
+            committedPage?.let {
+                pageView.setPage(it, null, null)
+            }
+        }
+        simulationCommitAfterAnim = false
+        resetPageLayers()
     }
 
     private fun startScrollSettle(targetOffset: Float, duration: Long) {
@@ -752,6 +1059,8 @@ internal class ReadView @JvmOverloads constructor(
     private fun abortGestureAnimation() {
         pageView.animate().cancel()
         targetPageView.animate().cancel()
+        simulationAnimator?.cancel()
+        simulationAnimator = null
         if (!scrollScroller.isFinished) scrollScroller.abortAnimation()
         isGestureAnimating = false
     }
@@ -775,6 +1084,64 @@ internal class ReadView @JvmOverloads constructor(
         pageView.translationX = 0f
         pageView.translationY = 0f
         pageView.rotationY = 0f
+    }
+
+    private fun drawSimulationPage(canvas: Canvas) {
+        val current = simulationCurrentBitmap
+        val target = simulationTargetBitmap
+        if (current == null || target == null) {
+            super.dispatchDraw(canvas)
+            return
+        }
+        simulationRenderer.draw(
+            canvas = canvas,
+            current = current,
+            target = target,
+            touchX = simulationTouchX,
+            touchY = simulationTouchY,
+            cornerX = simulationCornerX,
+            cornerY = simulationCornerY,
+            width = width,
+            height = height,
+            backgroundColor = currentReaderMeanColor(),
+            curlCurrentPage = true
+        )
+    }
+
+    private fun drawOverlayChildren(canvas: Canvas) {
+        for (i in 0 until childCount) {
+            val child = getChildAt(i)
+            if (child !== pageView && child !== targetPageView && child.visibility == VISIBLE) {
+                drawChild(canvas, child, drawingTime)
+            }
+        }
+    }
+
+    private fun View.captureToBitmap(reuse: Bitmap?): Bitmap? {
+        if (width <= 0 || height <= 0) return null
+        val bitmap = if (reuse != null && !reuse.isRecycled && reuse.width == width && reuse.height == height) {
+            reuse.eraseColor(Color.TRANSPARENT)
+            reuse
+        } else {
+            reuse?.recycle()
+            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        }
+        Canvas(bitmap).also { canvas ->
+            canvas.translate(-scrollX.toFloat(), -scrollY.toFloat())
+            draw(canvas)
+        }
+        bitmap.prepareToDraw()
+        return bitmap
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        simulationAnimator?.cancel()
+        simulationAnimator = null
+        simulationCurrentBitmap?.recycle()
+        simulationCurrentBitmap = null
+        simulationTargetBitmap?.recycle()
+        simulationTargetBitmap = null
     }
 
     private fun handleTap(event: MotionEvent) {
@@ -801,7 +1168,7 @@ internal class ReadView @JvmOverloads constructor(
     private fun handleLongPressSelection() {
         if (isDraggingPage || isGestureAnimating) return
         if (!pageView.beginTextSelectionAt(downX, downY)) return
-        isTextSelected = true
+        setTextSelectionActive(true)
         updateSelectionOverlays()
     }
 
@@ -817,6 +1184,12 @@ internal class ReadView @JvmOverloads constructor(
     private fun performSelectionAction(action: SelectionAction) {
         when (action) {
             SelectionAction.COPY -> copySelectedTextAndClear()
+            SelectionAction.PROCESS_TEXT -> {
+                val text = pageView.selectedText().trim()
+                if (text.isBlank()) return
+                selectionActionMenu.dismiss()
+                onSelectionAction?.invoke(action, text)
+            }
             else -> {
                 val text = pageView.selectedText().trim()
                 if (text.isBlank()) return
@@ -888,11 +1261,17 @@ internal class ReadView @JvmOverloads constructor(
     private fun clearTextSelection() {
         if (!isTextSelected) return
         pageView.clearTextSelection()
-        isTextSelected = false
+        setTextSelectionActive(false)
         activeSelectionHandle = SelectionHandle.NONE
         selectionActionMenu.dismiss()
         selectionStartHandle.visibility = GONE
         selectionEndHandle.visibility = GONE
+    }
+
+    private fun setTextSelectionActive(active: Boolean) {
+        if (isTextSelected == active) return
+        isTextSelected = active
+        onTextSelectionStateChanged?.invoke(active)
     }
 
     private fun selectionHandleAt(x: Float, y: Float): SelectionHandle {
@@ -973,6 +1352,7 @@ internal class ReadView @JvmOverloads constructor(
     }
 
     enum class SelectionAction {
+        PROCESS_TEXT,
         COPY,
         SHARE,
         SEARCH,
@@ -987,6 +1367,7 @@ internal class ReadView @JvmOverloads constructor(
     }
 
     private fun toggleAssistOverlay(token: ContentTextView.AssistToken) {
+        crossPageCuePageOverlay.visibility = GONE
         val current = assistToken
         if (current != null &&
             current.sourceStart == token.sourceStart &&
@@ -1021,6 +1402,7 @@ internal class ReadView @JvmOverloads constructor(
     private fun hideAssistOverlay() {
         assistToken = null
         assistOverlay.visibility = GONE
+        crossPageCuePageOverlay.visibility = GONE
     }
 
     private fun computeOverlayBounds(anchor: RectF, overlayWidth: Int, overlayHeight: Int): RectF {
@@ -1036,9 +1418,117 @@ internal class ReadView @JvmOverloads constructor(
         return RectF(left, top, left + overlayWidth, top + overlayHeight)
     }
 
+    private fun computeCrossPageOverlayBounds(
+        anchor: RectF,
+        overlayWidth: Int,
+        overlayHeight: Int,
+        vertical: Boolean
+    ): RectF {
+        val content = readableContentBounds()
+        val targetWidth = overlayWidth.toFloat().coerceAtMost(content.width().coerceAtLeast(1f))
+        val targetHeight = overlayHeight.toFloat().coerceAtMost(content.height().coerceAtLeast(1f))
+        val left: Float
+        val top: Float
+        if (vertical) {
+            val right = anchor.right.coerceIn(content.left + targetWidth, content.right)
+            left = (right - targetWidth).coerceIn(content.left, (content.right - targetWidth).coerceAtLeast(content.left))
+            top = clampCoveringAnchor(
+                preferredStart = anchor.top,
+                targetSize = targetHeight,
+                minStart = content.top,
+                maxEnd = content.bottom,
+                anchorStart = anchor.top,
+                anchorEnd = anchor.bottom
+            )
+        } else {
+            left = clampCoveringAnchor(
+                preferredStart = anchor.left,
+                targetSize = targetWidth,
+                minStart = content.left,
+                maxEnd = content.right,
+                anchorStart = anchor.left,
+                anchorEnd = anchor.right
+            )
+            top = clampCoveringAnchor(
+                preferredStart = anchor.top,
+                targetSize = targetHeight,
+                minStart = content.top,
+                maxEnd = content.bottom,
+                anchorStart = anchor.top,
+                anchorEnd = anchor.bottom
+            )
+        }
+        return RectF(left, top, left + targetWidth, top + targetHeight)
+    }
+
+    private fun clampCoveringAnchor(
+        preferredStart: Float,
+        targetSize: Float,
+        minStart: Float,
+        maxEnd: Float,
+        anchorStart: Float,
+        anchorEnd: Float
+    ): Float {
+        val maxStart = (maxEnd - targetSize).coerceAtLeast(minStart)
+        var start = preferredStart.coerceIn(minStart, maxStart)
+        if (anchorEnd > start + targetSize) {
+            start = (anchorEnd - targetSize).coerceIn(minStart, maxStart)
+        }
+        if (anchorStart < start) {
+            start = anchorStart.coerceIn(minStart, maxStart)
+        }
+        return start
+    }
+
+    private fun readableContentBounds(): RectF {
+        val content = pageView.contentView
+        return RectF(
+            content.left + content.paddingLeft.toFloat(),
+            content.top + content.paddingTop.toFloat(),
+            content.right - content.paddingRight.toFloat(),
+            content.bottom - content.paddingBottom.toFloat()
+        )
+    }
+
     private fun updateAssistOverlayStyle() {
         assistOverlay.setTextColor(overlayTextColor)
         assistOverlay.background = GradientDrawable().apply {
+            cornerRadius = dp(18).toFloat()
+            setColor(overlayBgColor)
+            setStroke(dp(1), if (isDarkColor(overlayBgColor)) 0x33FFFFFF else 0x22000000)
+        }
+    }
+
+    private fun showCrossPageCuePageOverlay(page: TextPage, range: IntRange?) {
+        assistToken = null
+        assistOverlay.visibility = GONE
+        updateCrossPageCuePageOverlayStyle()
+        crossPageCuePageOverlay.setPage(page, null, null)
+        crossPageCuePageOverlay.post {
+            val overlayWidth = page.width.toInt().coerceAtLeast(dp(48)) + dp(16)
+            val overlayHeight = page.height.toInt().coerceAtLeast(dp(48)) + dp(16)
+            val anchor = range?.let { pageView.rangeBounds(it) }
+                ?: RectF(width / 2f, height / 2f, width / 2f, height / 2f)
+            val target = computeCrossPageOverlayBounds(
+                anchor = anchor,
+                overlayWidth = overlayWidth,
+                overlayHeight = overlayHeight,
+                vertical = true
+            )
+            val params = crossPageCuePageOverlay.layoutParams as LayoutParams
+            params.width = target.width().toInt()
+            params.height = target.height().toInt()
+            params.leftMargin = target.left.toInt()
+            params.topMargin = target.top.toInt()
+            crossPageCuePageOverlay.layoutParams = params
+            crossPageCuePageOverlay.visibility = VISIBLE
+            crossPageCuePageOverlay.bringToFront()
+        }
+    }
+
+    private fun updateCrossPageCuePageOverlayStyle() {
+        crossPageCuePageOverlay.setReaderColors(overlayBgColor, overlayTextColor, overlayTextColor)
+        crossPageCuePageOverlay.background = GradientDrawable().apply {
             cornerRadius = dp(18).toFloat()
             setColor(overlayBgColor)
             setStroke(dp(1), if (isDarkColor(overlayBgColor)) 0x33FFFFFF else 0x22000000)
@@ -1123,8 +1613,399 @@ internal class ReadView @JvmOverloads constructor(
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    private class SimulationCurlRenderer {
+        private val path0 = Path()
+        private val path1 = Path()
+        private val bezierStart1 = PointF()
+        private val bezierControl1 = PointF()
+        private val bezierVertex1 = PointF()
+        private var bezierEnd1 = PointF()
+        private val bezierStart2 = PointF()
+        private val bezierControl2 = PointF()
+        private val bezierVertex2 = PointF()
+        private var bezierEnd2 = PointF()
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.TRANSPARENT
+        }
+        private val matrix = Matrix()
+        private val matrixArray = floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 1f)
+        private val frontShadowVlr = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(0x80FFFFFF.toInt(), 0x111111)
+        )
+        private val frontShadowVrl = GradientDrawable(
+            GradientDrawable.Orientation.RIGHT_LEFT,
+            intArrayOf(0x80FFFFFF.toInt(), 0x111111)
+        )
+        private val frontShadowHtb = GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(0x80FFFFFF.toInt(), 0x111111)
+        )
+        private val frontShadowHbt = GradientDrawable(
+            GradientDrawable.Orientation.BOTTOM_TOP,
+            intArrayOf(0x80FFFFFF.toInt(), 0x111111)
+        )
+        private val backShadowLr = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(0x11FFFFFF, 0x66000000)
+        )
+        private val backShadowRl = GradientDrawable(
+            GradientDrawable.Orientation.RIGHT_LEFT,
+            intArrayOf(0x11FFFFFF, 0x66000000)
+        )
+        private val foldShadowLr = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(0x44333333, 0x00CCCCCC)
+        )
+        private val foldShadowRl = GradientDrawable(
+            GradientDrawable.Orientation.RIGHT_LEFT,
+            intArrayOf(0x44333333, 0x00CCCCCC)
+        )
+        private var touchX = 0.1f
+        private var touchY = 0.1f
+        private var cornerX = 0
+        private var cornerY = 0
+        private var viewWidth = 0
+        private var viewHeight = 0
+        private var middleX = 0f
+        private var middleY = 0f
+        private var degrees = 0f
+        private var touchToCornerDistance = 0f
+        private var maxLength = 1f
+        private var isRtOrLb = false
+
+        fun draw(
+            canvas: Canvas,
+            current: Bitmap,
+            target: Bitmap,
+            touchX: Float,
+            touchY: Float,
+            cornerX: Int,
+            cornerY: Int,
+            width: Int,
+            height: Int,
+            backgroundColor: Int,
+            curlCurrentPage: Boolean
+        ) {
+            if (width <= 0 || height <= 0) return
+            val leftCurl = cornerX == 0
+            this.viewWidth = width
+            this.viewHeight = height
+            this.cornerX = if (leftCurl) width else cornerX
+            this.cornerY = cornerY
+            this.touchX = (if (leftCurl) width - touchX else touchX)
+                .coerceIn(-width.toFloat(), width * 2f)
+            this.touchY = touchY.coerceIn(0.1f, (height - 0.1f).coerceAtLeast(0.1f))
+            this.maxLength = hypot(width.toDouble(), height.toDouble()).toFloat()
+            this.isRtOrLb = (this.cornerX == 0 && cornerY == height) || (cornerY == 0 && this.cornerX == width)
+
+            calcPoints()
+            if (leftCurl) {
+                mirrorCalculatedGeometry()
+                this.cornerX = 0
+                this.touchX = touchX.coerceIn(-width.toFloat(), width * 2f)
+                this.isRtOrLb = (cornerY == height)
+            }
+            Log.d(
+                M9_PAGE_SIMULATION_LOG_TAG,
+                "geometry left=$leftCurl corner=($cornerX,$cornerY) " +
+                    "touch=(${m9PageSimulationFormat(this.touchX)},${m9PageSimulationFormat(this.touchY)}) " +
+                    "s1=(${m9PageSimulationFormat(bezierStart1.x)},${m9PageSimulationFormat(bezierStart1.y)}) " +
+                    "s2=(${m9PageSimulationFormat(bezierStart2.x)},${m9PageSimulationFormat(bezierStart2.y)}) " +
+                    "c1=(${m9PageSimulationFormat(bezierControl1.x)},${m9PageSimulationFormat(bezierControl1.y)}) " +
+                    "c2=(${m9PageSimulationFormat(bezierControl2.x)},${m9PageSimulationFormat(bezierControl2.y)}) " +
+                    "curlCurrentPage=$curlCurrentPage"
+            )
+            canvas.save()
+            val curlBitmap = if (curlCurrentPage) current else target
+            val baseBitmap = if (curlCurrentPage) target else current
+            drawCurrentPageArea(canvas, curlBitmap)
+            drawTargetPageAreaAndShadow(canvas, baseBitmap)
+            drawCurrentPageShadow(canvas)
+            drawCurrentBackArea(canvas, curlBitmap, backgroundColor)
+            canvas.restore()
+        }
+
+        private fun mirrorCalculatedGeometry() {
+            fun mirror(point: PointF) {
+                point.x = viewWidth - point.x
+            }
+            mirror(bezierStart1)
+            mirror(bezierControl1)
+            mirror(bezierVertex1)
+            mirror(bezierEnd1)
+            mirror(bezierStart2)
+            mirror(bezierControl2)
+            mirror(bezierVertex2)
+            mirror(bezierEnd2)
+            middleX = viewWidth - middleX
+        }
+
+        private fun drawCurrentPageArea(canvas: Canvas, bitmap: Bitmap) {
+            path0.reset()
+            path0.moveTo(bezierStart1.x, bezierStart1.y)
+            path0.quadTo(bezierControl1.x, bezierControl1.y, bezierEnd1.x, bezierEnd1.y)
+            path0.lineTo(touchX, touchY)
+            path0.lineTo(bezierEnd2.x, bezierEnd2.y)
+            path0.quadTo(bezierControl2.x, bezierControl2.y, bezierStart2.x, bezierStart2.y)
+            path0.lineTo(cornerX.toFloat(), cornerY.toFloat())
+            path0.close()
+
+            canvas.save()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                canvas.clipOutPath(path0)
+            } else {
+                @Suppress("DEPRECATION")
+                canvas.clipPath(path0, android.graphics.Region.Op.XOR)
+            }
+            canvas.drawBitmap(bitmap, 0f, 0f, null)
+            canvas.restore()
+        }
+
+        private fun drawTargetPageAreaAndShadow(canvas: Canvas, bitmap: Bitmap) {
+            path1.reset()
+            path1.moveTo(bezierStart1.x, bezierStart1.y)
+            path1.lineTo(bezierVertex1.x, bezierVertex1.y)
+            path1.lineTo(bezierVertex2.x, bezierVertex2.y)
+            path1.lineTo(bezierStart2.x, bezierStart2.y)
+            path1.lineTo(cornerX.toFloat(), cornerY.toFloat())
+            path1.close()
+
+            degrees = Math.toDegrees(
+                atan2(
+                    (bezierControl1.x - cornerX).toDouble(),
+                    bezierControl2.y - cornerY.toDouble()
+                )
+            ).toFloat()
+            val leftX: Int
+            val rightX: Int
+            val shadow: GradientDrawable
+            if (isRtOrLb) {
+                leftX = bezierStart1.x.toInt()
+                rightX = (bezierStart1.x + touchToCornerDistance / 4).toInt()
+                shadow = backShadowLr
+            } else {
+                leftX = (bezierStart1.x - touchToCornerDistance / 4).toInt()
+                rightX = bezierStart1.x.toInt()
+                shadow = backShadowRl
+            }
+
+            canvas.save()
+            canvas.clipPath(path0)
+            @Suppress("DEPRECATION")
+            canvas.clipPath(path1, android.graphics.Region.Op.INTERSECT)
+            canvas.drawBitmap(bitmap, 0f, 0f, null)
+            canvas.rotate(degrees, bezierStart1.x, bezierStart1.y)
+            shadow.setBounds(leftX, bezierStart1.y.toInt(), rightX, (maxLength + bezierStart1.y).toInt())
+            shadow.draw(canvas)
+            canvas.restore()
+        }
+
+        private fun drawCurrentPageShadow(canvas: Canvas) {
+            val degree = if (isRtOrLb) {
+                Math.PI / 4 - atan2(bezierControl1.y - touchY, touchX - bezierControl1.x)
+            } else {
+                Math.PI / 4 - atan2(touchY - bezierControl1.y, touchX - bezierControl1.x)
+            }
+            val d1 = (25f * 1.414f * cos(degree)).toFloat()
+            val d2 = (25f * 1.414f * sin(degree)).toFloat()
+            val x = touchX + d1
+            val y = if (isRtOrLb) touchY + d2 else touchY - d2
+
+            path1.reset()
+            path1.moveTo(x, y)
+            path1.lineTo(touchX, touchY)
+            path1.lineTo(bezierControl1.x, bezierControl1.y)
+            path1.lineTo(bezierStart1.x, bezierStart1.y)
+            path1.close()
+            canvas.save()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                canvas.clipOutPath(path0)
+            } else {
+                @Suppress("DEPRECATION")
+                canvas.clipPath(path0, android.graphics.Region.Op.XOR)
+            }
+            @Suppress("DEPRECATION")
+            canvas.clipPath(path1, android.graphics.Region.Op.INTERSECT)
+            val verticalShadow = if (isRtOrLb) frontShadowVlr else frontShadowVrl
+            val left = if (isRtOrLb) bezierControl1.x.toInt() else (bezierControl1.x - 25).toInt()
+            val right = if (isRtOrLb) (bezierControl1.x + 25).toInt() else (bezierControl1.x + 1).toInt()
+            val rotateDegrees = Math.toDegrees(
+                atan2(touchX - bezierControl1.x, bezierControl1.y - touchY).toDouble()
+            ).toFloat()
+            canvas.rotate(rotateDegrees, bezierControl1.x, bezierControl1.y)
+            verticalShadow.setBounds(left, (bezierControl1.y - maxLength).toInt(), right, bezierControl1.y.toInt())
+            verticalShadow.draw(canvas)
+            canvas.restore()
+
+            path1.reset()
+            path1.moveTo(x, y)
+            path1.lineTo(touchX, touchY)
+            path1.lineTo(bezierControl2.x, bezierControl2.y)
+            path1.lineTo(bezierStart2.x, bezierStart2.y)
+            path1.close()
+            canvas.save()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                canvas.clipOutPath(path0)
+            } else {
+                @Suppress("DEPRECATION")
+                canvas.clipPath(path0, android.graphics.Region.Op.XOR)
+            }
+            canvas.clipPath(path1)
+            val horizontalShadow = if (isRtOrLb) frontShadowHtb else frontShadowHbt
+            val top = if (isRtOrLb) bezierControl2.y.toInt() else (bezierControl2.y - 25).toInt()
+            val bottom = if (isRtOrLb) (bezierControl2.y + 25).toInt() else (bezierControl2.y + 1).toInt()
+            val rotateDegrees2 = Math.toDegrees(
+                atan2(bezierControl2.y - touchY, bezierControl2.x - touchX).toDouble()
+            ).toFloat()
+            canvas.rotate(rotateDegrees2, bezierControl2.x, bezierControl2.y)
+            val temp = if (bezierControl2.y < 0) bezierControl2.y - viewHeight else bezierControl2.y
+            val hmg = hypot(bezierControl2.x.toDouble(), temp.toDouble())
+            if (hmg > maxLength) {
+                horizontalShadow.setBounds(
+                    (bezierControl2.x - 25 - hmg).toInt(),
+                    top,
+                    (bezierControl2.x + maxLength - hmg).toInt(),
+                    bottom
+                )
+            } else {
+                horizontalShadow.setBounds((bezierControl2.x - maxLength).toInt(), top, bezierControl2.x.toInt(), bottom)
+            }
+            horizontalShadow.draw(canvas)
+            canvas.restore()
+        }
+
+        private fun drawCurrentBackArea(canvas: Canvas, bitmap: Bitmap, backgroundColor: Int) {
+            val i = ((bezierStart1.x + bezierControl1.x) / 2).toInt()
+            val f1 = abs(i - bezierControl1.x)
+            val i1 = ((bezierStart2.y + bezierControl2.y) / 2).toInt()
+            val f2 = abs(i1 - bezierControl2.y)
+            val f3 = min(f1, f2)
+            path1.reset()
+            path1.moveTo(bezierVertex2.x, bezierVertex2.y)
+            path1.lineTo(bezierVertex1.x, bezierVertex1.y)
+            path1.lineTo(bezierEnd1.x, bezierEnd1.y)
+            path1.lineTo(touchX, touchY)
+            path1.lineTo(bezierEnd2.x, bezierEnd2.y)
+            path1.close()
+
+            val left: Int
+            val right: Int
+            val foldShadow: GradientDrawable
+            if (isRtOrLb) {
+                left = (bezierStart1.x - 1).toInt()
+                right = (bezierStart1.x + f3 + 1).toInt()
+                foldShadow = foldShadowLr
+            } else {
+                left = (bezierStart1.x - f3 - 1).toInt()
+                right = (bezierStart1.x + 1).toInt()
+                foldShadow = foldShadowRl
+            }
+
+            canvas.save()
+            canvas.clipPath(path0)
+            @Suppress("DEPRECATION")
+            canvas.clipPath(path1, android.graphics.Region.Op.INTERSECT)
+            val dis = hypot(
+                cornerX - bezierControl1.x.toDouble(),
+                bezierControl2.y - cornerY.toDouble()
+            ).toFloat().coerceAtLeast(0.1f)
+            val f8 = (cornerX - bezierControl1.x) / dis
+            val f9 = (bezierControl2.y - cornerY) / dis
+            matrixArray[0] = 1 - 2 * f9 * f9
+            matrixArray[1] = 2 * f8 * f9
+            matrixArray[3] = matrixArray[1]
+            matrixArray[4] = 1 - 2 * f8 * f8
+            matrix.reset()
+            matrix.setValues(matrixArray)
+            matrix.preTranslate(-bezierControl1.x, -bezierControl1.y)
+            matrix.postTranslate(bezierControl1.x, bezierControl1.y)
+            canvas.drawColor(backgroundColor)
+            paint.alpha = 150
+            canvas.drawBitmap(bitmap, matrix, paint)
+            paint.alpha = 255
+            canvas.rotate(degrees, bezierStart1.x, bezierStart1.y)
+            foldShadow.setBounds(left, bezierStart1.y.toInt(), right, (bezierStart1.y + maxLength).toInt())
+            foldShadow.draw(canvas)
+            canvas.restore()
+        }
+
+        private fun calcPoints() {
+            middleX = (touchX + cornerX) / 2
+            middleY = (touchY + cornerY) / 2
+            val control1Denominator = (cornerX - middleX).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            bezierControl1.x = middleX - (cornerY - middleY) * (cornerY - middleY) / control1Denominator
+            bezierControl1.y = cornerY.toFloat()
+            bezierControl2.x = cornerX.toFloat()
+            val control2Denominator = (cornerY - middleY).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            bezierControl2.y = middleY - (cornerX - middleX) * (cornerX - middleX) / control2Denominator
+            bezierStart1.x = bezierControl1.x - (cornerX - bezierControl1.x) / 2
+            bezierStart1.y = cornerY.toFloat()
+
+            if (touchX > 0 && touchX < viewWidth && (bezierStart1.x < 0 || bezierStart1.x > viewWidth)) {
+                if (bezierStart1.x < 0) {
+                    bezierStart1.x = viewWidth - bezierStart1.x
+                }
+                val f1 = abs(cornerX - touchX).coerceAtLeast(0.1f)
+                val f2 = viewWidth * f1 / bezierStart1.x.coerceAtLeast(0.1f)
+                touchX = abs(cornerX - f2)
+                val f3 = abs(cornerX - touchX) * abs(cornerY - touchY) / f1
+                touchY = abs(cornerY - f3).coerceIn(0.1f, (viewHeight - 0.1f).coerceAtLeast(0.1f))
+                middleX = (touchX + cornerX) / 2
+                middleY = (touchY + cornerY) / 2
+                val d1 = (cornerX - middleX).let {
+                    if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+                }
+                val d2 = (cornerY - middleY).let {
+                    if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+                }
+                bezierControl1.x = middleX - (cornerY - middleY) * (cornerY - middleY) / d1
+                bezierControl1.y = cornerY.toFloat()
+                bezierControl2.x = cornerX.toFloat()
+                bezierControl2.y = middleY - (cornerX - middleX) * (cornerX - middleX) / d2
+                bezierStart1.x = bezierControl1.x - (cornerX - bezierControl1.x) / 2
+            }
+
+            bezierStart2.x = cornerX.toFloat()
+            bezierStart2.y = bezierControl2.y - (cornerY - bezierControl2.y) / 2
+            touchToCornerDistance = hypot((touchX - cornerX).toDouble(), (touchY - cornerY).toDouble()).toFloat()
+            bezierEnd1 = getCross(PointF(touchX, touchY), bezierControl1, bezierStart1, bezierStart2)
+            bezierEnd2 = getCross(PointF(touchX, touchY), bezierControl2, bezierStart1, bezierStart2)
+            bezierVertex1.x = (bezierStart1.x + 2 * bezierControl1.x + bezierEnd1.x) / 4
+            bezierVertex1.y = (2 * bezierControl1.y + bezierStart1.y + bezierEnd1.y) / 4
+            bezierVertex2.x = (bezierStart2.x + 2 * bezierControl2.x + bezierEnd2.x) / 4
+            bezierVertex2.y = (2 * bezierControl2.y + bezierStart2.y + bezierEnd2.y) / 4
+        }
+
+        private fun getCross(p1: PointF, p2: PointF, p3: PointF, p4: PointF): PointF {
+            val a1 = (p2.y - p1.y) / (p2.x - p1.x).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            val b1 = (p1.x * p2.y - p2.x * p1.y) / (p1.x - p2.x).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            val a2 = (p4.y - p3.y) / (p4.x - p3.x).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            val b2 = (p3.x * p4.y - p4.x * p3.y) / (p3.x - p4.x).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            val denominator = (a1 - a2).let {
+                if (abs(it) < 0.1f) if (it < 0f) -0.1f else 0.1f else it
+            }
+            val x = (b2 - b1) / denominator
+            return PointF(x, a1 * x + b1)
+        }
+    }
+
     companion object {
         const val CLICK_REGION_COUNT: Int = 9
+        const val DEFAULT_SELECTION_PRIMARY_ACTION_KEY: String = "default"
         private const val MIN_FLING_VELOCITY = 900f
         private const val PAGE_DRAG_ANIM_MS = 260L
         private const val PROGRAMMATIC_PAGE_ANIM_MS = 220L
@@ -1164,6 +2045,13 @@ internal class ReadView @JvmOverloads constructor(
         private val onAction: (SelectionAction) -> Unit,
         private val onProcessText: (Intent) -> Unit
     ) {
+        private data class MenuActionItem(
+            val key: String,
+            val label: String,
+            val action: SelectionAction? = null,
+            val intent: Intent? = null
+        )
+
         private val popupWindow: PopupWindow
         private val rootView: LinearLayout
         private val primaryRow: LinearLayout
@@ -1171,7 +2059,9 @@ internal class ReadView @JvmOverloads constructor(
         private val moreList: LinearLayout
         private val moreScrollView: ScrollView
         private val moreButton: TextView
-        private var expanded = false
+        private val moreMenuItems: List<MenuActionItem>
+        private var primaryActionKey: String = DEFAULT_SELECTION_PRIMARY_ACTION_KEY
+        private var moreExpanded = false
         private var lastAnchor: View? = null
         private var lastStartX: Int = 0
         private var lastStartTopY: Int = 0
@@ -1189,7 +2079,7 @@ internal class ReadView @JvmOverloads constructor(
                 visibility = View.GONE
                 addView(row(context).apply {
                     gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                    addView(backButton(context) { toggleExpanded() })
+                    addView(backButton(context, context.getString(R.string.reader_selection_more)) { collapseMorePage() })
                 })
                 moreScrollView = ScrollView(context).apply {
                     isFillViewport = false
@@ -1199,17 +2089,47 @@ internal class ReadView @JvmOverloads constructor(
                 addView(moreScrollView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(context, 240)))
             }
             moreButton = overflowButton(context) {
-                toggleExpanded()
+                toggleMoreExpanded()
             }
+            moreMenuItems = buildList {
+                add(
+                    MenuActionItem(
+                        key = "share",
+                        label = context.getString(R.string.reader_selection_share),
+                        action = SelectionAction.SHARE
+                    )
+                )
+                add(
+                    MenuActionItem(
+                        key = "browser",
+                        label = context.getString(R.string.reader_selection_browser_search),
+                        action = SelectionAction.BROWSER
+                    )
+                )
+                processTextIntents(context).forEach { item ->
+                    add(
+                        MenuActionItem(
+                            key = item.intent.component?.flattenToString()?.let { "process:$it" }
+                                ?: "process:${item.label}",
+                            label = item.label,
+                            intent = item.intent
+                        )
+                    )
+                }
+            }
+            primaryRow.addView(buildPrimaryActionButton(context))
             primaryRow.addView(actionButton(context, context.getString(android.R.string.copy)) { onAction(SelectionAction.COPY) })
             primaryRow.addView(actionButton(context, context.getString(R.string.reader_menu_add_bookmark)) { onAction(SelectionAction.ADD_BOOKMARK) })
             primaryRow.addView(actionButton(context, context.getString(R.string.search_content)) { onAction(SelectionAction.SEARCH) })
             primaryRow.addView(moreButton)
 
-            moreList.addView(moreActionButton(context, context.getString(R.string.reader_selection_share)) { onAction(SelectionAction.SHARE) })
-            moreList.addView(moreActionButton(context, context.getString(R.string.reader_selection_browser_search)) { onAction(SelectionAction.BROWSER) })
-            processTextIntents(context).forEach { item ->
-                moreList.addView(moreActionButton(context, item.label) { onProcessText(item.intent) })
+            moreMenuItems.forEach { item ->
+                moreList.addView(moreActionButton(context, item.label) {
+                    when {
+                        item.intent != null -> onProcessText(item.intent)
+                        item.action != null -> onAction(item.action)
+                    }
+                })
             }
 
             rootView = LinearLayout(context).apply {
@@ -1234,6 +2154,25 @@ internal class ReadView @JvmOverloads constructor(
                 isFocusable = false
                 isOutsideTouchable = false
                 setBackgroundDrawable(null)
+            }
+        }
+
+        fun setPrimaryActionKey(key: String) {
+            primaryActionKey = key
+            rebuildPrimaryActionButton(rootView.context)
+        }
+
+        fun primaryActionOptions(): List<SelectionPrimaryActionOption> {
+            return buildList {
+                add(
+                    SelectionPrimaryActionOption(
+                        key = DEFAULT_SELECTION_PRIMARY_ACTION_KEY,
+                        label = rootView.context.getString(R.string.reader_selection_primary_default)
+                    )
+                )
+                moreMenuItems.forEach { item ->
+                    add(SelectionPrimaryActionOption(key = item.key, label = item.label))
+                }
             }
         }
 
@@ -1292,16 +2231,25 @@ internal class ReadView @JvmOverloads constructor(
         }
 
         private fun restoreDefaultPage() {
-            expanded = false
+            moreExpanded = false
             primaryRow.visibility = View.VISIBLE
             morePage.visibility = View.GONE
             moreScrollView.scrollTo(0, 0)
         }
 
-        private fun toggleExpanded() {
-            expanded = !expanded
-            primaryRow.visibility = if (expanded) View.GONE else View.VISIBLE
-            morePage.visibility = if (expanded) View.VISIBLE else View.GONE
+        private fun toggleMoreExpanded() {
+            moreExpanded = !moreExpanded
+            primaryRow.visibility = if (moreExpanded) View.GONE else View.VISIBLE
+            morePage.visibility = if (moreExpanded) View.VISIBLE else View.GONE
+            updateLastPopupPosition()
+        }
+
+        private fun collapseMorePage() {
+            restoreDefaultPage()
+            updateLastPopupPosition()
+        }
+
+        private fun updateLastPopupPosition() {
             val anchor = lastAnchor ?: return
             show(
                 anchor = anchor,
@@ -1312,6 +2260,29 @@ internal class ReadView @JvmOverloads constructor(
                 endBottomY = lastEndBottomY,
                 resetToDefault = false
             )
+        }
+
+        private fun rebuildPrimaryActionButton(context: Context) {
+            if (primaryRow.childCount <= 0) return
+            primaryRow.removeViewAt(0)
+            primaryRow.addView(buildPrimaryActionButton(context), 0)
+        }
+
+        private fun buildPrimaryActionButton(context: Context): View {
+            val item = moreMenuItems.firstOrNull { it.key == primaryActionKey }
+            if (primaryActionKey == DEFAULT_SELECTION_PRIMARY_ACTION_KEY || item == null) {
+                return processTextButton(context) { onAction(SelectionAction.PROCESS_TEXT) }
+            }
+            return processTextButton(
+                context = context,
+                text = primaryActionGlyph(item.label),
+                description = item.label
+            ) {
+                when {
+                    item.intent != null -> onProcessText(item.intent)
+                    item.action != null -> onAction(item.action)
+                }
+            }
         }
 
         private fun row(context: Context): LinearLayout {
@@ -1335,6 +2306,44 @@ internal class ReadView @JvmOverloads constructor(
             }
         }
 
+        private fun processTextButton(
+            context: Context,
+            text: String = "▽",
+            description: String = context.getString(R.string.reader_selection_process_text),
+            onClick: () -> Unit
+        ): TextView {
+            return TextView(context).apply {
+                this.text = text
+                gravity = Gravity.CENTER
+                includeFontPadding = false
+                setSingleLine(true)
+                setTextColor(0xFF8A837A.toInt())
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                contentDescription = description
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.TRANSPARENT)
+                    setStroke(dp(context, 1), 0x668A837A)
+                }
+                setPadding(0, 0, 0, dp(context, 1))
+                layoutParams = LinearLayout.LayoutParams(dp(context, 20), dp(context, 20)).apply {
+                    marginEnd = dp(context, 6)
+                }
+                setOnClickListener { onClick() }
+            }
+        }
+
+        private fun primaryActionGlyph(label: String): String {
+            val trimmed = label.trim()
+            if (trimmed.isEmpty()) return "▽"
+            return when {
+                trimmed == rootView.context.getString(R.string.reader_selection_share) -> "分"
+                trimmed == rootView.context.getString(R.string.reader_selection_browser_search) -> "搜"
+                else -> trimmed.take(1)
+            }
+        }
+
         private fun moreActionButton(context: Context, label: String, onClick: () -> Unit): TextView {
             return TextView(context).apply {
                 text = label
@@ -1348,14 +2357,14 @@ internal class ReadView @JvmOverloads constructor(
             }
         }
 
-        private fun backButton(context: Context, onClick: () -> Unit): TextView {
+        private fun backButton(context: Context, description: String, onClick: () -> Unit): TextView {
             return TextView(context).apply {
                 text = "‹"
                 gravity = Gravity.CENTER
                 setTextColor(0xFF2C241B.toInt())
                 textSize = 22f
                 setPadding(dp(context, 10), dp(context, 2), dp(context, 10), dp(context, 2))
-                contentDescription = context.getString(R.string.reader_selection_more)
+                contentDescription = description
                 setOnClickListener { onClick() }
             }
         }
@@ -1410,4 +2419,5 @@ internal class ReadView @JvmOverloads constructor(
             val intent: Intent
         )
     }
+
 }

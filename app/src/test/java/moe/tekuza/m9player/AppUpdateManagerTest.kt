@@ -34,6 +34,7 @@ class AppUpdateManagerTest {
         val keepApk = updateDir.file("9player-v1.6.2.apk")
         val oldApk = updateDir.file("9player-v1.6.1.apk")
         val otherApk = updateDir.file("other.apk")
+        val partialDownload = updateDir.file("9player-v1.6.2.apk.download")
         val note = updateDir.file("note.txt")
 
         cleanupUpdateApksExcept(updateDir, keepApk)
@@ -41,6 +42,7 @@ class AppUpdateManagerTest {
         assertTrue(keepApk.exists())
         assertFalse(oldApk.exists())
         assertFalse(otherApk.exists())
+        assertFalse(partialDownload.exists())
         assertTrue(note.exists())
     }
 

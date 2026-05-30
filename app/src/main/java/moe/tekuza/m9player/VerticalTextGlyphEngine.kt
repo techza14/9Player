@@ -8,6 +8,13 @@ import android.text.TextPaint
 import kotlin.math.ceil
 
 internal object VerticalTextGlyphEngine {
+    private data class RotationStyle(
+        val degrees: Float,
+        val dxEm: Float = 0f,
+        val dyEm: Float = 0f,
+        val mirrorAfterRotation: Boolean = false
+    )
+
     private val scratchBounds = ThreadLocal.withInitial { AndroidRect() }
 
     private val topRightPunctuation = setOf(
@@ -26,8 +33,16 @@ internal object VerticalTextGlyphEngine {
     private val rotateClockwise = setOf(
         '「', '」', '『', '』', '（', '）', '(', ')', '［', '］', '[', ']',
         '｛', '｝', '{', '}', '〔', '〕', '【', '】', '〈', '〉', '《', '》',
-        '〖', '〗', '＜', '＞', 'ー', '〜', '～', '…', '‥', '-', '_', '~',
+        '〖', '〗', '＜', '＞', '〜', '～', '…', '‥', '-', '_', '~',
         '／', '/', '｜', '|', '＝', '=', '÷', '：', ':', '；', ';'
+    )
+
+    private val vjapDashRotation = mapOf(
+        'ー' to RotationStyle(degrees = -90f),
+        '─' to RotationStyle(degrees = 90f, dxEm = -0.08f, dyEm = -0.02f),
+        '—' to RotationStyle(degrees = 90f, dxEm = -0.08f, dyEm = -0.02f),
+        '―' to RotationStyle(degrees = 90f, dxEm = -0.08f, dyEm = -0.02f),
+        '−' to RotationStyle(degrees = 90f, dxEm = -0.08f, dyEm = -0.02f)
     )
 
     private val verticalPresentationForms = setOf(
@@ -35,12 +50,12 @@ internal object VerticalTextGlyphEngine {
         '﹁', '﹂', '﹃', '﹄', '︙'
     )
 
-    private val mirrorAfterRotation = setOf('ー', '〜', '～')
+    private val mirrorAfterRotation = setOf('〜', '～')
 
     private val noColumnStartChars: Set<Char> = setOf(
         '、', '。', '，', '．', '.', ',', '：', '；', ':', ';',
         '！', '？', '）', ')', ']', '】', '}', '』', '」', '》', '〉',
-        '…', '—', '―', '～', '〜',
+        '…', '—', '―', '─', '−', '～', '〜',
         '︑', '︒', '︐', '︓', '︔', '︕', '︖', '︶', '︺', '︸', '﹀',
         '︙', '︰', '﹡'
     )
@@ -112,6 +127,20 @@ internal object VerticalTextGlyphEngine {
             trimmed.all { isAsciiWordChar(it) || isAsciiRunSpace(it) }
     }
 
+    fun isSidewaysAsciiToken(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.length <= 1) return false
+        if (trimmed.all { it.isDigit() }) return false
+        val compact = trimmed.filterNot(::isAsciiRunSpace)
+        if (compact.length <= 3 && compact.all { it.isLetterOrDigit() }) return false
+        return trimmed.any { it.isLetterOrDigit() } &&
+            trimmed.all { isAsciiWordChar(it) || isAsciiRunSpace(it) }
+    }
+
+    fun isTwoDigitToken(text: String): Boolean {
+        return text.length == 2 && text.all { it.isDigit() }
+    }
+
     fun estimateCellWidth(paint: TextPaint): Float {
         val sampleWidth = maxOf(
             paint.measureText("国"),
@@ -152,6 +181,22 @@ internal object VerticalTextGlyphEngine {
         }
     }
 
+    fun drawTateChuYoko(canvas: Canvas, sourcePaint: TextPaint, text: String, rect: RectF) {
+        val displayText = text.trim()
+        if (displayText.isEmpty()) return
+        withPaint(sourcePaint, Paint.Align.CENTER) { paint ->
+            val oldSize = paint.textSize
+            val baselineAdjust = -(paint.ascent() + paint.descent()) * 0.5f
+            val maxWidth = rect.width() * 0.92f
+            val measured = paint.measureText(displayText).coerceAtLeast(1f)
+            if (measured > maxWidth) {
+                paint.textSize = (oldSize * maxWidth / measured).coerceAtLeast(oldSize * 0.72f)
+            }
+            canvas.drawText(displayText, rect.centerX(), rect.centerY() + baselineAdjust, paint)
+            paint.textSize = oldSize
+        }
+    }
+
     fun inkRect(sourcePaint: TextPaint, text: String, rect: RectF): RectF {
         val displayText = presentationText(text)
         if (displayText.isEmpty()) return rect
@@ -170,6 +215,7 @@ internal object VerticalTextGlyphEngine {
     fun rotationFor(text: String): Float {
         val ch = text.firstOrNull()?.let(::presentationChar) ?: return 0f
         return when {
+            ch in vjapDashRotation -> vjapDashRotation.getValue(ch).degrees
             ch in 'A'..'Z' || ch in 'a'..'z' -> 90f
             ch in '0'..'9' -> 0f
             ch in verticalPresentationForms -> 0f
@@ -179,7 +225,17 @@ internal object VerticalTextGlyphEngine {
     }
 
     fun shouldMirrorAfterRotation(text: String): Boolean {
-        return text.firstOrNull()?.let(::presentationChar) in mirrorAfterRotation
+        val ch = text.firstOrNull()?.let(::presentationChar) ?: return false
+        return vjapDashRotation[ch]?.mirrorAfterRotation == true || ch in mirrorAfterRotation
+    }
+
+    private fun rotationStyleFor(text: String): RotationStyle {
+        val ch = text.firstOrNull()?.let(::presentationChar) ?: return RotationStyle(0f)
+        vjapDashRotation[ch]?.let { return it }
+        return RotationStyle(
+            degrees = rotationFor(text),
+            mirrorAfterRotation = ch in mirrorAfterRotation
+        )
     }
 
     private inline fun <T> withPaint(
@@ -251,7 +307,15 @@ internal object VerticalTextGlyphEngine {
         if (rotation == 0f) {
             return offsetInkRect(paint, text, rect, baselineAdjust, 0f, 0f)
         }
-        val base = offsetInkRect(paint, text, rect, baselineAdjust, 0f, 0f)
+        val style = rotationStyleFor(text)
+        val base = offsetInkRect(
+            paint = paint,
+            text = text,
+            rect = rect,
+            baselineAdjust = baselineAdjust,
+            dx = paint.fontSpacing * style.dxEm,
+            dy = paint.fontSpacing * style.dyEm
+        )
         val cx = rect.centerX()
         val cy = rect.centerY()
         return rotatedBounds(base, cx, cy, rotation)
@@ -383,17 +447,19 @@ internal object VerticalTextGlyphEngine {
     ) {
         val cx = rect.centerX()
         val cy = rect.centerY()
-        val rotation = rotationFor(text)
-        if (rotation == 0f) {
+        val style = rotationStyleFor(text)
+        if (style.degrees == 0f) {
             canvas.drawText(text, cx, cy + baselineAdjust, paint)
             return
         }
+        val drawX = cx + paint.fontSpacing * style.dxEm
+        val drawY = cy + baselineAdjust + paint.fontSpacing * style.dyEm
         canvas.save()
-        canvas.rotate(rotation, cx, cy)
-        if (shouldMirrorAfterRotation(text)) {
+        canvas.rotate(style.degrees, cx, cy)
+        if (style.mirrorAfterRotation) {
             canvas.scale(1f, -1f, cx, cy)
         }
-        canvas.drawText(text, cx, cy + baselineAdjust, paint)
+        canvas.drawText(text, drawX, drawY, paint)
         canvas.restore()
     }
 }

@@ -1,5 +1,7 @@
 package moe.tekuza.m9player
 
+import android.app.ActivityManager
+import android.app.DatePickerDialog
 import android.app.Dialog
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -14,6 +16,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -29,9 +32,14 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.ScrollView
 import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -50,6 +58,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
 import kotlin.math.abs
 import moe.tekuza.m9player.legado.reader.M9PageAnim
 import moe.tekuza.m9player.legado.reader.M9ReadBookConfig
@@ -67,6 +76,7 @@ import moe.tekuza.m9player.legado.reader.provider.TextPageFactory
 
 private const val LEGADO_READER_DEFAULT_TITLE = "吾輩は猫である"
 private const val LEGADO_READER_LOG_TAG = "LegadoReader"
+private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
 private const val NIGHT_BAR_BG = 0xFF677C8B.toInt()
 private const val NIGHT_BOTTOM_BG = 0xFF3A3A3A.toInt()
 private const val NIGHT_FLOATING_BG = 0xFF303030.toInt()
@@ -78,6 +88,8 @@ private val LEGADO_READER_DEFAULT_PARAGRAPHS = listOf(
     "吾輩はここで始めて人間というものを見た。しかもあとで聞くとそれは書生という人間中で一番獰悪な種族であったそうだ。",
     "この書生というのは時々我々を捕えて煮て食うという話である。しかしその當時は何という考もなかったから別段恐しいとも思わなかった。"
 )
+private const val DEFAULT_IMAGE_PAUSE_SECONDS = 0
+private const val MAX_IMAGE_PAUSE_SECONDS = 300
 
 private data class ReaderPageAnchor(
     val chapterIndex: Int,
@@ -106,10 +118,18 @@ private enum class CatalogMode {
 private enum class ReaderOverflowAction(val menuId: Int) {
     PLAYER(1),
     ADD_BOOKMARK(2),
-    REMOVE_RUBY(3),
-    SWITCH_LAYOUT(4),
-    CHARSET(5),
-    HELP(6)
+    SIMULATED_READING(3),
+    REMOVE_RUBY(4),
+    SWITCH_LAYOUT(5),
+    CHARSET(6),
+    HELP(7)
+}
+
+private data class ReaderImageStopTarget(
+    val chapterIndex: Int,
+    val imagePosition: Int
+) {
+    val key: String get() = "$chapterIndex:$imagePosition"
 }
 
 class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
@@ -137,6 +157,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private lateinit var listenActionText: TextView
     private lateinit var audioPlayPauseText: TextView
     private lateinit var playbackBarToggleButton: ImageButton
+    private lateinit var chapterControlRow: LinearLayout
     private lateinit var brightnessPanel: View
     private lateinit var brightnessSeekBar: SeekBar
     private lateinit var brightnessAutoButton: ImageView
@@ -158,9 +179,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var cueMatchesByCueIndex: Map<Int, EbookCueMatch> = emptyMap()
     private var matchData: EbookMatchData? = null
     private var matchSearchWindow: Int = DEFAULT_MATCH_SEARCH_WINDOW
+    private var audioCueIndex: Int = -1
     private var activeCueIndex: Int = -1
-    private var temporaryCuePage: TextPage? = null
+    private var textSelectionActive: Boolean = false
     private var player: ExoPlayer? = null
+    private var returnToPlayerOnBack: Boolean = false
+    private var simulatedReadingConfig: SimulatedReadingConfig = SimulatedReadingConfig()
+    private var simulatedUnlockedChapterCount: Int = 0
     private var syncJob: Job? = null
     private var reloadBookJob: Job? = null
     private var paginationJob: Job? = null
@@ -239,28 +264,60 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var brightnessValue: Int = 160
     private var brightnessPanelOnRight: Boolean = false
     private var showReadTitleAddition: Boolean = true
+    private var bodyTitleMode: ReaderBodyTitleMode = ReaderBodyTitleMode.LEFT
+    private var bodyTitleSizeAddSp: Int = 0
+    private var bodyTitleTopSpacingDp: Int = 0
+    private var bodyTitleBottomSpacingDp: Int = 0
+    private var headerMode: ReaderHeaderMode = ReaderHeaderMode.HIDE_WHEN_STATUS_BAR_SHOW
+    private var footerMode: ReaderFooterMode = ReaderFooterMode.SHOW
+    private var tipHeaderLeft: ReaderTipContent = ReaderTipContent.CHAPTER_TITLE
+    private var tipHeaderMiddle: ReaderTipContent = ReaderTipContent.NONE
+    private var tipHeaderRight: ReaderTipContent = ReaderTipContent.TIME
+    private var tipFooterLeft: ReaderTipContent = ReaderTipContent.BOOK_NAME
+    private var tipFooterMiddle: ReaderTipContent = ReaderTipContent.NONE
+    private var tipFooterRight: ReaderTipContent = ReaderTipContent.PAGE_AND_TOTAL
+    private var tipColorMode: ReaderTipColorMode = ReaderTipColorMode.FOLLOW_CONTENT
+    private var tipDividerColorMode: ReaderTipDividerColorMode = ReaderTipDividerColorMode.DEFAULT
+    private var tipDividerColor: Int = 0x1F000000
     private var useZhLayout: Boolean = true
     private var textFullJustify: Boolean = true
     private var textBottomJustify: Boolean = true
     private var clickRegionActions: List<ReadView.TapAction> = ReadView.defaultClickRegionActions()
+    private var selectionPrimaryActionKey: String = ReadView.DEFAULT_SELECTION_PRIMARY_ACTION_KEY
     private var progressByChapter: Boolean = true
+    private var pendingPageSeekIndex: Int? = null
+    private var pendingChapterSeekIndex: Int? = null
+    private var confirmSkipToChapter: Boolean = false
+    private var chapterSourceMode: ReaderChapterSourceMode = ReaderChapterSourceMode.BOOK
+    private var m4bChapters: List<M4bChapter> = emptyList()
+    private var m4bChapterLoadJob: Job? = null
     private var keepScreenOn: Boolean = false
     private var noAnimScrollPage: Boolean = false
     private var previewImageByClick: Boolean = false
     private var disableReturnKey: Boolean = false
     private var readBarStyleFollowPage: Boolean = false
     private var playbackBarPinnedVisible: Boolean = false
+    private var crossPageCueWindowEnabled: Boolean = true
+    private var stopPlaybackOnImage: Boolean = false
+    private var imagePauseSeconds: Int = DEFAULT_IMAGE_PAUSE_SECONDS
+    private var verticalControlDirectionReversed: Boolean = false
+    private var verticalProgressDirectionReversed: Boolean = false
+    private var lastImageStopKey: String? = null
+    private var imagePauseResumeJob: Job? = null
+    private var imagePausePageIndex: Int? = null
     private var showRubyText: Boolean = true
     private var playbackBarHeightPx: Int = 0
     private var pendingRestoreAnchor: ReaderPageAnchor? = null
     private var loadedDocumentBookUriText: String? = null
     private var loadedDocumentCharsetName: String? = null
+    private var floatingOverlayStartJob: Job? = null
+    private var suppressFloatingOverlayOnStop: Boolean = false
 
     private fun readerString(resId: Int): String = getString(resId)
 
     private fun bridgeCanReturnToPlayer(): Boolean {
-        return BookReaderFloatingBridge.hasController() &&
-            BookReaderFloatingBridge.currentAudioUri() == audioUri?.toString()
+        return audioUri != null &&
+            BookReaderPlaybackSession.currentAudioUri() == audioUri?.toString()
     }
 
     private fun publishReaderPlaybackBridgeSnapshot(notifyState: Boolean = false) {
@@ -269,45 +326,81 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         currentReaderPlaybackKey()?.let { BookReaderFloatingBridge.setCurrentBookKey(this, it) }
         BookReaderFloatingBridge.notifyPlaybackSpeed(currentAudioPlaybackSpeed())
         currentAudioPositionMs()?.let { BookReaderFloatingBridge.notifyPlaybackPosition(it) }
+        publishReaderSubtitleBridgeSnapshot(clearWhenMissing = false)
         if (notifyState) {
             BookReaderFloatingBridge.notifyPlaybackState(isAudioPlaying())
         }
     }
+
+    private fun publishReaderSubtitleBridgeSnapshot(clearWhenMissing: Boolean) {
+        BookReaderFloatingBridge.setSubtitleTimeline(
+            bookTitle = currentReaderTitle(),
+            audioUri = audioUri?.toString(),
+            cues = cues.mapIndexed { index, cue ->
+                val fullSentence = cueMatchesByCueIndex[index]
+                    ?.let(::fullCueText)
+                    ?.takeIf { it.isNotBlank() }
+                    ?: cue.text
+                BookReaderFloatingBridge.SubtitleTimelineCue(
+                    startMs = cue.startMs,
+                    endMs = cue.endMs,
+                    text = cue.text,
+                    fullSentenceText = fullSentence,
+                    fullSentenceStartMs = cue.startMs,
+                    fullSentenceEndMs = cue.endMs
+                )
+            }
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         restoreReaderSettings()
         importedBook = intentLocalReaderBook() ?: loadLastLocalReaderBook(this)
+        refreshSimulatedReadingConfig()
         restoreBookmarks()
         attachSavedAnchorIfNeeded()
         audioUri = intent.getStringExtra(EXTRA_AUDIO_URI)?.trim()?.takeIf { it.isNotBlank() }?.let(Uri::parse)
         srtUri = intent.getStringExtra(EXTRA_SRT_URI)?.trim()?.takeIf { it.isNotBlank() }?.let(Uri::parse)
+        returnToPlayerOnBack = intent.getBooleanExtra(EXTRA_RETURN_TO_PLAYER_ON_BACK, false)
         pendingAudioRestorePositionMs = intent.getLongExtra(EXTRA_AUDIO_POSITION_MS, -1L).coerceAtLeast(0L)
         pendingAudioRestoreDurationMs = intent.getLongExtra(EXTRA_AUDIO_DURATION_MS, -1L).coerceAtLeast(0L)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.isNavigationBarContrastEnforced = false
         volumeControlStream = AudioManager.STREAM_MUSIC
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (!handleReaderBackPressed()) {
+                        finish()
+                    }
+                }
+            }
+        )
         setContentView(buildLegadoReaderShell())
         applySystemUiSettings()
         updateDisplayedBookTitle()
         BookReaderFloatingBridge.addPlaybackStateListener(sharedPlaybackStateListener)
         BookReaderFloatingBridge.addPlaybackPositionListener(sharedPlaybackPositionListener)
         initAudioPlayerIfNeeded()
+        ensureM4bChaptersLoaded()
         readView.post { loadDisplayedBook(anchor = pendingRestoreAnchor) }
     }
 
-    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-    override fun onBackPressed() {
+    private fun handleReaderBackPressed(): Boolean {
         if (disableReturnKey) {
             setReadMenuVisible(true)
-            return
+            return true
         }
         when {
             ::searchPanel.isInitialized && searchPanel.visibility == View.VISIBLE -> {
                 hideSearchPanel()
-                return
+                return true
             }
             ::catalogPanel.isInitialized && catalogPanel.visibility == View.VISIBLE -> {
                 hideCatalogPanel()
-                return
+                return true
             }
             ::searchMenu.isInitialized && searchMenu.visibility == View.VISIBLE -> {
                 searchQuery = null
@@ -315,31 +408,91 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 searchHitIndex = -1
                 hideSearchMenu()
                 renderCurrentPage()
-                return
+                return true
             }
             ::audioControlPanel.isInitialized && audioControlPanel.visibility == View.VISIBLE -> {
                 audioControlPanel.visibility = View.GONE
-                return
+                updateSystemBarSurfaces()
+                return true
             }
             ::moreSettingsPanel.isInitialized && moreSettingsPanel.visibility == View.VISIBLE -> {
                 moreSettingsPanel.visibility = View.GONE
-                return
+                updateSystemBarSurfaces()
+                return true
             }
             isReadMenuVisible() -> {
                 setReadMenuVisible(false)
-                return
+                return true
             }
         }
         if (returnToPlayerIfShared()) {
-            return
+            return true
         }
-        super.onBackPressed()
+        return false
     }
 
     override fun onPause() {
         persistAudioPlaybackSnapshot()
-        persistReaderSettings()
+        persistReaderSettings(updateAnchor = false)
         super.onPause()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        floatingOverlayStartJob?.cancel()
+        floatingOverlayStartJob = null
+        suppressFloatingOverlayOnStop = false
+        stopAudiobookFloatingOverlayService(this)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        floatingOverlayStartJob?.cancel()
+        if (isChangingConfigurations || suppressFloatingOverlayOnStop) {
+            Log.d(
+                FLOATING_OVERLAY_EXIT_LOG_TAG,
+                "Legado onStop skipped changing=$isChangingConfigurations " +
+                    "suppress=$suppressFloatingOverlayOnStop"
+            )
+            return
+        }
+        val settings = loadAudiobookSettingsConfig(this)
+        val overlayEnabled = settings.floatingOverlayEnabled || settings.floatingOverlaySubtitleEnabled
+        publishReaderPlaybackBridgeSnapshot(notifyState = true)
+        val playing = BookReaderFloatingBridge.isPlaying()
+        Log.d(
+            FLOATING_OVERLAY_EXIT_LOG_TAG,
+            "Legado onStop overlayEnabled=$overlayEnabled " +
+                "showOnReaderExit=${settings.floatingOverlayShowOnReaderExit} playing=$playing"
+        )
+        if (!overlayEnabled || !playing) {
+            return
+        }
+        if (settings.floatingOverlayShowOnReaderExit) {
+            Log.d(FLOATING_OVERLAY_EXIT_LOG_TAG, "Legado starting overlay service immediately")
+            startAudiobookFloatingOverlayService(this)
+            return
+        }
+        floatingOverlayStartJob = lifecycleScope.launch {
+            delay(150L)
+            val refreshed = loadAudiobookSettingsConfig(this@LegadoReaderActivity)
+            val refreshedOverlayEnabled =
+                refreshed.floatingOverlayEnabled || refreshed.floatingOverlaySubtitleEnabled
+            val appForeground = isLegadoAppProcessInForeground()
+            val shouldShowAfterReaderExit =
+                refreshed.floatingOverlayShowOnReaderExit || !appForeground
+            val stillPlaying = BookReaderFloatingBridge.isPlaying()
+            Log.d(
+                FLOATING_OVERLAY_EXIT_LOG_TAG,
+                "Legado delayed overlayEnabled=$refreshedOverlayEnabled appForeground=$appForeground " +
+                    "showOnReaderExit=${refreshed.floatingOverlayShowOnReaderExit} " +
+                    "shouldShow=$shouldShowAfterReaderExit playing=$stillPlaying"
+            )
+            if (refreshedOverlayEnabled && shouldShowAfterReaderExit && stillPlaying) {
+                Log.d(FLOATING_OVERLAY_EXIT_LOG_TAG, "Legado starting overlay service")
+                startAudiobookFloatingOverlayService(this@LegadoReaderActivity)
+            }
+        }
     }
 
     private fun intentLocalReaderBook(): LocalReaderBook? {
@@ -483,13 +636,20 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 Gravity.BOTTOM
             )
         )
+        applyDirectionSettings()
 
         root.setOnClickListener {
             when {
                 searchPanel.visibility == View.VISIBLE -> hideSearchPanel()
                 catalogPanel.visibility == View.VISIBLE -> hideCatalogPanel()
-                audioControlPanel.visibility == View.VISIBLE -> audioControlPanel.visibility = View.GONE
-                moreSettingsPanel.visibility == View.VISIBLE -> moreSettingsPanel.visibility = View.GONE
+                audioControlPanel.visibility == View.VISIBLE -> {
+                    audioControlPanel.visibility = View.GONE
+                    updateSystemBarSurfaces()
+                }
+                moreSettingsPanel.visibility == View.VISIBLE -> {
+                    moreSettingsPanel.visibility = View.GONE
+                    updateSystemBarSurfaces()
+                }
                 else -> {
                     toggleReadMenuVisibility()
                 }
@@ -505,7 +665,14 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private fun buildStaticPage(): View {
         return ReadView(this).apply {
             readView = this
-            setReaderColors(readerBgColor, readerTextColor, readerTipColor, readerBgAssetName, readerBgImageUri, readerBgAlpha)
+            setReaderColors(
+                readerBgColor,
+                readerTextColor,
+                effectiveReaderTipColor(),
+                readerBgAssetName,
+                readerBgImageUri,
+                readerBgAlpha
+            )
             setCueHighlightColor(readerCueHighlightColor)
             setTextSizeSp(readerTextSizeSp.toFloat())
             setTextWeight(readerTextWeight)
@@ -517,6 +684,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             setNoAnimScrollPage(noAnimScrollPage)
             setClickRegionActions(clickRegionActions)
             setShowHeaderFooter(showReadTitleAddition)
+            setBookTitle(currentReaderTitle())
+            applyReaderInfoConfig()
+            setSelectionPrimaryActionKey(selectionPrimaryActionKey)
             onPagePreview = { delta -> pagePreviewForDelta(delta) }
             onMovePages = { delta -> movePage(delta) }
             onPrevPage = { movePage(-1) }
@@ -524,6 +694,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             onTapAction = { handleTapRegionAction(it) }
             onSelectionAction = { action, text -> handleSelectionAction(action, text) }
             onSelectionProcessText = { intent, text -> handleSelectionProcessText(intent, text) }
+            onTextSelectionStateChanged = { active -> handleTextSelectionStateChanged(active) }
             onImageClick = { image ->
                 if (previewImageByClick) {
                     showImagePreviewDialog(image)
@@ -531,8 +702,14 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             }
             onMenu = {
                 when {
-                    audioControlPanel.visibility == View.VISIBLE -> audioControlPanel.visibility = View.GONE
-                    moreSettingsPanel.visibility == View.VISIBLE -> moreSettingsPanel.visibility = View.GONE
+                    audioControlPanel.visibility == View.VISIBLE -> {
+                        audioControlPanel.visibility = View.GONE
+                        updateSystemBarSurfaces()
+                    }
+                    moreSettingsPanel.visibility == View.VISIBLE -> {
+                        moreSettingsPanel.visibility = View.GONE
+                        updateSystemBarSurfaces()
+                    }
                     else -> toggleReadMenuVisibility()
                 }
             }
@@ -622,21 +799,43 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             }
             findViewById<TextView>(R.id.reader_prev_chapter).setOnClickListener { moveChapter(-1) }
             findViewById<TextView>(R.id.reader_next_chapter).setOnClickListener { moveChapter(1) }
+            findViewById<LinearLayout>(R.id.reader_chapter_control_row).also {
+                chapterControlRow = it
+            }
             findViewById<SeekBar>(R.id.reader_page_seek).also { seek ->
                 chapterSeekBar = seek
                 seek.max = 0
                 seek.progress = 0
                 seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                     override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                        if (fromUser && pages.isNotEmpty()) {
-                            pageIndex = seekProgressToPageIndex(progress)
-                            activeCueIndex = -1
-                            renderCurrentPage()
+                        if (!fromUser || pages.isEmpty()) return
+                        if (progressByChapter) {
+                            pendingPageSeekIndex = progress
+                        } else {
+                            pendingChapterSeekIndex = progress
                         }
                     }
 
-                    override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                    override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) {
+                        pendingPageSeekIndex = null
+                        pendingChapterSeekIndex = null
+                    }
+
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                        if (progressByChapter) {
+                            val targetPage = pendingPageSeekIndex ?: seekBar?.progress ?: return
+                            pendingPageSeekIndex = null
+                            pendingChapterSeekIndex = null
+                            pageIndex = seekProgressToPageIndex(targetPage)
+                            activeCueIndex = -1
+                            renderCurrentPage(persistAnchor = true)
+                        } else {
+                            val targetChapter = pendingChapterSeekIndex ?: seekBar?.progress ?: return
+                            pendingChapterSeekIndex = null
+                            pendingPageSeekIndex = null
+                            confirmOrJumpToChapterFromSeekBar(targetChapter)
+                        }
+                    }
                 })
             }
             findViewById<LinearLayout>(R.id.reader_catalog).setOnClickListener {
@@ -656,6 +855,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 audioControlPanel.visibility = View.GONE
                 moreSettingsPanel.visibility =
                     if (moreSettingsPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                updateSystemBarSurfaces()
             }
         }
     }
@@ -665,8 +865,15 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             elevation = dp(8).toFloat()
             isClickable = true
             setOnClickListener { }
-            findViewById<ImageButton>(R.id.reader_playback_prev).setOnClickListener { seekToAdjacentCue(-1) }
-            findViewById<ImageButton>(R.id.reader_playback_next).setOnClickListener { seekToAdjacentCue(1) }
+            findViewById<ImageButton>(R.id.reader_playback_catalog).setOnClickListener {
+                showChapterListDialog()
+            }
+            findViewById<ImageButton>(R.id.reader_playback_prev).setOnClickListener {
+                seekToAdjacentCue(controlCueDelta(-1))
+            }
+            findViewById<ImageButton>(R.id.reader_playback_next).setOnClickListener {
+                seekToAdjacentCue(controlCueDelta(1))
+            }
             findViewById<ImageButton>(R.id.reader_playback_toggle).also {
                 playbackBarToggleButton = it
                 it.setOnClickListener { toggleAudioPlayback() }
@@ -698,14 +905,16 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             elevation = dp(8).toFloat()
             isClickable = true
             setOnClickListener { }
-            findViewById<TextView>(R.id.audio_prev_sentence_text).setOnClickListener { seekToAdjacentCue(-1) }
-            findViewById<ImageButton>(R.id.audio_play_prev).setOnClickListener { seekToAdjacentCue(-1) }
+            findViewById<ImageButton>(R.id.audio_play_prev).setOnClickListener {
+                seekToAdjacentCue(controlCueDelta(-1))
+            }
             findViewById<TextView>(R.id.audio_play_pause).also {
                 audioPlayPauseText = it
                 it.setOnClickListener { toggleAudioPlayback() }
             }
-            findViewById<ImageButton>(R.id.audio_play_next).setOnClickListener { seekToAdjacentCue(1) }
-            findViewById<TextView>(R.id.audio_next_sentence_text).setOnClickListener { seekToAdjacentCue(1) }
+            findViewById<ImageButton>(R.id.audio_play_next).setOnClickListener {
+                seekToAdjacentCue(controlCueDelta(1))
+            }
             val speedValue = findViewById<TextView>(R.id.audio_speed_value)
             val speedSeek = findViewById<SeekBar>(R.id.audio_speed_seek)
             val initialSpeed = currentAudioPlaybackSpeed()
@@ -741,6 +950,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             onHideStatusBarChanged = {
                 hideStatusBar = it
                 applySystemUiSettings()
+                applyReaderInfoConfig()
                 persistReaderSettings()
             }
             onHideNavigationBarChanged = {
@@ -761,7 +971,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             }
             onShowReadTitleAdditionChanged = {
                 showReadTitleAddition = it
-                readView.setShowHeaderFooter(it)
+                applyReaderInfoConfig()
                 requestBookRelayout()
             }
             onUseZhLayoutChanged = {
@@ -798,6 +1008,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             onScreenOrientationClicked = { showScreenOrientationDialog() }
             onKeepLightClicked = { showKeepLightDialog() }
             onProgressBehaviorClicked = { showProgressBehaviorDialog() }
+            onSelectionPrimaryActionClicked = { showSelectionPrimaryActionDialog() }
             onClickRegionalConfigClicked = { showClickRegionDialog() }
             onResetDefaultsClicked = { showResetReaderDefaultsDialog() }
             bind(currentMoreConfigState())
@@ -813,6 +1024,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             },
             keepScreenOn = keepScreenOn,
             progressByChapter = progressByChapter,
+            selectionPrimaryActionSummary = currentSelectionPrimaryActionSummary(),
             clickRegionSummary = currentClickRegionSummary(),
             hideStatusBar = hideStatusBar,
             readBodyToLh = readBodyToLh,
@@ -834,9 +1046,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         WindowCompat.setDecorFitsSystemWindows(window, !(hideStatusBar || hideNavigationBar || readBodyToLh))
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         val systemBarColor = currentSystemBarColor()
+        val useDarkSystemBarIcons = currentSystemBarUsesDarkIcons()
         window.statusBarColor = systemBarColor
         window.navigationBarColor = systemBarColor
-        val useDarkSystemBarIcons = currentSystemBarUsesDarkIcons()
         controller.isAppearanceLightStatusBars = useDarkSystemBarIcons
         controller.isAppearanceLightNavigationBars = useDarkSystemBarIcons
         val hideTypes =
@@ -865,7 +1077,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val bottomPanel = readMenu.findViewById<View>(R.id.reader_bottom_panel)
         titleBar.setBackgroundColor(menuBgColor)
         bottomPanel.setBackgroundColor(menuBgColor)
-        playbackBar.setBackgroundColor(menuBgColor)
+        applyPlaybackBarStyle()
         tintMenuContent(titleBar, textColor)
         tintMenuContent(bottomPanel, textColor)
         chapterSeekBar.thumb.setTint(progressColor)
@@ -907,12 +1119,20 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun currentSystemBarColor(): Int {
-        return if (isReadMenuVisible()) currentMenuBackgroundColor() else readerBgColor
+        return if (isReaderChromeVisibleForSystemBars()) currentMenuBackgroundColor() else readerBgColor
+    }
+
+    private fun isReaderChromeVisibleForSystemBars(): Boolean {
+        return isReadMenuVisible() ||
+            (::catalogPanel.isInitialized && catalogPanel.visibility == View.VISIBLE) ||
+            (::searchPanel.isInitialized && searchPanel.visibility == View.VISIBLE) ||
+            (::audioControlPanel.isInitialized && audioControlPanel.visibility == View.VISIBLE) ||
+            (::moreSettingsPanel.isInitialized && moreSettingsPanel.visibility == View.VISIBLE)
     }
 
     private fun currentSystemBarUsesDarkIcons(): Boolean {
         return when {
-            !isReadMenuVisible() -> readerDarkStatusIcon
+            !isReaderChromeVisibleForSystemBars() -> readerDarkStatusIcon
             readBarStyleFollowPage -> readerDarkStatusIcon
             else -> !isNightReaderTheme()
         }
@@ -922,13 +1142,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         return ::readMenu.isInitialized && readMenu.visibility == View.VISIBLE
     }
 
-    private fun setReadMenuVisible(visible: Boolean) {
+    private fun setReadMenuVisible(visible: Boolean, updateSystemBars: Boolean = true) {
         if (!::readMenu.isInitialized) return
         val targetVisibility = if (visible) View.VISIBLE else View.GONE
         if (readMenu.visibility != targetVisibility) {
             readMenu.visibility = targetVisibility
         }
-        updateSystemBarSurfaces()
+        if (updateSystemBars) updateSystemBarSurfaces()
     }
 
     private fun toggleReadMenuVisibility() {
@@ -936,6 +1156,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun updateSystemBarSurfaces() {
+        applyPlaybackBarStyle()
         val systemBarColor = currentSystemBarColor()
         if (::statusBarScrim.isInitialized) {
             statusBarScrim.setBackgroundColor(systemBarColor)
@@ -944,6 +1165,28 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             navigationBarScrim.setBackgroundColor(systemBarColor)
         }
         applySystemUiSettings()
+    }
+
+    private fun isVerticalControlDirectionReversed(): Boolean {
+        return verticalControlDirectionReversed && readerLayoutMode == M9LayoutMode.VERTICAL
+    }
+
+    private fun isVerticalProgressDirectionReversed(): Boolean {
+        return verticalProgressDirectionReversed && readerLayoutMode == M9LayoutMode.VERTICAL
+    }
+
+    private fun controlCueDelta(delta: Int): Int {
+        return if (isVerticalControlDirectionReversed()) -delta else delta
+    }
+
+    private fun applyDirectionSettings() {
+        val progressDirection = if (isVerticalProgressDirectionReversed()) {
+            View.LAYOUT_DIRECTION_RTL
+        } else {
+            View.LAYOUT_DIRECTION_LTR
+        }
+        if (::chapterControlRow.isInitialized) chapterControlRow.layoutDirection = progressDirection
+        if (::chapterSeekBar.isInitialized) chapterSeekBar.layoutDirection = progressDirection
     }
 
     private fun tintMenuContent(view: View, textColor: Int) {
@@ -1098,16 +1341,34 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun closeReaderChrome() {
-        setReadMenuVisible(false)
         audioControlPanel.visibility = View.GONE
         moreSettingsPanel.visibility = View.GONE
-        hideCatalogPanel()
-        hideSearchPanel()
+        if (::catalogPanel.isInitialized) catalogPanel.visibility = View.GONE
+        if (::searchPanel.isInitialized) searchPanel.visibility = View.GONE
+        setReadMenuVisible(false, updateSystemBars = false)
+        updateSystemBarSurfaces()
     }
 
     private fun isNightReaderTheme(): Boolean = readerNightMode
 
     private fun currentMenuTextColor(): Int = if (isNightReaderTheme()) 0xFFF4F0E6.toInt() else 0xFF2C241B.toInt()
+
+    private fun applyPlaybackBarStyle() {
+        if (!::playbackBar.isInitialized) return
+        val chromeVisible = isReaderChromeVisibleForSystemBars()
+        val bgColor = if (chromeVisible) currentMenuBackgroundColor() else readerBgColor
+        val iconColor = if (chromeVisible) {
+            when {
+                readBarStyleFollowPage -> readerTextColor
+                isNightReaderTheme() -> 0xFFF4F0E6.toInt()
+                else -> 0xFF2C241B.toInt()
+            }
+        } else {
+            readerTextColor
+        }
+        playbackBar.setBackgroundColor(bgColor)
+        tintMenuContent(playbackBar, iconColor)
+    }
 
     private fun withAlpha(color: Int, alphaFraction: Float): Int {
         val alpha = (alphaFraction.coerceIn(0f, 1f) * 255f).toInt()
@@ -1251,11 +1512,28 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         hideNavigationBar = defaults.hideNavigationBar
         showBrightnessView = defaults.showBrightnessView
         showReadTitleAddition = defaults.showReadTitleAddition
+        bodyTitleMode = defaults.bodyTitleMode
+        bodyTitleSizeAddSp = defaults.bodyTitleSizeAddSp
+        bodyTitleTopSpacingDp = defaults.bodyTitleTopSpacingDp
+        bodyTitleBottomSpacingDp = defaults.bodyTitleBottomSpacingDp
+        headerMode = defaults.headerMode
+        footerMode = defaults.footerMode
+        tipHeaderLeft = defaults.tipHeaderLeft
+        tipHeaderMiddle = defaults.tipHeaderMiddle
+        tipHeaderRight = defaults.tipHeaderRight
+        tipFooterLeft = defaults.tipFooterLeft
+        tipFooterMiddle = defaults.tipFooterMiddle
+        tipFooterRight = defaults.tipFooterRight
+        tipColorMode = defaults.tipColorMode
+        tipDividerColorMode = defaults.tipDividerColorMode
+        tipDividerColor = defaults.tipDividerColor
         useZhLayout = defaults.useZhLayout
         textFullJustify = defaults.textFullJustify
         textBottomJustify = defaults.textBottomJustify
         clickRegionActions = defaultClickRegionActionsForCurrentLayout()
+        selectionPrimaryActionKey = defaults.selectionPrimaryActionKey
         progressByChapter = defaults.progressByChapter
+        chapterSourceMode = defaults.chapterSourceMode
         keepScreenOn = defaults.keepScreenOn
         noAnimScrollPage = defaults.noAnimScrollPage
         previewImageByClick = defaults.previewImageByClick
@@ -1268,7 +1546,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
         readView.setClickRegionActions(clickRegionActions)
-        readView.setShowHeaderFooter(showReadTitleAddition)
+        readView.setSelectionPrimaryActionKey(selectionPrimaryActionKey)
+        applyReaderInfoConfig()
         readView.setNoAnimScrollPage(noAnimScrollPage)
         brightnessPanel.visibility = if (showBrightnessView) View.VISIBLE else View.GONE
         applyBrightnessState()
@@ -1284,6 +1563,33 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         } else {
             readerString(R.string.reader_click_region_summary_custom)
         }
+    }
+
+    private fun currentSelectionPrimaryActionSummary(): String {
+        val options = readView.selectionPrimaryActionOptions()
+        return options.firstOrNull { it.key == selectionPrimaryActionKey }?.label
+            ?: readerString(R.string.reader_selection_primary_default)
+    }
+
+    private fun showSelectionPrimaryActionDialog() {
+        val options = readView.selectionPrimaryActionOptions()
+        val labels = options.map { it.label }.toTypedArray()
+        val selectedIndex = options.indexOfFirst { it.key == selectionPrimaryActionKey }
+            .takeIf { it >= 0 }
+            ?: 0
+        AlertDialog.Builder(this)
+            .setTitle(R.string.reader_selection_primary_action)
+            .setSingleChoiceItems(labels, selectedIndex) { dialog, which ->
+                selectionPrimaryActionKey = options.getOrNull(which)?.key
+                    ?: ReadView.DEFAULT_SELECTION_PRIMARY_ACTION_KEY
+                readView.setSelectionPrimaryActionKey(selectionPrimaryActionKey)
+                persistReaderSettings(updateAnchor = false)
+                if (::moreSettingsPanel.isInitialized) {
+                    moreSettingsPanel.bind(currentMoreConfigState())
+                }
+                dialog.dismiss()
+            }
+            .show()
     }
 
     private fun defaultClickRegionActionsForCurrentLayout(): List<ReadView.TapAction> {
@@ -1379,6 +1685,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun handleSelectionAction(action: ReadView.SelectionAction, text: String) {
         when (action) {
+            ReadView.SelectionAction.PROCESS_TEXT -> startSelectionProcessText(text)
             ReadView.SelectionAction.COPY -> Unit
             ReadView.SelectionAction.SHARE -> {
                 runCatching {
@@ -1412,12 +1719,30 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
     }
 
+    private fun startSelectionProcessText(text: String) {
+        launchSelectionProcessText(
+            Intent(Intent.ACTION_PROCESS_TEXT).apply {
+                type = "text/plain"
+            },
+            text = text,
+            readOnly = true
+        )
+    }
+
     private fun handleSelectionProcessText(intent: Intent, text: String) {
+        launchSelectionProcessText(intent, text = text, readOnly = false)
+    }
+
+    private fun handleTextSelectionStateChanged(active: Boolean) {
+        textSelectionActive = active
+    }
+
+    private fun launchSelectionProcessText(intent: Intent, text: String, readOnly: Boolean) {
         runCatching {
             startActivity(
                 Intent(intent).apply {
                     putExtra(Intent.EXTRA_PROCESS_TEXT, text)
-                    putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, false)
+                    putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, readOnly)
                 }
             )
         }.onFailure {
@@ -1442,8 +1767,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         PopupMenu(this, anchor).apply {
             menu.add(0, ReaderOverflowAction.PLAYER.menuId, 0, R.string.reader_menu_player)
             menu.add(0, ReaderOverflowAction.ADD_BOOKMARK.menuId, 1, R.string.reader_menu_add_bookmark)
+            menu.add(0, ReaderOverflowAction.SIMULATED_READING.menuId, 2, R.string.reader_simulated_reading_title)
             if (hasRubySpans()) {
-                menu.add(0, ReaderOverflowAction.REMOVE_RUBY.menuId, 2, R.string.del_ruby_tag).apply {
+                menu.add(0, ReaderOverflowAction.REMOVE_RUBY.menuId, 3, R.string.del_ruby_tag).apply {
                     isCheckable = true
                     isChecked = !showRubyText
                 }
@@ -1451,15 +1777,16 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             menu.add(
                 0,
                 ReaderOverflowAction.SWITCH_LAYOUT.menuId,
-                3,
+                4,
                 if (readerLayoutMode == M9LayoutMode.VERTICAL) R.string.reader_menu_switch_horizontal else R.string.reader_menu_switch_vertical
             )
-            menu.add(0, ReaderOverflowAction.CHARSET.menuId, 4, R.string.reader_encoding_set)
-            menu.add(0, ReaderOverflowAction.HELP.menuId, 5, R.string.reader_menu_help)
+            menu.add(0, ReaderOverflowAction.CHARSET.menuId, 5, R.string.reader_encoding_set)
+            menu.add(0, ReaderOverflowAction.HELP.menuId, 6, R.string.reader_menu_help)
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     ReaderOverflowAction.PLAYER.menuId -> openPlayerFromReader()
                     ReaderOverflowAction.ADD_BOOKMARK.menuId -> addCurrentBookmark()
+                    ReaderOverflowAction.SIMULATED_READING.menuId -> showSimulatedReadingDialog()
                     ReaderOverflowAction.REMOVE_RUBY.menuId -> {
                         item.isChecked = !item.isChecked
                         showRubyText = !item.isChecked
@@ -1481,6 +1808,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                             if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
                         }
                         readView.setTextUnderline(readerUnderline && readerLayoutMode == M9LayoutMode.HORIZONTAL)
+                        applyDirectionSettings()
                         requestBookRelayout()
                     }
                     ReaderOverflowAction.CHARSET.menuId -> showEncodingMenu(anchor)
@@ -1489,6 +1817,122 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             }
             show()
         }
+    }
+
+    private fun showSimulatedReadingDialog() {
+        val bookUri = currentBookUriText()
+        if (bookUri == null) {
+            Toast.makeText(this, R.string.reader_catalog_not_ready, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val currentChapterOneBased = ((currentPageAnchor()?.chapterIndex ?: pages.getOrNull(pageIndex)?.chapterIndex) ?: 0) + 1
+        val dialogStartChapter = if (!simulatedReadingConfig.enabled && simulatedReadingConfig.startChapter <= 1) {
+            currentChapterOneBased
+        } else {
+            simulatedReadingConfig.startChapter.coerceAtLeast(1)
+        }
+        var selectedStartEpochDay = simulatedReadingConfig.startEpochDay
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(30), dp(12), dp(30), 0)
+        }
+        fun label(text: String): TextView = TextView(this).apply {
+            this.text = text
+            textSize = 18f
+            setTextColor(currentMenuTextColor())
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        fun row(left: View, right: View): LinearLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, dp(12))
+            addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(right)
+        }
+        val enabledSwitch = Switch(this).apply {
+            isChecked = simulatedReadingConfig.enabled
+        }
+        val dateButton = EditText(this).apply {
+            inputType = InputType.TYPE_NULL
+            isFocusable = false
+            isClickable = true
+            textSize = 18f
+            setTextColor(currentMenuTextColor())
+            gravity = Gravity.CENTER_VERTICAL
+            fun updateDateText() {
+                setText(simulatedReadingDateLabel(selectedStartEpochDay))
+            }
+            updateDateText()
+            setOnClickListener {
+                val date = runCatching { LocalDate.ofEpochDay(selectedStartEpochDay) }
+                    .getOrDefault(LocalDate.now())
+                DatePickerDialog(
+                    this@LegadoReaderActivity,
+                    { _, year, month, dayOfMonth ->
+                        selectedStartEpochDay = LocalDate.of(year, month + 1, dayOfMonth).toEpochDay()
+                        updateDateText()
+                    },
+                    date.year,
+                    date.monthValue - 1,
+                    date.dayOfMonth
+                ).show()
+            }
+        }
+        val startChapterInput = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            gravity = Gravity.CENTER
+            textSize = 18f
+            setText(dialogStartChapter.toString())
+            selectAll()
+        }
+        val dailyChaptersInput = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            gravity = Gravity.CENTER
+            textSize = 18f
+            setText(simulatedReadingConfig.dailyChapters.coerceAtLeast(1).toString())
+        }
+        val numericRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, dp(12))
+            addView(label(readerString(R.string.reader_simulated_reading_start_chapter)))
+            addView(startChapterInput, LinearLayout.LayoutParams(dp(72), dp(54)))
+            addView(View(this@LegadoReaderActivity), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(label(readerString(R.string.reader_simulated_reading_daily_chapters)))
+            addView(dailyChaptersInput, LinearLayout.LayoutParams(dp(72), dp(54)))
+        }
+        container.addView(row(label(readerString(R.string.reader_simulated_reading_switch)), enabledSwitch))
+        container.addView(row(label(readerString(R.string.reader_simulated_reading_start_date)), dateButton))
+        container.addView(numericRow)
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.reader_simulated_reading_title)
+            .setView(container)
+            .setPositiveButton(android.R.string.yes) { _, _ ->
+                val realChapterCount = document?.chapters?.size ?: Int.MAX_VALUE
+                simulatedReadingConfig = SimulatedReadingConfig(
+                    enabled = enabledSwitch.isChecked,
+                    startEpochDay = selectedStartEpochDay,
+                    startChapter = startChapterInput.text.toString().toIntOrNull()
+                        ?.coerceIn(1, realChapterCount.coerceAtLeast(1))
+                        ?: 1,
+                    dailyChapters = dailyChaptersInput.text.toString().toIntOrNull()
+                        ?.coerceAtLeast(1)
+                        ?: 1
+                )
+                saveSimulatedReadingConfig(this, bookUri, simulatedReadingConfig)
+                updateSimulatedUnlockedChapterCount(document)
+                bindCatalogList()
+                val anchor = currentPageAnchor()?.let { clampAnchorToUnlocked(it, document) }
+                if (anchor != null && anchor.chapterIndex != currentPageAnchor()?.chapterIndex) {
+                    showAnchorOrLoad(anchor = anchor, forward = false)
+                } else {
+                    renderCurrentPage()
+                }
+            }
+            .setNegativeButton(android.R.string.no, null)
+            .show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(accentColor())
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(accentColor())
     }
 
     private fun showEncodingMenu(anchor: View) {
@@ -1509,6 +1953,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 loadedDocumentCharsetName = null
                 cueMatchesByCueIndex = emptyMap()
                 matchData = null
+                audioCueIndex = -1
                 activeCueIndex = -1
                 loadDisplayedBook(anchor = currentPageAnchor(), forceDocumentReload = true)
                 true
@@ -1535,19 +1980,75 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         return document?.title ?: importedBook?.title ?: LEGADO_READER_DEFAULT_TITLE
     }
 
+    private fun currentBookUriText(): String? {
+        return importedBook?.uri?.toString()?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun refreshSimulatedReadingConfig() {
+        simulatedReadingConfig = loadSimulatedReadingConfig(this, currentBookUriText())
+    }
+
+    private fun updateSimulatedUnlockedChapterCount(loaded: EbookDocument?) {
+        simulatedUnlockedChapterCount = simulatedReadingUnlockedChapterCount(
+            config = simulatedReadingConfig,
+            realChapterCount = loaded?.chapters?.size ?: 0
+        )
+    }
+
+    private fun unlockedChapterCount(loaded: EbookDocument? = document): Int {
+        val realCount = loaded?.chapters?.size ?: return 0
+        if (realCount <= 0) return 0
+        val cached = simulatedUnlockedChapterCount.takeIf { it > 0 } ?: simulatedReadingUnlockedChapterCount(
+            config = simulatedReadingConfig,
+            realChapterCount = realCount
+        )
+        return cached.coerceIn(1, realCount)
+    }
+
+    private fun lastUnlockedChapterIndex(loaded: EbookDocument? = document): Int {
+        return (unlockedChapterCount(loaded) - 1).coerceAtLeast(0)
+    }
+
+    private fun isChapterUnlocked(chapterIndex: Int, loaded: EbookDocument? = document): Boolean {
+        val realCount = loaded?.chapters?.size ?: return true
+        if (realCount <= 0) return true
+        return chapterIndex <= lastUnlockedChapterIndex(loaded)
+    }
+
+    private fun clampChapterToUnlocked(chapterIndex: Int, loaded: EbookDocument? = document): Int {
+        val realLastIndex = loaded?.chapters?.lastIndex ?: return chapterIndex.coerceAtLeast(0)
+        return chapterIndex.coerceIn(0, lastUnlockedChapterIndex(loaded).coerceAtMost(realLastIndex))
+    }
+
+    private fun clampAnchorToUnlocked(anchor: ReaderPageAnchor, loaded: EbookDocument? = document): ReaderPageAnchor {
+        val safeChapter = clampChapterToUnlocked(anchor.chapterIndex, loaded)
+        return if (safeChapter == anchor.chapterIndex) {
+            anchor
+        } else {
+            ReaderPageAnchor(safeChapter, 0)
+        }
+    }
+
+    private fun showSimulatedReadingLockedToast() {
+        if (simulatedReadingConfig.enabled) {
+            Toast.makeText(this, R.string.reader_simulated_reading_locked, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun openPlayerFromReader() {
         val targetAudioUri = audioUri ?: run {
             Toast.makeText(this, R.string.reader_no_audio, Toast.LENGTH_SHORT).show()
             return
         }
         if (bridgeCanReturnToPlayer()) {
-            persistReaderSettings()
-            persistAudioPlaybackSnapshot()
-            BookReaderFloatingBridge.returnToPlayer()
-            finish()
+            returnToSharedPlayer()
             return
         }
         persistAudioPlaybackSnapshot()
+        startPlayerActivity(targetAudioUri)
+    }
+
+    private fun startPlayerActivity(targetAudioUri: Uri) {
         val intent = Intent(this, BookReaderActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -1558,7 +2059,17 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             importedBook?.title?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_NAME, it) }
             importedBook?.format?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_FORMAT, it) }
         }
+        suppressFloatingOverlayOnStop = true
         startActivity(intent)
+    }
+
+    private fun returnToSharedPlayer(): Boolean {
+        val targetAudioUri = audioUri ?: return false
+        persistReaderSettings(updateAnchor = false)
+        persistAudioPlaybackSnapshot()
+        startPlayerActivity(targetAudioUri)
+        finish()
+        return true
     }
 
     private fun returnToHome() {
@@ -1572,17 +2083,15 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun returnToPlayerIfShared(): Boolean {
+        if (!returnToPlayerOnBack) return false
         if (!bridgeCanReturnToPlayer()) return false
-        persistReaderSettings()
-        persistAudioPlaybackSnapshot()
-        BookReaderFloatingBridge.returnToPlayer()
-        finish()
-        return true
+        return returnToSharedPlayer()
     }
 
     private fun updateDisplayedBookTitle() {
         val title = currentReaderTitle()
         if (::toolbarTitleText.isInitialized) toolbarTitleText.text = title
+        if (::readView.isInitialized) readView.setBookTitle(title)
     }
 
     private fun toggleNightMode() {
@@ -1599,8 +2108,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             return
         }
         val lowerQuery = query.lowercase()
+        val maxChapterCount = unlockedChapterCount(document)
         val hits = buildList {
-            document?.chapters?.forEachIndexed { chapterIndex, chapter ->
+            document?.chapters?.take(maxChapterCount)?.forEachIndexed { chapterIndex, chapter ->
                 val pageText = chapter.text
                 val lowerPageText = pageText.lowercase()
                 var fromIndex = 0
@@ -1683,17 +2193,19 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         audioControlPanel.visibility = View.GONE
         moreSettingsPanel.visibility = View.GONE
         catalogPanel.visibility = View.GONE
-        setReadMenuVisible(false)
+        setReadMenuVisible(false, updateSystemBars = false)
         searchPanel.visibility = View.VISIBLE
         searchInputView.setText(initialQuery)
         searchInputView.setSelection(searchInputView.text.length)
         bindSearchResultList()
         updateSearchInfo()
+        updateSystemBarSurfaces()
     }
 
     private fun hideSearchPanel() {
         if (::searchPanel.isInitialized) {
             searchPanel.visibility = View.GONE
+            updateSystemBarSurfaces()
         }
     }
 
@@ -1728,12 +2240,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private fun hideCatalogPanel() {
         if (::catalogPanel.isInitialized) {
             catalogPanel.visibility = View.GONE
+            updateSystemBarSurfaces()
         }
     }
 
     private fun showChapterListDialog() {
         val chapters = document?.chapters.orEmpty()
-        if (chapters.isEmpty()) {
+        if (chapters.isEmpty() && !useM4bChapterSource()) {
             Toast.makeText(this, R.string.reader_catalog_not_ready, Toast.LENGTH_SHORT).show()
             return
         }
@@ -1742,17 +2255,17 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         audioControlPanel.visibility = View.GONE
         moreSettingsPanel.visibility = View.GONE
         searchPanel.visibility = View.GONE
-        setReadMenuVisible(false)
+        setReadMenuVisible(false, updateSystemBars = false)
         catalogPanel.visibility = View.VISIBLE
         catalogSearchInputView.setText("")
         bindCatalogList()
+        updateSystemBarSurfaces()
     }
 
     private fun navigateToSearchHit(index: Int, showSearchMenu: Boolean) {
         val hit = searchHits.getOrNull(index) ?: return
         searchHitIndex = index
         activeCueIndex = -1
-        temporaryCuePage = null
         showAnchorOrLoad(
             anchor = ReaderPageAnchor(hit.chapterIndex, hit.chapterPosition),
             forward = hit.chapterIndex >= (pages.getOrNull(pageIndex)?.chapterIndex ?: 0),
@@ -1799,9 +2312,14 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun bindChapterCatalogList() {
+        if (useM4bChapterSource()) {
+            bindM4bChapterCatalogList()
+            return
+        }
         val chapters = document?.chapters.orEmpty()
         val currentChapterIndex = pages.getOrNull(pageIndex)?.chapterIndex ?: 0
-        val filtered = chapters.mapIndexed { index, chapter -> index to chapter }.filter { (_, chapter) ->
+        val visibleChapters = chapters.take(unlockedChapterCount(document))
+        val filtered = visibleChapters.mapIndexed { index, chapter -> index to chapter }.filter { (_, chapter) ->
             val query = catalogFilterQuery.trim()
             query.isBlank() || chapter.title.contains(query, ignoreCase = true)
         }
@@ -1818,7 +2336,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 val item = getItem(position)
                 val chapterIndex = item?.first ?: position
                 val chapterTitle = item?.second?.title.orEmpty()
-                view.text = "${chapterIndex + 1}. $chapterTitle"
+                view.text = chapterTitle
                 view.setTextColor(if (chapterIndex == currentChapterIndex) accentColor() else currentMenuTextColor())
                 return view
             }
@@ -1835,12 +2353,55 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         catalogListView.post { catalogListView.setSelection(selection) }
     }
 
-    private fun bindBookmarkCatalogList() {
-        val filtered = bookmarks.filter { bookmark ->
+    private fun bindM4bChapterCatalogList() {
+        val chapters = m4bChapters
+        if (chapters.isEmpty()) {
+            Toast.makeText(this, R.string.reader_chapter_source_m4b_unavailable, Toast.LENGTH_SHORT).show()
+            chapterSourceMode = ReaderChapterSourceMode.BOOK
+            if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
+            bindChapterCatalogList()
+            return
+        }
+        val currentChapterIndex = currentM4bChapterIndex()
+        val filtered = chapters.mapIndexed { index, chapter -> index to chapter }.filter { (_, chapter) ->
             val query = catalogFilterQuery.trim()
-            query.isBlank() ||
+            query.isBlank() || chapter.title.contains(query, ignoreCase = true)
+        }
+        catalogListView.adapter = object : ArrayAdapter<Pair<Int, M4bChapter>>(
+            this,
+            android.R.layout.simple_list_item_1,
+            filtered
+        ) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val view = (convertView as? TextView) ?: TextView(context).apply {
+                    setPadding(dp(16), dp(14), dp(16), dp(14))
+                    textSize = 16f
+                }
+                val item = getItem(position)
+                val chapterIndex = item?.first ?: position
+                val chapterTitle = item?.second?.title.orEmpty()
+                view.text = chapterTitle
+                view.setTextColor(if (chapterIndex == currentChapterIndex) accentColor() else currentMenuTextColor())
+                return view
+            }
+        }
+        catalogListView.setOnItemClickListener { _, _, which, _ ->
+            val chapterIndex = filtered.getOrNull(which)?.first ?: return@setOnItemClickListener
+            seekToM4bChapter(chapterIndex)
+            hideCatalogPanel()
+        }
+        val selection = filtered.indexOfFirst { it.first == currentChapterIndex }.coerceAtLeast(0)
+        catalogListView.post { catalogListView.setSelection(selection) }
+    }
+
+    private fun bindBookmarkCatalogList() {
+        val query = catalogFilterQuery.trim()
+        val filtered = bookmarks.filter { bookmark ->
+            isChapterUnlocked(bookmark.chapterIndex) && (
+                query.isBlank() ||
                 bookmark.chapterTitle.contains(query, ignoreCase = true) ||
                 bookmark.preview.contains(query, ignoreCase = true)
+            )
         }
         catalogListView.adapter = object : ArrayAdapter<ReaderBookmark>(
             this,
@@ -1897,6 +2458,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val targetChapter = currentPage.chapterIndex + delta.coerceIn(-1, 1)
         val loaded = document ?: return null
         if (targetChapter !in loaded.chapters.indices) return null
+        if (!isChapterUnlocked(targetChapter, loaded)) return null
         val cacheKey = currentChapterPageCacheKey(targetChapter)
         val cachedPages = chapterPageCache[cacheKey].orEmpty()
         return if (delta > 0) cachedPages.firstOrNull() else cachedPages.lastOrNull()
@@ -1905,17 +2467,27 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private fun showAnchorOrLoad(
         anchor: ReaderPageAnchor,
         forward: Boolean = true,
-        keepSearchHit: Boolean = false
+        keepSearchHit: Boolean = false,
+        persistAnchor: Boolean = true
     ) {
-        val next = findPageIndexForChapterPosition(anchor.chapterIndex, anchor.charPosition)
+        val safeAnchor = clampAnchorToUnlocked(anchor, document)
+        if (safeAnchor.chapterIndex != anchor.chapterIndex) {
+            showSimulatedReadingLockedToast()
+        }
+        val next = findPageIndexForChapterPosition(safeAnchor.chapterIndex, safeAnchor.charPosition)
         if (!keepSearchHit) searchHitIndex = -1
         activeCueIndex = -1
-        temporaryCuePage = null
         if (next >= 0) {
             pageIndex = next
-            renderCurrentPage(forward = forward)
+            renderCurrentPage(
+                forward = forward,
+                persistAnchor = persistAnchor
+            )
         } else {
-            loadDisplayedBook(anchor = anchor, forceDocumentReload = false)
+            loadDisplayedBook(anchor = safeAnchor, forceDocumentReload = false)
+            if (persistAnchor) {
+                persistReaderAnchor(safeAnchor)
+            }
         }
     }
 
@@ -1962,15 +2534,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 }
 
                 override fun onInfoClicked() {
-                    Toast.makeText(
-                        this@LegadoReaderActivity,
-                        getString(
-                            R.string.reader_info_debug,
-                            pages.size,
-                            document?.chapters?.size ?: 0
-                        ),
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    showTipConfigDialog()
                 }
 
                 override fun onWeightClicked(onChanged: (M9TextWeight) -> Unit) {
@@ -1997,7 +2561,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                     readerPageAnim = when (animIndex) {
                         0 -> M9PageAnim.COVER
                         1 -> M9PageAnim.SLIDE
-                        2 -> M9PageAnim.SCROLL
+                        2 -> M9PageAnim.SIMULATION
+                        3 -> M9PageAnim.SCROLL
                         else -> M9PageAnim.NONE
                     }
                     readView.setPageAnim(readerPageAnim)
@@ -2146,10 +2711,54 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         if (::readerRoot.isInitialized) {
             readerRoot.setBackgroundColor(readerBgColor)
         }
-        readView.setReaderColors(readerBgColor, readerTextColor, readerTipColor, readerBgAssetName, readerBgImageUri, readerBgAlpha)
+        readView.setReaderColors(
+            readerBgColor,
+            readerTextColor,
+            effectiveReaderTipColor(),
+            readerBgAssetName,
+            readerBgImageUri,
+            readerBgAlpha
+        )
         readView.setCueHighlightColor(readerCueHighlightColor)
         readView.setTextUnderline(readerUnderline && readerLayoutMode == M9LayoutMode.HORIZONTAL)
+        applyReaderInfoConfig()
         applyReadBarStyle()
+    }
+
+    private fun effectiveReaderTipColor(): Int {
+        return when (tipColorMode) {
+            ReaderTipColorMode.FOLLOW_CONTENT -> readerTextColor
+            ReaderTipColorMode.CUSTOM -> readerTipColor
+        }
+    }
+
+    private fun effectiveReaderTipDividerColor(): Int? {
+        return when (tipDividerColorMode) {
+            ReaderTipDividerColorMode.DEFAULT -> (effectiveReaderTipColor() and 0x00FFFFFF) or 0x33000000
+            ReaderTipDividerColorMode.FOLLOW_CONTENT -> effectiveReaderTipColor()
+            ReaderTipDividerColorMode.CUSTOM -> tipDividerColor
+        }
+    }
+
+    private fun applyReaderInfoConfig() {
+        if (!::readView.isInitialized) return
+        readView.setShowHeaderFooter(showReadTitleAddition)
+        readView.setReaderInfoConfig(
+            bodyTitleMode = bodyTitleMode,
+            bodyTitleSizeAddSp = bodyTitleSizeAddSp,
+            bodyTitleTopSpacingDp = bodyTitleTopSpacingDp,
+            bodyTitleBottomSpacingDp = bodyTitleBottomSpacingDp,
+            headerMode = headerMode,
+            footerMode = footerMode,
+            headerLeft = tipHeaderLeft,
+            headerMiddle = tipHeaderMiddle,
+            headerRight = tipHeaderRight,
+            footerLeft = tipFooterLeft,
+            footerMiddle = tipFooterMiddle,
+            footerRight = tipFooterRight,
+            statusBarHidden = hideStatusBar,
+            dividerColor = effectiveReaderTipDividerColor()
+        )
     }
 
     private fun showReaderStyleConfigDialog(index: Int) {
@@ -2680,18 +3289,371 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun showTipConfigDialog() {
-        val choices = resources.getStringArray(R.array.reader_info_titles)
-        AlertDialog.Builder(this)
+        var dialog: AlertDialog? = null
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(18), dp(24), dp(18))
+        }
+        addInfoSectionTitle(content, "正文标题")
+        addBodyTitleModeGroup(content)
+        addInfoAdjustRow(content, "字号", bodyTitleSizeAddSp, 0, 10) {
+            bodyTitleSizeAddSp = it
+            applyTipConfigChange(repaginate = true)
+        }
+        addInfoAdjustRow(content, "上边距", bodyTitleTopSpacingDp, 0, 100) {
+            bodyTitleTopSpacingDp = it
+            applyTipConfigChange(repaginate = true)
+        }
+        addInfoAdjustRow(content, "下边距", bodyTitleBottomSpacingDp, 0, 100) {
+            bodyTitleBottomSpacingDp = it
+            applyTipConfigChange(repaginate = true)
+        }
+
+        addInfoSectionTitle(content, "页眉")
+        addInfoSelectorRow(content, "显示/隐藏", headerModeLabel(headerMode)) {
+            dialog?.dismiss()
+            showHeaderModeSelector()
+        }
+        addInfoSelectorRow(content, "左", tipContentLabel(tipHeaderLeft)) {
+            dialog?.dismiss()
+            showTipContentSelector(tipHeaderLeft) {
+                tipHeaderLeft = it
+                applyTipConfigChange(repaginate = true)
+            }
+        }
+        addInfoSelectorRow(content, "中", tipContentLabel(tipHeaderMiddle)) {
+            dialog?.dismiss()
+            showTipContentSelector(tipHeaderMiddle) {
+                tipHeaderMiddle = it
+                applyTipConfigChange(repaginate = true)
+            }
+        }
+        addInfoSelectorRow(content, "右", tipContentLabel(tipHeaderRight)) {
+            dialog?.dismiss()
+            showTipContentSelector(tipHeaderRight) {
+                tipHeaderRight = it
+                applyTipConfigChange(repaginate = true)
+            }
+        }
+
+        addInfoSectionTitle(content, "页脚")
+        addInfoSelectorRow(content, "显示/隐藏", footerModeLabel(footerMode)) {
+            dialog?.dismiss()
+            showFooterModeSelector()
+        }
+        addInfoSelectorRow(content, "左", tipContentLabel(tipFooterLeft)) {
+            dialog?.dismiss()
+            showTipContentSelector(tipFooterLeft) {
+                tipFooterLeft = it
+                applyTipConfigChange(repaginate = true)
+            }
+        }
+        addInfoSelectorRow(content, "中", tipContentLabel(tipFooterMiddle)) {
+            dialog?.dismiss()
+            showTipContentSelector(tipFooterMiddle) {
+                tipFooterMiddle = it
+                applyTipConfigChange(repaginate = true)
+            }
+        }
+        addInfoSelectorRow(content, "右", tipContentLabel(tipFooterRight)) {
+            dialog?.dismiss()
+            showTipContentSelector(tipFooterRight) {
+                tipFooterRight = it
+                applyTipConfigChange(repaginate = true)
+            }
+        }
+
+        addInfoSectionTitle(content, "页眉&页脚")
+        addInfoSelectorRow(content, "文字颜色", tipColorModeLabel(tipColorMode)) {
+            dialog?.dismiss()
+            showTipColorModeSelector()
+        }
+        addInfoSelectorRow(content, "分隔线颜色", tipDividerColorModeLabel(tipDividerColorMode)) {
+            dialog?.dismiss()
+            showTipDividerColorModeSelector()
+        }
+
+        dialog = AlertDialog.Builder(this)
             .setTitle(R.string.reader_title_info)
-            .setSingleChoiceItems(choices, if (showReadTitleAddition) 0 else 1) { dialog, which ->
-                showReadTitleAddition = which == 0
-                readView.setShowHeaderFooter(showReadTitleAddition)
-                persistReaderSettings()
+            .setView(ScrollView(this).apply { addView(content) })
+            .setPositiveButton(R.string.reader_dialog_done, null)
+            .show()
+    }
+
+    private fun addInfoSectionTitle(parent: LinearLayout, text: String) {
+        parent.addView(TextView(this).apply {
+            this.text = text
+            textSize = 20f
+            setTextColor(0xFFE0483F.toInt())
+            includeFontPadding = true
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(12) })
+    }
+
+    private fun addBodyTitleModeGroup(parent: LinearLayout) {
+        val group = RadioGroup(this).apply {
+            orientation = RadioGroup.HORIZONTAL
+        }
+        val options = listOf(
+            ReaderBodyTitleMode.LEFT to "靠左",
+            ReaderBodyTitleMode.CENTER to "居中",
+            ReaderBodyTitleMode.HIDE to "隐藏"
+        )
+        options.forEach { (mode, label) ->
+            group.addView(RadioButton(this).apply {
+                id = View.generateViewId()
+                text = label
+                textSize = 16f
+                setTextColor(readerTextColor)
+                isChecked = bodyTitleMode == mode
+                setOnClickListener {
+                    bodyTitleMode = mode
+                    applyTipConfigChange(repaginate = true)
+                }
+            }, RadioGroup.LayoutParams(
+                RadioGroup.LayoutParams.WRAP_CONTENT,
+                RadioGroup.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = dp(14) })
+        }
+        parent.addView(group, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+    }
+
+    private fun addInfoAdjustRow(
+        parent: LinearLayout,
+        label: String,
+        initialValue: Int,
+        min: Int,
+        max: Int,
+        onChange: (Int) -> Unit
+    ) {
+        val row = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        val valueView = TextView(this).apply {
+            text = initialValue.toString()
+            textSize = 16f
+            gravity = Gravity.END
+            setTextColor(readerTextColor)
+        }
+        row.addView(TextView(this).apply {
+            text = label
+            textSize = 16f
+            setTextColor(readerTextColor)
+        }, LinearLayout.LayoutParams(dp(72), LinearLayout.LayoutParams.WRAP_CONTENT))
+        row.addView(TextView(this).apply {
+            text = "－"
+            textSize = 30f
+            gravity = Gravity.CENTER
+            setTextColor(readerTextColor)
+            setOnClickListener {
+                val value = (valueView.text.toString().toIntOrNull() ?: initialValue).minus(1).coerceIn(min, max)
+                valueView.text = value.toString()
+                onChange(value)
+            }
+        }, LinearLayout.LayoutParams(dp(44), dp(44)))
+        row.addView(SeekBar(this).apply {
+            this.max = max - min
+            progress = (initialValue - min).coerceIn(0, this.max)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    val value = min + progress
+                    valueView.text = value.toString()
+                    onChange(value)
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }, LinearLayout.LayoutParams(0, dp(44), 1f))
+        row.addView(TextView(this).apply {
+            text = "＋"
+            textSize = 34f
+            gravity = Gravity.CENTER
+            setTextColor(readerTextColor)
+            setOnClickListener {
+                val value = (valueView.text.toString().toIntOrNull() ?: initialValue).plus(1).coerceIn(min, max)
+                valueView.text = value.toString()
+                (row.getChildAt(2) as? SeekBar)?.progress = value - min
+                onChange(value)
+            }
+        }, LinearLayout.LayoutParams(dp(44), dp(44)))
+        row.addView(valueView, LinearLayout.LayoutParams(dp(42), LinearLayout.LayoutParams.WRAP_CONTENT))
+        parent.addView(row, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+    }
+
+    private fun addInfoSelectorRow(parent: LinearLayout, label: String, value: String, onClick: () -> Unit) {
+        parent.addView(LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(10), 0, dp(10))
+            isClickable = true
+            setOnClickListener { onClick() }
+            addView(TextView(this@LegadoReaderActivity).apply {
+                text = label
+                textSize = 16f
+                setTextColor(readerTextColor)
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(TextView(this@LegadoReaderActivity).apply {
+                text = value
+                textSize = 16f
+                gravity = Gravity.END
+                setTextColor(readerTextColor)
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+    }
+
+    private fun showHeaderModeSelector() {
+        val entries = listOf(
+            ReaderHeaderMode.HIDE_WHEN_STATUS_BAR_SHOW to "状态栏显示时隐藏",
+            ReaderHeaderMode.SHOW to "显示",
+            ReaderHeaderMode.HIDE to "隐藏"
+        )
+        showSimpleSelector("页眉", entries, headerMode) {
+            headerMode = it
+            applyTipConfigChange(repaginate = true)
+            showTipConfigDialog()
+        }
+    }
+
+    private fun showFooterModeSelector() {
+        val entries = listOf(
+            ReaderFooterMode.SHOW to "显示",
+            ReaderFooterMode.HIDE to "隐藏"
+        )
+        showSimpleSelector("页脚", entries, footerMode) {
+            footerMode = it
+            applyTipConfigChange(repaginate = true)
+            showTipConfigDialog()
+        }
+    }
+
+    private fun showTipContentSelector(current: ReaderTipContent, onSelected: (ReaderTipContent) -> Unit) {
+        showSimpleSelector("显示内容", tipContentEntries(), current) {
+            onSelected(it)
+            showTipConfigDialog()
+        }
+    }
+
+    private fun showTipColorModeSelector() {
+        val entries = listOf(
+            ReaderTipColorMode.FOLLOW_CONTENT to "跟随内容",
+            ReaderTipColorMode.CUSTOM to "自定义"
+        )
+        showSimpleSelector("文字颜色", entries, tipColorMode) {
+            tipColorMode = it
+            if (it == ReaderTipColorMode.CUSTOM) {
+                showReaderColorPicker(READER_TIP_COLOR_DIALOG_ID, readerTipColor) { color ->
+                    readerTipColor = color
+                    applyTipConfigChange(repaginate = false)
+                    showTipConfigDialog()
+                }
+                applyTipConfigChange(repaginate = false)
+                return@showSimpleSelector
+            }
+            applyTipConfigChange(repaginate = false)
+            showTipConfigDialog()
+        }
+    }
+
+    private fun showTipDividerColorModeSelector() {
+        val entries = listOf(
+            ReaderTipDividerColorMode.DEFAULT to "默认",
+            ReaderTipDividerColorMode.FOLLOW_CONTENT to "跟随内容",
+            ReaderTipDividerColorMode.CUSTOM to "自定义"
+        )
+        showSimpleSelector("分隔线颜色", entries, tipDividerColorMode) {
+            tipDividerColorMode = it
+            if (it == ReaderTipDividerColorMode.CUSTOM) {
+                showReaderColorPicker(READER_TIP_DIVIDER_COLOR_DIALOG_ID, tipDividerColor) { color ->
+                    tipDividerColor = color
+                    applyTipConfigChange(repaginate = false)
+                    showTipConfigDialog()
+                }
+                applyTipConfigChange(repaginate = false)
+                return@showSimpleSelector
+            }
+            applyTipConfigChange(repaginate = false)
+            showTipConfigDialog()
+        }
+    }
+
+    private fun <T> showSimpleSelector(
+        title: String,
+        entries: List<Pair<T, String>>,
+        current: T,
+        onSelected: (T) -> Unit
+    ) {
+        val labels = entries.map { it.second }.toTypedArray()
+        val checked = entries.indexOfFirst { it.first == current }
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
                 dialog.dismiss()
-                requestBookRelayout()
-                Toast.makeText(this, R.string.reader_info_saved, Toast.LENGTH_SHORT).show()
+                onSelected(entries[which].first)
             }
             .show()
+    }
+
+    private fun applyTipConfigChange(repaginate: Boolean) {
+        applyReaderVisualStyle()
+        persistReaderSettings(updateAnchor = false)
+        if (repaginate) {
+            requestBookRelayout()
+        } else {
+            renderCurrentPage()
+        }
+    }
+
+    private fun tipContentEntries(): List<Pair<ReaderTipContent, String>> = listOf(
+        ReaderTipContent.NONE to "无",
+        ReaderTipContent.BOOK_NAME to "标题",
+        ReaderTipContent.CHAPTER_TITLE to "章节标题",
+        ReaderTipContent.TIME to "时间",
+        ReaderTipContent.BATTERY_PERCENTAGE to "电量百分比",
+        ReaderTipContent.PAGE to "页数",
+        ReaderTipContent.TOTAL_PROGRESS to "总进度",
+        ReaderTipContent.CHAPTER_PROGRESS to "章节页数",
+        ReaderTipContent.PAGE_AND_TOTAL to "页数及进度",
+        ReaderTipContent.TIME_BATTERY_PERCENTAGE to "时间+电量百分比"
+    )
+
+    private fun tipContentLabel(content: ReaderTipContent): String {
+        return tipContentEntries().firstOrNull { it.first == content }?.second ?: "无"
+    }
+
+    private fun headerModeLabel(mode: ReaderHeaderMode): String = when (mode) {
+        ReaderHeaderMode.HIDE_WHEN_STATUS_BAR_SHOW -> "状态栏显示时隐藏"
+        ReaderHeaderMode.SHOW -> "显示"
+        ReaderHeaderMode.HIDE -> "隐藏"
+    }
+
+    private fun footerModeLabel(mode: ReaderFooterMode): String = when (mode) {
+        ReaderFooterMode.SHOW -> "显示"
+        ReaderFooterMode.HIDE -> "隐藏"
+    }
+
+    private fun tipColorModeLabel(mode: ReaderTipColorMode): String = when (mode) {
+        ReaderTipColorMode.FOLLOW_CONTENT -> "跟随内容"
+        ReaderTipColorMode.CUSTOM -> "自定义"
+    }
+
+    private fun tipDividerColorModeLabel(mode: ReaderTipDividerColorMode): String = when (mode) {
+        ReaderTipDividerColorMode.DEFAULT -> "默认"
+        ReaderTipDividerColorMode.FOLLOW_CONTENT -> "跟随内容"
+        ReaderTipDividerColorMode.CUSTOM -> "自定义"
     }
 
     private fun loadDisplayedBook(anchor: ReaderPageAnchor?, forceDocumentReload: Boolean = false) {
@@ -2715,12 +3677,14 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                         "chapters=${loaded.chapters.size}"
                 )
                 document = loaded
+                updateSimulatedUnlockedChapterCount(loaded)
+                val safeAnchor = anchor?.let { clampAnchorToUnlocked(it, loaded) }
                 val currentChapterIndex = currentPageAnchor()?.chapterIndex
                     ?: pendingRestoreAnchor?.chapterIndex
                     ?: 0
-                val previewChapterIndex = (anchor?.chapterIndex ?: currentChapterIndex).coerceIn(
+                val previewChapterIndex = (safeAnchor?.chapterIndex ?: currentChapterIndex).coerceIn(
                     0,
-                    loaded.chapters.lastIndex.coerceAtLeast(0)
+                    lastUnlockedChapterIndex(loaded)
                 )
                 val previewStartMs = SystemClock.elapsedRealtime()
                 val previewPages = getOrPaginateChapterPages(
@@ -2735,8 +3699,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                         "chapter=$previewChapterIndex pages=${previewPages.size}"
                 )
                 pages = previewPages
-                temporaryCuePage = null
-                pageIndex = anchor
+                pageIndex = safeAnchor
                     ?.let { pageIndexForAnchor(previewPages, it) }
                     ?: 0
                 updateDisplayedBookTitle()
@@ -2845,8 +3808,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             )
             cueMatchesByCueIndex = emptyMap()
             matchData = null
+            audioCueIndex = -1
             activeCueIndex = -1
-            temporaryCuePage = null
         }
         return loaded
     }
@@ -2889,7 +3852,19 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun effectiveReaderContentHeightPx(contentHeightPx: Int): Int {
-        return (contentHeightPx - readerBodyBottomReservePx()).coerceAtLeast(dp(120))
+        return (contentHeightPx - readerBodyBottomReservePx() - readerBodyTitleReservePx()).coerceAtLeast(dp(120))
+    }
+
+    private fun readerBodyTitleReservePx(): Int {
+        if (bodyTitleMode == ReaderBodyTitleMode.HIDE) return 0
+        val titleTextSizePx = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_SP,
+            (readerTextSizeSp + bodyTitleSizeAddSp).toFloat(),
+            resources.displayMetrics
+        )
+        return (titleTextSizePx * 1.55f).toInt() +
+            dp(bodyTitleTopSpacingDp) +
+            dp(bodyTitleBottomSpacingDp)
     }
 
     private suspend fun getOrPaginateChapterPages(
@@ -2902,7 +3877,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             return paginateDocument(document, contentWidthPx, contentHeightPx)
         }
         val effectiveContentHeightPx = effectiveReaderContentHeightPx(contentHeightPx)
-        val safeChapterIndex = chapterIndex.coerceIn(0, document.chapters.lastIndex)
+        val safeChapterIndex = clampChapterToUnlocked(chapterIndex, document).coerceIn(0, document.chapters.lastIndex)
         val cacheKey = ReaderChapterPageCacheKey(
             chapterIndex = safeChapterIndex,
             contentWidthPx = contentWidthPx,
@@ -2947,12 +3922,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         contentHeightPx: Int
     ) {
         if (document.chapters.size <= 1) return
-        val safeCenter = centerChapterIndex.coerceIn(0, document.chapters.lastIndex)
+        val safeCenter = clampChapterToUnlocked(centerChapterIndex, document)
         pruneChapterPageCache(safeCenter, contentWidthPx, effectiveReaderContentHeightPx(contentHeightPx))
         chapterPreloadJob?.cancel()
         chapterPreloadJob = lifecycleScope.launch {
             listOf(safeCenter - 1, safeCenter + 1)
                 .filter { it in document.chapters.indices }
+                .filter { isChapterUnlocked(it, document) }
                 .forEach { chapterIndex ->
                     val startMs = SystemClock.elapsedRealtime()
                     runCatching {
@@ -2999,10 +3975,15 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         return dp(12)
     }
 
-    private fun renderCurrentPage(forward: Boolean = true) {
+    private fun renderCurrentPage(
+        forward: Boolean = true,
+        persistAnchor: Boolean = false
+    ) {
+        resumeImagePauseIfPageLeft()
         val normalPage = pages.getOrNull(pageIndex)
-        val page = temporaryCuePage ?: normalPage
+        val page = normalPage
         if (page == null) {
+            hideCrossPageCueWindow()
             readView.setPage(
                 TextPage(
                     title = currentReaderTitle(),
@@ -3012,7 +3993,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             )
             return
         }
-        val match = cueMatchesByCueIndex[activeCueIndex]
+        val match = currentPageCueMatch(page)
         val highlight = highlightTextPage(page, match)
         val currentSearchHit = searchHits.getOrNull(searchHitIndex)
         val searchHighlight = searchQuery
@@ -3027,15 +4008,104 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 start.takeIf { it >= 0 }?.let { it until (it + query.length) }
             }
         readView.setPage(page, highlight, searchHighlight, forward = forward)
+        updateCrossPageCueWindow(page, match)
         updateProgressSeekBar()
-        persistReaderSettings()
+        if (persistAnchor) {
+            persistReaderAnchorFromPage()
+        }
+    }
+
+    private fun persistReaderAnchorFromPage() {
+        val anchor = currentPageAnchor(includeCueMatch = false)
+        persistReaderAnchor(anchor)
+    }
+
+    private fun persistReaderAnchor(anchor: ReaderPageAnchor?) {
+        persistReaderSettings(updateAnchor = true, anchorOverride = anchor)
+    }
+
+    private fun useM4bChapterSource(): Boolean {
+        return chapterSourceMode == ReaderChapterSourceMode.M4B && m4bChapters.isNotEmpty()
+    }
+
+    private fun currentChapterSourceSummary(): String {
+        return if (chapterSourceMode == ReaderChapterSourceMode.M4B) {
+            readerString(R.string.reader_chapter_source_m4b)
+        } else {
+            readerString(R.string.reader_chapter_source_book)
+        }
+    }
+
+    private fun ensureM4bChaptersLoaded(onLoaded: ((Boolean) -> Unit)? = null) {
+        val uri = audioUri
+        if (uri == null) {
+            m4bChapters = emptyList()
+            onLoaded?.invoke(false)
+            return
+        }
+        if (m4bChapters.isNotEmpty()) {
+            onLoaded?.invoke(true)
+            return
+        }
+        if (m4bChapterLoadJob?.isActive == true) {
+            val activeJob = m4bChapterLoadJob
+            if (onLoaded != null) {
+                activeJob?.invokeOnCompletion {
+                    lifecycleScope.launch {
+                        onLoaded(m4bChapters.isNotEmpty())
+                    }
+                }
+            }
+            return
+        }
+        m4bChapterLoadJob = lifecycleScope.launch {
+            val chapters = withContext(Dispatchers.IO) {
+                loadM4bChapters(this@LegadoReaderActivity, contentResolver, uri)
+            }
+            m4bChapters = chapters
+            onLoaded?.invoke(chapters.isNotEmpty())
+            if (chapters.isNotEmpty()) {
+                updateProgressSeekBar()
+            }
+        }
+    }
+    private fun currentM4bChapterIndex(): Int {
+        if (m4bChapters.isEmpty()) return 0
+        val positionMs = currentAudioPositionMs() ?: 0L
+        return m4bChapters.indexOfLast { it.startMs <= positionMs }
+            .coerceAtLeast(0)
+            .coerceAtMost(m4bChapters.lastIndex)
+    }
+
+    private fun seekToM4bChapter(targetIndex: Int) {
+        val target = m4bChapters.getOrNull(targetIndex) ?: return
+        val currentPlayer = player ?: return
+        currentPlayer.seekTo(target.startMs)
+        activeCueIndex = -1
+        publishReaderPlaybackBridgeSnapshot(notifyState = false)
+        persistAudioPlaybackSnapshot()
+        if (cues.isNotEmpty()) {
+            syncToAudioPosition(allowPageJump = true, forceReveal = true)
+        } else {
+            loadSrtSyncIfNeeded {
+                syncToAudioPosition(allowPageJump = true, forceReveal = true)
+            }
+        }
+        updateProgressSeekBar()
     }
 
     private fun updateProgressSeekBar() {
         if (pages.isEmpty()) return
+        if (!progressByChapter && useM4bChapterSource()) {
+            chapterSeekBar.max = (m4bChapters.size - 1).coerceAtLeast(0)
+            chapterSeekBar.progress = currentM4bChapterIndex().coerceIn(0, chapterSeekBar.max)
+            return
+        }
         if (!progressByChapter) {
-            chapterSeekBar.max = pages.lastIndex.coerceAtLeast(0)
-            chapterSeekBar.progress = pageIndex.coerceIn(0, chapterSeekBar.max)
+            val lastChapterIndex = lastUnlockedChapterIndex(document)
+            val currentChapterIndex = pages.getOrNull(pageIndex)?.chapterIndex ?: 0
+            chapterSeekBar.max = lastChapterIndex.coerceAtLeast(0)
+            chapterSeekBar.progress = currentChapterIndex.coerceIn(0, chapterSeekBar.max)
             return
         }
         val page = pages.getOrNull(pageIndex) ?: return
@@ -3045,19 +4115,191 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun seekProgressToPageIndex(progress: Int): Int {
-        if (!progressByChapter) return progress.coerceIn(0, pages.lastIndex)
         val currentChapter = pages.getOrNull(pageIndex)?.chapterIndex ?: return pageIndex
         val chapterStart = pages.indexOfFirst { it.chapterIndex == currentChapter }
         if (chapterStart < 0) return pageIndex
         return (chapterStart + progress).coerceIn(chapterStart, pages.lastIndex)
     }
 
+    private fun confirmOrJumpToChapterFromSeekBar(targetChapter: Int) {
+        if (useM4bChapterSource()) {
+            val safeTarget = targetChapter.coerceIn(0, m4bChapters.lastIndex.coerceAtLeast(0))
+            seekToM4bChapter(safeTarget)
+            return
+        }
+        val currentChapter = pages.getOrNull(pageIndex)?.chapterIndex ?: 0
+        val lastChapter = lastUnlockedChapterIndex(document)
+        val safeTarget = targetChapter.coerceIn(0, lastChapter.coerceAtLeast(0))
+        if (targetChapter > safeTarget) {
+            showSimulatedReadingLockedToast()
+        }
+        if (safeTarget == currentChapter || confirmSkipToChapter) {
+            jumpToChapterFromSeekBar(safeTarget, currentChapter)
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.reader_chapter_jump_confirm_title)
+            .setMessage(R.string.reader_chapter_jump_confirm_message)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                confirmSkipToChapter = true
+                jumpToChapterFromSeekBar(safeTarget, currentChapter)
+            }
+            .setNegativeButton(android.R.string.cancel) { _, _ ->
+                updateProgressSeekBar()
+            }
+            .setOnCancelListener {
+                updateProgressSeekBar()
+            }
+            .show()
+    }
+
+    private fun jumpToChapterFromSeekBar(targetChapter: Int, currentChapter: Int) {
+        showAnchorOrLoad(
+            anchor = ReaderPageAnchor(targetChapter, 0),
+            forward = targetChapter >= currentChapter
+        )
+    }
+
     private fun highlightTextPage(page: TextPage, match: EbookCueMatch?): IntRange? {
         if (match == null || match.chapterIndex != page.chapterIndex) return null
-        val start = (match.rawStart - page.charStart).coerceIn(0, page.text.length)
-        val end = (match.rawEnd - page.charStart).coerceIn(start, page.text.length)
-        if (end <= start) return null
-        return start until end
+        val absoluteStart = match.rawStart.coerceAtLeast(page.charStart)
+        val absoluteEnd = match.rawEnd.coerceAtMost(page.charEnd)
+        if (absoluteEnd <= absoluteStart) return null
+        val start = (absoluteStart - page.charStart).coerceIn(0, page.text.length)
+        val end = (absoluteEnd - page.charStart).coerceIn(start, page.text.length)
+        return (start until end).takeIf { it.first < it.last }
+    }
+
+    private fun currentPageCueMatch(page: TextPage): EbookCueMatch? {
+        return cueMatchesByCueIndex[activeCueIndex]
+            ?.takeIf { it.intersects(page) }
+            ?: cueMatchesByCueIndex[audioCueIndex]
+                ?.takeIf { it.intersects(page) }
+    }
+
+    private fun updateCrossPageCueWindow(page: TextPage?, match: EbookCueMatch?) {
+        if (!::readView.isInitialized) return
+        if (!crossPageCueWindowEnabled || page == null || match == null || match.chapterIndex != page.chapterIndex) {
+            hideCrossPageCueWindow()
+            return
+        }
+        val fullyVisible = match.rawStart >= page.charStart && match.rawEnd <= page.charEnd
+        if (fullyVisible) {
+            hideCrossPageCueWindow()
+            return
+        }
+        val text = fullCueText(match).takeIf { it.isNotBlank() } ?: run {
+            hideCrossPageCueWindow()
+            return
+        }
+        val visibleStart = match.rawStart.coerceAtLeast(page.charStart) - page.charStart
+        val visibleEnd = match.rawEnd.coerceAtMost(page.charEnd) - page.charStart
+        val visibleRange = (visibleStart until visibleEnd).takeIf { it.first < it.last }
+        val verticalPage = if (readerLayoutMode == M9LayoutMode.VERTICAL) {
+            buildCrossPageCuePage(text)
+        } else {
+            null
+        }
+        readView.showCrossPageCueOverlay(text, visibleRange, verticalPage)
+    }
+
+    private fun hideCrossPageCueWindow() {
+        if (::readView.isInitialized) {
+            readView.hideCrossPageCueOverlay()
+        }
+    }
+
+    private fun fullCueText(match: EbookCueMatch): String {
+        val chapterText = document?.chapters?.getOrNull(match.chapterIndex)?.text ?: return ""
+        val start = match.rawStart.coerceIn(0, chapterText.length)
+        val end = match.rawEnd.coerceIn(start, chapterText.length)
+        return chapterText.substring(start, end).trim()
+    }
+
+    private fun buildCrossPageCuePage(text: String): TextPage? {
+        val contentWidth = (readView.contentWidth - dp(16)).coerceAtLeast(dp(120))
+        val contentHeight = (readView.contentHeight - dp(16)).coerceAtLeast(dp(160))
+        val cueDocument = EbookDocument(
+            title = currentReaderTitle(),
+            format = "TEXT",
+            chapters = listOf(EbookChapter(title = "", text = text))
+        )
+        val page = buildTextPageFactory()
+            .createChapterPages(cueDocument, chapterIndex = 0, contentWidth, contentHeight)
+            .firstOrNull()
+            ?: return null
+        page.title = ""
+        page.globalIndex = 0
+        page.totalPages = 1
+        page.pageInChapter = 0
+        page.chapterPageCount = 1
+        return normalizeCrossPageCuePage(page, contentHeight)
+    }
+
+    private fun normalizeCrossPageCuePage(page: TextPage, contentHeight: Int): TextPage? {
+        if (page.lines.isEmpty()) return null
+        val isVertical = readerLayoutMode == M9LayoutMode.VERTICAL
+        val minX = if (isVertical) {
+            page.lines.minOf { it.lineTop }
+        } else {
+            page.lines.minOf { line -> line.columns.minOfOrNull { it.start } ?: line.startX }
+        }
+        val maxX = if (isVertical) {
+            page.lines.maxOf { it.lineBottom }
+        } else {
+            page.lines.maxOf { line -> line.columns.maxOfOrNull { it.end } ?: line.lineEnd }
+        }
+        val minY = if (isVertical) {
+            page.lines.minOf { line -> line.columns.minOfOrNull { it.start } ?: line.crossStart }
+        } else {
+            page.lines.minOf { it.lineTop }
+        }
+        val maxY = if (isVertical) {
+            page.lines.maxOf { line -> line.columns.maxOfOrNull { it.end } ?: line.crossEnd }
+        } else {
+            page.lines.maxOf { it.lineBottom }
+        }
+        val left = minX.coerceAtLeast(0f)
+        val top = minY.coerceAtLeast(0f)
+        page.lines.forEach { line ->
+            if (isVertical) {
+                line.lineTop -= left
+                line.lineBase -= left
+                line.lineBottom -= left
+                line.crossStart -= top
+                line.crossEnd -= top
+                line.columns.forEach { column ->
+                    column.start -= top
+                    column.end -= top
+                }
+            } else {
+                line.lineTop -= top
+                line.lineBase -= top
+                line.lineBottom -= top
+                line.crossStart -= top
+                line.crossEnd -= top
+                line.startX -= left
+                line.columns.forEach { column ->
+                    column.start -= left
+                    column.end -= left
+                }
+            }
+        }
+        page.width = (maxX - minX).coerceAtLeast(1f)
+        page.height = if (isVertical) {
+            contentHeight.toFloat()
+        } else {
+            (maxY - minY).coerceAtLeast(1f)
+        }
+        page.charStart = 0
+        page.charEnd = page.text.length
+        return page
+    }
+
+    private fun EbookCueMatch.intersects(page: TextPage): Boolean {
+        return chapterIndex == page.chapterIndex &&
+            rawStart < page.charEnd &&
+            rawEnd > page.charStart
     }
 
     private fun findTextPageForMatch(match: EbookCueMatch): Int? {
@@ -3069,121 +4311,25 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             ?: pages.indexOfFirst { it.chapterIndex == match.chapterIndex }.takeIf { it >= 0 }
     }
 
-    private fun buildTemporaryCuePage(match: EbookCueMatch, startPageIndex: Int): Pair<Int, TextPage>? {
-        val chapter = document?.chapters?.getOrNull(match.chapterIndex) ?: return null
-        val startPage = pages.getOrNull(startPageIndex) ?: return null
-        if (match.rawEnd <= startPage.charEnd) return null
-        val pageWidth = readView.contentWidth.takeIf { it > 0 }
-            ?: (resources.displayMetrics.widthPixels - dp(44))
-        val pageHeight = readView.contentHeight.takeIf { it > 0 }
-            ?: (resources.displayMetrics.heightPixels - dp(220))
-        var low = startPage.charStart.coerceIn(0, match.rawStart)
-        var high = match.rawStart.coerceIn(low, chapter.text.length)
-        var bestStart = high
-        var bestPage: TextPage? = null
-        while (low <= high) {
-            val mid = (low + high) ushr 1
-            val candidate = buildTemporaryNormalPageContainingCue(
-                chapter = chapter,
-                textStart = mid,
-                rawStart = match.rawStart,
-                rawEnd = match.rawEnd,
-                pageWidth = pageWidth,
-                pageHeight = pageHeight
-            )
-            if (candidate != null) {
-                bestStart = mid
-                bestPage = candidate.second
-                high = mid - 1
-            } else {
-                low = mid + 1
-            }
-        }
-        val temporaryPage = bestPage ?: return null
-        val templateIndex = pages.indexOfFirst { candidate ->
-            candidate.chapterIndex == match.chapterIndex &&
-            candidate.charStart <= match.rawEnd &&
-                match.rawEnd <= candidate.charEnd
-        }.takeIf { it >= 0 } ?: (startPageIndex + 1).coerceAtMost(pages.lastIndex)
-        val templatePage = pages.getOrNull(templateIndex) ?: return null
-        temporaryPage.index = templatePage.index
-        temporaryPage.pageInChapter = templatePage.pageInChapter
-        temporaryPage.chapterPageCount = templatePage.chapterPageCount
-        temporaryPage.chapterIndex = templatePage.chapterIndex
-        temporaryPage.chapterSize = templatePage.chapterSize
-        temporaryPage.globalIndex = templatePage.globalIndex
-        temporaryPage.totalPages = templatePage.totalPages
-        temporaryPage.title = templatePage.title
-        temporaryPage.charStart += bestStart
-        temporaryPage.charEnd += bestStart
-        if (temporaryPage.charStart > match.rawStart || temporaryPage.charEnd < match.rawEnd) return null
-        return templateIndex to temporaryPage
-    }
-
-    private fun buildTemporaryNormalPageContainingCue(
-        chapter: EbookChapter,
-        textStart: Int,
-        rawStart: Int,
-        rawEnd: Int,
-        pageWidth: Int,
-        pageHeight: Int
-    ): Pair<Int, TextPage>? {
-        val safeStart = textStart.coerceIn(0, rawEnd.coerceIn(0, chapter.text.length))
-        val text = chapter.text.substring(safeStart)
-        if (text.isBlank()) return null
-        val shiftedImages = chapter.images.entries
-            .asSequence()
-            .filter { it.key >= safeStart }
-            .associate { (position, image) -> (position - safeStart) to image }
-        val shiftedRubySpans = chapter.rubySpans
-            .asSequence()
-            .filter { it.end > safeStart }
-            .mapNotNull { span ->
-                val start = (span.start - safeStart).coerceAtLeast(0)
-                val end = span.end - safeStart
-                if (end > start) span.copy(start = start, end = end) else null
-            }
-            .toList()
-        val temporaryDocument = EbookDocument(
-            title = document?.title ?: currentReaderTitle(),
-            format = document?.format ?: "EPUB",
-            chapters = listOf(
-                EbookChapter(
-                    title = chapter.title,
-                    text = text,
-                    sourcePath = chapter.sourcePath,
-                    images = shiftedImages,
-                    rubySpans = shiftedRubySpans
-                )
-            )
-        )
-        val temporaryPages = paginateDocument(
-            document = temporaryDocument,
-            contentWidthPx = pageWidth,
-            contentHeightPx = pageHeight
-        )
-        val localCueStart = rawStart - safeStart
-        val localCueEnd = rawEnd - safeStart
-        val pageIndex = temporaryPages.indexOfFirst { page ->
-            page.charStart <= localCueStart && localCueEnd <= page.charEnd
-        }
-        if (pageIndex < 0) return null
-        return pageIndex to temporaryPages[pageIndex]
-    }
-
     private fun movePage(delta: Int) {
         if (pages.isEmpty()) return
         val next = (pageIndex + delta).coerceIn(0, pages.lastIndex)
         if (next != pageIndex) {
             pageIndex = next
             activeCueIndex = -1
-            temporaryCuePage = null
-            renderCurrentPage(forward = delta > 0)
+            renderCurrentPage(
+                forward = delta > 0,
+                persistAnchor = true
+            )
             return
         }
         val currentChapter = pages.getOrNull(pageIndex)?.chapterIndex ?: return
         val targetChapter = currentChapter + if (delta > 0) 1 else -1
-        val lastChapter = document?.chapters?.lastIndex ?: return
+        val lastChapter = lastUnlockedChapterIndex(document)
+        if (delta > 0 && targetChapter > lastChapter) {
+            showSimulatedReadingLockedToast()
+            return
+        }
         if (targetChapter in 0..lastChapter) {
             showAnchorOrLoad(
                 anchor = ReaderPageAnchor(
@@ -3196,9 +4342,23 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun moveChapter(delta: Int) {
+        if (useM4bChapterSource()) {
+            val currentChapter = currentM4bChapterIndex()
+            val targetChapter = (currentChapter + delta).coerceIn(0, m4bChapters.lastIndex.coerceAtLeast(0))
+            if (targetChapter != currentChapter) {
+                seekToM4bChapter(targetChapter)
+            }
+            return
+        }
         if (pages.isEmpty()) return
         val currentChapter = pages.getOrNull(pageIndex)?.chapterIndex ?: return
-        val targetChapter = (currentChapter + delta).coerceIn(0, (document?.chapters?.lastIndex ?: 0))
+        val lastChapter = lastUnlockedChapterIndex(document)
+        val rawTargetChapter = currentChapter + delta
+        if (delta > 0 && rawTargetChapter > lastChapter) {
+            showSimulatedReadingLockedToast()
+            return
+        }
+        val targetChapter = rawTargetChapter.coerceIn(0, lastChapter)
         if (targetChapter != currentChapter) {
             showAnchorOrLoad(
                 anchor = ReaderPageAnchor(
@@ -3221,6 +4381,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             restoredSnapshot != null -> restoredSnapshot.positionMs
             else -> 0L
         }.coerceAtLeast(0L)
+        audioCueIndex = -1
         player = BookReaderPlaybackSession.prepareAudioIfNeeded(
             context = this,
             audioUri = uri,
@@ -3240,13 +4401,14 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             updateAudioControlLabels()
             loadSrtSyncIfNeeded()
         }
+        updateSystemBarSurfaces()
     }
 
     private fun togglePlaybackBar() {
         playbackBarPinnedVisible = !playbackBarPinnedVisible
         playbackBar.visibility = if (playbackBarPinnedVisible) View.VISIBLE else View.GONE
         if (playbackBarPinnedVisible) {
-            setReadMenuVisible(false)
+            setReadMenuVisible(false, updateSystemBars = false)
             playbackBar.post {
                 val newHeight = playbackBar.height.coerceAtLeast(0)
                 if (newHeight > 0) {
@@ -3260,6 +4422,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
         persistReaderSettings()
         updateAudioControlLabels()
+        updateSystemBarSurfaces()
     }
 
     private fun toggleAudioPlayback() {
@@ -3271,12 +4434,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         if (currentPlayer.isPlaying) {
             currentPlayer.pause()
         } else {
+            clearImagePauseResume()
             currentPlayer.play()
         }
         publishReaderPlaybackBridgeSnapshot(notifyState = true)
         updateAudioControlLabels()
         if (currentPlayer.isPlaying) {
-            syncToAudioPosition(allowPageJump = true)
+            syncToAudioPosition(allowPageJump = true, forceReveal = true)
         }
         if (!currentPlayer.isPlaying) {
             persistAudioPlaybackSnapshot()
@@ -3343,7 +4507,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         activeCueIndex = -1
         publishReaderPlaybackBridgeSnapshot(notifyState = false)
         persistAudioPlaybackSnapshot()
-        syncToAudioPosition(allowPageJump = true)
+        syncToAudioPosition(allowPageJump = true, forceReveal = true)
     }
 
     private fun currentAudioPositionMs(): Long? {
@@ -3398,17 +4562,18 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         return if (playbackBarPinnedVisible) playbackBarHeightPx.coerceAtLeast(dp(62)) else 0
     }
 
-    private fun currentPageAnchor(): ReaderPageAnchor? {
+    private fun currentPageAnchor(includeCueMatch: Boolean = false): ReaderPageAnchor? {
         val page = pages.getOrNull(pageIndex) ?: return null
         return ReaderPageAnchor(
             chapterIndex = page.chapterIndex,
-            charPosition = currentAnchorCharPosition(page)
+            charPosition = currentAnchorCharPosition(page, includeCueMatch)
         )
     }
 
-    private fun currentAnchorCharPosition(page: TextPage): Int {
-        val cueMatch = cueMatchesByCueIndex[activeCueIndex]
+    private fun currentAnchorCharPosition(page: TextPage, includeCueMatch: Boolean): Int {
+        val cueMatch = currentPageCueMatch(page)
         if (
+            includeCueMatch &&
             cueMatch != null &&
             cueMatch.chapterIndex == page.chapterIndex &&
             cueMatch.rawStart >= page.charStart &&
@@ -3478,13 +4643,15 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         paginationJob?.cancel()
         clearChapterPageCache()
         paginationJob = lifecycleScope.launch {
+            updateSimulatedUnlockedChapterCount(loaded)
+            val safeAnchor = anchor?.let { clampAnchorToUnlocked(it, loaded) }
             val relayoutResult = runCatching {
-                val centerChapterIndex = anchor?.chapterIndex
+                val centerChapterIndex = safeAnchor?.chapterIndex
                     ?: pages.getOrNull(pageIndex)?.chapterIndex
                     ?: 0
                 getOrPaginateChapterPages(
                     document = loaded,
-                    chapterIndex = centerChapterIndex,
+                    chapterIndex = clampChapterToUnlocked(centerChapterIndex, loaded),
                     contentWidthPx = pageWidth.coerceAtLeast(1),
                     contentHeightPx = pageHeight.coerceAtLeast(dp(120))
                 )
@@ -3497,8 +4664,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 return@launch
             }
             pages = loadedPages
-            temporaryCuePage = null
-            pageIndex = anchor?.let { pageIndexForAnchor(loadedPages, it) } ?: pageIndex.coerceIn(0, pages.lastIndex)
+            pageIndex = safeAnchor?.let { pageIndexForAnchor(loadedPages, it) } ?: pageIndex.coerceIn(0, pages.lastIndex)
             renderCurrentPage()
             if (cueMatchesByCueIndex.isNotEmpty()) {
                 syncToAudioPosition(allowPageJump = isAudioPlaying())
@@ -3570,6 +4736,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             unmatched = snapshot.unmatched,
             totalCues = snapshot.totalCues
         )
+        audioCueIndex = -1
         activeCueIndex = -1
         Log.d(
             LEGADO_READER_LOG_TAG,
@@ -3638,6 +4805,21 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         brightnessValue = state.brightnessValue
         brightnessPanelOnRight = state.brightnessPanelOnRight
         showReadTitleAddition = state.showReadTitleAddition
+        bodyTitleMode = state.bodyTitleMode
+        bodyTitleSizeAddSp = state.bodyTitleSizeAddSp
+        bodyTitleTopSpacingDp = state.bodyTitleTopSpacingDp
+        bodyTitleBottomSpacingDp = state.bodyTitleBottomSpacingDp
+        headerMode = state.headerMode
+        footerMode = state.footerMode
+        tipHeaderLeft = state.tipHeaderLeft
+        tipHeaderMiddle = state.tipHeaderMiddle
+        tipHeaderRight = state.tipHeaderRight
+        tipFooterLeft = state.tipFooterLeft
+        tipFooterMiddle = state.tipFooterMiddle
+        tipFooterRight = state.tipFooterRight
+        tipColorMode = state.tipColorMode
+        tipDividerColorMode = state.tipDividerColorMode
+        tipDividerColor = state.tipDividerColor
         useZhLayout = state.useZhLayout
         textFullJustify = state.textFullJustify
         textBottomJustify = state.textBottomJustify
@@ -3656,6 +4838,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         disableReturnKey = state.disableReturnKey
         readBarStyleFollowPage = state.readBarStyleFollowPage
         playbackBarPinnedVisible = state.playbackBarPinnedVisible
+        crossPageCueWindowEnabled = state.crossPageCueWindowEnabled
+        stopPlaybackOnImage = state.stopPlaybackOnImage
+        imagePauseSeconds = state.imagePauseSeconds
+        verticalControlDirectionReversed = state.verticalControlDirectionReversed
+        verticalProgressDirectionReversed = state.verticalProgressDirectionReversed
+        selectionPrimaryActionKey = state.selectionPrimaryActionKey
+        chapterSourceMode = state.chapterSourceMode
         showRubyText = state.showRubyText
         preferredCharsetName = state.preferredCharsetName
         pendingRestoreAnchor = ReaderPageAnchor(
@@ -3683,10 +4872,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         pendingRestoreAnchor = null
     }
 
-    private fun persistReaderSettings(updateAnchor: Boolean = true) {
+    private fun persistReaderSettings(
+        updateAnchor: Boolean = false,
+        anchorOverride: ReaderPageAnchor? = null
+    ) {
         val previous = loadLegadoReaderPersistedState(this)
         val bookUri = importedBook?.uri?.toString()
-        val anchor = if (updateAnchor) currentPageAnchor() else null
+        val anchor = if (updateAnchor) anchorOverride ?: currentPageAnchor(includeCueMatch = false) else null
         if (updateAnchor && anchor != null) {
             saveLegadoReaderBookAnchor(
                 this,
@@ -3733,6 +4925,21 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 brightnessValue = brightnessValue,
                 brightnessPanelOnRight = brightnessPanelOnRight,
                 showReadTitleAddition = showReadTitleAddition,
+                bodyTitleMode = bodyTitleMode,
+                bodyTitleSizeAddSp = bodyTitleSizeAddSp,
+                bodyTitleTopSpacingDp = bodyTitleTopSpacingDp,
+                bodyTitleBottomSpacingDp = bodyTitleBottomSpacingDp,
+                headerMode = headerMode,
+                footerMode = footerMode,
+                tipHeaderLeft = tipHeaderLeft,
+                tipHeaderMiddle = tipHeaderMiddle,
+                tipHeaderRight = tipHeaderRight,
+                tipFooterLeft = tipFooterLeft,
+                tipFooterMiddle = tipFooterMiddle,
+                tipFooterRight = tipFooterRight,
+                tipColorMode = tipColorMode,
+                tipDividerColorMode = tipDividerColorMode,
+                tipDividerColor = tipDividerColor,
                 useZhLayout = useZhLayout,
                 textFullJustify = textFullJustify,
                 textBottomJustify = textBottomJustify,
@@ -3744,6 +4951,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 disableReturnKey = disableReturnKey,
                 readBarStyleFollowPage = readBarStyleFollowPage,
                 playbackBarPinnedVisible = playbackBarPinnedVisible,
+                crossPageCueWindowEnabled = crossPageCueWindowEnabled,
+                stopPlaybackOnImage = stopPlaybackOnImage,
+                imagePauseSeconds = imagePauseSeconds,
+                verticalControlDirectionReversed = verticalControlDirectionReversed,
+                verticalProgressDirectionReversed = verticalProgressDirectionReversed,
+                selectionPrimaryActionKey = selectionPrimaryActionKey,
+                chapterSourceMode = chapterSourceMode,
                 showRubyText = showRubyText,
                 preferredCharsetName = preferredCharsetName,
                 currentBookUri = persistedBookUri,
@@ -3794,6 +5008,139 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             R.string.reader_match_highlight_color,
             readerCueHighlightColor
         )
+        val crossPageWindowCheck = CheckBox(this).apply {
+            text = readerString(R.string.reader_cross_page_cue_window)
+            setTextColor(MENU_TEXT)
+            textSize = 14f
+            isChecked = crossPageCueWindowEnabled
+            setOnCheckedChangeListener { _, checked ->
+                crossPageCueWindowEnabled = checked
+                if (!checked) hideCrossPageCueWindow() else renderCurrentPage()
+                persistReaderSettings(updateAnchor = false)
+            }
+        }
+        val stopOnImageCheck = CheckBox(this).apply {
+            text = readerString(R.string.reader_stop_on_image)
+            setTextColor(MENU_TEXT)
+            textSize = 14f
+            isChecked = stopPlaybackOnImage
+        }
+        val imagePauseContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (stopPlaybackOnImage) View.VISIBLE else View.GONE
+        }
+        val imagePauseLabel = text(
+            readerString(R.string.reader_image_pause_seconds),
+            14f,
+            MENU_TEXT
+        )
+        val imagePauseInput = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setSingleLine(true)
+            setText(imagePauseSeconds.toString())
+            setTextColor(MENU_TEXT)
+            textSize = 14f
+            isEnabled = stopPlaybackOnImage
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+                override fun afterTextChanged(s: Editable?) {
+                    val value = s?.toString()?.toIntOrNull() ?: return
+                    imagePauseSeconds = value.coerceIn(0, MAX_IMAGE_PAUSE_SECONDS)
+                    persistReaderSettings(updateAnchor = false)
+                }
+            })
+        }
+        stopOnImageCheck.setOnCheckedChangeListener { _, checked ->
+            stopPlaybackOnImage = checked
+            imagePauseInput.isEnabled = checked
+            imagePauseContainer.visibility = if (checked) View.VISIBLE else View.GONE
+            if (!checked) {
+                lastImageStopKey = null
+                clearImagePauseResume()
+            }
+            persistReaderSettings(updateAnchor = false)
+        }
+        val reverseControlCheck = CheckBox(this).apply {
+            text = readerString(R.string.reader_reverse_vertical_controls)
+            setTextColor(MENU_TEXT)
+            textSize = 14f
+            isChecked = verticalControlDirectionReversed
+            setOnCheckedChangeListener { _, checked ->
+                verticalControlDirectionReversed = checked
+                applyDirectionSettings()
+                persistReaderSettings(updateAnchor = false)
+            }
+        }
+        val reverseProgressCheck = CheckBox(this).apply {
+            text = readerString(R.string.reader_reverse_vertical_progress)
+            setTextColor(MENU_TEXT)
+            textSize = 14f
+            isChecked = verticalProgressDirectionReversed
+            setOnCheckedChangeListener { _, checked ->
+                verticalProgressDirectionReversed = checked
+                applyDirectionSettings()
+                persistReaderSettings(updateAnchor = false)
+            }
+        }
+        val chapterSourceRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        val chapterSourceLabel = text(readerString(R.string.reader_chapter_source), 14f, MENU_TEXT)
+        val chapterSourceValue = text(currentChapterSourceSummary(), 14f, MENU_TEXT).apply {
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        }
+        chapterSourceRow.addView(
+            chapterSourceLabel,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        chapterSourceRow.addView(
+            chapterSourceValue,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        )
+        chapterSourceRow.setOnClickListener {
+            val options = arrayOf(
+                readerString(R.string.reader_chapter_source_book),
+                readerString(R.string.reader_chapter_source_m4b)
+            )
+            AlertDialog.Builder(this)
+                .setTitle(R.string.reader_chapter_source)
+                .setSingleChoiceItems(
+                    options,
+                    if (chapterSourceMode == ReaderChapterSourceMode.BOOK) 0 else 1
+                ) { sourceDialog, which ->
+                    if (which == 1) {
+                        ensureM4bChaptersLoaded { success ->
+                            runOnUiThread {
+                                if (!success) {
+                                    chapterSourceMode = ReaderChapterSourceMode.BOOK
+                                    chapterSourceValue.text = currentChapterSourceSummary()
+                                    Toast.makeText(
+                                        this,
+                                        R.string.reader_chapter_source_m4b_unavailable,
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                } else {
+                                    chapterSourceMode = ReaderChapterSourceMode.M4B
+                                    chapterSourceValue.text = currentChapterSourceSummary()
+                                    updateProgressSeekBar()
+                                }
+                                persistReaderSettings(updateAnchor = false)
+                                sourceDialog.dismiss()
+                            }
+                        }
+                    } else {
+                        chapterSourceMode = ReaderChapterSourceMode.BOOK
+                        chapterSourceValue.text = currentChapterSourceSummary()
+                        updateProgressSeekBar()
+                        persistReaderSettings(updateAnchor = false)
+                        sourceDialog.dismiss()
+                    }
+                }
+                .show()
+        }
         val seekBar = SeekBar(this).apply {
             max = MATCH_SEARCH_WINDOW_MAX - MATCH_SEARCH_WINDOW_MIN
             progress = (matchSearchWindow - MATCH_SEARCH_WINDOW_MIN).coerceIn(0, max)
@@ -3819,8 +5166,41 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             LinearLayout.LayoutParams.MATCH_PARENT,
             dp(42)
         ).apply {
-            bottomMargin = dp(10)
             topMargin = dp(8)
+        })
+        container.addView(crossPageWindowCheck, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(44)
+        ))
+        container.addView(stopOnImageCheck, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(44)
+        ))
+        imagePauseContainer.addView(imagePauseLabel, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(28)
+        ))
+        imagePauseContainer.addView(imagePauseInput, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(44)
+        ))
+        container.addView(imagePauseContainer, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        container.addView(reverseControlCheck, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(44)
+        ))
+        container.addView(reverseProgressCheck, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(44)
+        ))
+        container.addView(chapterSourceRow, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            bottomMargin = dp(10)
         })
         cueHighlightButton.setOnClickListener {
             showReaderColorPicker(READER_CUE_HIGHLIGHT_DIALOG_ID, readerCueHighlightColor) { color ->
@@ -3864,6 +5244,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                             "manual match success matches=${data.matches.size} totalCues=${data.totalCues} unmatched=${data.unmatched}"
                         )
                         persistCurrentMatchSnapshot()
+                        audioCueIndex = -1
                         activeCueIndex = -1
                         syncToAudioPosition(allowPageJump = isAudioPlaying())
                         renderCurrentPage()
@@ -3902,6 +5283,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val uri = srtUri ?: return
         val uriText = uri.toString()
         if (!force && loadedSrtUriText == uriText && cues.isNotEmpty()) {
+            publishReaderSubtitleBridgeSnapshot(clearWhenMissing = false)
             onComplete?.invoke(true)
             return
         }
@@ -3945,7 +5327,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 loadedSrtUriText = uriText
                 cueMatchesByCueIndex = emptyMap()
                 matchData = null
-                temporaryCuePage = null
+                audioCueIndex = -1
+                activeCueIndex = -1
                 Log.d(
                     LEGADO_READER_LOG_TAG,
                     "loadSrtSyncIfNeeded ready=${SystemClock.elapsedRealtime() - srtStartMs}ms " +
@@ -3956,6 +5339,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 } else {
                     null
                 }
+                publishReaderSubtitleBridgeSnapshot(clearWhenMissing = true)
                 if (loadedCues.isNotEmpty()) {
                     Log.d(
                         LEGADO_READER_LOG_TAG,
@@ -3974,6 +5358,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                     R.string.reader_srt_load_failed,
                     error.message ?: error.javaClass.simpleName
                 )
+                cues = emptyList()
+                loadedSrtUriText = null
+                publishReaderSubtitleBridgeSnapshot(clearWhenMissing = true)
                 onComplete?.invoke(false)
             }
             srtLoading = false
@@ -4010,49 +5397,172 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
     }
 
-    private fun syncToAudioPosition(allowPageJump: Boolean = true) {
+    private fun syncToAudioPosition(
+        allowPageJump: Boolean = true,
+        forceReveal: Boolean = false
+    ) {
         if (cues.isEmpty() || pages.isEmpty()) return
         val currentPosition = currentAudioPositionMs() ?: return
         val cueIndex = findEbookCueIndexAtTime(cues, currentPosition)
         if (cueIndex < 0) {
-            val changed = activeCueIndex != -1 || temporaryCuePage != null
+            val changed = activeCueIndex != -1
+            audioCueIndex = -1
             activeCueIndex = -1
-            temporaryCuePage = null
+            if (textSelectionActive && !forceReveal) {
+                updateDisplayedCueHighlightOnly()
+                return
+            }
             if (changed) {
+                renderCurrentPage()
+            } else {
+                hideCrossPageCueWindow()
+            }
+            return
+        }
+        val previousAudioCueIndex = audioCueIndex
+        val cueChanged = cueIndex != previousAudioCueIndex
+        if (!cueChanged && !forceReveal) return
+        val previousMatch = cueMatchesByCueIndex[previousAudioCueIndex]
+        audioCueIndex = cueIndex
+        if (textSelectionActive && !forceReveal) {
+            activeCueIndex = cueIndex
+            updateDisplayedCueHighlightOnly()
+            return
+        }
+        val match = cueMatchesByCueIndex[cueIndex] ?: run {
+            activeCueIndex = cueIndex
+            hideCrossPageCueWindow()
+            if (!allowPageJump || forceReveal) {
                 renderCurrentPage()
             }
             return
         }
-        if (cueIndex == activeCueIndex) return
-        val match = cueMatchesByCueIndex[cueIndex] ?: run {
-            activeCueIndex = cueIndex
-            temporaryCuePage = null
-            if (!allowPageJump) {
-                renderCurrentPage()
+        if (
+            stopPlaybackOnImage &&
+            allowPageJump &&
+            isAudioPlaying() &&
+            cueChanged &&
+            previousMatch != null
+        ) {
+            findCrossedImageStopTarget(previousMatch, match)?.let { target ->
+                pausePlaybackAtImage(target)
+                return
             }
-            return
         }
         activeCueIndex = cueIndex
         if (!allowPageJump) {
-            temporaryCuePage = null
             renderCurrentPage()
             return
         }
         val startPageIndex = findTextPageForMatch(match)
         if (startPageIndex == null) {
-            activeCueIndex = -1
-            temporaryCuePage = null
+            activeCueIndex = cueIndex
             loadDisplayedBook(
                 anchor = ReaderPageAnchor(match.chapterIndex, match.rawStart),
                 forceDocumentReload = false
             )
             return
         }
-        val temporaryPagePair = buildTemporaryCuePage(match, startPageIndex)
-        temporaryCuePage = temporaryPagePair?.second
-        val nextPage = temporaryPagePair?.first ?: startPageIndex
-        if (nextPage != pageIndex) pageIndex = nextPage
+        if (startPageIndex == pageIndex) {
+            updateDisplayedCueHighlightOnly()
+            return
+        }
+        val previousPageIndex = pageIndex
+        pageIndex = startPageIndex
+        renderCurrentPage(forward = startPageIndex >= previousPageIndex)
+    }
+
+    private fun updateDisplayedCueHighlightOnly() {
+        val page = pages.getOrNull(pageIndex) ?: return
+        val match = currentPageCueMatch(page)
+        readView.setCueHighlight(highlightTextPage(page, match))
+        updateCrossPageCueWindow(page, match)
+    }
+
+    private fun findCrossedImageStopTarget(
+        previousMatch: EbookCueMatch,
+        currentMatch: EbookCueMatch
+    ): ReaderImageStopTarget? {
+        val loadedDocument = document ?: return null
+        if (currentMatch.chapterIndex < previousMatch.chapterIndex) return null
+        if (
+            currentMatch.chapterIndex == previousMatch.chapterIndex &&
+            currentMatch.rawStart <= previousMatch.rawStart
+        ) {
+            return null
+        }
+        for (chapterIndex in previousMatch.chapterIndex..currentMatch.chapterIndex) {
+            val chapter = loadedDocument.chapters.getOrNull(chapterIndex) ?: continue
+            val start = if (chapterIndex == previousMatch.chapterIndex) previousMatch.rawEnd else 0
+            val end = if (chapterIndex == currentMatch.chapterIndex) currentMatch.rawStart else Int.MAX_VALUE
+            val imagePosition = chapter.images.keys
+                .asSequence()
+                .filter { position -> position >= start && position < end }
+                .minOrNull()
+                ?: continue
+            val target = ReaderImageStopTarget(chapterIndex, imagePosition)
+            if (target.key != lastImageStopKey) return target
+        }
+        return null
+    }
+
+    private fun pausePlaybackAtImage(target: ReaderImageStopTarget) {
+        lastImageStopKey = target.key
+        player?.pause()
+        BookReaderFloatingBridge.notifyPlaybackState(false)
+        activeCueIndex = -1
+        findImagePageIndex(target)?.let { imagePage ->
+            if (imagePage != pageIndex) pageIndex = imagePage
+        }
+        imagePausePageIndex = pageIndex
         renderCurrentPage()
+        updateAudioControlLabels()
+        persistAudioPlaybackSnapshot()
+        scheduleImagePauseResume()
+    }
+
+    private fun scheduleImagePauseResume() {
+        imagePauseResumeJob?.cancel()
+        imagePauseResumeJob = null
+        val delayMs = imagePauseSeconds.coerceIn(0, MAX_IMAGE_PAUSE_SECONDS) * 1000L
+        if (delayMs <= 0L) return
+        imagePauseResumeJob = lifecycleScope.launch {
+            delay(delayMs)
+            resumeFromImagePause()
+        }
+    }
+
+    private fun resumeImagePauseIfPageLeft() {
+        val pausedPageIndex = imagePausePageIndex ?: return
+        if (pageIndex != pausedPageIndex) {
+            resumeFromImagePause()
+        }
+    }
+
+    private fun resumeFromImagePause() {
+        val hadPendingPause = imagePausePageIndex != null
+        clearImagePauseResume()
+        if (!hadPendingPause) return
+        val currentPlayer = player ?: return
+        if (!currentPlayer.isPlaying) {
+            currentPlayer.play()
+            publishReaderPlaybackBridgeSnapshot(notifyState = true)
+            updateAudioControlLabels()
+        }
+    }
+
+    private fun clearImagePauseResume() {
+        imagePauseResumeJob?.cancel()
+        imagePauseResumeJob = null
+        imagePausePageIndex = null
+    }
+
+    private fun findImagePageIndex(target: ReaderImageStopTarget): Int? {
+        return pages.indexOfFirst { page ->
+            page.chapterIndex == target.chapterIndex &&
+                target.imagePosition >= page.charStart &&
+                target.imagePosition < page.charEnd
+        }.takeIf { it >= 0 }
     }
 
     override fun onColorSelected(dialogId: Int, color: Int) {
@@ -4073,7 +5583,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         reloadBookJob?.cancel()
         paginationJob?.cancel()
         chapterPreloadJob?.cancel()
+        m4bChapterLoadJob?.cancel()
         syncJob?.cancel()
+        imagePauseResumeJob?.cancel()
+        floatingOverlayStartJob?.cancel()
         persistAudioPlaybackSnapshot()
         BookReaderFloatingBridge.removePlaybackStateListener(sharedPlaybackStateListener)
         BookReaderFloatingBridge.removePlaybackPositionListener(sharedPlaybackPositionListener)
@@ -4092,6 +5605,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         const val EXTRA_SRT_URI = "extra_srt_uri"
         const val EXTRA_AUDIO_POSITION_MS = "extra_audio_position_ms"
         const val EXTRA_AUDIO_DURATION_MS = "extra_audio_duration_ms"
+        const val EXTRA_RETURN_TO_PLAYER_ON_BACK = "extra_return_to_player_on_back"
         private const val DEFAULT_MATCH_SEARCH_WINDOW = 200
         private const val MATCH_SEARCH_WINDOW_MIN = 50
         private const val MATCH_SEARCH_WINDOW_MAX = 1000
@@ -4101,11 +5615,20 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         private const val READER_TEXT_COLOR_DIALOG_ID = 121
         private const val READER_BG_COLOR_DIALOG_ID = 122
         private const val READER_CUE_HIGHLIGHT_DIALOG_ID = 123
+        private const val READER_TIP_COLOR_DIALOG_ID = 124
+        private const val READER_TIP_DIVIDER_COLOR_DIALOG_ID = 125
         private const val LEGADO_COLOR_PICKER_IMAGE_BG_FALLBACK = 0xFF015A86.toInt()
         private const val MENU_BG = 0xFFF7F0E2.toInt()
         private const val MENU_TEXT = 0xFF2C241B.toInt()
         private const val SUBTLE_TEXT = 0xFF7D6E5C.toInt()
     }
+}
+
+private fun isLegadoAppProcessInForeground(): Boolean {
+    val processInfo = ActivityManager.RunningAppProcessInfo()
+    ActivityManager.getMyMemoryState(processInfo)
+    return processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+        processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
 }
 
 private fun buildLegadoReaderPlaybackKey(

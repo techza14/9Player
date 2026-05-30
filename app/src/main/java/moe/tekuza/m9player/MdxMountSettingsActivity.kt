@@ -95,7 +95,6 @@ private fun MdxMountSettingsScreen(onBack: () -> Unit) {
     fun persist(next: MdxMountState) {
         mountState = next
         saveMdxMountState(context, next)
-        invalidateDictionaryLookupCaches()
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->

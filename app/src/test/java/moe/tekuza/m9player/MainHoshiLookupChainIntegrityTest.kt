@@ -184,7 +184,7 @@ class MainHoshiLookupChainIntegrityTest {
     @Test
     fun duplicateSkippedDoesNotShowToastButCanOpenDuplicateSearch() {
         val exportFunction = mainActivitySource
-            .substringAfter("fun exportMainHoshiLookupEntryToAnki(content: String): Boolean")
+            .substringAfter("fun exportMainHoshiLookupEntryToAnkiAsync(content: String, onComplete: (Boolean) -> Unit)")
             .substringBefore("fun mainHoshiFallbackSelection(")
 
         assertFalse(
@@ -199,5 +199,22 @@ class MainHoshiLookupChainIntegrityTest {
             "Main lookup callbacks should expose duplicate search opening",
             mainActivitySource.contains("onViewDuplicate = { noteIds ->")
         )
+    }
+
+    @Test
+    fun ankiBridgeCallbacksDoNotRunBlockingOnJsBridgeThread() {
+        val blockingSource = listOf(
+            "src/main/java/moe/tekuza/m9player/MainActivity.kt",
+            "src/main/java/moe/tekuza/m9player/BookReaderActivity.kt",
+            "src/main/java/moe/tekuza/m9player/AudiobookFloatingOverlayService.kt",
+            "src/main/java/moe/tekuza/m9player/hoshi/features/dictionary/PopupWebViewMessages.kt",
+        ).joinToString("\n") { File(it).readText() }
+
+        assertFalse(
+            "Anki WebView bridge paths should dispatch to coroutine callbacks instead of blocking bridge/UI threads",
+            blockingSource.contains("runBlocking")
+        )
+        assertTrue(mainActivitySource.contains("onMineEntryAsync = { content, onComplete ->"))
+        assertTrue(mainActivitySource.contains("onDuplicateCheckAsync = { expression, onComplete ->"))
     }
 }

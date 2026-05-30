@@ -9,6 +9,7 @@ import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9ReadBookConfig
 import moe.tekuza.m9player.legado.reader.applyM9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.ImageColumn
+import moe.tekuza.m9player.legado.reader.entities.RubyLayoutEngine
 import moe.tekuza.m9player.legado.reader.entities.TextChapter
 import moe.tekuza.m9player.legado.reader.entities.TextColumn
 import moe.tekuza.m9player.legado.reader.entities.TextLine
@@ -31,16 +32,16 @@ internal class TextChapterLayout(
     private val paragraphSpacing = config.paragraphSpacingPx.coerceAtLeast(0f)
     private var lineHeight = baseLineHeight
     private var rubyReservePx = 0f
-    private var rubyByStart: Map<Int, EbookRubySpan> = emptyMap()
+    private var rubyByStart: Map<Int, RubyPlacement> = emptyMap()
 
     fun layout(chapter: TextChapter): TextChapter {
         rubyReservePx = if (chapter.rubySpans.isNotEmpty()) {
-            (config.textSizePx * 0.58f).coerceAtLeast(8f)
+            (config.textSizePx * RubyLayoutEngine.RESERVE_RATIO).coerceAtLeast(8f)
         } else {
             0f
         }
         lineHeight = baseLineHeight + rubyReservePx
-        rubyByStart = chapter.rubySpans.associateBy { it.start }
+        rubyByStart = buildRubyPlacements(chapter.rubySpans)
         val text = chapter.text
         if (text.isBlank()) {
             chapter.addPage(
@@ -280,6 +281,8 @@ internal class TextChapterLayout(
                 }
             } else {
                 val ruby = rubyByStart[sourceStart]
+                val rubyStart = ruby?.absoluteStart ?: sourceStart
+                val rubyEnd = ruby?.absoluteEnd ?: sourceEnd
                 line.addColumn(
                     TextColumn(
                         start = x,
@@ -288,8 +291,9 @@ internal class TextChapterLayout(
                         sourceStart = sourceStart,
                         sourceEnd = sourceEnd,
                         rubyText = ruby?.text,
-                        rubySourceStart = ruby?.start ?: sourceStart,
-                        rubySourceEnd = ruby?.end ?: sourceEnd
+                        rubySourceStart = rubyStart,
+                        rubySourceEnd = rubyEnd,
+                        rubySpan = ruby?.span
                     )
                 )
             }

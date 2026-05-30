@@ -1,4 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <lint>
     <issue id="IconDuplicates" severity="ignore" />
+    <issue id="ObsoleteSdkInt">
+        <ignore path="src/main/res/mipmap-anydpi-v26" />
+    </issue>
+    <issue id="IconLauncherShape">
+        <ignore path="src/main/res/mipmap-hdpi/ic_launcher.png" />
+        <ignore path="src/main/res/mipmap-mdpi/ic_launcher.png" />
+        <ignore path="src/main/res/mipmap-xhdpi/ic_launcher.png" />
+        <ignore path="src/main/res/mipmap-xxhdpi/ic_launcher.png" />
+        <ignore path="src/main/res/mipmap-xxxhdpi/ic_launcher.png" />
+        <ignore path="src/main/res/mipmap-hdpi/ic_launcher_round.png" />
+        <ignore path="src/main/res/mipmap-mdpi/ic_launcher_round.png" />
+        <ignore path="src/main/res/mipmap-xhdpi/ic_launcher_round.png" />
+        <ignore path="src/main/res/mipmap-xxhdpi/ic_launcher_round.png" />
+        <ignore path="src/main/res/mipmap-xxxhdpi/ic_launcher_round.png" />
+    </issue>
+    <issue id="MonochromeLauncherIcon">
+        <ignore path="src/main/res/mipmap-anydpi-v26/ic_launcher.xml" />
+        <ignore path="src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml" />
+    </issue>
 </lint>

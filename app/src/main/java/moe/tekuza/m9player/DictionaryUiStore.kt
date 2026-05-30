@@ -42,7 +42,7 @@ internal fun saveDictionaryOrderIds(context: Context, ids: List<String>) {
     context.getSharedPreferences(DICTIONARY_ORDER_PREFS, Context.MODE_PRIVATE)
         .edit()
         .putString(KEY_DICTIONARY_ORDER_IDS, normalized.joinToString("\n"))
-        .commit()
+        .apply()
 }
 
 internal fun moveDictionaryOrder(orderIds: List<String>, currentIds: List<String>, fromIndex: Int, toIndex: Int): List<String> {
