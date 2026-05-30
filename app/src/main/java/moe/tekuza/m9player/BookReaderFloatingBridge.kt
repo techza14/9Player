@@ -4,6 +4,15 @@ import android.content.Context
 import android.os.SystemClock
 
 object BookReaderFloatingBridge {
+    data class SubtitleTimelineCue(
+        val startMs: Long,
+        val endMs: Long,
+        val text: String,
+        val fullSentenceText: String? = null,
+        val fullSentenceStartMs: Long? = null,
+        val fullSentenceEndMs: Long? = null
+    )
+
     data class CueSnapshot(
         val text: String,
         val startMs: Long,
@@ -15,29 +24,8 @@ object BookReaderFloatingBridge {
         val fullSentenceEndMs: Long?
     )
 
-    interface Controller {
-        fun isPlaying(): Boolean
-        fun isFavorite(): Boolean
-        fun isCueLoopEnabled(): Boolean
-        fun togglePlayPause()
-        fun setPlaying(play: Boolean)
-        fun seekToPosition(targetPositionMs: Long)
-        fun setPlaybackSpeed(speed: Float)
-        fun seekPrevious()
-        fun seekNext()
-        fun replayCurrentCue()
-        fun toggleCueLoop()
-        fun toggleFavorite()
-        fun returnToPlayer()
-        fun lookupCurrentSubtitleAt(offset: Int)
-    }
-
     interface PlaybackStateListener {
         fun onPlaybackStateChanged(isPlaying: Boolean)
-    }
-
-    interface FavoriteStateListener {
-        fun onFavoriteStateChanged(isFavorite: Boolean)
     }
 
     interface SubtitleStateListener {
@@ -52,22 +40,12 @@ object BookReaderFloatingBridge {
         fun onPlaybackSpeedChanged(speed: Float)
     }
 
-    interface CueLoopStateListener {
-        fun onCueLoopStateChanged(enabled: Boolean)
-    }
-
-    @Volatile
-    private var controller: Controller? = null
     private val listeners = linkedSetOf<PlaybackStateListener>()
-    private val favoriteListeners = linkedSetOf<FavoriteStateListener>()
     private val subtitleListeners = linkedSetOf<SubtitleStateListener>()
     private val playbackPositionListeners = linkedSetOf<PlaybackPositionListener>()
     private val playbackSpeedListeners = linkedSetOf<PlaybackSpeedListener>()
-    private val cueLoopStateListeners = linkedSetOf<CueLoopStateListener>()
     @Volatile
     private var playingSnapshot: Boolean = false
-    @Volatile
-    private var favoriteSnapshot: Boolean = false
     @Volatile
     private var currentAudioUriSnapshot: String? = null
     @Volatile
@@ -76,14 +54,15 @@ object BookReaderFloatingBridge {
     private var subtitleSnapshot: String? = null
     @Volatile
     private var cueSnapshot: CueSnapshot? = null
+    private var subtitleTimelineSnapshot: List<SubtitleTimelineCue> = emptyList()
+    private var subtitleTimelineBookTitle: String? = null
+    private var subtitleTimelineAudioUri: String? = null
     @Volatile
     private var subtitleTrackAvailableSnapshot: Boolean = false
     @Volatile
     private var playbackPositionSnapshot: Long = 0L
     @Volatile
     private var playbackSpeedSnapshot: Float = 1f
-    @Volatile
-    private var cueLoopEnabledSnapshot: Boolean = false
     @Volatile
     private var statisticsContext: Context? = null
     @Volatile
@@ -97,46 +76,6 @@ object BookReaderFloatingBridge {
         val elapsedMs: Long
     )
 
-    fun attach(controller: Controller) {
-        synchronized(this) {
-            this.controller = controller
-            playingSnapshot = controller.isPlaying()
-            favoriteSnapshot = controller.isFavorite()
-            cueLoopEnabledSnapshot = controller.isCueLoopEnabled()
-        }
-        notifyPlaybackState(playingSnapshot)
-        notifyFavoriteState(favoriteSnapshot)
-        notifySubtitle(subtitleSnapshot)
-        notifyPlaybackPosition(playbackPositionSnapshot)
-        notifyPlaybackSpeed(playbackSpeedSnapshot)
-    }
-
-    fun detach(controller: Controller) {
-        val listeningStat: ListeningStat?
-        synchronized(this) {
-            if (this.controller === controller) {
-                listeningStat = flushListeningStatLocked()
-                this.controller = null
-                playingSnapshot = false
-                favoriteSnapshot = false
-                subtitleSnapshot = null
-                cueSnapshot = null
-                subtitleTrackAvailableSnapshot = false
-                cueLoopEnabledSnapshot = false
-                currentBookKeySnapshot = null
-                resetListeningStatLocked()
-            } else {
-                listeningStat = null
-            }
-        }
-        listeningStat?.let { recordStatisticsListening(it.context, it.bookKey, it.elapsedMs) }
-        notifyPlaybackState(playingSnapshot)
-        notifyFavoriteState(favoriteSnapshot)
-        notifySubtitle(subtitleSnapshot)
-        notifyPlaybackPosition(0L)
-        notifyPlaybackSpeed(1f)
-    }
-
     fun addPlaybackStateListener(listener: PlaybackStateListener) {
         synchronized(this) {
             listeners += listener
@@ -147,19 +86,6 @@ object BookReaderFloatingBridge {
     fun removePlaybackStateListener(listener: PlaybackStateListener) {
         synchronized(this) {
             listeners -= listener
-        }
-    }
-
-    fun addFavoriteStateListener(listener: FavoriteStateListener) {
-        synchronized(this) {
-            favoriteListeners += listener
-        }
-        listener.onFavoriteStateChanged(favoriteSnapshot)
-    }
-
-    fun removeFavoriteStateListener(listener: FavoriteStateListener) {
-        synchronized(this) {
-            favoriteListeners -= listener
         }
     }
 
@@ -202,19 +128,6 @@ object BookReaderFloatingBridge {
         }
     }
 
-    fun addCueLoopStateListener(listener: CueLoopStateListener) {
-        synchronized(this) {
-            cueLoopStateListeners += listener
-        }
-        listener.onCueLoopStateChanged(cueLoopEnabledSnapshot)
-    }
-
-    fun removeCueLoopStateListener(listener: CueLoopStateListener) {
-        synchronized(this) {
-            cueLoopStateListeners -= listener
-        }
-    }
-
     fun notifyPlaybackState(isPlaying: Boolean) {
         val snapshot: List<PlaybackStateListener>
         val listeningStat: ListeningStat?
@@ -232,18 +145,33 @@ object BookReaderFloatingBridge {
         snapshot.forEach { it.onPlaybackStateChanged(isPlaying) }
     }
 
-    fun isPlaying(): Boolean = playingSnapshot
-    fun isFavorite(): Boolean = favoriteSnapshot
+    fun isPlaying(): Boolean = if (BookReaderPlaybackSession.currentAudioUri() != null) {
+        BookReaderPlaybackSession.isPlaying()
+    } else {
+        playingSnapshot
+    }
     fun currentAudioUri(): String? = currentAudioUriSnapshot
     fun isUiTestModeActive(): Boolean = uiTestModeSnapshot
-    fun currentSubtitle(): String? = subtitleSnapshot
-    fun currentCue(): CueSnapshot? = cueSnapshot
+    fun currentSubtitle(): String? = synchronized(this) {
+        if (subtitleTimelineSnapshot.isNotEmpty()) {
+            subtitleTimelineCueAtPositionLocked(currentPlaybackPositionMs())?.text
+        } else {
+            subtitleSnapshot
+        }
+    }
+    fun currentCue(): CueSnapshot? = synchronized(this) {
+        if (subtitleTimelineSnapshot.isNotEmpty()) {
+            subtitleTimelineCueAtPositionLocked(currentPlaybackPositionMs())
+        } else {
+            cueSnapshot
+        }
+    }
     fun hasSubtitleTrack(): Boolean = subtitleTrackAvailableSnapshot
-    fun currentPlaybackPositionMs(): Long = playbackPositionSnapshot
-    fun currentPlaybackSpeed(): Float = playbackSpeedSnapshot
-    fun isCueLoopEnabled(): Boolean = cueLoopEnabledSnapshot
+    fun currentPlaybackPositionMs(): Long =
+        if (BookReaderPlaybackSession.currentAudioUri() != null) BookReaderPlaybackSession.currentPositionMs() else playbackPositionSnapshot
+    fun currentPlaybackSpeed(): Float =
+        if (BookReaderPlaybackSession.currentAudioUri() != null) BookReaderPlaybackSession.currentPlaybackSpeed() else playbackSpeedSnapshot
     fun currentBookKey(): String? = currentBookKeySnapshot
-    fun hasController(): Boolean = controller != null
 
     fun setCurrentBookKey(context: Context, bookKey: String?) {
         val normalized = bookKey?.trim()?.takeIf { it.isNotBlank() }
@@ -270,59 +198,45 @@ object BookReaderFloatingBridge {
         }
     }
 
-    fun setCurrentCue(
-        text: String?,
-        startMs: Long?,
-        endMs: Long?,
+    fun setSubtitleTimeline(
         bookTitle: String?,
         audioUri: String?,
-        fullSentenceText: String?,
-        fullSentenceStartMs: Long?,
-        fullSentenceEndMs: Long?
+        cues: List<SubtitleTimelineCue>
     ) {
+        val listeners: List<SubtitleStateListener>
+        val nextText: String?
         synchronized(this) {
-            cueSnapshot = if (text.isNullOrBlank() || startMs == null || endMs == null) {
-                null
-            } else {
-                CueSnapshot(
-                    text = text,
-                    startMs = startMs,
-                    endMs = endMs,
-                    bookTitle = bookTitle?.takeIf { it.isNotBlank() },
-                    audioUri = audioUri?.takeIf { it.isNotBlank() },
-                    fullSentenceText = fullSentenceText?.trim()?.takeIf { it.isNotBlank() },
-                    fullSentenceStartMs = fullSentenceStartMs,
-                    fullSentenceEndMs = fullSentenceEndMs
-                )
-            }
+            val previousText = subtitleSnapshot
+            subtitleTimelineSnapshot = cues
+                .filter { it.text.isNotBlank() && it.endMs > it.startMs }
+                .sortedBy { it.startMs }
+            subtitleTimelineBookTitle = bookTitle?.takeIf { it.isNotBlank() }
+            subtitleTimelineAudioUri = audioUri?.takeIf { it.isNotBlank() }
+            subtitleTrackAvailableSnapshot = subtitleTimelineSnapshot.isNotEmpty()
+            cueSnapshot = subtitleTimelineCueAtPositionLocked(currentPlaybackPositionMs())
+            subtitleSnapshot = cueSnapshot?.text
+            listeners = if (previousText != subtitleSnapshot) subtitleListeners.toList() else emptyList()
+            nextText = subtitleSnapshot
         }
-    }
-
-    fun setSubtitleTrackAvailable(available: Boolean) {
-        subtitleTrackAvailableSnapshot = available
-    }
-
-    fun notifySubtitle(text: String?) {
-        val normalized = text?.trim()?.takeIf { it.isNotEmpty() }
-        val snapshot: List<SubtitleStateListener>
-        synchronized(this) {
-            subtitleSnapshot = normalized
-            snapshot = subtitleListeners.toList()
-        }
-        snapshot.forEach { it.onSubtitleChanged(normalized) }
+        listeners.forEach { it.onSubtitleChanged(nextText) }
     }
 
     fun notifyPlaybackPosition(positionMs: Long) {
         val normalized = positionMs.coerceAtLeast(0L)
         val snapshot: List<PlaybackPositionListener>
+        val subtitleSnapshotListeners: List<SubtitleStateListener>
+        val subtitleText: String?
         val listeningStat: ListeningStat?
         synchronized(this) {
             playbackPositionSnapshot = normalized
             snapshot = playbackPositionListeners.toList()
             listeningStat = accumulateListeningStatLocked(SystemClock.elapsedRealtime())
+            subtitleSnapshotListeners = updateTimelineCueAtPositionLocked(normalized)
+            subtitleText = subtitleSnapshot
         }
         listeningStat?.let { recordStatisticsListening(it.context, it.bookKey, it.elapsedMs) }
         snapshot.forEach { it.onPlaybackPositionChanged(normalized) }
+        subtitleSnapshotListeners.forEach { it.onSubtitleChanged(subtitleText) }
     }
 
     private fun accumulateListeningStatLocked(nowMs: Long): ListeningStat? {
@@ -372,69 +286,90 @@ object BookReaderFloatingBridge {
         snapshot.forEach { it.onPlaybackSpeedChanged(normalized) }
     }
 
-    fun notifyFavoriteState(isFavorite: Boolean) {
-        val snapshot: List<FavoriteStateListener>
-        synchronized(this) {
-            favoriteSnapshot = isFavorite
-            snapshot = favoriteListeners.toList()
-        }
-        snapshot.forEach { it.onFavoriteStateChanged(isFavorite) }
-    }
-
-    fun notifyCueLoopState(enabled: Boolean) {
-        val snapshot: List<CueLoopStateListener>
-        synchronized(this) {
-            cueLoopEnabledSnapshot = enabled
-            snapshot = cueLoopStateListeners.toList()
-        }
-        snapshot.forEach { it.onCueLoopStateChanged(enabled) }
-    }
-
     fun togglePlayPause() {
-        controller?.togglePlayPause()
+        BookReaderPlaybackSession.togglePlayPause()
+        notifyPlaybackState(BookReaderPlaybackSession.isPlaying())
     }
 
     fun setPlaying(play: Boolean) {
-        controller?.setPlaying(play)
+        BookReaderPlaybackSession.setPlaying(play)
+        notifyPlaybackState(BookReaderPlaybackSession.isPlaying())
     }
 
     fun seekToPosition(targetPositionMs: Long) {
-        controller?.seekToPosition(targetPositionMs.coerceAtLeast(0L))
+        val normalized = targetPositionMs.coerceAtLeast(0L)
+        BookReaderPlaybackSession.seekToPosition(normalized)
+        notifyPlaybackPosition(BookReaderPlaybackSession.currentPositionMs())
     }
 
     fun setPlaybackSpeed(speed: Float) {
-        controller?.setPlaybackSpeed(speed)
+        BookReaderPlaybackSession.setPlaybackSpeed(speed)
+        notifyPlaybackSpeed(BookReaderPlaybackSession.currentPlaybackSpeed())
     }
 
     fun seekPrevious() {
-        controller?.seekPrevious()
+        BookReaderPlaybackSession.seekPrevious()
+        notifyPlaybackPosition(BookReaderPlaybackSession.currentPositionMs())
     }
 
     fun seekNext() {
-        controller?.seekNext()
+        BookReaderPlaybackSession.seekNext()
+        notifyPlaybackPosition(BookReaderPlaybackSession.currentPositionMs())
     }
 
     fun replayCurrentCue() {
-        controller?.replayCurrentCue()
+        val cueStartMs = currentCue()?.startMs ?: return
+        BookReaderPlaybackSession.seekToPosition(cueStartMs)
+        notifyPlaybackPosition(BookReaderPlaybackSession.currentPositionMs())
     }
 
-    fun toggleCueLoop() {
-        val before = cueLoopEnabledSnapshot
-        controller?.toggleCueLoop()
-        val after = controller?.isCueLoopEnabled() ?: !before
-        notifyCueLoopState(after)
+    fun refreshSubtitleForCurrentPlaybackPosition(): CueSnapshot? {
+        val positionMs = currentPlaybackPositionMs()
+        val subtitleSnapshotListeners: List<SubtitleStateListener>
+        val subtitleText: String?
+        val cue: CueSnapshot?
+        synchronized(this) {
+            subtitleSnapshotListeners = updateTimelineCueAtPositionLocked(positionMs)
+            subtitleText = subtitleSnapshot
+            cue = cueSnapshot
+        }
+        subtitleSnapshotListeners.forEach { it.onSubtitleChanged(subtitleText) }
+        return cue
     }
 
-    fun toggleFavorite() {
-        controller?.toggleFavorite()
+    private fun updateTimelineCueAtPositionLocked(positionMs: Long): List<SubtitleStateListener> {
+        if (subtitleTimelineSnapshot.isEmpty()) return emptyList()
+        val nextCue = subtitleTimelineCueAtPositionLocked(positionMs)
+        if (nextCue == cueSnapshot && nextCue?.text == subtitleSnapshot) return emptyList()
+        cueSnapshot = nextCue
+        subtitleSnapshot = nextCue?.text
+        return subtitleListeners.toList()
     }
 
-    fun returnToPlayer() {
-        controller?.returnToPlayer()
-    }
-
-    fun lookupCurrentSubtitleAt(offset: Int) {
-        controller?.lookupCurrentSubtitleAt(offset)
+    private fun subtitleTimelineCueAtPositionLocked(positionMs: Long): CueSnapshot? {
+        val cues = subtitleTimelineSnapshot
+        if (cues.isEmpty()) return null
+        var low = 0
+        var high = cues.lastIndex
+        while (low <= high) {
+            val mid = (low + high) ushr 1
+            val cue = cues[mid]
+            when {
+                positionMs < cue.startMs -> high = mid - 1
+                positionMs >= cue.endMs -> low = mid + 1
+                else -> return CueSnapshot(
+                    text = cue.text,
+                    startMs = cue.startMs,
+                    endMs = cue.endMs,
+                    bookTitle = subtitleTimelineBookTitle,
+                    audioUri = subtitleTimelineAudioUri,
+                    fullSentenceText = cue.fullSentenceText?.takeIf { it.isNotBlank() } ?: cue.text,
+                    fullSentenceStartMs = cue.fullSentenceStartMs ?: cue.startMs,
+                    fullSentenceEndMs = cue.fullSentenceEndMs ?: cue.endMs
+                )
+            }
+        }
+        return null
     }
 }
 

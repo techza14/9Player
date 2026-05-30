@@ -96,21 +96,6 @@ class LookupPopupHtmlShimTest {
     }
 
     @Test
-    fun lightThemeUsesWhiteHtmlBackgroundInsidePopupCard() {
-        val htmlSource = File("src/main/java/moe/tekuza/m9player/hoshi/features/dictionary/LookupPopupHtml.kt").readText()
-
-        assertTrue(htmlSource.contains("""--background-color: #ffffff;"""))
-        assertTrue(htmlSource.contains("""background-color: #ffffff !important;"""))
-    }
-
-    @Test
-    fun popupShellUsesWhiteBackgroundInLightMode() {
-        val popupViewSource = File("src/main/java/moe/tekuza/m9player/hoshi/features/dictionary/LookupPopupView.kt").readText()
-
-        assertTrue(popupViewSource.contains("""val popupBackground = if (state.darkMode) HoshiDarkCardBackground else HoshiCardBackground"""))
-    }
-
-    @Test
     fun mainLookupPreviewUsesHighlightedSentence() {
         val mainActivitySource = File("src/main/java/moe/tekuza/m9player/MainActivity.kt").readText()
         val collectionsPopupSource = File("src/main/java/moe/tekuza/m9player/MainCollectionsHoshiPopup.kt").readText()

@@ -7,10 +7,12 @@ import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.legado.reader.page.ReadView
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.LocalDate
 
 private const val LEGADO_READER_SETTINGS_PREFS = "legado_reader_settings"
 private const val LEGADO_READER_SETTINGS_KEY = "legado_reader_settings_json"
 private const val LEGADO_READER_BOOK_ANCHORS_KEY = "legado_reader_book_anchors_json"
+private const val LEGADO_READER_SIMULATED_READING_KEY = "legado_reader_simulated_reading_json"
 internal const val DEFAULT_LEGADO_READER_STYLE_INDEX = 1
 
 internal data class LegadoReaderStyleConfig(
@@ -166,6 +168,33 @@ internal data class LegadoReaderBookAnchor(
     val chapterIndex: Int,
     val charPosition: Int
 )
+
+internal data class SimulatedReadingConfig(
+    val enabled: Boolean = false,
+    val startEpochDay: Long = currentSimulatedReadingEpochDay(),
+    val startChapter: Int = 1,
+    val dailyChapters: Int = 1
+)
+
+internal fun currentSimulatedReadingEpochDay(): Long = LocalDate.now().toEpochDay()
+
+internal fun simulatedReadingDateLabel(epochDay: Long): String {
+    return runCatching { LocalDate.ofEpochDay(epochDay).toString() }
+        .getOrDefault(LocalDate.now().toString())
+}
+
+internal fun simulatedReadingUnlockedChapterCount(
+    config: SimulatedReadingConfig,
+    realChapterCount: Int,
+    todayEpochDay: Long = currentSimulatedReadingEpochDay()
+): Int {
+    if (realChapterCount <= 0) return 0
+    if (!config.enabled) return realChapterCount
+    val daysPassed = (todayEpochDay - config.startEpochDay).coerceAtLeast(0L)
+    val unlocked = config.startChapter.coerceAtLeast(1).toLong() +
+        daysPassed * config.dailyChapters.coerceAtLeast(1).toLong()
+    return unlocked.coerceIn(1L, realChapterCount.toLong()).toInt()
+}
 
 internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersistedState {
     val raw = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
@@ -506,5 +535,44 @@ internal fun saveLegadoReaderBookAnchor(
     )
     prefs.edit()
         .putString(LEGADO_READER_BOOK_ANCHORS_KEY, root.toString())
+        .apply()
+}
+
+internal fun loadSimulatedReadingConfig(context: Context, bookUri: String?): SimulatedReadingConfig {
+    val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return SimulatedReadingConfig()
+    val raw = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .getString(LEGADO_READER_SIMULATED_READING_KEY, null)
+        ?: return SimulatedReadingConfig()
+    val root = runCatching { JSONObject(raw) }.getOrNull() ?: return SimulatedReadingConfig()
+    val item = root.optJSONObject(key) ?: return SimulatedReadingConfig()
+    return SimulatedReadingConfig(
+        enabled = item.optBoolean("enabled", false),
+        startEpochDay = item.optLong("startEpochDay", currentSimulatedReadingEpochDay()),
+        startChapter = item.optInt("startChapter", 1).coerceAtLeast(1),
+        dailyChapters = item.optInt("dailyChapters", 1).coerceAtLeast(1)
+    )
+}
+
+internal fun saveSimulatedReadingConfig(
+    context: Context,
+    bookUri: String?,
+    config: SimulatedReadingConfig
+) {
+    val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return
+    val prefs = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
+    val root = prefs.getString(LEGADO_READER_SIMULATED_READING_KEY, null)
+        ?.let { runCatching { JSONObject(it) }.getOrNull() }
+        ?: JSONObject()
+    root.put(
+        key,
+        JSONObject().apply {
+            put("enabled", config.enabled)
+            put("startEpochDay", config.startEpochDay)
+            put("startChapter", config.startChapter.coerceAtLeast(1))
+            put("dailyChapters", config.dailyChapters.coerceAtLeast(1))
+        }
+    )
+    prefs.edit()
+        .putString(LEGADO_READER_SIMULATED_READING_KEY, root.toString())
         .apply()
 }

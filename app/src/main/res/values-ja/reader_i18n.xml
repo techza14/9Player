@@ -140,7 +140,6 @@
     <string name="reader_catalog_search_chapters">目次を検索</string>
     <string name="reader_catalog_search_bookmarks">しおりを検索</string>
     <string name="reader_unknown_chapter">不明な章</string>
-    <string name="reader_info_debug">ページ %1$d、章 %2$d</string>
     <string name="reader_indent_none">字下げなし</string>
     <string name="reader_indent_one">1文字字下げ</string>
     <string name="reader_indent_two">2文字字下げ</string>
@@ -153,14 +152,7 @@
     <string name="reader_margin_label">余白：%1$ddp</string>
     <string name="reader_title_margin">余白</string>
     <string name="reader_dialog_done">完了</string>
-    <string name="reader_info_show">ヘッダー/フッターを表示</string>
-    <string name="reader_info_hide">ヘッダー/フッターを非表示</string>
-    <string name="reader_info_show_title">書名を表示</string>
-    <string name="reader_info_show_time">時刻を表示</string>
-    <string name="reader_info_show_page">ページ番号を表示</string>
-    <string name="reader_info_show_progress">進捗を表示</string>
     <string name="reader_title_info">補足情報</string>
-    <string name="reader_info_saved">ヘッダー/フッター表示状態を保存しました</string>
     <string name="reader_open_ebook_failed">ebook を開けませんでした：%1$s</string>
     <string name="reader_pause">一時停止</string>
     <string name="reader_listen">聴く</string>
@@ -188,4 +180,12 @@
     <string name="reader_srt_parse_failed_detail">SRT から字幕を解析できませんでした。標準的な .srt ファイルか確認してください。</string>
     <string name="reader_srt_load_failed">SRT 読み込み失敗：%1$s</string>
     <string name="reader_match_search_window">Search Window: %1$d</string>
+    <string name="reader_simulated_reading_title">追読シミュレーション</string>
+    <string name="reader_simulated_reading_switch">スイッチ</string>
+    <string name="reader_simulated_reading_enable">追読シミュレーションを有効化</string>
+    <string name="reader_simulated_reading_start_date">開始日</string>
+    <string name="reader_simulated_reading_start_date_value">開始日：%1$s</string>
+    <string name="reader_simulated_reading_start_chapter">開始章</string>
+    <string name="reader_simulated_reading_daily_chapters">1日あたりの章数</string>
+    <string name="reader_simulated_reading_locked">この章はまだ解放されていません</string>
 </resources>

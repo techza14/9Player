@@ -140,7 +140,6 @@
     <string name="reader_catalog_search_chapters">搜索目录</string>
     <string name="reader_catalog_search_bookmarks">搜索书签</string>
     <string name="reader_unknown_chapter">未知章节</string>
-    <string name="reader_info_debug">页数 %1$d，章节 %2$d</string>
     <string name="reader_indent_none">无缩进</string>
     <string name="reader_indent_one">一字缩进</string>
     <string name="reader_indent_two">两字缩进</string>
@@ -153,14 +152,7 @@
     <string name="reader_margin_label">边距：%1$ddp</string>
     <string name="reader_title_margin">边距</string>
     <string name="reader_dialog_done">完成</string>
-    <string name="reader_info_show">显示页眉页脚</string>
-    <string name="reader_info_hide">隐藏页眉页脚</string>
-    <string name="reader_info_show_title">显示书名</string>
-    <string name="reader_info_show_time">显示时间</string>
-    <string name="reader_info_show_page">显示页码</string>
-    <string name="reader_info_show_progress">显示进度</string>
     <string name="reader_title_info">提示信息</string>
-    <string name="reader_info_saved">页眉页脚显示状态已保存</string>
     <string name="reader_open_ebook_failed">打开 ebook 失败：%1$s</string>
     <string name="reader_pause">暂停</string>
     <string name="reader_listen">听书</string>
@@ -188,6 +180,14 @@
     <string name="reader_srt_parse_failed_detail">SRT 没有解析出字幕，请确认文件是标准 .srt。</string>
     <string name="reader_srt_load_failed">SRT 加载失败：%1$s</string>
     <string name="reader_match_search_window">Search Window: %1$d</string>
+    <string name="reader_simulated_reading_title">模拟追读</string>
+    <string name="reader_simulated_reading_switch">开关</string>
+    <string name="reader_simulated_reading_enable">启用模拟追读</string>
+    <string name="reader_simulated_reading_start_date">开始日期</string>
+    <string name="reader_simulated_reading_start_date_value">开始日期：%1$s</string>
+    <string name="reader_simulated_reading_start_chapter">起始章节</string>
+    <string name="reader_simulated_reading_daily_chapters">每日章节数</string>
+    <string name="reader_simulated_reading_locked">章节尚未解锁</string>
 
     <string-array name="reader_screen_direction_titles">
         <item>@string/screen_unspecified</item>
@@ -217,8 +217,4 @@
         <item>@string/reader_font_monospace</item>
     </string-array>
 
-    <string-array name="reader_info_titles">
-        <item>@string/reader_info_show</item>
-        <item>@string/reader_info_hide</item>
-    </string-array>
 </resources>

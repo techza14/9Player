@@ -447,15 +447,6 @@ std::string build_import_json(const ImportResult& result, const std::string& out
 
 jstring to_jstring(JNIEnv* env, const std::string& value) { return env->NewStringUTF(value.c_str()); }
 
-jobject new_import_result(JNIEnv* env, const ImportResult& result) {
-  jclass cls = env->FindClass("de/manhhao/hoshi/ImportResult");
-  jmethodID ctor = env->GetMethodID(cls, "<init>", "(ZJJJ)V");
-  return env->NewObject(cls, ctor, static_cast<jboolean>(result.success),
-                        static_cast<jlong>(result.term_count),
-                        static_cast<jlong>(result.meta_count),
-                        static_cast<jlong>(result.media_count));
-}
-
 jstring new_string(JNIEnv* env, const std::string& value) { return to_jstring(env, value); }
 
 jobject new_frequency(JNIEnv* env, const Frequency& frequency) {
@@ -642,11 +633,6 @@ Java_de_manhhao_hoshi_HoshiDicts_createLookupObject(JNIEnv*, jobject) {
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_de_manhhao_hoshi_HoshiDicts_destroyLookupObject(JNIEnv*, jobject, jlong session) {
-  delete reinterpret_cast<LookupContext*>(session);
-}
-
-extern "C" JNIEXPORT void JNICALL
 Java_de_manhhao_hoshi_HoshiDicts_rebuildQuery(JNIEnv* env,
                                               jobject,
                                               jlong session,
@@ -670,26 +656,6 @@ Java_de_manhhao_hoshi_HoshiDicts_rebuildQuery(JNIEnv* env,
   for (const auto& path : jstring_array_to_vector(env, pitch_paths)) {
     obj->dictionary_paths.push_back(path);
     obj->query.add_pitch_dict(path);
-  }
-}
-
-extern "C" JNIEXPORT jobject JNICALL
-Java_de_manhhao_hoshi_HoshiDicts_importDictionary(JNIEnv* env,
-                                                  jobject,
-                                                  jstring zip_path,
-                                                  jstring output_dir) {
-  try {
-    const std::string zip_path_str = jstring_to_string(env, zip_path);
-    const std::string output_dir_str = jstring_to_string(env, output_dir);
-    if (zip_path_str.empty() || output_dir_str.empty()) {
-      return new_import_result(env, ImportResult{false, "", "", 0, 0, 0, {"invalid import path"}});
-    }
-    const ImportResult result = dictionary_importer::import(zip_path_str, output_dir_str, true);
-    return new_import_result(env, result);
-  } catch (const std::exception& e) {
-    return new_import_result(env, ImportResult{false, "", "", 0, 0, 0, {e.what()}});
-  } catch (...) {
-    return new_import_result(env, ImportResult{false, "", "", 0, 0, 0, {"unknown native import error"}});
   }
 }
 

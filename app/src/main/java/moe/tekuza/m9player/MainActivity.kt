@@ -185,6 +185,11 @@ class MainActivity : AppCompatActivity() {
             (settings.floatingOverlayEnabled || settings.floatingOverlaySubtitleEnabled) &&
                 BookReaderFloatingBridge.currentAudioUri() != null &&
                 BookReaderFloatingBridge.isPlaying()
+        Log.d(
+            FLOATING_OVERLAY_EXIT_LOG_TAG,
+            "Main onStart keepOverlay=$keepOverlay audio=${BookReaderFloatingBridge.currentAudioUri() != null} " +
+                "playing=${BookReaderFloatingBridge.isPlaying()}"
+        )
         if (!keepOverlay) {
             stopAudiobookFloatingOverlayService(this)
         }
@@ -327,6 +332,7 @@ private val FIELD_VARIABLE_CHOICES = listOf(
 )
 private const val MAIN_LOOKUP_DEBUG_LOG_TAG = "MainLookupDebug"
 private const val ANKI_CONFIG_LOG_TAG = "AnkiConfig"
+private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
 
 internal data class ReaderBook(
     val id: String,
@@ -466,7 +472,6 @@ private fun ReaderSyncScreen() {
     var collectionFirstLayerHtml by remember { mutableStateOf("") }
     var collectionFirstLayerResults by remember { mutableStateOf<List<LookupResult>>(emptyList()) }
     var collectionFirstLayerClearSelectionSignal by remember { mutableStateOf(0) }
-    var mainLookupRequestNonce by remember { mutableStateOf(0L) }
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
     var versionTapCount by remember { mutableStateOf(0) }
     var showVersionEasterGif by remember { mutableStateOf(false) }
@@ -474,7 +479,6 @@ private fun ReaderSyncScreen() {
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
-    var dragProgress by remember { mutableStateOf<Float?>(null) }
     var pendingCollectionPlayMs by remember { mutableStateOf<Long?>(null) }
     var pendingCollectionStopMs by remember { mutableStateOf<Long?>(null) }
     var collectionPlayRequestNonce by remember { mutableStateOf(0L) }
@@ -2182,7 +2186,6 @@ private fun ReaderSyncScreen() {
     }
     val sliderValue = when {
         durationMs <= 0L -> 0f
-        dragProgress != null -> dragProgress!!.coerceIn(0f, 1f)
         else -> (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     }
 

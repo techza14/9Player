@@ -17,7 +17,6 @@
     <string name="common_delete">削除</string>
     <string name="common_play">再生</string>
     <string name="common_pause">一時停止</string>
-    <string name="common_stop">停止</string>
     <string name="common_lookup">辞書</string>
     <string name="common_loading">読み込み中...</string>
     <string name="common_not_selected">未選択</string>
@@ -356,8 +355,6 @@
     <string name="audiobook_overlay_mode_changed">フローティングを切り替えました：%1$s</string>
     <string name="audiobook_overlay_test_button">フローティングをテスト</string>
     <string name="audiobook_overlay_preview_swipe_hint">左右にスワイプして実際のフローティングを切り替え、ダブルタップで終了して適用します。</string>
-    <string name="audiobook_overlay_playback_active">バックグラウンドで再生中</string>
-    <string name="audiobook_overlay_playback_paused">再生を一時停止中</string>
     <string name="audiobook_overlay_mode_subtitle">フローティング字幕</string>
     <string name="audiobook_overlay_mode_bubble">フローティングバブル</string>
     <string name="audiobook_overlay_mode_both">字幕 + バブル</string>

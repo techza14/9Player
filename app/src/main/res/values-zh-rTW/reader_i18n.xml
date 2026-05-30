@@ -140,7 +140,6 @@
     <string name="reader_catalog_search_chapters">搜尋目錄</string>
     <string name="reader_catalog_search_bookmarks">搜尋書籤</string>
     <string name="reader_unknown_chapter">未知章節</string>
-    <string name="reader_info_debug">頁數 %1$d，章節 %2$d</string>
     <string name="reader_indent_none">無縮排</string>
     <string name="reader_indent_one">一字縮排</string>
     <string name="reader_indent_two">兩字縮排</string>
@@ -153,14 +152,7 @@
     <string name="reader_margin_label">邊距：%1$ddp</string>
     <string name="reader_title_margin">邊距</string>
     <string name="reader_dialog_done">完成</string>
-    <string name="reader_info_show">顯示頁眉頁腳</string>
-    <string name="reader_info_hide">隱藏頁眉頁腳</string>
-    <string name="reader_info_show_title">顯示書名</string>
-    <string name="reader_info_show_time">顯示時間</string>
-    <string name="reader_info_show_page">顯示頁碼</string>
-    <string name="reader_info_show_progress">顯示進度</string>
     <string name="reader_title_info">提示資訊</string>
-    <string name="reader_info_saved">頁眉頁腳顯示狀態已儲存</string>
     <string name="reader_open_ebook_failed">開啟 ebook 失敗：%1$s</string>
     <string name="reader_pause">暫停</string>
     <string name="reader_listen">聽書</string>
@@ -188,4 +180,12 @@
     <string name="reader_srt_parse_failed_detail">SRT 沒有解析出字幕，請確認檔案是標準 .srt。</string>
     <string name="reader_srt_load_failed">SRT 載入失敗：%1$s</string>
     <string name="reader_match_search_window">Search Window: %1$d</string>
+    <string name="reader_simulated_reading_title">模擬追讀</string>
+    <string name="reader_simulated_reading_switch">開關</string>
+    <string name="reader_simulated_reading_enable">啟用模擬追讀</string>
+    <string name="reader_simulated_reading_start_date">開始日期</string>
+    <string name="reader_simulated_reading_start_date_value">開始日期：%1$s</string>
+    <string name="reader_simulated_reading_start_chapter">起始章節</string>
+    <string name="reader_simulated_reading_daily_chapters">每日章節數</string>
+    <string name="reader_simulated_reading_locked">章節尚未解鎖</string>
 </resources>

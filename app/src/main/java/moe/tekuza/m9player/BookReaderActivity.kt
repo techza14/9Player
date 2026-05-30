@@ -192,6 +192,7 @@ private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
 private const val BOOK_LOOKUP_SELECTION_LOG_TAG = "BookLookupSelection"
 private const val BOOK_READER_BACK_LOG_TAG = "BookReaderBack"
 private const val BOOK_UI_MODE_LOG_TAG = "BookUiMode"
+private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
 private const val BOOK_VERTICAL_TAP_DEBUG_OVERLAY = false
 private const val BOOK_CUE_LOOP_LOG_TAG = "BookCueLoop"
 private const val BOOK_VERTICAL_COLUMN_WIDTH_FACTOR = 1.0f
@@ -272,9 +273,6 @@ class BookReaderActivity : AppCompatActivity() {
                                 putExtra(EXTRA_RETURN_POSITION_MS, normalized)
                                 putExtra(EXTRA_RETURN_DURATION_MS, currentDurationMs.coerceAtLeast(0L))
                             }
-                            if (loadAudiobookSettingsConfig(this).floatingOverlayShowOnReaderExit) {
-                                startAudiobookFloatingOverlayService(this)
-                            }
                             startActivity(intent)
                         }
                     }
@@ -296,18 +294,31 @@ class BookReaderActivity : AppCompatActivity() {
         val settings = loadAudiobookSettingsConfig(this)
         floatingOverlayStartJob?.cancel()
         val overlayEnabled = settings.floatingOverlayEnabled || settings.floatingOverlaySubtitleEnabled
-        if (isChangingConfigurations || !overlayEnabled || !BookReaderFloatingBridge.isPlaying()) return
+        val playing = BookReaderFloatingBridge.isPlaying()
+        Log.d(
+            FLOATING_OVERLAY_EXIT_LOG_TAG,
+            "BookReader onStop changing=$isChangingConfigurations overlayEnabled=$overlayEnabled " +
+                "showOnReaderExit=${settings.floatingOverlayShowOnReaderExit} playing=$playing"
+        )
+        if (isChangingConfigurations || !overlayEnabled || !playing) return
 
         floatingOverlayStartJob = lifecycleScope.launch {
             delay(150L)
-            if (
-                !isAppProcessInForeground(this@BookReaderActivity) &&
-                run {
-                    val refreshed = loadAudiobookSettingsConfig(this@BookReaderActivity)
-                    refreshed.floatingOverlayEnabled || refreshed.floatingOverlaySubtitleEnabled
-                } &&
-                BookReaderFloatingBridge.isPlaying()
-            ) {
+            val refreshed = loadAudiobookSettingsConfig(this@BookReaderActivity)
+            val refreshedOverlayEnabled =
+                refreshed.floatingOverlayEnabled || refreshed.floatingOverlaySubtitleEnabled
+            val appForeground = isAppProcessInForeground(this@BookReaderActivity)
+            val shouldShowAfterReaderExit =
+                refreshed.floatingOverlayShowOnReaderExit || !appForeground
+            val stillPlaying = BookReaderFloatingBridge.isPlaying()
+            Log.d(
+                FLOATING_OVERLAY_EXIT_LOG_TAG,
+                "BookReader delayed overlayEnabled=$refreshedOverlayEnabled appForeground=$appForeground " +
+                    "showOnReaderExit=${refreshed.floatingOverlayShowOnReaderExit} " +
+                    "shouldShow=$shouldShowAfterReaderExit playing=$stillPlaying"
+            )
+            if (refreshedOverlayEnabled && shouldShowAfterReaderExit && stillPlaying) {
+                Log.d(FLOATING_OVERLAY_EXIT_LOG_TAG, "BookReader starting overlay service")
                 startAudiobookFloatingOverlayService(this@BookReaderActivity)
             }
         }
@@ -703,12 +714,10 @@ private fun BookReaderScreen(
     var playbackRestoreCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
     var playbackCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    var playbackFadeJob by remember { mutableStateOf<Job?>(null) }
     val player = remember(context) {
         BookReaderPlaybackSession.acquirePlayer(context)
     }
     fun setLookupPlaybackState(play: Boolean) {
-        playbackFadeJob?.cancel()
         player.volume = 1f
         if (play) player.play() else player.pause()
     }
@@ -842,9 +851,6 @@ private fun BookReaderScreen(
     }
 
     LaunchedEffect(hasSubtitleFile, uiTestMode) {
-        if (!uiTestMode) {
-            BookReaderFloatingBridge.setSubtitleTrackAvailable(hasSubtitleFile)
-        }
         if (!hasSubtitleFile && controlModeEnabled) {
             controlModeEnabled = false
             controlModeStatus = null
@@ -1211,14 +1217,27 @@ private fun BookReaderScreen(
             BookReaderFloatingBridge.setCurrentBookKey(context, playbackPositionKey)
         }
     }
-    LaunchedEffect(activeCue?.text, uiTestMode) {
-        if (!uiTestMode) {
-            BookReaderFloatingBridge.notifySubtitle(activeCue?.text)
-        }
-    }
     LaunchedEffect(positionMs, uiTestMode) {
         if (!uiTestMode) {
             BookReaderFloatingBridge.notifyPlaybackPosition(positionMs)
+        }
+    }
+    LaunchedEffect(cues, title, audioUri, uiTestMode) {
+        if (!uiTestMode) {
+            BookReaderFloatingBridge.setSubtitleTimeline(
+                bookTitle = title,
+                audioUri = audioUri?.toString(),
+                cues = cues.map { cue ->
+                    BookReaderFloatingBridge.SubtitleTimelineCue(
+                        startMs = cue.startMs,
+                        endMs = cue.endMs,
+                        text = cue.text,
+                        fullSentenceText = cue.text,
+                        fullSentenceStartMs = cue.startMs,
+                        fullSentenceEndMs = cue.endMs
+                    )
+                }
+            )
         }
     }
 
@@ -1321,12 +1340,6 @@ private fun BookReaderScreen(
     val favoriteCueCollected = remember(favoriteCueKey, collectedCueUiVersion) {
         favoriteCueKey?.let { collectedCueKeys.contains(it) } == true
     }
-    LaunchedEffect(favoriteCueCollected) {
-        if (!uiTestMode) {
-            BookReaderFloatingBridge.notifyFavoriteState(favoriteCueCollected)
-        }
-    }
-
     LaunchedEffect(audioChapters.size) {
         if (audioChapters.isEmpty()) {
             chapterOptionsVisible = false
@@ -2145,70 +2158,6 @@ private fun BookReaderScreen(
         controlModeStatus = context.getString(R.string.status_control_mode_exited_full)
     }
 
-    val latestIsPlaying by rememberUpdatedState(isPlaying)
-    val latestTogglePlayPause by rememberUpdatedState<() -> Unit>({
-        toggleReaderPlaybackState()
-    })
-    val latestSeekPrevious by rememberUpdatedState<() -> Unit>({
-        if (cueLoopEnabled) {
-            val targetIndex = when {
-                activeCueIndex > 0 -> activeCueIndex - 1
-                cues.isNotEmpty() -> 0
-                else -> -1
-            }
-            val targetCue = cues.getOrNull(targetIndex)
-            if (targetCue != null && targetCue.endMs > targetCue.startMs) {
-                cueLoopWindow = targetCue.startMs to targetCue.endMs
-                if (!uiTestMode) {
-                    BookReaderFloatingBridge.notifyCueLoopState(true)
-                }
-                Log.d(
-                    BOOK_CUE_LOOP_LOG_TAG,
-                    "seekPrevious update loop window=${targetCue.startMs}-${targetCue.endMs}"
-                )
-            }
-        }
-        jumpToAdjacentCue(-1)
-    })
-    val latestSeekNext by rememberUpdatedState<() -> Unit>({
-        if (cueLoopEnabled) {
-            val lastIndex = cues.lastIndex
-            val targetIndex = when {
-                activeCueIndex in 0 until lastIndex -> activeCueIndex + 1
-                activeCueIndex == -1 && cues.isNotEmpty() -> 0
-                else -> lastIndex
-            }
-            val targetCue = cues.getOrNull(targetIndex)
-            if (targetCue != null && targetCue.endMs > targetCue.startMs) {
-                cueLoopWindow = targetCue.startMs to targetCue.endMs
-                if (!uiTestMode) {
-                    BookReaderFloatingBridge.notifyCueLoopState(true)
-                }
-                Log.d(
-                    BOOK_CUE_LOOP_LOG_TAG,
-                    "seekNext update loop window=${targetCue.startMs}-${targetCue.endMs}"
-                )
-            }
-        }
-        jumpToAdjacentCue(1)
-    })
-    val latestReplayCurrentCue by rememberUpdatedState<() -> Unit>({
-        val cue = activeCue
-        if (cue != null) {
-            if (uiTestMode) {
-                positionMs = cue.startMs.coerceAtLeast(0L)
-                isPlaying = true
-            } else {
-                player.seekTo(cue.startMs.coerceAtLeast(0L))
-                if (!player.isPlaying) {
-                    player.play()
-                }
-            }
-        }
-    })
-    val latestToggleFavorite by rememberUpdatedState<() -> Unit>({
-        toggleFavoriteCue()
-    })
     val latestHandleGamepadKeyEvent by rememberUpdatedState<(KeyEvent) -> Boolean>({ event ->
         handleGamepadKeyEvent(event)
     })
@@ -2226,150 +2175,6 @@ private fun BookReaderScreen(
             )
             append(context.getString(R.string.status_control_hint_footer))
         }
-    }
-
-    if (!uiTestMode) DisposableEffect(Unit) {
-        val controller = object : BookReaderFloatingBridge.Controller {
-            override fun isPlaying(): Boolean = latestIsPlaying
-            override fun isFavorite(): Boolean = favoriteCueCollected
-            override fun isCueLoopEnabled(): Boolean = cueLoopEnabled
-
-            override fun togglePlayPause() {
-                latestTogglePlayPause()
-            }
-
-            override fun setPlaying(play: Boolean) {
-                setLookupPlaybackState(play)
-            }
-
-            override fun seekToPosition(targetPositionMs: Long) {
-                val target = targetPositionMs.coerceAtLeast(0L)
-                player.seekTo(target)
-                positionMs = target
-            }
-
-            override fun setPlaybackSpeed(speed: Float) {
-                playbackSpeed = speed.coerceIn(0.5f, 3.0f)
-            }
-
-            override fun seekPrevious() {
-                latestSeekPrevious()
-            }
-
-            override fun seekNext() {
-                latestSeekNext()
-            }
-
-            override fun replayCurrentCue() {
-                latestReplayCurrentCue()
-            }
-
-            override fun toggleCueLoop() {
-                Log.d(BOOK_CUE_LOOP_LOG_TAG, "toggle requested enabled=$cueLoopEnabled cue=${activeCue?.startMs}-${activeCue?.endMs}")
-                if (cueLoopEnabled) {
-                    cueLoopEnabled = false
-                    cueLoopWindow = null
-                    BookReaderFloatingBridge.notifyCueLoopState(false)
-                    Log.d(BOOK_CUE_LOOP_LOG_TAG, "toggle applied enabled=false window=null")
-                } else {
-                    val cue = activeCue ?: run {
-                        val fallbackIndex = findBookCueIndexAtTime(cues, player.currentPosition.coerceAtLeast(0L))
-                        cues.getOrNull(fallbackIndex)
-                    }
-                    if (cue == null || cue.endMs <= cue.startMs) {
-                        Log.d(
-                            BOOK_CUE_LOOP_LOG_TAG,
-                            "toggle ignored no-valid-cue active=${activeCue != null} pos=${player.currentPosition} cues=${cues.size}"
-                        )
-                        return
-                    }
-                    cueLoopWindow = cue.startMs to cue.endMs
-                    cueLoopEnabled = true
-                    BookReaderFloatingBridge.notifyCueLoopState(true)
-                    Log.d(BOOK_CUE_LOOP_LOG_TAG, "toggle applied enabled=true window=${cue.startMs}-${cue.endMs}")
-                    if (!player.isPlaying) {
-                        player.play()
-                    }
-                }
-            }
-
-            override fun toggleFavorite() {
-                latestToggleFavorite()
-            }
-
-            override fun returnToPlayer() {
-                val current = player.currentPosition.coerceAtLeast(0L)
-                val total = if (player.duration > 0L) player.duration else durationMs.coerceAtLeast(0L)
-                saveBookReaderPlaybackPosition(
-                    context = context,
-                    bookKey = playbackPositionKey,
-                    positionMs = if (playbackCompleted) 0L else normalizeBookReaderPlaybackPosition(current, total),
-                    durationMs = total
-                )
-                val intent = Intent(context, BookReaderActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                    addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, title)
-                    putExtra(BookReaderActivity.EXTRA_AUDIO_URI, audioUri?.toString())
-                    putExtra(BookReaderActivity.EXTRA_SRT_URI, srtUri?.toString())
-                    putExtra(BookReaderActivity.EXTRA_COVER_URI, coverUri?.toString())
-                    ebookUri?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_URI, it.toString()) }
-                    ebookName?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_NAME, it) }
-                    ebookFormat?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_FORMAT, it) }
-                }
-                context.startActivity(intent)
-            }
-
-            override fun lookupCurrentSubtitleAt(offset: Int) {
-                val cue = activeCue ?: return
-                triggerPopupLookup(
-                    cue = cue,
-                    offset = offset.coerceIn(0, cue.text.length.coerceAtLeast(1) - 1),
-                    anchor = null
-                )
-            }
-        }
-        BookReaderFloatingBridge.attach(controller)
-        onDispose {
-            BookReaderFloatingBridge.notifySubtitle(null)
-            BookReaderFloatingBridge.setCurrentCue(null, null, null, null, null, null, null, null)
-            BookReaderFloatingBridge.detach(controller)
-        }
-    }
-
-    if (!uiTestMode) LaunchedEffect(activeCue, activeCueIndex, cues, title, audioUri) {
-        val fullSentenceSelection = if (activeCueIndex in cues.indices) {
-            extractFullSentenceLikeHoshiFromCues(
-                cues = cues,
-                cueIndex = activeCueIndex,
-                anchorText = null,
-                selectedRangeInCue = null,
-                rawAnchorOffsetInCue = null
-            )
-        } else {
-            null
-        }
-        val fullSentence = fullSentenceSelection?.text?.trim()?.takeIf { it.isNotBlank() }
-        val fullSentenceStartMs = fullSentenceSelection
-            ?.cueRange
-            ?.first
-            ?.takeIf { it in cues.indices }
-            ?.let { cues[it].startMs }
-        val fullSentenceEndMs = fullSentenceSelection
-            ?.cueRange
-            ?.last
-            ?.takeIf { it in cues.indices }
-            ?.let { cues[it].endMs }
-        BookReaderFloatingBridge.setCurrentCue(
-            text = activeCue?.text,
-            startMs = activeCue?.startMs,
-            endMs = activeCue?.endMs,
-            bookTitle = title,
-            audioUri = audioUri?.toString(),
-            fullSentenceText = fullSentence,
-            fullSentenceStartMs = fullSentenceStartMs,
-            fullSentenceEndMs = fullSentenceEndMs
-        )
     }
 
     DisposableEffect(Unit) {

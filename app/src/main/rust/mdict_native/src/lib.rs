@@ -4,7 +4,7 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{CStr, CString};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::os::raw::c_char;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -291,75 +291,6 @@ fn lower_bound(sorted: &[String], target: &str) -> usize {
     low
 }
 
-fn load_lookup_index(entries_path: &str) -> Result<Arc<LookupIndex>, String> {
-    if let Some(cached) = LOOKUP_CACHE
-        .lock()
-        .map_err(|_| "lookup cache poisoned".to_string())?
-        .get(entries_path)
-        .cloned()
-    {
-        return Ok(cached);
-    }
-
-    let parsed_entries = match load_lookup_entries_binary(entries_path) {
-        Ok(entries) => entries,
-        Err(_) => {
-            let file = File::open(entries_path).map_err(|e| format!("open entries failed: {e}"))?;
-            let reader = BufReader::new(file);
-            let mut entries = Vec::<NativeEntry>::new();
-            for line in reader.lines() {
-                let line = line.map_err(|e| format!("read entries failed: {e}"))?;
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let json: serde_json::Value =
-                    serde_json::from_str(trimmed).map_err(|e| format!("parse entry json failed: {e}"))?;
-                let term = json
-                    .get("term")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
-                if term.is_empty() {
-                    continue;
-                }
-                let reading = json
-                    .get("reading")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
-                let definition = json
-                    .get("definition")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
-                let normalized_term = normalize_lookup(&term);
-                if normalized_term.is_empty() {
-                    continue;
-                }
-                entries.push(NativeEntry {
-                    term,
-                    reading,
-                    definition,
-                    normalized_term,
-                });
-            }
-            let _ = save_lookup_entries_binary(entries_path, &entries);
-            entries
-        }
-    };
-
-    let built = Arc::new(build_lookup_maps(parsed_entries)?);
-    LOOKUP_CACHE
-        .lock()
-        .map_err(|_| "lookup cache poisoned".to_string())?
-        .insert(entries_path.to_string(), built.clone());
-    Ok(built)
-}
-
 fn load_lookup_index_from_mdx(mdx_path: &str, cache_key: &str) -> Result<Arc<LookupIndex>, String> {
     let normalized_cache = cache_key.trim();
     let cache_id = if normalized_cache.is_empty() {
@@ -539,10 +470,6 @@ fn lookup_with_index(
     json!({ "results": results })
 }
 
-fn index_cache_sidecar_path(entries_path: &str) -> String {
-    format!("{entries_path}.idxbin")
-}
-
 fn mdx_index_cache_sidecar_path(mdx_path: &str) -> String {
     format!("{mdx_path}.idxbin")
 }
@@ -595,10 +522,6 @@ fn read_string(reader: &mut dyn Read) -> Result<String, String> {
     String::from_utf8(buf).map_err(|e| format!("invalid utf8 string: {e}"))
 }
 
-fn save_lookup_entries_binary(entries_path: &str, entries: &[NativeEntry]) -> Result<(), String> {
-    save_lookup_entries_binary_for_source(entries_path, &index_cache_sidecar_path(entries_path), entries)
-}
-
 fn save_lookup_entries_binary_for_source(
     source_path: &str,
     sidecar: &str,
@@ -635,10 +558,6 @@ fn save_lookup_entries_binary_for_source(
     let _ = fs::remove_file(&sidecar);
     fs::rename(&temp, &sidecar).map_err(|e| format!("rename sidecar failed: {e}"))?;
     Ok(())
-}
-
-fn load_lookup_entries_binary(entries_path: &str) -> Result<Vec<NativeEntry>, String> {
-    load_lookup_entries_binary_for_source(entries_path, &index_cache_sidecar_path(entries_path))
 }
 
 fn load_lookup_entries_binary_for_source(source_path: &str, sidecar: &str) -> Result<Vec<NativeEntry>, String> {
@@ -783,182 +702,6 @@ fn render_definition_with_entry_link(index: &LookupIndex, raw_definition: &str) 
     };
     // Keep only resolved body content to avoid duplicate headword rendering in UI.
     resolve_linked_definition(index, trimmed, 8)
-}
-
-
-#[no_mangle]
-pub extern "C" fn mdict_native_import_json(
-    mdx_path: *const c_char,
-    output_dir: *const c_char,
-) -> *mut c_char {
-    let result = (|| {
-        let mdx_path = c_ptr_to_string(mdx_path)?;
-        let output_dir = c_ptr_to_string(output_dir)?;
-        if !Path::new(&mdx_path).is_file() {
-            return Err("mdx file not found".to_string());
-        }
-        if output_dir.trim().is_empty() {
-            return Err("output dir is empty".to_string());
-        }
-        fs::create_dir_all(&output_dir).map_err(|e| format!("create output dir failed: {e}"))?;
-
-        let mdx = MdxFile::open(&mdx_path).map_err(|e| format!("open mdx failed: {e}"))?;
-        let header = mdx.header();
-        let title = header
-            .title
-            .clone()
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        let entries_path = Path::new(&output_dir).join("entries.ndjson");
-        let entries_file = File::create(&entries_path)
-            .map_err(|e| format!("create entries file failed: {e}"))?;
-        let mut writer = BufWriter::new(entries_file);
-        let mut term_count: u64 = 0;
-        let mut errors: Vec<String> = Vec::new();
-
-        for item in mdx.entries() {
-            match item {
-                Ok(record) => {
-                    let term = record.key.trim();
-                    if term.is_empty() {
-                        continue;
-                    }
-                    let definition = record.text.trim().to_string();
-                    serde_json::to_writer(
-                        &mut writer,
-                        &json!({
-                            "term": term,
-                            "reading": "",
-                            "definition": definition
-                        }),
-                    )
-                    .map_err(|e| format!("write entry json failed: {e}"))?;
-                    writer
-                        .write_all(b"\n")
-                        .map_err(|e| format!("write entry newline failed: {e}"))?;
-                    term_count = term_count.saturating_add(1);
-                }
-                Err(e) => {
-                    if errors.len() < 16 {
-                        errors.push(format!("decode entry failed: {e}"));
-                    }
-                }
-            }
-        }
-        writer
-            .flush()
-            .map_err(|e| format!("flush entries file failed: {e}"))?;
-
-        // Best-effort media export from sibling .mdd (same basename as mdx).
-        let mut media_count: u64 = 0;
-        let media_dir = Path::new(&output_dir).join("media");
-        let mdd_path = Path::new(&mdx_path).with_extension("mdd");
-        if mdd_path.is_file() {
-            fs::create_dir_all(&media_dir)
-                .map_err(|e| format!("create media dir failed: {e}"))?;
-            let mdd = MddFile::open(&mdd_path).map_err(|e| format!("open mdd failed: {e}"))?;
-            for item in mdd.entries() {
-                match item {
-                    Ok(resource) => {
-                        let Some(target) = safe_output_child(&media_dir, &resource.key) else {
-                            if errors.len() < 16 {
-                                errors.push(format!("skip unsafe media path: {}", resource.key));
-                            }
-                            continue;
-                        };
-                        if let Some(parent) = target.parent() {
-                            if let Err(e) = fs::create_dir_all(parent) {
-                                if errors.len() < 16 {
-                                    errors.push(format!("create media parent failed: {e}"));
-                                }
-                                continue;
-                            }
-                        }
-                        match File::create(&target) {
-                            Ok(mut file) => {
-                                if let Err(e) = file.write_all(&resource.data) {
-                                    if errors.len() < 16 {
-                                        errors.push(format!("write media failed: {e}"));
-                                    }
-                                    continue;
-                                }
-                                media_count = media_count.saturating_add(1);
-                            }
-                            Err(e) => {
-                                if errors.len() < 16 {
-                                    errors.push(format!("create media file failed: {e}"));
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        if errors.len() < 16 {
-                            errors.push(format!("decode media failed: {e}"));
-                        }
-                    }
-                }
-            }
-        }
-
-        if term_count == 0 && errors.is_empty() {
-            errors.push("no valid entries decoded".to_string());
-        }
-
-        Ok(json!({
-            "success": term_count > 0,
-            "title": title,
-            "termCount": term_count,
-            "mediaCount": media_count,
-            "entriesFile": entries_path.to_string_lossy(),
-            "errors": errors
-        }))
-    })();
-
-    match result {
-        Ok(value) => make_json_ptr(value),
-        Err(error) => make_json_ptr(json!({
-            "success": false,
-            "title": "",
-            "termCount": 0,
-            "errors": [error]
-        })),
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn mdict_native_lookup_json(
-    entries_path: *const c_char,
-    query: *const c_char,
-    max_results: i32,
-    scan_length: i32,
-) -> *mut c_char {
-    let result = (|| {
-        let entries_path = c_ptr_to_string(entries_path)?;
-        let query = c_ptr_to_string(query)?;
-        if entries_path.trim().is_empty() {
-            return Err("entries path is empty".to_string());
-        }
-        if query.trim().is_empty() {
-            return Ok(json!({ "results": [] }));
-        }
-        if !Path::new(&entries_path).is_file() {
-            return Err("entries file not found".to_string());
-        }
-
-        let max_results = max_results.max(1) as usize;
-        let scan_length = scan_length.max(1) as usize;
-        let index = load_lookup_index(&entries_path)?;
-        Ok(lookup_with_index(index.as_ref(), &query, max_results, scan_length))
-    })();
-
-    match result {
-        Ok(value) => make_json_ptr(value),
-        Err(error) => make_json_ptr(json!({
-            "results": [],
-            "error": error
-        })),
-    }
 }
 
 #[no_mangle]

@@ -20,6 +20,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.util.AttributeSet
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -51,6 +52,13 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.sin
+import java.util.Locale
+
+private const val M9_PAGE_SIMULATION_LOG_TAG = "M9PageSimulation"
+
+private fun m9PageSimulationFormat(value: Float): String {
+    return String.format(Locale.US, "%.1f", value)
+}
 
 internal class ReadView @JvmOverloads constructor(
     context: Context,
@@ -644,12 +652,26 @@ internal class ReadView @JvmOverloads constructor(
         simulationCurrentBitmap = pageView.captureToBitmap(simulationCurrentBitmap)
         simulationTargetBitmap = targetPageView.captureToBitmap(simulationTargetBitmap)
         targetPageView.visibility = INVISIBLE
+        Log.d(
+            M9_PAGE_SIMULATION_LOG_TAG,
+            "begin direction=$direction layout=$layoutMode side=$simulationCurlSide " +
+                "corner=($simulationCornerX,$simulationCornerY) " +
+                "down=(${m9PageSimulationFormat(downX)},${m9PageSimulationFormat(downY)}) " +
+                "touch=(${m9PageSimulationFormat(simulationTouchX)},${m9PageSimulationFormat(simulationTouchY)}) " +
+                "curlCurrentPage=true"
+        )
         postInvalidateOnAnimation()
     }
 
     private fun updateSimulationDrag(x: Float, y: Float) {
         simulationTouchX = x.coerceIn(0.1f, (width - 0.1f).coerceAtLeast(0.1f))
         simulationTouchY = simulationTouchYForDrag(dragDirection, y)
+        Log.d(
+            M9_PAGE_SIMULATION_LOG_TAG,
+            "drag direction=$dragDirection side=$simulationCurlSide " +
+                "raw=(${m9PageSimulationFormat(x)},${m9PageSimulationFormat(y)}) " +
+                "touch=(${m9PageSimulationFormat(simulationTouchX)},${m9PageSimulationFormat(simulationTouchY)})"
+        )
         postInvalidateOnAnimation()
     }
 
@@ -848,6 +870,13 @@ internal class ReadView @JvmOverloads constructor(
         }
         val progress = (abs(startX - downX) / width.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
         val duration = (PAGE_DRAG_ANIM_MS * (1f - progress).coerceIn(0.25f, 1f)).toLong()
+        Log.d(
+            M9_PAGE_SIMULATION_LOG_TAG,
+            "finishDrag commit=$commit direction=$dragDirection side=$simulationCurlSide " +
+                "start=(${m9PageSimulationFormat(startX)},${m9PageSimulationFormat(startY)}) " +
+                "target=(${m9PageSimulationFormat(targetX)},${m9PageSimulationFormat(targetY)}) " +
+                "progress=${m9PageSimulationFormat(progress)} duration=$duration"
+        )
         simulationCommitAfterAnim = commit
         simulationAnimator?.cancel()
         simulationAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
@@ -877,8 +906,13 @@ internal class ReadView @JvmOverloads constructor(
     }
 
     private fun finishSimulationMotion() {
+        val committedPage = if (simulationCommitAfterAnim) targetPageView.currentPage else null
+        Log.d(
+            M9_PAGE_SIMULATION_LOG_TAG,
+            "finishMotion commit=$simulationCommitAfterAnim direction=$dragDirection side=$simulationCurlSide " +
+                "targetPage=${committedPage?.globalIndex ?: committedPage?.index}"
+        )
         if (simulationCommitAfterAnim) {
-            val committedPage = targetPageView.currentPage
             suppressNextSetAnimation = true
             invokeTurnCallback()
             committedPage?.let {
@@ -1070,7 +1104,7 @@ internal class ReadView @JvmOverloads constructor(
             width = width,
             height = height,
             backgroundColor = currentReaderMeanColor(),
-            curlCurrentPage = layoutMode == M9LayoutMode.VERTICAL || dragDirection >= 0
+            curlCurrentPage = true
         )
     }
 
@@ -1673,6 +1707,16 @@ internal class ReadView @JvmOverloads constructor(
                 this.touchX = touchX.coerceIn(-width.toFloat(), width * 2f)
                 this.isRtOrLb = (cornerY == height)
             }
+            Log.d(
+                M9_PAGE_SIMULATION_LOG_TAG,
+                "geometry left=$leftCurl corner=($cornerX,$cornerY) " +
+                    "touch=(${m9PageSimulationFormat(this.touchX)},${m9PageSimulationFormat(this.touchY)}) " +
+                    "s1=(${m9PageSimulationFormat(bezierStart1.x)},${m9PageSimulationFormat(bezierStart1.y)}) " +
+                    "s2=(${m9PageSimulationFormat(bezierStart2.x)},${m9PageSimulationFormat(bezierStart2.y)}) " +
+                    "c1=(${m9PageSimulationFormat(bezierControl1.x)},${m9PageSimulationFormat(bezierControl1.y)}) " +
+                    "c2=(${m9PageSimulationFormat(bezierControl2.x)},${m9PageSimulationFormat(bezierControl2.y)}) " +
+                    "curlCurrentPage=$curlCurrentPage"
+            )
             canvas.save()
             val curlBitmap = if (curlCurrentPage) current else target
             val baseBitmap = if (curlCurrentPage) target else current

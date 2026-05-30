@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
 import kotlin.math.abs
 
@@ -27,6 +28,46 @@ object BookReaderPlaybackSession {
     }
 
     fun currentAudioUri(): String? = currentAudioUriText
+
+    fun isPlaying(): Boolean = player?.isPlaying == true
+
+    fun currentPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
+
+    fun currentPlaybackSpeed(): Float = player?.playbackParameters?.speed ?: 1f
+
+    fun setPlaying(play: Boolean) {
+        val sharedPlayer = player ?: return
+        if (play) {
+            sharedPlayer.play()
+        } else {
+            sharedPlayer.pause()
+        }
+    }
+
+    fun togglePlayPause() {
+        val sharedPlayer = player ?: return
+        if (sharedPlayer.isPlaying) {
+            sharedPlayer.pause()
+        } else {
+            sharedPlayer.play()
+        }
+    }
+
+    fun seekToPosition(positionMs: Long) {
+        player?.seekTo(positionMs.coerceAtLeast(0L))
+    }
+
+    fun seekPrevious() {
+        player?.seekBack()
+    }
+
+    fun seekNext() {
+        player?.seekForward()
+    }
+
+    fun setPlaybackSpeed(speed: Float) {
+        player?.playbackParameters = PlaybackParameters(speed.coerceIn(0.5f, 3.0f))
+    }
 
     @Synchronized
     fun prepareAudioIfNeeded(

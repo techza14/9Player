@@ -36,7 +36,13 @@ internal data class TextColumn(
         }
         when (line.layoutMode) {
             M9LayoutMode.HORIZONTAL -> {
-                canvas.drawText(charData, start, line.lineBase, paint)
+                if (isHorizontalDash(charData)) {
+                    if (isFirstHorizontalDashInRun(line)) {
+                        drawHorizontalDashRun(canvas, line, paint)
+                    }
+                } else {
+                    canvas.drawText(charData, start, line.lineBase, paint)
+                }
                 drawHorizontalRuby(view, canvas, line)
             }
             M9LayoutMode.VERTICAL -> {
@@ -73,6 +79,17 @@ internal data class TextColumn(
         }
     }
 
+    private fun isFirstHorizontalDashInRun(line: TextLine): Boolean {
+        val previous = line.columns
+            .filterIsInstance<TextColumn>()
+            .lastOrNull { it !== this && it.end <= start }
+            ?: return true
+        if (!isHorizontalDash(previous.charData)) return true
+        if (previous.sourceEnd != sourceStart) return true
+        val gap = (start - previous.end).coerceAtLeast(0f)
+        return gap > max(1f, (end - start) * 0.25f)
+    }
+
     private fun isFirstVerticalDashInRun(line: TextLine): Boolean {
         val previous = line.columns
             .filterIsInstance<TextColumn>()
@@ -82,6 +99,28 @@ internal data class TextColumn(
         if (previous.sourceEnd != sourceStart) return true
         val gap = (start - previous.end).coerceAtLeast(0f)
         return gap > max(1f, (end - start) * 0.25f)
+    }
+
+    private fun horizontalDashRunColumns(line: TextLine): List<TextColumn> {
+        val columns = line.columns.filterIsInstance<TextColumn>()
+        val startIndex = columns.indexOfFirst { it === this }
+        if (startIndex < 0) return listOf(this)
+        val run = arrayListOf<TextColumn>()
+        var previous: TextColumn? = null
+        for (index in startIndex until columns.size) {
+            val column = columns[index]
+            if (!isHorizontalDash(column.charData)) break
+            val previousColumn = previous
+            if (previousColumn != null) {
+                val sourceContinuous = previousColumn.sourceEnd == column.sourceStart
+                val visualGap = (column.start - previousColumn.end).coerceAtLeast(0f)
+                val visualContinuous = visualGap <= max(1f, (column.end - column.start) * 0.25f)
+                if (!sourceContinuous || !visualContinuous) break
+            }
+            run += column
+            previous = column
+        }
+        return run.takeIf { it.isNotEmpty() } ?: listOf(this)
     }
 
     private fun verticalDashRunColumns(line: TextLine): List<TextColumn> {
@@ -104,6 +143,32 @@ internal data class TextColumn(
             previous = column
         }
         return run.takeIf { it.isNotEmpty() } ?: listOf(this)
+    }
+
+    private fun drawHorizontalDashRun(
+        canvas: Canvas,
+        line: TextLine,
+        paint: Paint
+    ) {
+        val run = horizontalDashRunColumns(line)
+        val left = run.minOf { it.start }
+        val right = run.maxOf { it.end }
+        val metrics = paint.fontMetrics
+        val y = line.lineBase + (metrics.ascent + metrics.descent) * 0.5f
+        val strokeWidth = min(
+            (line.lineBottom - line.lineTop).coerceAtLeast(1f) * 0.12f,
+            paint.textSize * 0.08f
+        ).coerceAtLeast(1f)
+        val oldStyle = paint.style
+        val oldStrokeWidth = paint.strokeWidth
+        val oldStrokeCap = paint.strokeCap
+        paint.style = Style.STROKE
+        paint.strokeWidth = strokeWidth
+        paint.strokeCap = Cap.SQUARE
+        canvas.drawLine(left - strokeWidth * 0.5f, y, right + strokeWidth * 0.5f, y, paint)
+        paint.style = oldStyle
+        paint.strokeWidth = oldStrokeWidth
+        paint.strokeCap = oldStrokeCap
     }
 
     private fun drawVerticalDashRun(
@@ -261,6 +326,10 @@ internal data class TextColumn(
     }
 
     private companion object {
+        private fun isHorizontalDash(value: String): Boolean {
+            return value.length == 1 && value[0] in HORIZONTAL_DASH_CHARS
+        }
+
         private fun isVerticalDash(value: String): Boolean {
             return value.length == 1 && value[0] in VERTICAL_DASH_CHARS
         }
@@ -274,6 +343,16 @@ internal data class TextColumn(
             )
 
         private val VERTICAL_DASH_CHARS = setOf(
+            '\u2014',
+            '\u2015',
+            '\u2212',
+            '\u2500',
+            '\u2501',
+            '\u2E3A',
+            '\u2E3B'
+        )
+
+        private val HORIZONTAL_DASH_CHARS = setOf(
             '\u2014',
             '\u2015',
             '\u2212',

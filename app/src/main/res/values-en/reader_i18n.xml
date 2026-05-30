@@ -140,7 +140,6 @@
     <string name="reader_catalog_search_chapters">Search chapters</string>
     <string name="reader_catalog_search_bookmarks">Search bookmarks</string>
     <string name="reader_unknown_chapter">Unknown chapter</string>
-    <string name="reader_info_debug">Pages %1$d, chapters %2$d</string>
     <string name="reader_indent_none">No indent</string>
     <string name="reader_indent_one">Indent 1 char</string>
     <string name="reader_indent_two">Indent 2 chars</string>
@@ -153,14 +152,7 @@
     <string name="reader_margin_label">Padding: %1$ddp</string>
     <string name="reader_title_margin">Padding</string>
     <string name="reader_dialog_done">Done</string>
-    <string name="reader_info_show">Show header/footer</string>
-    <string name="reader_info_hide">Hide header/footer</string>
-    <string name="reader_info_show_title">Show title</string>
-    <string name="reader_info_show_time">Show time</string>
-    <string name="reader_info_show_page">Show page number</string>
-    <string name="reader_info_show_progress">Show progress</string>
     <string name="reader_title_info">Info</string>
-    <string name="reader_info_saved">Header/footer visibility saved</string>
     <string name="reader_open_ebook_failed">Failed to open ebook: %1$s</string>
     <string name="reader_pause">Pause</string>
     <string name="reader_listen">Listen</string>
@@ -188,4 +180,12 @@
     <string name="reader_srt_parse_failed_detail">No subtitles were parsed from the SRT. Make sure it is a standard .srt file.</string>
     <string name="reader_srt_load_failed">Failed to load SRT: %1$s</string>
     <string name="reader_match_search_window">Search Window: %1$d</string>
+    <string name="reader_simulated_reading_title">Simulated following</string>
+    <string name="reader_simulated_reading_switch">Switch</string>
+    <string name="reader_simulated_reading_enable">Enable simulated following</string>
+    <string name="reader_simulated_reading_start_date">Start date</string>
+    <string name="reader_simulated_reading_start_date_value">Start date: %1$s</string>
+    <string name="reader_simulated_reading_start_chapter">Starting chapter</string>
+    <string name="reader_simulated_reading_daily_chapters">Chapters per day</string>
+    <string name="reader_simulated_reading_locked">This chapter is not unlocked yet</string>
 </resources>
