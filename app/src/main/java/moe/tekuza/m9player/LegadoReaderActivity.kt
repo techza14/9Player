@@ -1461,9 +1461,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             R.id.reader_click_region_bottom_center,
             R.id.reader_click_region_bottom_right
         )
-        root.findViewById<View>(R.id.reader_click_region_root).setOnClickListener {
-            dialog.dismiss()
-        }
         repeat(ReadView.CLICK_REGION_COUNT) { index ->
             root.findViewById<TextView>(cellIds[index]).apply {
                 text = readerTapActionLabel(clickRegionActions[index])
@@ -1480,7 +1477,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 }
             }
         }
-        root.findViewById<View>(R.id.reader_click_region_panel).setOnClickListener { }
         root.findViewById<View>(R.id.reader_click_region_close).setOnClickListener { dialog.dismiss() }
         dialog.setOnDismissListener {
             val normalized = normalizeClickRegionActions(clickRegionActions)
