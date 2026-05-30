@@ -149,7 +149,6 @@
     <string name="reader_font_monospace">等幅フォント</string>
     <string name="reader_title_font">フォント</string>
     <string name="reader_image_preview_unavailable">画像をプレビューできません</string>
-    <string name="reader_margin_label">余白：%1$ddp</string>
     <string name="reader_title_margin">余白</string>
     <string name="reader_margin_header">ヘッダー</string>
     <string name="reader_margin_body">本文</string>
@@ -159,6 +158,34 @@
     <string name="reader_margin_bottom">下余白</string>
     <string name="reader_margin_left">左余白</string>
     <string name="reader_margin_right">右余白</string>
+    <string name="reader_margin_body_title">本文タイトル</string>
+    <string name="reader_margin_font_size">文字サイズ</string>
+    <string name="reader_tip_show_hide">表示/非表示</string>
+    <string name="reader_tip_show">表示</string>
+    <string name="reader_tip_hide">非表示</string>
+    <string name="reader_tip_left">左</string>
+    <string name="reader_tip_middle">中央</string>
+    <string name="reader_tip_right">右</string>
+    <string name="reader_tip_header_footer">ヘッダー<![CDATA[&]]>フッター</string>
+    <string name="reader_tip_text_color">文字色</string>
+    <string name="reader_tip_divider_color">区切り線の色</string>
+    <string name="reader_tip_align_left">左寄せ</string>
+    <string name="reader_tip_align_center">中央寄せ</string>
+    <string name="reader_tip_hide_status_bar_show">ステータスバー表示時に非表示</string>
+    <string name="reader_tip_display_content">表示内容</string>
+    <string name="reader_tip_follow_content">本文に合わせる</string>
+    <string name="reader_tip_default">標準</string>
+    <string name="reader_tip_custom">カスタム</string>
+    <string name="reader_tip_none">なし</string>
+    <string name="reader_tip_book_name">タイトル</string>
+    <string name="reader_tip_chapter_title">章タイトル</string>
+    <string name="reader_tip_time">時刻</string>
+    <string name="reader_tip_battery_percentage">バッテリー残量</string>
+    <string name="reader_tip_page">ページ数</string>
+    <string name="reader_tip_total_progress">総進捗</string>
+    <string name="reader_tip_chapter_progress">章ページ数</string>
+    <string name="reader_tip_page_and_total">ページ数と進捗</string>
+    <string name="reader_tip_time_battery_percentage">時刻+バッテリー残量</string>
     <string name="reader_dialog_done">完了</string>
     <string name="reader_title_info">補足情報</string>
     <string name="reader_open_ebook_failed">ebook を開けませんでした：%1$s</string>
@@ -190,10 +217,36 @@
     <string name="reader_match_search_window">Search Window: %1$d</string>
     <string name="reader_simulated_reading_title">追読シミュレーション</string>
     <string name="reader_simulated_reading_switch">スイッチ</string>
-    <string name="reader_simulated_reading_enable">追読シミュレーションを有効化</string>
     <string name="reader_simulated_reading_start_date">開始日</string>
-    <string name="reader_simulated_reading_start_date_value">開始日：%1$s</string>
     <string name="reader_simulated_reading_start_chapter">開始章</string>
     <string name="reader_simulated_reading_daily_chapters">1日あたりの章数</string>
     <string name="reader_simulated_reading_locked">この章はまだ解放されていません</string>
+
+    <string-array name="reader_screen_direction_titles">
+        <item>@string/screen_unspecified</item>
+        <item>@string/screen_portrait</item>
+        <item>@string/screen_landscape</item>
+    </string-array>
+
+    <string-array name="reader_keep_light_titles">
+        <item>@string/reader_keep_light_default</item>
+        <item>@string/reader_keep_light_always</item>
+    </string-array>
+
+    <string-array name="reader_progress_behavior_titles">
+        <item>@string/reader_progress_behavior_page</item>
+        <item>@string/reader_progress_behavior_book</item>
+    </string-array>
+
+    <string-array name="reader_indent_titles">
+        <item>@string/reader_indent_none</item>
+        <item>@string/reader_indent_one</item>
+        <item>@string/reader_indent_two</item>
+    </string-array>
+
+    <string-array name="reader_font_titles">
+        <item>@string/reader_font_default</item>
+        <item>@string/reader_font_serif</item>
+        <item>@string/reader_font_monospace</item>
+    </string-array>
 </resources>

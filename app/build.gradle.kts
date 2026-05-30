@@ -70,7 +70,6 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation(libs.androidx.activity.compose)
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("androidx.media3:media3-exoplayer:1.3.1")
@@ -84,15 +83,12 @@ dependencies {
     implementation("com.github.ankidroid:Anki-Android:api-v1.1.0")
     implementation("com.github.renezuidhof:AudioConverter:1.0.0")
     implementation("io.github.kyant0:taglib:1.0.5")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation("androidx.compose.material:material-icons-extended")
     testImplementation(libs.junit)
-    debugImplementation(libs.androidx.compose.ui.tooling)
 }
 
 val rustProjectDir = layout.projectDirectory.dir("src/main/rust/mdict_native")

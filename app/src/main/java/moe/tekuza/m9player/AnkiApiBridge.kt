@@ -137,7 +137,6 @@ private val SINGLE_GLOSSARY_VARIABLES = setOf(
 )
 private val CLOZE_VARIABLES = setOf("cloze-prefix", "cloze-body", "cloze-body-kana", "cloze-suffix")
 private val FURIGANA_VARIABLES = setOf("furigana", "furigana-plain", "expression-furigana")
-private val PITCH_VARIABLES = setOf("pitch", "pitch-accents", "pitch-accent-positions", "pitch-accent-categories")
 private val FREQUENCY_VARIABLES = setOf(
     "frequency",
     "frequencies",
@@ -360,19 +359,6 @@ internal fun exportToAnkiDroidApiResult(
     }
 }
 
-internal suspend fun exportToAnkiDroidApiResultAsync(
-    context: Context,
-    card: MinedCard,
-    config: AnkiExportConfig
-): AnkiExportResult = withContext(Dispatchers.IO) {
-    exportToAnkiDroidApiResult(context, card, config)
-}
-
-internal suspend fun hasAnkiDuplicateByFirstFieldAsync(
-    context: Context,
-    firstFieldValue: String
-): Boolean = findAnkiDuplicateNoteIdsByFirstFieldAsync(context, firstFieldValue).isNotEmpty()
-
 internal suspend fun findAnkiDuplicateNoteIdsByFirstFieldAsync(
     context: Context,
     firstFieldValue: String
@@ -430,15 +416,6 @@ internal fun prepareAnkiExportResult(
             lookupAudioUri = lookupAudioUri
         )
     }
-}
-
-internal suspend fun prepareAnkiExportResultAsync(
-    context: Context,
-    persistedConfig: PersistedAnkiConfig,
-    audioUri: Uri?,
-    lookupAudioUri: Uri?
-): Result<PreparedAnkiExport> = withContext(Dispatchers.IO) {
-    prepareAnkiExportResult(context, persistedConfig, audioUri, lookupAudioUri)
 }
 
 private fun findOrCreateDeckId(api: AddContentApi, deckNameRaw: String): Long {

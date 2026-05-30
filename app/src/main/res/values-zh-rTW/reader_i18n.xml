@@ -149,7 +149,6 @@
     <string name="reader_font_monospace">等寬字型</string>
     <string name="reader_title_font">字型</string>
     <string name="reader_image_preview_unavailable">圖片無法預覽</string>
-    <string name="reader_margin_label">邊距：%1$ddp</string>
     <string name="reader_title_margin">邊距</string>
     <string name="reader_margin_header">頁眉</string>
     <string name="reader_margin_body">正文</string>
@@ -159,6 +158,34 @@
     <string name="reader_margin_bottom">下邊距</string>
     <string name="reader_margin_left">左邊距</string>
     <string name="reader_margin_right">右邊距</string>
+    <string name="reader_margin_body_title">正文標題</string>
+    <string name="reader_margin_font_size">字號</string>
+    <string name="reader_tip_show_hide">顯示/隱藏</string>
+    <string name="reader_tip_show">顯示</string>
+    <string name="reader_tip_hide">隱藏</string>
+    <string name="reader_tip_left">左</string>
+    <string name="reader_tip_middle">中</string>
+    <string name="reader_tip_right">右</string>
+    <string name="reader_tip_header_footer">頁眉<![CDATA[&]]>頁腳</string>
+    <string name="reader_tip_text_color">文字顏色</string>
+    <string name="reader_tip_divider_color">分隔線顏色</string>
+    <string name="reader_tip_align_left">靠左</string>
+    <string name="reader_tip_align_center">置中</string>
+    <string name="reader_tip_hide_status_bar_show">狀態列顯示時隱藏</string>
+    <string name="reader_tip_display_content">顯示內容</string>
+    <string name="reader_tip_follow_content">跟隨內容</string>
+    <string name="reader_tip_default">預設</string>
+    <string name="reader_tip_custom">自訂</string>
+    <string name="reader_tip_none">無</string>
+    <string name="reader_tip_book_name">標題</string>
+    <string name="reader_tip_chapter_title">章節標題</string>
+    <string name="reader_tip_time">時間</string>
+    <string name="reader_tip_battery_percentage">電量百分比</string>
+    <string name="reader_tip_page">頁數</string>
+    <string name="reader_tip_total_progress">總進度</string>
+    <string name="reader_tip_chapter_progress">章節頁數</string>
+    <string name="reader_tip_page_and_total">頁數及進度</string>
+    <string name="reader_tip_time_battery_percentage">時間+電量百分比</string>
     <string name="reader_dialog_done">完成</string>
     <string name="reader_title_info">提示資訊</string>
     <string name="reader_open_ebook_failed">開啟 ebook 失敗：%1$s</string>
@@ -190,10 +217,36 @@
     <string name="reader_match_search_window">Search Window: %1$d</string>
     <string name="reader_simulated_reading_title">模擬追讀</string>
     <string name="reader_simulated_reading_switch">開關</string>
-    <string name="reader_simulated_reading_enable">啟用模擬追讀</string>
     <string name="reader_simulated_reading_start_date">開始日期</string>
-    <string name="reader_simulated_reading_start_date_value">開始日期：%1$s</string>
     <string name="reader_simulated_reading_start_chapter">起始章節</string>
     <string name="reader_simulated_reading_daily_chapters">每日章節數</string>
     <string name="reader_simulated_reading_locked">章節尚未解鎖</string>
+
+    <string-array name="reader_screen_direction_titles">
+        <item>@string/screen_unspecified</item>
+        <item>@string/screen_portrait</item>
+        <item>@string/screen_landscape</item>
+    </string-array>
+
+    <string-array name="reader_keep_light_titles">
+        <item>@string/reader_keep_light_default</item>
+        <item>@string/reader_keep_light_always</item>
+    </string-array>
+
+    <string-array name="reader_progress_behavior_titles">
+        <item>@string/reader_progress_behavior_page</item>
+        <item>@string/reader_progress_behavior_book</item>
+    </string-array>
+
+    <string-array name="reader_indent_titles">
+        <item>@string/reader_indent_none</item>
+        <item>@string/reader_indent_one</item>
+        <item>@string/reader_indent_two</item>
+    </string-array>
+
+    <string-array name="reader_font_titles">
+        <item>@string/reader_font_default</item>
+        <item>@string/reader_font_serif</item>
+        <item>@string/reader_font_monospace</item>
+    </string-array>
 </resources>

@@ -194,7 +194,6 @@ private const val BOOK_READER_BACK_LOG_TAG = "BookReaderBack"
 private const val BOOK_UI_MODE_LOG_TAG = "BookUiMode"
 private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
 private const val BOOK_VERTICAL_TAP_DEBUG_OVERLAY = false
-private const val BOOK_CUE_LOOP_LOG_TAG = "BookCueLoop"
 private const val BOOK_VERTICAL_COLUMN_WIDTH_FACTOR = 1.0f
 private val BOOK_VERTICAL_CUE_EDGE_PADDING = 28.dp
 private val BOOK_VERTICAL_CUE_ITEM_HORIZONTAL_PADDING = 0.dp
@@ -4429,7 +4428,7 @@ private fun transformSubtitleForWritingMode(
 
     val rowsPerColumn = rowsPerColumnHint.coerceAtLeast(2)
     val display = StringBuilder(sourceText.length * 2)
-    val sourceToDisplay = IntArray(sourceText.length) { 0 }
+    val sourceToDisplay = IntArray(sourceText.length)
     val displayToSource = ArrayList<Int>(sourceText.length * 2)
 
     val paragraphs = ArrayList<List<Int>>()

@@ -1591,39 +1591,6 @@ internal fun rebuildRectsFromCharacterRectsShared(
     return mergeRectsByLineShared(selectedRects)
 }
 
-internal fun sanitizeResolvedHighlightRectsShared(
-    rebuiltRects: List<Rect>,
-    sourceRects: List<Rect>
-): List<Rect> {
-    if (rebuiltRects.isEmpty()) return emptyList()
-    if (sourceRects.isEmpty()) return rebuiltRects
-    val rebuiltBounds = mergeRectBoundsShared(rebuiltRects) ?: return emptyList()
-    val sourceBounds = mergeRectBoundsShared(sourceRects) ?: return rebuiltRects
-    val expandedSource = Rect(
-        left = sourceBounds.left - 24f,
-        top = sourceBounds.top - 24f,
-        right = sourceBounds.right + 24f,
-        bottom = sourceBounds.bottom + 24f
-    )
-    val intersects =
-        rebuiltBounds.right >= expandedSource.left &&
-            rebuiltBounds.left <= expandedSource.right &&
-            rebuiltBounds.bottom >= expandedSource.top &&
-            rebuiltBounds.top <= expandedSource.bottom
-    return if (intersects) rebuiltRects else emptyList()
-}
-
-private fun mergeRectBoundsShared(rects: List<Rect>): Rect? {
-    val validRects = rects.filter { !it.isEmpty }
-    if (validRects.isEmpty()) return null
-    return Rect(
-        left = validRects.minOf { it.left },
-        top = validRects.minOf { it.top },
-        right = validRects.maxOf { it.right },
-        bottom = validRects.maxOf { it.bottom }
-    )
-}
-
 internal fun mergeRectsByLineShared(rects: List<Rect>): List<Rect> {
     if (rects.isEmpty()) return emptyList()
     val sorted = rects.sortedWith(compareBy<Rect> { it.top }.thenBy { it.left })

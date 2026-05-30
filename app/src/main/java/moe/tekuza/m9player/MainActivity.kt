@@ -330,7 +330,6 @@ private val FIELD_VARIABLE_CHOICES = listOf(
     "{book-title}",
     "{search-query}"
 )
-private const val MAIN_LOOKUP_DEBUG_LOG_TAG = "MainLookupDebug"
 private const val ANKI_CONFIG_LOG_TAG = "AnkiConfig"
 private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
 

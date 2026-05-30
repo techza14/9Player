@@ -3,8 +3,6 @@ package moe.tekuza.m9player
 import android.content.Context
 import java.util.Locale
 
-internal const val MAX_LOOKUP_RESULTS = 40
-
 internal data class DictionaryImportProgress(
     val stage: String,
     val current: Int,

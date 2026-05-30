@@ -77,9 +77,7 @@ import moe.tekuza.m9player.legado.reader.provider.TextPageFactory
 private const val LEGADO_READER_DEFAULT_TITLE = "吾輩は猫である"
 private const val LEGADO_READER_LOG_TAG = "LegadoReader"
 private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
-private const val NIGHT_BAR_BG = 0xFF677C8B.toInt()
 private const val NIGHT_BOTTOM_BG = 0xFF3A3A3A.toInt()
-private const val NIGHT_FLOATING_BG = 0xFF303030.toInt()
 private const val NIGHT_BRIGHTNESS_BG = 0x80303030.toInt()
 private const val NIGHT_ACCENT = 0xFFE36A3C.toInt()
 private val LEGADO_READER_DEFAULT_PARAGRAPHS = listOf(
@@ -3388,9 +3386,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(18), dp(24), dp(18))
         }
-        addInfoSectionTitle(content, "正文标题")
+        addInfoSectionTitle(content, getString(R.string.reader_margin_body_title))
         addBodyTitleModeGroup(content)
-        addInfoAdjustRow(content, "字号", bodyTitleSizeAddSp, 0, 10) {
+        addInfoAdjustRow(content, getString(R.string.reader_margin_font_size), bodyTitleSizeAddSp, 0, 10) {
             bodyTitleSizeAddSp = it
             applyTipConfigChange(repaginate = true)
         }
@@ -3403,64 +3401,64 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             applyTipConfigChange(repaginate = true)
         }
 
-        addInfoSectionTitle(content, "页眉")
-        addInfoSelectorRow(content, "显示/隐藏", headerModeLabel(headerMode)) {
+        addInfoSectionTitle(content, getString(R.string.reader_margin_header))
+        addInfoSelectorRow(content, getString(R.string.reader_tip_show_hide), headerModeLabel(headerMode)) {
             dialog?.dismiss()
             showHeaderModeSelector()
         }
-        addInfoSelectorRow(content, "左", tipContentLabel(tipHeaderLeft)) {
+        addInfoSelectorRow(content, getString(R.string.reader_tip_left), tipContentLabel(tipHeaderLeft)) {
             dialog?.dismiss()
             showTipContentSelector(tipHeaderLeft) {
                 tipHeaderLeft = it
                 applyTipConfigChange(repaginate = true)
             }
         }
-        addInfoSelectorRow(content, "中", tipContentLabel(tipHeaderMiddle)) {
+        addInfoSelectorRow(content, getString(R.string.reader_tip_middle), tipContentLabel(tipHeaderMiddle)) {
             dialog?.dismiss()
             showTipContentSelector(tipHeaderMiddle) {
                 tipHeaderMiddle = it
                 applyTipConfigChange(repaginate = true)
             }
         }
-        addInfoSelectorRow(content, "右", tipContentLabel(tipHeaderRight)) {
+        addInfoSelectorRow(content, getString(R.string.reader_tip_right), tipContentLabel(tipHeaderRight)) {
             dialog?.dismiss()
             showTipContentSelector(tipHeaderRight) {
                 tipHeaderRight = it
                 applyTipConfigChange(repaginate = true)
             }
         }
-        addInfoSectionTitle(content, "页脚")
-        addInfoSelectorRow(content, "显示/隐藏", footerModeLabel(footerMode)) {
+        addInfoSectionTitle(content, getString(R.string.reader_margin_footer))
+        addInfoSelectorRow(content, getString(R.string.reader_tip_show_hide), footerModeLabel(footerMode)) {
             dialog?.dismiss()
             showFooterModeSelector()
         }
-        addInfoSelectorRow(content, "左", tipContentLabel(tipFooterLeft)) {
+        addInfoSelectorRow(content, getString(R.string.reader_tip_left), tipContentLabel(tipFooterLeft)) {
             dialog?.dismiss()
             showTipContentSelector(tipFooterLeft) {
                 tipFooterLeft = it
                 applyTipConfigChange(repaginate = true)
             }
         }
-        addInfoSelectorRow(content, "中", tipContentLabel(tipFooterMiddle)) {
+        addInfoSelectorRow(content, getString(R.string.reader_tip_middle), tipContentLabel(tipFooterMiddle)) {
             dialog?.dismiss()
             showTipContentSelector(tipFooterMiddle) {
                 tipFooterMiddle = it
                 applyTipConfigChange(repaginate = true)
             }
         }
-        addInfoSelectorRow(content, "右", tipContentLabel(tipFooterRight)) {
+        addInfoSelectorRow(content, getString(R.string.reader_tip_right), tipContentLabel(tipFooterRight)) {
             dialog?.dismiss()
             showTipContentSelector(tipFooterRight) {
                 tipFooterRight = it
                 applyTipConfigChange(repaginate = true)
             }
         }
-        addInfoSectionTitle(content, "页眉&页脚")
-        addInfoSelectorRow(content, "文字颜色", tipColorModeLabel(tipColorMode)) {
+        addInfoSectionTitle(content, getString(R.string.reader_tip_header_footer))
+        addInfoSelectorRow(content, getString(R.string.reader_tip_text_color), tipColorModeLabel(tipColorMode)) {
             dialog?.dismiss()
             showTipColorModeSelector()
         }
-        addInfoSelectorRow(content, "分隔线颜色", tipDividerColorModeLabel(tipDividerColorMode)) {
+        addInfoSelectorRow(content, getString(R.string.reader_tip_divider_color), tipDividerColorModeLabel(tipDividerColorMode)) {
             dialog?.dismiss()
             showTipDividerColorModeSelector()
         }
@@ -3489,9 +3487,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             orientation = RadioGroup.HORIZONTAL
         }
         val options = listOf(
-            ReaderBodyTitleMode.LEFT to "靠左",
-            ReaderBodyTitleMode.CENTER to "居中",
-            ReaderBodyTitleMode.HIDE to "隐藏"
+            ReaderBodyTitleMode.LEFT to getString(R.string.reader_tip_align_left),
+            ReaderBodyTitleMode.CENTER to getString(R.string.reader_tip_align_center),
+            ReaderBodyTitleMode.HIDE to getString(R.string.reader_tip_hide)
         )
         options.forEach { (mode, label) ->
             group.addView(RadioButton(this).apply {
@@ -3632,11 +3630,11 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun showHeaderModeSelector() {
         val entries = listOf(
-            ReaderHeaderMode.HIDE_WHEN_STATUS_BAR_SHOW to "状态栏显示时隐藏",
-            ReaderHeaderMode.SHOW to "显示",
-            ReaderHeaderMode.HIDE to "隐藏"
+            ReaderHeaderMode.HIDE_WHEN_STATUS_BAR_SHOW to getString(R.string.reader_tip_hide_status_bar_show),
+            ReaderHeaderMode.SHOW to getString(R.string.reader_tip_show),
+            ReaderHeaderMode.HIDE to getString(R.string.reader_tip_hide)
         )
-        showSimpleSelector("页眉", entries, headerMode) {
+        showSimpleSelector(getString(R.string.reader_margin_header), entries, headerMode) {
             headerMode = it
             applyTipConfigChange(repaginate = true)
             showTipConfigDialog()
@@ -3645,10 +3643,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun showFooterModeSelector() {
         val entries = listOf(
-            ReaderFooterMode.SHOW to "显示",
-            ReaderFooterMode.HIDE to "隐藏"
+            ReaderFooterMode.SHOW to getString(R.string.reader_tip_show),
+            ReaderFooterMode.HIDE to getString(R.string.reader_tip_hide)
         )
-        showSimpleSelector("页脚", entries, footerMode) {
+        showSimpleSelector(getString(R.string.reader_margin_footer), entries, footerMode) {
             footerMode = it
             applyTipConfigChange(repaginate = true)
             showTipConfigDialog()
@@ -3656,7 +3654,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun showTipContentSelector(current: ReaderTipContent, onSelected: (ReaderTipContent) -> Unit) {
-        showSimpleSelector("显示内容", tipContentEntries(), current) {
+        showSimpleSelector(getString(R.string.reader_tip_display_content), tipContentEntries(), current) {
             onSelected(it)
             showTipConfigDialog()
         }
@@ -3664,10 +3662,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun showTipColorModeSelector() {
         val entries = listOf(
-            ReaderTipColorMode.FOLLOW_CONTENT to "跟随内容",
-            ReaderTipColorMode.CUSTOM to "自定义"
+            ReaderTipColorMode.FOLLOW_CONTENT to getString(R.string.reader_tip_follow_content),
+            ReaderTipColorMode.CUSTOM to getString(R.string.reader_tip_custom)
         )
-        showSimpleSelector("文字颜色", entries, tipColorMode) {
+        showSimpleSelector(getString(R.string.reader_tip_text_color), entries, tipColorMode) {
             tipColorMode = it
             if (it == ReaderTipColorMode.CUSTOM) {
                 showReaderColorPicker(READER_TIP_COLOR_DIALOG_ID, readerTipColor) { color ->
@@ -3685,11 +3683,11 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun showTipDividerColorModeSelector() {
         val entries = listOf(
-            ReaderTipDividerColorMode.DEFAULT to "默认",
-            ReaderTipDividerColorMode.FOLLOW_CONTENT to "跟随内容",
-            ReaderTipDividerColorMode.CUSTOM to "自定义"
+            ReaderTipDividerColorMode.DEFAULT to getString(R.string.reader_tip_default),
+            ReaderTipDividerColorMode.FOLLOW_CONTENT to getString(R.string.reader_tip_follow_content),
+            ReaderTipDividerColorMode.CUSTOM to getString(R.string.reader_tip_custom)
         )
-        showSimpleSelector("分隔线颜色", entries, tipDividerColorMode) {
+        showSimpleSelector(getString(R.string.reader_tip_divider_color), entries, tipDividerColorMode) {
             tipDividerColorMode = it
             if (it == ReaderTipDividerColorMode.CUSTOM) {
                 showReaderColorPicker(READER_TIP_DIVIDER_COLOR_DIALOG_ID, tipDividerColor) { color ->
@@ -3733,42 +3731,42 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun tipContentEntries(): List<Pair<ReaderTipContent, String>> = listOf(
-        ReaderTipContent.NONE to "无",
-        ReaderTipContent.BOOK_NAME to "标题",
-        ReaderTipContent.CHAPTER_TITLE to "章节标题",
-        ReaderTipContent.TIME to "时间",
-        ReaderTipContent.BATTERY_PERCENTAGE to "电量百分比",
-        ReaderTipContent.PAGE to "页数",
-        ReaderTipContent.TOTAL_PROGRESS to "总进度",
-        ReaderTipContent.CHAPTER_PROGRESS to "章节页数",
-        ReaderTipContent.PAGE_AND_TOTAL to "页数及进度",
-        ReaderTipContent.TIME_BATTERY_PERCENTAGE to "时间+电量百分比"
+        ReaderTipContent.NONE to getString(R.string.reader_tip_none),
+        ReaderTipContent.BOOK_NAME to getString(R.string.reader_tip_book_name),
+        ReaderTipContent.CHAPTER_TITLE to getString(R.string.reader_tip_chapter_title),
+        ReaderTipContent.TIME to getString(R.string.reader_tip_time),
+        ReaderTipContent.BATTERY_PERCENTAGE to getString(R.string.reader_tip_battery_percentage),
+        ReaderTipContent.PAGE to getString(R.string.reader_tip_page),
+        ReaderTipContent.TOTAL_PROGRESS to getString(R.string.reader_tip_total_progress),
+        ReaderTipContent.CHAPTER_PROGRESS to getString(R.string.reader_tip_chapter_progress),
+        ReaderTipContent.PAGE_AND_TOTAL to getString(R.string.reader_tip_page_and_total),
+        ReaderTipContent.TIME_BATTERY_PERCENTAGE to getString(R.string.reader_tip_time_battery_percentage)
     )
 
     private fun tipContentLabel(content: ReaderTipContent): String {
-        return tipContentEntries().firstOrNull { it.first == content }?.second ?: "无"
+        return tipContentEntries().firstOrNull { it.first == content }?.second ?: getString(R.string.reader_tip_none)
     }
 
     private fun headerModeLabel(mode: ReaderHeaderMode): String = when (mode) {
-        ReaderHeaderMode.HIDE_WHEN_STATUS_BAR_SHOW -> "状态栏显示时隐藏"
-        ReaderHeaderMode.SHOW -> "显示"
-        ReaderHeaderMode.HIDE -> "隐藏"
+        ReaderHeaderMode.HIDE_WHEN_STATUS_BAR_SHOW -> getString(R.string.reader_tip_hide_status_bar_show)
+        ReaderHeaderMode.SHOW -> getString(R.string.reader_tip_show)
+        ReaderHeaderMode.HIDE -> getString(R.string.reader_tip_hide)
     }
 
     private fun footerModeLabel(mode: ReaderFooterMode): String = when (mode) {
-        ReaderFooterMode.SHOW -> "显示"
-        ReaderFooterMode.HIDE -> "隐藏"
+        ReaderFooterMode.SHOW -> getString(R.string.reader_tip_show)
+        ReaderFooterMode.HIDE -> getString(R.string.reader_tip_hide)
     }
 
     private fun tipColorModeLabel(mode: ReaderTipColorMode): String = when (mode) {
-        ReaderTipColorMode.FOLLOW_CONTENT -> "跟随内容"
-        ReaderTipColorMode.CUSTOM -> "自定义"
+        ReaderTipColorMode.FOLLOW_CONTENT -> getString(R.string.reader_tip_follow_content)
+        ReaderTipColorMode.CUSTOM -> getString(R.string.reader_tip_custom)
     }
 
     private fun tipDividerColorModeLabel(mode: ReaderTipDividerColorMode): String = when (mode) {
-        ReaderTipDividerColorMode.DEFAULT -> "默认"
-        ReaderTipDividerColorMode.FOLLOW_CONTENT -> "跟随内容"
-        ReaderTipDividerColorMode.CUSTOM -> "自定义"
+        ReaderTipDividerColorMode.DEFAULT -> getString(R.string.reader_tip_default)
+        ReaderTipDividerColorMode.FOLLOW_CONTENT -> getString(R.string.reader_tip_follow_content)
+        ReaderTipDividerColorMode.CUSTOM -> getString(R.string.reader_tip_custom)
     }
 
     private fun loadDisplayedBook(anchor: ReaderPageAnchor?, forceDocumentReload: Boolean = false) {

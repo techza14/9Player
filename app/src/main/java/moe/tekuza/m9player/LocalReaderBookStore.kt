@@ -33,20 +33,6 @@ internal fun loadLastLocalReaderBook(context: Context): LocalReaderBook? {
     )
 }
 
-internal fun saveLastLocalReaderBook(context: Context, book: LocalReaderBook) {
-    val json = JSONObject().apply {
-        put("title", book.title)
-        put("uri", book.uri.toString())
-        put("format", book.format)
-        put("importedAtMs", book.importedAtMs)
-    }
-    context
-        .getSharedPreferences(LOCAL_READER_BOOK_PREFS, Context.MODE_PRIVATE)
-        .edit()
-        .putString(LOCAL_READER_LAST_BOOK_KEY, json.toString())
-        .apply()
-}
-
 internal fun inferLocalReaderBookFormat(displayName: String, mimeType: String?): String? {
     val lowerName = displayName.lowercase(Locale.US)
     val lowerMime = mimeType.orEmpty().lowercase(Locale.US)

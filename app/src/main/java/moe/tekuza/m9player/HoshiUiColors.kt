@@ -7,7 +7,6 @@ import androidx.compose.ui.graphics.toArgb
 import java.util.Locale
 
 internal val HoshiPanelBackground = Color(0xFFEDF3FA)
-internal const val HoshiPanelBackgroundCss = "#EDF3FA"
 internal val HoshiBottomNavigationBackground = Color(0xFFEEF3F8)
 internal val HoshiCardBackground = Color(0xFFFFFFFF)
 internal val HoshiSoftCardBackground = Color(0xFFF8FBFF)

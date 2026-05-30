@@ -1773,12 +1773,7 @@ internal class ReadView @JvmOverloads constructor(
             path0.close()
 
             canvas.save()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                canvas.clipOutPath(path0)
-            } else {
-                @Suppress("DEPRECATION")
-                canvas.clipPath(path0, android.graphics.Region.Op.XOR)
-            }
+            canvas.clipOutPath(path0)
             canvas.drawBitmap(bitmap, 0f, 0f, null)
             canvas.restore()
         }
@@ -1840,12 +1835,7 @@ internal class ReadView @JvmOverloads constructor(
             path1.lineTo(bezierStart1.x, bezierStart1.y)
             path1.close()
             canvas.save()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                canvas.clipOutPath(path0)
-            } else {
-                @Suppress("DEPRECATION")
-                canvas.clipPath(path0, android.graphics.Region.Op.XOR)
-            }
+            canvas.clipOutPath(path0)
             @Suppress("DEPRECATION")
             canvas.clipPath(path1, android.graphics.Region.Op.INTERSECT)
             val verticalShadow = if (isRtOrLb) frontShadowVlr else frontShadowVrl
@@ -1866,12 +1856,7 @@ internal class ReadView @JvmOverloads constructor(
             path1.lineTo(bezierStart2.x, bezierStart2.y)
             path1.close()
             canvas.save()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                canvas.clipOutPath(path0)
-            } else {
-                @Suppress("DEPRECATION")
-                canvas.clipPath(path0, android.graphics.Region.Op.XOR)
-            }
+            canvas.clipOutPath(path0)
             canvas.clipPath(path1)
             val horizontalShadow = if (isRtOrLb) frontShadowHtb else frontShadowHbt
             val top = if (isRtOrLb) bezierControl2.y.toInt() else (bezierControl2.y - 25).toInt()
@@ -2407,7 +2392,6 @@ internal class ReadView @JvmOverloads constructor(
         }
 
         private fun processTextIntents(context: Context): List<ProcessTextItem> {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return emptyList()
             val baseIntent = Intent()
                 .setAction(Intent.ACTION_PROCESS_TEXT)
                 .setType("text/plain")

@@ -240,13 +240,7 @@ private fun validateDownloadedUpdateApk(context: Context, apkFile: File) {
     }
 }
 
-private fun packageSignatureFlags(): Int =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-        PackageManager.GET_SIGNING_CERTIFICATES
-    } else {
-        @Suppress("DEPRECATION")
-        PackageManager.GET_SIGNATURES
-    }
+private fun packageSignatureFlags(): Int = PackageManager.GET_SIGNING_CERTIFICATES
 
 @Suppress("DEPRECATION")
 private fun PackageManager.getPackageArchiveInfoCompat(path: String, flags: Int): PackageInfo? =
@@ -264,20 +258,10 @@ private fun PackageManager.getPackageInfoCompat(packageName: String, flags: Int)
         getPackageInfo(packageName, flags)
     }
 
-private fun PackageInfo.longVersionCodeCompat(): Long =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) longVersionCode else {
-        @Suppress("DEPRECATION")
-        versionCode.toLong()
-    }
+private fun PackageInfo.longVersionCodeCompat(): Long = longVersionCode
 
-@Suppress("DEPRECATION")
 private fun PackageInfo.signatureDigests(): Set<String> {
-    val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-        signingInfo?.apkContentsSigners.orEmpty()
-    } else {
-        signatures.orEmpty()
-    }
-    return signatures
+    return signingInfo?.apkContentsSigners.orEmpty()
         .map { signature -> sha256Hex(signature.toByteArray()) }
         .toSet()
 }

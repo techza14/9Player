@@ -28,7 +28,6 @@ private const val DICTIONARY_HOSHI_BLOBS_FILE = "blobs.bin"
 private const val DICTIONARY_HOSHI_OFFSETS_FILE = "offsets.bin"
 private const val DICTIONARY_HOSHI_HASH_FILE = "hash.mph"
 private const val DICTIONARY_HOSHI_STYLES_FILE = "styles.css"
-private const val IMPORT_PROGRESS_STEP = 3
 private const val MDICT_MEDIA_LOG_TAG = "MdictMedia"
 private const val HOSHI_LOOKUP_PERF_LOG_TAG = "HoshiLookupPerf"
 private const val HOSHI_META_TYPE_SCAN_LIMIT_ROWS = 2048
@@ -43,14 +42,9 @@ private val NORMALIZE_WHITESPACE_REGEX = Regex("\\s+")
 private val STRIP_HTML_TAGS_REGEX = Regex("<[^>]+>")
 private val LOOKS_LIKE_HTML_REGEX = Regex("<\\s*/?\\s*[a-zA-Z][^>]*>")
 private val CAMEL_CASE_BOUNDARY_REGEX = Regex("([a-z])([A-Z])")
-private val STRUCTURED_DATA_KEY_SANITIZE_REGEX = Regex("[^a-z0-9_-]")
 private val MARKDOWN_IMAGE_REGEX = Regex("!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)")
 private val MARKDOWN_LINK_REGEX = Regex("\\[([^\\]]+)\\]\\(([^)\\s]+)\\)")
 private val PLAIN_URL_REGEX = Regex("https?://[^\\s<]+")
-private val HTML_IMG_SRC_QUOTED_REGEX =
-    Regex("(?i)<img\\b([^>]*?)\\bsrc\\s*=\\s*(['\"])(.*?)\\2([^>]*)>")
-private val HTML_IMG_SRC_UNQUOTED_REGEX =
-    Regex("(?i)<img\\b([^>]*?)\\bsrc\\s*=\\s*([^\\s>]+)([^>]*)>")
 private val DICTIONARY_STORAGE_SAFE_KEY_REGEX = Regex("[^A-Za-z0-9._-]")
 private val HOSHI_TERM_BANK_FILE_REGEX = Regex("term_bank_\\d+\\.json")
 private val HOSHI_TERM_META_BANK_FILE_REGEX = Regex("term_meta_bank_\\d+\\.json")
@@ -617,17 +611,6 @@ internal fun importDictionaryFromZip(
     HoshiNativeBridge.clearLookupCache()
     MdictNativeBridge.clearLookupCache()
     return imported
-}
-
-internal fun includeMountedMdxDictionary(
-    context: Context,
-    dictionaries: List<LoadedDictionary>
-): List<LoadedDictionary> {
-    val mounted = mountedMdxDictionariesFromState(context)
-    if (mounted.isEmpty()) return dictionaries
-    return (dictionaries + mounted).distinctBy { dictionary ->
-        dictionary.cacheKey.trim().ifBlank { dictionary.name.trim().lowercase(Locale.ROOT) }
-    }
 }
 
 internal fun mountedMdxDictionariesFromState(context: Context): List<LoadedDictionary> {
