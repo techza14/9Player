@@ -151,6 +151,14 @@
     <string name="reader_image_preview_unavailable">Image preview unavailable</string>
     <string name="reader_margin_label">Padding: %1$ddp</string>
     <string name="reader_title_margin">Padding</string>
+    <string name="reader_margin_header">Header</string>
+    <string name="reader_margin_body">Body</string>
+    <string name="reader_margin_footer">Footer</string>
+    <string name="reader_margin_show_divider">Show divider</string>
+    <string name="reader_margin_top">Top padding</string>
+    <string name="reader_margin_bottom">Bottom padding</string>
+    <string name="reader_margin_left">Left padding</string>
+    <string name="reader_margin_right">Right padding</string>
     <string name="reader_dialog_done">Done</string>
     <string name="reader_title_info">Info</string>
     <string name="reader_open_ebook_failed">Failed to open ebook: %1$s</string>

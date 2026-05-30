@@ -151,6 +151,14 @@
     <string name="reader_image_preview_unavailable">图片无法预览</string>
     <string name="reader_margin_label">边距：%1$ddp</string>
     <string name="reader_title_margin">边距</string>
+    <string name="reader_margin_header">页眉</string>
+    <string name="reader_margin_body">正文</string>
+    <string name="reader_margin_footer">页脚</string>
+    <string name="reader_margin_show_divider">显示分隔线</string>
+    <string name="reader_margin_top">上边距</string>
+    <string name="reader_margin_bottom">下边距</string>
+    <string name="reader_margin_left">左边距</string>
+    <string name="reader_margin_right">右边距</string>
     <string name="reader_dialog_done">完成</string>
     <string name="reader_title_info">提示信息</string>
     <string name="reader_open_ebook_failed">打开 ebook 失败：%1$s</string>

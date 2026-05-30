@@ -151,6 +151,14 @@
     <string name="reader_image_preview_unavailable">画像をプレビューできません</string>
     <string name="reader_margin_label">余白：%1$ddp</string>
     <string name="reader_title_margin">余白</string>
+    <string name="reader_margin_header">ヘッダー</string>
+    <string name="reader_margin_body">本文</string>
+    <string name="reader_margin_footer">フッター</string>
+    <string name="reader_margin_show_divider">区切り線を表示</string>
+    <string name="reader_margin_top">上余白</string>
+    <string name="reader_margin_bottom">下余白</string>
+    <string name="reader_margin_left">左余白</string>
+    <string name="reader_margin_right">右余白</string>
     <string name="reader_dialog_done">完了</string>
     <string name="reader_title_info">補足情報</string>
     <string name="reader_open_ebook_failed">ebook を開けませんでした：%1$s</string>

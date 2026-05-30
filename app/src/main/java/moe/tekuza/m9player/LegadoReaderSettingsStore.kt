@@ -110,6 +110,10 @@ internal data class LegadoReaderPersistedState(
     val typefaceIndex: Int = 0,
     val paragraphIndentCount: Int = 0,
     val paddingDp: Int = 22,
+    val readerPaddingTopDp: Int = 34,
+    val readerPaddingBottomDp: Int = 22,
+    val readerPaddingLeftDp: Int = 22,
+    val readerPaddingRightDp: Int = 22,
     val layoutMode: M9LayoutMode = M9LayoutMode.HORIZONTAL,
     val pageAnim: M9PageAnim = M9PageAnim.NONE,
     val readerStyleSelect: Int = DEFAULT_LEGADO_READER_STYLE_INDEX,
@@ -139,6 +143,16 @@ internal data class LegadoReaderPersistedState(
     val tipColorMode: ReaderTipColorMode = ReaderTipColorMode.FOLLOW_CONTENT,
     val tipDividerColorMode: ReaderTipDividerColorMode = ReaderTipDividerColorMode.DEFAULT,
     val tipDividerColor: Int = 0x1F000000,
+    val headerPaddingTopDp: Int = 0,
+    val headerPaddingBottomDp: Int = 0,
+    val headerPaddingLeftDp: Int = 0,
+    val headerPaddingRightDp: Int = 0,
+    val footerPaddingTopDp: Int = 0,
+    val footerPaddingBottomDp: Int = 0,
+    val footerPaddingLeftDp: Int = 0,
+    val footerPaddingRightDp: Int = 0,
+    val showHeaderLine: Boolean = false,
+    val showFooterLine: Boolean = true,
     val useZhLayout: Boolean = true,
     val textFullJustify: Boolean = true,
     val textBottomJustify: Boolean = true,
@@ -238,6 +252,10 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         typefaceIndex = typefaceIndex,
         paragraphIndentCount = paragraphIndentCount,
         paddingDp = paddingDp,
+        readerPaddingTopDp = json.optInt("readerPaddingTopDp", 34).coerceIn(0, 100),
+        readerPaddingBottomDp = json.optInt("readerPaddingBottomDp", 22).coerceIn(0, 100),
+        readerPaddingLeftDp = json.optInt("readerPaddingLeftDp", paddingDp).coerceIn(0, 100),
+        readerPaddingRightDp = json.optInt("readerPaddingRightDp", paddingDp).coerceIn(0, 100),
         layoutMode = json.optString("layoutMode")
             .takeIf { it.isNotBlank() }
             ?.let { runCatching { M9LayoutMode.valueOf(it) }.getOrNull() }
@@ -302,6 +320,16 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         tipColorMode = json.optEnum("tipColorMode", ReaderTipColorMode.FOLLOW_CONTENT),
         tipDividerColorMode = json.optEnum("tipDividerColorMode", ReaderTipDividerColorMode.DEFAULT),
         tipDividerColor = json.optInt("tipDividerColor", 0x1F000000),
+        headerPaddingTopDp = json.optInt("headerPaddingTopDp", 0).coerceIn(0, 100),
+        headerPaddingBottomDp = json.optInt("headerPaddingBottomDp", 0).coerceIn(0, 100),
+        headerPaddingLeftDp = json.optInt("headerPaddingLeftDp", 0).coerceIn(0, 100),
+        headerPaddingRightDp = json.optInt("headerPaddingRightDp", 0).coerceIn(0, 100),
+        footerPaddingTopDp = json.optInt("footerPaddingTopDp", 0).coerceIn(0, 100),
+        footerPaddingBottomDp = json.optInt("footerPaddingBottomDp", 0).coerceIn(0, 100),
+        footerPaddingLeftDp = json.optInt("footerPaddingLeftDp", 0).coerceIn(0, 100),
+        footerPaddingRightDp = json.optInt("footerPaddingRightDp", 0).coerceIn(0, 100),
+        showHeaderLine = json.optBoolean("showHeaderLine", false),
+        showFooterLine = json.optBoolean("showFooterLine", true),
         useZhLayout = json.optBoolean("useZhLayout", true),
         textFullJustify = json.optBoolean("textFullJustify", true),
         textBottomJustify = json.optBoolean("textBottomJustify", true),
@@ -419,6 +447,10 @@ internal fun saveLegadoReaderPersistedState(context: Context, state: LegadoReade
         put("typefaceIndex", state.typefaceIndex)
         put("paragraphIndentCount", state.paragraphIndentCount)
         put("paddingDp", state.paddingDp)
+        put("readerPaddingTopDp", state.readerPaddingTopDp)
+        put("readerPaddingBottomDp", state.readerPaddingBottomDp)
+        put("readerPaddingLeftDp", state.readerPaddingLeftDp)
+        put("readerPaddingRightDp", state.readerPaddingRightDp)
         put("layoutMode", state.layoutMode.name)
         put("pageAnim", state.pageAnim.name)
         put("readerStyleSelect", state.readerStyleSelect)
@@ -470,6 +502,16 @@ internal fun saveLegadoReaderPersistedState(context: Context, state: LegadoReade
         put("tipColorMode", state.tipColorMode.name)
         put("tipDividerColorMode", state.tipDividerColorMode.name)
         put("tipDividerColor", state.tipDividerColor)
+        put("headerPaddingTopDp", state.headerPaddingTopDp)
+        put("headerPaddingBottomDp", state.headerPaddingBottomDp)
+        put("headerPaddingLeftDp", state.headerPaddingLeftDp)
+        put("headerPaddingRightDp", state.headerPaddingRightDp)
+        put("footerPaddingTopDp", state.footerPaddingTopDp)
+        put("footerPaddingBottomDp", state.footerPaddingBottomDp)
+        put("footerPaddingLeftDp", state.footerPaddingLeftDp)
+        put("footerPaddingRightDp", state.footerPaddingRightDp)
+        put("showHeaderLine", state.showHeaderLine)
+        put("showFooterLine", state.showFooterLine)
         put("useZhLayout", state.useZhLayout)
         put("textFullJustify", state.textFullJustify)
         put("textBottomJustify", state.textBottomJustify)

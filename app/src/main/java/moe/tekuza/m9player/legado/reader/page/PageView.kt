@@ -57,6 +57,8 @@ internal class PageView(context: Context) : LinearLayout(context) {
     private var tipFooterRight: ReaderTipContent = ReaderTipContent.PAGE_AND_TOTAL
     private var statusBarHidden: Boolean = false
     private var dividerColor: Int? = null
+    private var showHeaderLine: Boolean = false
+    private var showFooterLine: Boolean = true
 
     init {
         orientation = VERTICAL
@@ -283,7 +285,17 @@ internal class PageView(context: Context) : LinearLayout(context) {
         footerMiddle: ReaderTipContent,
         footerRight: ReaderTipContent,
         statusBarHidden: Boolean,
-        dividerColor: Int?
+        dividerColor: Int?,
+        headerPaddingTopDp: Int,
+        headerPaddingBottomDp: Int,
+        headerPaddingLeftDp: Int,
+        headerPaddingRightDp: Int,
+        footerPaddingTopDp: Int,
+        footerPaddingBottomDp: Int,
+        footerPaddingLeftDp: Int,
+        footerPaddingRightDp: Int,
+        showHeaderLine: Boolean,
+        showFooterLine: Boolean
     ) {
         this.bodyTitleMode = bodyTitleMode
         this.bodyTitleSizeAddSp = bodyTitleSizeAddSp
@@ -299,6 +311,20 @@ internal class PageView(context: Context) : LinearLayout(context) {
         tipFooterRight = footerRight
         this.statusBarHidden = statusBarHidden
         this.dividerColor = dividerColor
+        this.showHeaderLine = showHeaderLine
+        this.showFooterLine = showFooterLine
+        headerView.setPadding(
+            dp(headerPaddingLeftDp),
+            dp(headerPaddingTopDp),
+            dp(headerPaddingRightDp),
+            dp(headerPaddingBottomDp)
+        )
+        footerView.setPadding(
+            dp(footerPaddingLeftDp),
+            dp(footerPaddingTopDp),
+            dp(footerPaddingRightDp),
+            dp(footerPaddingBottomDp)
+        )
         updateTipText()
         applyHeaderFooterVisibility()
         applyBodyTitleStyle()
@@ -319,8 +345,8 @@ internal class PageView(context: Context) : LinearLayout(context) {
         footerRightView.visibility = if (showFooter && tipFooterRight != ReaderTipContent.NONE) View.VISIBLE else View.INVISIBLE
         headerView.visibility = if (showHeader) View.VISIBLE else View.GONE
         footerView.visibility = if (showFooter) View.VISIBLE else View.GONE
-        headerDividerView.visibility = if (showHeader && dividerColor != null) View.VISIBLE else View.GONE
-        footerDividerView.visibility = if (showFooter && dividerColor != null) View.VISIBLE else View.GONE
+        headerDividerView.visibility = if (showHeader && showHeaderLine && dividerColor != null) View.VISIBLE else View.GONE
+        footerDividerView.visibility = if (showFooter && showFooterLine && dividerColor != null) View.VISIBLE else View.GONE
     }
 
     private fun updateTipText() {

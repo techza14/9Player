@@ -224,6 +224,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var readerTypeface: Typeface? = Typeface.DEFAULT
     private var readerParagraphIndentCount: Int = 0
     private var readerPaddingDp: Int = 22
+    private var readerPaddingTopDp: Int = 34
+    private var readerPaddingBottomDp: Int = 22
+    private var readerPaddingLeftDp: Int = 22
+    private var readerPaddingRightDp: Int = 22
     private var readerLayoutMode: M9LayoutMode = M9LayoutMode.HORIZONTAL
     private var readerPageAnim: M9PageAnim = M9PageAnim.NONE
     private var readerStyleSelect: Int = DEFAULT_LEGADO_READER_STYLE_INDEX
@@ -279,6 +283,16 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var tipColorMode: ReaderTipColorMode = ReaderTipColorMode.FOLLOW_CONTENT
     private var tipDividerColorMode: ReaderTipDividerColorMode = ReaderTipDividerColorMode.DEFAULT
     private var tipDividerColor: Int = 0x1F000000
+    private var headerPaddingTopDp: Int = 0
+    private var headerPaddingBottomDp: Int = 0
+    private var headerPaddingLeftDp: Int = 0
+    private var headerPaddingRightDp: Int = 0
+    private var footerPaddingTopDp: Int = 0
+    private var footerPaddingBottomDp: Int = 0
+    private var footerPaddingLeftDp: Int = 0
+    private var footerPaddingRightDp: Int = 0
+    private var showHeaderLine: Boolean = false
+    private var showFooterLine: Boolean = true
     private var useZhLayout: Boolean = true
     private var textFullJustify: Boolean = true
     private var textBottomJustify: Boolean = true
@@ -678,7 +692,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             setTextWeight(readerTextWeight)
             setTextUnderline(readerUnderline && readerLayoutMode == M9LayoutMode.HORIZONTAL)
             setReaderTypeface(readerTypeface)
-            setReaderPadding(dp(readerPaddingDp), dp(34), dp(readerPaddingDp), currentReaderBottomPaddingPx())
+            setReaderPadding(
+                dp(readerPaddingLeftDp),
+                dp(readerPaddingTopDp),
+                dp(readerPaddingRightDp),
+                currentReaderBottomPaddingPx()
+            )
             setPageAnim(readerPageAnim)
             setLayoutMode(readerLayoutMode)
             setNoAnimScrollPage(noAnimScrollPage)
@@ -1527,6 +1546,21 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         tipColorMode = defaults.tipColorMode
         tipDividerColorMode = defaults.tipDividerColorMode
         tipDividerColor = defaults.tipDividerColor
+        readerPaddingTopDp = defaults.readerPaddingTopDp
+        readerPaddingBottomDp = defaults.readerPaddingBottomDp
+        readerPaddingLeftDp = defaults.readerPaddingLeftDp
+        readerPaddingRightDp = defaults.readerPaddingRightDp
+        readerPaddingDp = defaults.paddingDp
+        headerPaddingTopDp = defaults.headerPaddingTopDp
+        headerPaddingBottomDp = defaults.headerPaddingBottomDp
+        headerPaddingLeftDp = defaults.headerPaddingLeftDp
+        headerPaddingRightDp = defaults.headerPaddingRightDp
+        footerPaddingTopDp = defaults.footerPaddingTopDp
+        footerPaddingBottomDp = defaults.footerPaddingBottomDp
+        footerPaddingLeftDp = defaults.footerPaddingLeftDp
+        footerPaddingRightDp = defaults.footerPaddingRightDp
+        showHeaderLine = defaults.showHeaderLine
+        showFooterLine = defaults.showFooterLine
         useZhLayout = defaults.useZhLayout
         textFullJustify = defaults.textFullJustify
         textBottomJustify = defaults.textBottomJustify
@@ -2637,6 +2671,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         readerTypeface = readerTypefaceForIndex(readerTypefaceIndex)
         readerParagraphIndentCount = style.paragraphIndentCount
         readerPaddingDp = style.paddingDp
+        readerPaddingLeftDp = style.paddingDp
+        readerPaddingRightDp = style.paddingDp
         readerBgColor = style.bgColor
         readerTextColor = style.textColor
         readerTipColor = style.tipColor
@@ -2692,9 +2728,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         readView.setTextWeight(readerTextWeight)
         readView.setReaderTypeface(readerTypeface)
         readView.setReaderPadding(
-            dp(readerPaddingDp),
-            dp(34),
-            dp(readerPaddingDp),
+            dp(readerPaddingLeftDp),
+            dp(readerPaddingTopDp),
+            dp(readerPaddingRightDp),
             currentReaderBottomPaddingPx()
         )
     }
@@ -2757,7 +2793,17 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             footerMiddle = tipFooterMiddle,
             footerRight = tipFooterRight,
             statusBarHidden = hideStatusBar,
-            dividerColor = effectiveReaderTipDividerColor()
+            dividerColor = effectiveReaderTipDividerColor(),
+            headerPaddingTopDp = headerPaddingTopDp,
+            headerPaddingBottomDp = headerPaddingBottomDp,
+            headerPaddingLeftDp = headerPaddingLeftDp,
+            headerPaddingRightDp = headerPaddingRightDp,
+            footerPaddingTopDp = footerPaddingTopDp,
+            footerPaddingBottomDp = footerPaddingBottomDp,
+            footerPaddingLeftDp = footerPaddingLeftDp,
+            footerPaddingRightDp = footerPaddingRightDp,
+            showHeaderLine = showHeaderLine,
+            showFooterLine = showFooterLine
         )
     }
 
@@ -3250,42 +3296,90 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun showPaddingDialog() {
-        val container = LinearLayout(this).apply {
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(12), dp(22), 0)
+            setPadding(dp(24), dp(18), dp(24), dp(18))
         }
-        val label = text(getString(R.string.reader_margin_label, readerPaddingDp), 15f, MENU_TEXT)
-        val seek = SeekBar(this).apply {
-            max = 40
-            progress = readerPaddingDp.coerceIn(0, max)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser) {
-                        readerPaddingDp = progress
-                        label.text = getString(R.string.reader_margin_label, readerPaddingDp)
-                        readView.setReaderPadding(
-                            dp(readerPaddingDp),
-                            dp(34),
-                            dp(readerPaddingDp),
-                            currentReaderBottomPaddingPx()
-                        )
-                        updateSelectedReaderStyleLayoutFields()
-                    }
-                }
+        addInfoSectionTitle(content, getString(R.string.reader_margin_header))
+        addInfoCheckRow(content, getString(R.string.reader_margin_show_divider), showHeaderLine) {
+            showHeaderLine = it
+            applyPaddingConfigChange(repaginate = false)
+        }
+        addInfoAdjustRow(content, getString(R.string.reader_margin_top), headerPaddingTopDp, 0, 100) {
+            headerPaddingTopDp = it
+            applyPaddingConfigChange(repaginate = true)
+        }
+        addInfoAdjustRow(content, getString(R.string.reader_margin_bottom), headerPaddingBottomDp, 0, 100) {
+            headerPaddingBottomDp = it
+            applyPaddingConfigChange(repaginate = true)
+        }
+        addInfoAdjustRow(content, getString(R.string.reader_margin_left), headerPaddingLeftDp, 0, 100) {
+            headerPaddingLeftDp = it
+            applyPaddingConfigChange(repaginate = true)
+        }
+        addInfoAdjustRow(content, getString(R.string.reader_margin_right), headerPaddingRightDp, 0, 100) {
+            headerPaddingRightDp = it
+            applyPaddingConfigChange(repaginate = true)
+        }
 
-                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                    requestBookRelayout(immediate = true)
-                }
-            })
+        addInfoSectionTitle(content, getString(R.string.reader_margin_body))
+        addInfoAdjustRow(content, getString(R.string.reader_margin_top), readerPaddingTopDp, 0, 160) {
+            readerPaddingTopDp = it
+            applyPaddingConfigChange(repaginate = true)
         }
-        container.addView(label, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(42)))
-        container.addView(seek, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)))
+        addInfoAdjustRow(content, getString(R.string.reader_margin_bottom), readerPaddingBottomDp, 0, 160) {
+            readerPaddingBottomDp = it
+            applyPaddingConfigChange(repaginate = true)
+        }
+        addInfoAdjustRow(content, getString(R.string.reader_margin_left), readerPaddingLeftDp, 0, 100) {
+            readerPaddingLeftDp = it
+            readerPaddingDp = it
+            applyPaddingConfigChange(repaginate = true)
+        }
+        addInfoAdjustRow(content, getString(R.string.reader_margin_right), readerPaddingRightDp, 0, 100) {
+            readerPaddingRightDp = it
+            readerPaddingDp = readerPaddingLeftDp
+            applyPaddingConfigChange(repaginate = true)
+        }
+
+        addInfoSectionTitle(content, getString(R.string.reader_margin_footer))
+        addInfoCheckRow(content, getString(R.string.reader_margin_show_divider), showFooterLine) {
+            showFooterLine = it
+            applyPaddingConfigChange(repaginate = false)
+        }
+        addInfoAdjustRow(content, getString(R.string.reader_margin_top), footerPaddingTopDp, 0, 100) {
+            footerPaddingTopDp = it
+            applyPaddingConfigChange(repaginate = true)
+        }
+        addInfoAdjustRow(content, getString(R.string.reader_margin_bottom), footerPaddingBottomDp, 0, 100) {
+            footerPaddingBottomDp = it
+            applyPaddingConfigChange(repaginate = true)
+        }
+        addInfoAdjustRow(content, getString(R.string.reader_margin_left), footerPaddingLeftDp, 0, 100) {
+            footerPaddingLeftDp = it
+            applyPaddingConfigChange(repaginate = true)
+        }
+        addInfoAdjustRow(content, getString(R.string.reader_margin_right), footerPaddingRightDp, 0, 100) {
+            footerPaddingRightDp = it
+            applyPaddingConfigChange(repaginate = true)
+        }
+        val scroll = ScrollView(this).apply { addView(content) }
         AlertDialog.Builder(this)
             .setTitle(R.string.reader_title_margin)
-            .setView(container)
+            .setView(scroll)
             .setPositiveButton(R.string.reader_dialog_done, null)
             .show()
+    }
+
+    private fun applyPaddingConfigChange(repaginate: Boolean) {
+        applyReaderTypography()
+        applyReaderInfoConfig()
+        updateSelectedReaderStyleLayoutFields()
+        if (repaginate) {
+            requestBookRelayout(immediate = true)
+        } else {
+            persistReaderSettings()
+        }
     }
 
     private fun showTipConfigDialog() {
@@ -3300,11 +3394,11 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             bodyTitleSizeAddSp = it
             applyTipConfigChange(repaginate = true)
         }
-        addInfoAdjustRow(content, "上边距", bodyTitleTopSpacingDp, 0, 100) {
+        addInfoAdjustRow(content, getString(R.string.reader_margin_top), bodyTitleTopSpacingDp, 0, 100) {
             bodyTitleTopSpacingDp = it
             applyTipConfigChange(repaginate = true)
         }
-        addInfoAdjustRow(content, "下边距", bodyTitleBottomSpacingDp, 0, 100) {
+        addInfoAdjustRow(content, getString(R.string.reader_margin_bottom), bodyTitleBottomSpacingDp, 0, 100) {
             bodyTitleBottomSpacingDp = it
             applyTipConfigChange(repaginate = true)
         }
@@ -3335,7 +3429,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 applyTipConfigChange(repaginate = true)
             }
         }
-
         addInfoSectionTitle(content, "页脚")
         addInfoSelectorRow(content, "显示/隐藏", footerModeLabel(footerMode)) {
             dialog?.dismiss()
@@ -3362,7 +3455,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 applyTipConfigChange(repaginate = true)
             }
         }
-
         addInfoSectionTitle(content, "页眉&页脚")
         addInfoSelectorRow(content, "文字颜色", tipColorModeLabel(tipColorMode)) {
             dialog?.dismiss()
@@ -3509,6 +3601,29 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 gravity = Gravity.END
                 setTextColor(readerTextColor)
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+    }
+
+    private fun addInfoCheckRow(parent: LinearLayout, label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+        parent.addView(LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(8), 0, dp(8))
+            addView(TextView(this@LegadoReaderActivity).apply {
+                text = label
+                textSize = 16f
+                setTextColor(readerTextColor)
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(CheckBox(this@LegadoReaderActivity).apply {
+                isChecked = checked
+                setOnCheckedChangeListener { _, isChecked -> onChange(isChecked) }
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
         }, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
@@ -3842,8 +3957,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 letterSpacingPx = dp(readerLetterSpacingDp).toFloat(),
                 textWeight = readerTextWeight,
                 typeface = readerTypeface,
-                paddingLeftPx = dp(readerPaddingDp),
-                paddingRightPx = dp(readerPaddingDp),
+                paddingLeftPx = dp(readerPaddingLeftDp),
+                paddingRightPx = dp(readerPaddingRightDp),
                 layoutMode = readerLayoutMode,
                 pageAnim = readerPageAnim,
                 showRubyText = showRubyText
@@ -4555,7 +4670,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun currentReaderBottomPaddingPx(): Int {
-        return dp(22) + playbackBarEffectiveHeightPx()
+        return dp(readerPaddingBottomDp) + playbackBarEffectiveHeightPx()
     }
 
     private fun playbackBarEffectiveHeightPx(): Int {
@@ -4601,9 +4716,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun applyReadViewViewportInset(reload: Boolean) {
         readView.setReaderPadding(
-            dp(readerPaddingDp),
-            dp(34),
-            dp(readerPaddingDp),
+            dp(readerPaddingLeftDp),
+            dp(readerPaddingTopDp),
+            dp(readerPaddingRightDp),
             currentReaderBottomPaddingPx()
         )
         if (reload) {
@@ -4796,6 +4911,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         readerStyleSelect = state.readerStyleSelect.coerceIn(0, readerStyleConfigs.lastIndex)
         readerNightMode = state.readerNightMode
         applySelectedReaderStyleFields()
+        readerPaddingTopDp = state.readerPaddingTopDp
+        readerPaddingBottomDp = state.readerPaddingBottomDp
+        readerPaddingLeftDp = state.readerPaddingLeftDp
+        readerPaddingRightDp = state.readerPaddingRightDp
         readerCueHighlightColor = state.cueHighlightColor
         hideStatusBar = state.hideStatusBar
         readBodyToLh = state.readBodyToLh
@@ -4820,6 +4939,16 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         tipColorMode = state.tipColorMode
         tipDividerColorMode = state.tipDividerColorMode
         tipDividerColor = state.tipDividerColor
+        headerPaddingTopDp = state.headerPaddingTopDp
+        headerPaddingBottomDp = state.headerPaddingBottomDp
+        headerPaddingLeftDp = state.headerPaddingLeftDp
+        headerPaddingRightDp = state.headerPaddingRightDp
+        footerPaddingTopDp = state.footerPaddingTopDp
+        footerPaddingBottomDp = state.footerPaddingBottomDp
+        footerPaddingLeftDp = state.footerPaddingLeftDp
+        footerPaddingRightDp = state.footerPaddingRightDp
+        showHeaderLine = state.showHeaderLine
+        showFooterLine = state.showFooterLine
         useZhLayout = state.useZhLayout
         textFullJustify = state.textFullJustify
         textBottomJustify = state.textBottomJustify
@@ -4911,6 +5040,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 typefaceIndex = readerTypefaceIndex,
                 paragraphIndentCount = readerParagraphIndentCount,
                 paddingDp = readerPaddingDp,
+                readerPaddingTopDp = readerPaddingTopDp,
+                readerPaddingBottomDp = readerPaddingBottomDp,
+                readerPaddingLeftDp = readerPaddingLeftDp,
+                readerPaddingRightDp = readerPaddingRightDp,
                 layoutMode = readerLayoutMode,
                 pageAnim = readerPageAnim,
                 readerStyleSelect = readerStyleSelect,
@@ -4940,6 +5073,16 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 tipColorMode = tipColorMode,
                 tipDividerColorMode = tipDividerColorMode,
                 tipDividerColor = tipDividerColor,
+                headerPaddingTopDp = headerPaddingTopDp,
+                headerPaddingBottomDp = headerPaddingBottomDp,
+                headerPaddingLeftDp = headerPaddingLeftDp,
+                headerPaddingRightDp = headerPaddingRightDp,
+                footerPaddingTopDp = footerPaddingTopDp,
+                footerPaddingBottomDp = footerPaddingBottomDp,
+                footerPaddingLeftDp = footerPaddingLeftDp,
+                footerPaddingRightDp = footerPaddingRightDp,
+                showHeaderLine = showHeaderLine,
+                showFooterLine = showFooterLine,
                 useZhLayout = useZhLayout,
                 textFullJustify = textFullJustify,
                 textBottomJustify = textBottomJustify,

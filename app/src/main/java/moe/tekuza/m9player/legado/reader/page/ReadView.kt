@@ -303,7 +303,17 @@ internal class ReadView @JvmOverloads constructor(
         footerMiddle: ReaderTipContent,
         footerRight: ReaderTipContent,
         statusBarHidden: Boolean,
-        dividerColor: Int?
+        dividerColor: Int?,
+        headerPaddingTopDp: Int,
+        headerPaddingBottomDp: Int,
+        headerPaddingLeftDp: Int,
+        headerPaddingRightDp: Int,
+        footerPaddingTopDp: Int,
+        footerPaddingBottomDp: Int,
+        footerPaddingLeftDp: Int,
+        footerPaddingRightDp: Int,
+        showHeaderLine: Boolean,
+        showFooterLine: Boolean
     ) {
         forEachPageView {
             it.setReaderInfoConfig(
@@ -320,7 +330,17 @@ internal class ReadView @JvmOverloads constructor(
                 footerMiddle = footerMiddle,
                 footerRight = footerRight,
                 statusBarHidden = statusBarHidden,
-                dividerColor = dividerColor
+                dividerColor = dividerColor,
+                headerPaddingTopDp = headerPaddingTopDp,
+                headerPaddingBottomDp = headerPaddingBottomDp,
+                headerPaddingLeftDp = headerPaddingLeftDp,
+                headerPaddingRightDp = headerPaddingRightDp,
+                footerPaddingTopDp = footerPaddingTopDp,
+                footerPaddingBottomDp = footerPaddingBottomDp,
+                footerPaddingLeftDp = footerPaddingLeftDp,
+                footerPaddingRightDp = footerPaddingRightDp,
+                showHeaderLine = showHeaderLine,
+                showFooterLine = showFooterLine
             )
         }
         requestLayout()
