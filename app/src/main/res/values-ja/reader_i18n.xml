@@ -177,7 +177,7 @@
     <string name="reader_tip_default">標準</string>
     <string name="reader_tip_custom">カスタム</string>
     <string name="reader_tip_none">なし</string>
-    <string name="reader_tip_book_name">タイトル</string>
+    <string name="reader_tip_book_name">書名</string>
     <string name="reader_tip_chapter_title">章タイトル</string>
     <string name="reader_tip_time">時刻</string>
     <string name="reader_tip_battery_percentage">バッテリー残量</string>

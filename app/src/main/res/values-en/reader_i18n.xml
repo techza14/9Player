@@ -177,7 +177,7 @@
     <string name="reader_tip_default">Default</string>
     <string name="reader_tip_custom">Custom</string>
     <string name="reader_tip_none">None</string>
-    <string name="reader_tip_book_name">Title</string>
+    <string name="reader_tip_book_name">Book title</string>
     <string name="reader_tip_chapter_title">Chapter title</string>
     <string name="reader_tip_time">Time</string>
     <string name="reader_tip_battery_percentage">Battery percentage</string>

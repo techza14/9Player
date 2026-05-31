@@ -282,15 +282,11 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         bodyTitleBottomSpacingDp = json.optInt("bodyTitleBottomSpacingDp", 0).coerceIn(0, 100),
         headerMode = json.optEnum(
             "headerMode",
-            if (json.optBoolean("showReadTitleAddition", true)) {
-                ReaderHeaderMode.HIDE_WHEN_STATUS_BAR_SHOW
-            } else {
-                ReaderHeaderMode.HIDE
-            }
+            ReaderHeaderMode.HIDE_WHEN_STATUS_BAR_SHOW
         ),
         footerMode = json.optEnum(
             "footerMode",
-            if (json.optBoolean("showReadTitleAddition", true)) ReaderFooterMode.SHOW else ReaderFooterMode.HIDE
+            ReaderFooterMode.SHOW
         ),
         tipHeaderLeft = json.optTipContent(
             "tipHeaderLeft",

@@ -42,6 +42,7 @@ internal class PageView(context: Context) : LinearLayout(context) {
     private lateinit var footerView: LinearLayout
     private var showHeaderFooter: Boolean = true
     private var bookTitle: String = ""
+    private var displayedChapterTitle: String? = null
     private var headerMode: ReaderHeaderMode = ReaderHeaderMode.HIDE_WHEN_STATUS_BAR_SHOW
     private var footerMode: ReaderFooterMode = ReaderFooterMode.SHOW
     private var bodyTitleMode: ReaderBodyTitleMode = ReaderBodyTitleMode.LEFT
@@ -271,6 +272,13 @@ internal class PageView(context: Context) : LinearLayout(context) {
         updateTipText()
     }
 
+    fun setDisplayedChapterTitle(title: String?) {
+        val nextTitle = title?.takeIf { it.isNotBlank() }
+        if (displayedChapterTitle == nextTitle) return
+        displayedChapterTitle = nextTitle
+        updateTipText()
+    }
+
     fun setReaderInfoConfig(
         bodyTitleMode: ReaderBodyTitleMode,
         bodyTitleSizeAddSp: Int,
@@ -383,7 +391,7 @@ internal class PageView(context: Context) : LinearLayout(context) {
         return when (content) {
             ReaderTipContent.NONE -> ""
             ReaderTipContent.BOOK_NAME -> bookTitle.ifBlank { page.title }
-            ReaderTipContent.CHAPTER_TITLE -> page.title
+            ReaderTipContent.CHAPTER_TITLE -> displayedChapterTitle ?: page.title
             ReaderTipContent.TIME -> currentClockText()
             ReaderTipContent.BATTERY_PERCENTAGE -> "${batteryPercent()}%"
             ReaderTipContent.PAGE -> "${page.globalIndex + 1} / ${page.totalPages}"

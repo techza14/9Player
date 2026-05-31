@@ -151,6 +151,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private lateinit var readView: ReadView
     private lateinit var readerRoot: View
     private lateinit var toolbarTitleText: TextView
+    private lateinit var toolbarAdditionText: TextView
     private lateinit var chapterSeekBar: SeekBar
     private lateinit var listenActionText: TextView
     private lateinit var audioPlayPauseText: TextView
@@ -191,6 +192,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private val chapterPageCache: MutableMap<ReaderChapterPageCacheKey, List<TextPage>> = linkedMapOf()
     private var pendingAudioRestorePositionMs: Long = 0L
     private var pendingAudioRestoreDurationMs: Long = 0L
+    private var pendingPlayerOpenAudioReveal: Boolean = false
     private var lastSavedPlaybackPositionMs: Long = Long.MIN_VALUE
     private val sharedPlaybackStateListener = object : BookReaderFloatingBridge.PlaybackStateListener {
         override fun onPlaybackStateChanged(isPlaying: Boolean) {
@@ -200,6 +202,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private val sharedPlaybackPositionListener = object : BookReaderFloatingBridge.PlaybackPositionListener {
         override fun onPlaybackPositionChanged(positionMs: Long) {
             runOnUiThread {
+                if (useM4bChapterSource()) {
+                    updateChapterTitleSurfaces()
+                }
                 if (audioUri != null && isAudioPlaying()) {
                     syncToAudioPosition()
                 }
@@ -377,6 +382,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         returnToPlayerOnBack = intent.getBooleanExtra(EXTRA_RETURN_TO_PLAYER_ON_BACK, false)
         pendingAudioRestorePositionMs = intent.getLongExtra(EXTRA_AUDIO_POSITION_MS, -1L).coerceAtLeast(0L)
         pendingAudioRestoreDurationMs = intent.getLongExtra(EXTRA_AUDIO_DURATION_MS, -1L).coerceAtLeast(0L)
+        pendingPlayerOpenAudioReveal = returnToPlayerOnBack && pendingAudioRestorePositionMs > 0L
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.isNavigationBarContrastEnforced = false
         volumeControlStream = AudioManager.STREAM_MUSIC
@@ -445,7 +451,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     override fun onPause() {
         persistAudioPlaybackSnapshot()
-        persistReaderSettings(updateAnchor = false)
+        persistReaderSettingsWithCurrentAnchor("onPause")
         super.onPause()
     }
 
@@ -700,7 +706,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             setLayoutMode(readerLayoutMode)
             setNoAnimScrollPage(noAnimScrollPage)
             setClickRegionActions(clickRegionActions)
-            setShowHeaderFooter(showReadTitleAddition)
             setBookTitle(currentReaderTitle())
             applyReaderInfoConfig()
             setSelectionPrimaryActionKey(selectionPrimaryActionKey)
@@ -748,6 +753,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             findViewById<TextView>(R.id.reader_toolbar_title).also {
                 toolbarTitleText = it
                 it.text = currentReaderTitle()
+            }
+            findViewById<TextView>(R.id.reader_title_addition).also {
+                toolbarAdditionText = it
             }
             findViewById<TextView>(R.id.reader_encoding).also {
                 it.visibility = View.GONE
@@ -988,8 +996,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             }
             onShowReadTitleAdditionChanged = {
                 showReadTitleAddition = it
-                applyReaderInfoConfig()
-                requestBookRelayout()
+                updateChapterTitleSurfaces()
+                persistReaderSettings(updateAnchor = false)
             }
             onUseZhLayoutChanged = {
                 useZhLayout = it
@@ -1090,13 +1098,17 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             else -> 0xFF2C241B.toInt()
         }
         val progressColor = if (isNight) NIGHT_ACCENT else textColor
+        val titleContainer = readMenu.findViewById<View>(R.id.reader_title_container)
         val titleBar = readMenu.findViewById<View>(R.id.reader_title_bar)
+        val titleAddition = readMenu.findViewById<View>(R.id.reader_title_addition)
         val bottomPanel = readMenu.findViewById<View>(R.id.reader_bottom_panel)
-        titleBar.setBackgroundColor(menuBgColor)
+        titleContainer.setBackgroundColor(menuBgColor)
         bottomPanel.setBackgroundColor(menuBgColor)
         applyPlaybackBarStyle()
         tintMenuContent(titleBar, textColor)
+        tintMenuContent(titleAddition, textColor)
         tintMenuContent(bottomPanel, textColor)
+        updateChapterTitleSurfaces()
         chapterSeekBar.thumb.setTint(progressColor)
         chapterSeekBar.progressTintList = ColorStateList.valueOf(progressColor)
         chapterSeekBar.progressBackgroundTintList = ColorStateList.valueOf(withAlpha(textColor, 0.2f))
@@ -1165,6 +1177,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         if (readMenu.visibility != targetVisibility) {
             readMenu.visibility = targetVisibility
         }
+        if (visible) updateChapterTitleSurfaces()
         if (updateSystemBars) updateSystemBarSurfaces()
     }
 
@@ -2072,6 +2085,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             returnToSharedPlayer()
             return
         }
+        persistReaderSettingsWithCurrentAnchor("openPlayer")
         persistAudioPlaybackSnapshot()
         startPlayerActivity(targetAudioUri)
     }
@@ -2093,7 +2107,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun returnToSharedPlayer(): Boolean {
         val targetAudioUri = audioUri ?: return false
-        persistReaderSettings(updateAnchor = false)
+        persistReaderSettingsWithCurrentAnchor("returnToPlayer")
         persistAudioPlaybackSnapshot()
         startPlayerActivity(targetAudioUri)
         finish()
@@ -2119,7 +2133,28 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private fun updateDisplayedBookTitle() {
         val title = currentReaderTitle()
         if (::toolbarTitleText.isInitialized) toolbarTitleText.text = title
+        updateChapterTitleSurfaces()
         if (::readView.isInitialized) readView.setBookTitle(title)
+    }
+
+    private fun updateChapterTitleSurfaces() {
+        val page = pages.getOrNull(pageIndex)
+        val title = currentDisplayedChapterTitle(page)
+        if (::readView.isInitialized) readView.setDisplayedChapterTitle(title)
+        if (!::toolbarAdditionText.isInitialized) return
+        toolbarAdditionText.visibility = if (showReadTitleAddition) View.VISIBLE else View.GONE
+        if (!showReadTitleAddition) return
+        toolbarAdditionText.text = title
+    }
+
+    private fun currentDisplayedChapterTitle(page: TextPage? = pages.getOrNull(pageIndex)): String {
+        if (useM4bChapterSource()) {
+            m4bChapters.getOrNull(currentM4bChapterIndex())
+                ?.title
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return it }
+        }
+        return page?.title?.ifBlank { currentReaderTitle() } ?: currentReaderTitle()
     }
 
     private fun toggleNightMode() {
@@ -2386,6 +2421,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         if (chapters.isEmpty()) {
             Toast.makeText(this, R.string.reader_chapter_source_m4b_unavailable, Toast.LENGTH_SHORT).show()
             chapterSourceMode = ReaderChapterSourceMode.BOOK
+            updateChapterTitleSurfaces()
             if (::moreSettingsPanel.isInitialized) moreSettingsPanel.bind(currentMoreConfigState())
             bindChapterCatalogList()
             return
@@ -2772,7 +2808,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun applyReaderInfoConfig() {
         if (!::readView.isInitialized) return
-        readView.setShowHeaderFooter(showReadTitleAddition)
         readView.setReaderInfoConfig(
             bodyTitleMode = bodyTitleMode,
             bodyTitleSizeAddSp = bodyTitleSizeAddSp,
@@ -3821,16 +3856,17 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 )
                 if (cueMatchesByCueIndex.isNotEmpty()) {
                     Log.d(LEGADO_READER_LOG_TAG, "readerStartup syncToAudioPosition begin")
-                    syncToAudioPosition(allowPageJump = isAudioPlaying())
+                    syncToAudioPosition(
+                        allowPageJump = isAudioPlaying() || pendingPlayerOpenAudioReveal,
+                        forceReveal = pendingPlayerOpenAudioReveal
+                    )
+                    pendingPlayerOpenAudioReveal = false
                 } else {
                     Log.d(LEGADO_READER_LOG_TAG, "readerStartup loadSrtSync begin")
-                    loadSrtSyncIfNeeded()
-                    if (cues.isNotEmpty()) {
-                        Log.d(
-                            LEGADO_READER_LOG_TAG,
-                            "loadDisplayedBook no in-memory matches; trying persisted restore"
-                        )
-                        restorePersistedMatchIfPossible()
+                    loadSrtSyncIfNeeded { success ->
+                        if (success) {
+                            revealPendingPlayerOpenAudioPositionIfNeeded()
+                        }
                     }
                 }
                 preloadAdjacentChapters(
@@ -3961,7 +3997,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun effectiveReaderContentHeightPx(contentHeightPx: Int): Int {
-        return (contentHeightPx - readerBodyBottomReservePx() - readerBodyTitleReservePx()).coerceAtLeast(dp(120))
+        return (contentHeightPx - readerBodyTitleReservePx()).coerceAtLeast(dp(120))
     }
 
     private fun readerBodyTitleReservePx(): Int {
@@ -4079,11 +4115,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         chapterPageCache.clear()
     }
 
-    private fun readerBodyBottomReservePx(): Int {
-        if (!showReadTitleAddition) return 0
-        return dp(12)
-    }
-
     private fun renderCurrentPage(
         forward: Boolean = true,
         persistAnchor: Boolean = false
@@ -4119,18 +4150,23 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         readView.setPage(page, highlight, searchHighlight, forward = forward)
         updateCrossPageCueWindow(page, match)
         updateProgressSeekBar()
+        updateChapterTitleSurfaces()
         if (persistAnchor) {
-            persistReaderAnchorFromPage()
+            persistReaderAnchor(currentPageAnchor(includeCueMatch = false))
         }
-    }
-
-    private fun persistReaderAnchorFromPage() {
-        val anchor = currentPageAnchor(includeCueMatch = false)
-        persistReaderAnchor(anchor)
     }
 
     private fun persistReaderAnchor(anchor: ReaderPageAnchor?) {
         persistReaderSettings(updateAnchor = true, anchorOverride = anchor)
+    }
+
+    private fun persistReaderSettingsWithCurrentAnchor(reason: String) {
+        val anchor = currentPageAnchor(includeCueMatch = false)
+        Log.d(
+            LEGADO_READER_LOG_TAG,
+            "readerProgress save reason=$reason anchor=$anchor pageIndex=$pageIndex pages=${pages.size}"
+        )
+        persistReaderSettings(updateAnchor = anchor != null, anchorOverride = anchor)
     }
 
     private fun useM4bChapterSource(): Boolean {
@@ -4175,6 +4211,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             onLoaded?.invoke(chapters.isNotEmpty())
             if (chapters.isNotEmpty()) {
                 updateProgressSeekBar()
+                updateChapterTitleSurfaces()
             }
         }
     }
@@ -4201,6 +4238,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             }
         }
         updateProgressSeekBar()
+        updateChapterTitleSurfaces()
     }
 
     private fun updateProgressSeekBar() {
@@ -4854,6 +4892,20 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         )
     }
 
+    private fun revealPendingPlayerOpenAudioPositionIfNeeded() {
+        if (!pendingPlayerOpenAudioReveal) return
+        if (cueMatchesByCueIndex.isEmpty()) {
+            Log.d(LEGADO_READER_LOG_TAG, "readerProgress revealFromPlayer skipped matches empty")
+            return
+        }
+        pendingPlayerOpenAudioReveal = false
+        Log.d(
+            LEGADO_READER_LOG_TAG,
+            "readerProgress revealFromPlayer position=${currentAudioPositionMs()} playing=${isAudioPlaying()}"
+        )
+        syncToAudioPosition(allowPageJump = true, forceReveal = true)
+    }
+
     private fun persistCurrentMatchSnapshot() {
         val current = matchData ?: run {
             Log.d(LEGADO_READER_LOG_TAG, "persistMatch skipped matchData=null")
@@ -5263,6 +5315,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                                     chapterSourceMode = ReaderChapterSourceMode.M4B
                                     chapterSourceValue.text = currentChapterSourceSummary()
                                     updateProgressSeekBar()
+                                    updateChapterTitleSurfaces()
                                 }
                                 persistReaderSettings(updateAnchor = false)
                                 sourceDialog.dismiss()
@@ -5272,6 +5325,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                         chapterSourceMode = ReaderChapterSourceMode.BOOK
                         chapterSourceValue.text = currentChapterSourceSummary()
                         updateProgressSeekBar()
+                        updateChapterTitleSurfaces()
                         persistReaderSettings(updateAnchor = false)
                         sourceDialog.dismiss()
                     }
@@ -5591,22 +5645,26 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             renderCurrentPage()
             return
         }
+        val matchAnchor = ReaderPageAnchor(match.chapterIndex, match.rawStart)
         val startPageIndex = findTextPageForMatch(match)
         if (startPageIndex == null) {
             activeCueIndex = cueIndex
+            persistReaderAnchor(matchAnchor)
             loadDisplayedBook(
-                anchor = ReaderPageAnchor(match.chapterIndex, match.rawStart),
+                anchor = matchAnchor,
                 forceDocumentReload = false
             )
             return
         }
         if (startPageIndex == pageIndex) {
             updateDisplayedCueHighlightOnly()
+            persistReaderAnchor(matchAnchor)
             return
         }
         val previousPageIndex = pageIndex
         pageIndex = startPageIndex
         renderCurrentPage(forward = startPageIndex >= previousPageIndex)
+        persistReaderAnchor(matchAnchor)
     }
 
     private fun updateDisplayedCueHighlightOnly() {

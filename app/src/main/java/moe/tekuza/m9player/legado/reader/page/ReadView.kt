@@ -279,14 +279,13 @@ internal class ReadView @JvmOverloads constructor(
         requestLayout()
     }
 
-    fun setShowHeaderFooter(show: Boolean) {
-        forEachPageView { it.setShowHeaderFooter(show) }
-        requestLayout()
-    }
-
     fun setBookTitle(title: String) {
         forEachPageView { it.setBookTitle(title) }
         crossPageCuePageOverlay.setBookTitle(title)
+    }
+
+    fun setDisplayedChapterTitle(title: String?) {
+        forEachPageView { it.setDisplayedChapterTitle(title) }
     }
 
     fun setReaderInfoConfig(

@@ -11,58 +11,78 @@
         android:layout_height="match_parent" />
 
     <LinearLayout
-        android:id="@+id/reader_title_bar"
+        android:id="@+id/reader_title_container"
         android:layout_width="match_parent"
-        android:layout_height="56dp"
+        android:layout_height="wrap_content"
         android:layout_gravity="top"
         android:background="@drawable/reader_menu_panel_bg"
         android:elevation="4dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="8dp"
-        android:paddingEnd="4dp">
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:id="@+id/reader_title_bar"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="4dp">
+
+            <TextView
+                android:id="@+id/reader_back"
+                android:layout_width="48dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/reader_menu_touch"
+                android:gravity="center"
+                android:text="‹"
+                android:textColor="#2C241B"
+                android:textSize="32sp" />
+
+            <TextView
+                android:id="@+id/reader_toolbar_title"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:gravity="center_vertical"
+                android:singleLine="true"
+                android:textColor="#2C241B"
+                android:textSize="18sp" />
+
+            <TextView
+                android:id="@+id/reader_encoding"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/reader_menu_touch"
+                android:gravity="center"
+                android:text="@string/reader_encoding_set"
+                android:textColor="#2C241B"
+                android:textSize="15sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/reader_overflow"
+                android:layout_width="48dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/reader_menu_touch"
+                android:gravity="center"
+                android:text="⋮"
+                android:textColor="#2C241B"
+                android:textSize="30sp" />
+        </LinearLayout>
 
         <TextView
-            android:id="@+id/reader_back"
-            android:layout_width="48dp"
-            android:layout_height="match_parent"
-            android:background="@drawable/reader_menu_touch"
-            android:gravity="center"
-            android:text="‹"
-            android:textColor="#2C241B"
-            android:textSize="32sp" />
-
-        <TextView
-            android:id="@+id/reader_toolbar_title"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
+            android:id="@+id/reader_title_addition"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
             android:ellipsize="end"
             android:gravity="center_vertical"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
             android:singleLine="true"
             android:textColor="#2C241B"
-            android:textSize="18sp" />
-
-        <TextView
-            android:id="@+id/reader_encoding"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:background="@drawable/reader_menu_touch"
-            android:gravity="center"
-            android:text="@string/reader_encoding_set"
-            android:textColor="#2C241B"
-            android:textSize="15sp"
+            android:textSize="14sp"
             android:visibility="gone" />
-
-        <TextView
-            android:id="@+id/reader_overflow"
-            android:layout_width="48dp"
-            android:layout_height="match_parent"
-            android:background="@drawable/reader_menu_touch"
-            android:gravity="center"
-            android:text="⋮"
-            android:textColor="#2C241B"
-            android:textSize="30sp" />
     </LinearLayout>
 
     <LinearLayout
