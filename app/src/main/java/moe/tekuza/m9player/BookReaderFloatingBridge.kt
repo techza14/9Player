@@ -146,7 +146,7 @@ object BookReaderFloatingBridge {
     }
 
     fun isPlaying(): Boolean = if (BookReaderPlaybackSession.currentAudioUri() != null) {
-        BookReaderPlaybackSession.isPlaying()
+        BookReaderPlaybackSession.isPlaybackRequested()
     } else {
         playingSnapshot
     }
@@ -187,8 +187,9 @@ object BookReaderFloatingBridge {
     }
 
     fun setCurrentAudioUri(audioUri: String?) {
+        val normalized = audioUri?.takeIf { it.isNotBlank() }
         synchronized(this) {
-            currentAudioUriSnapshot = audioUri?.takeIf { it.isNotBlank() }
+            currentAudioUriSnapshot = normalized
         }
     }
 
@@ -288,12 +289,12 @@ object BookReaderFloatingBridge {
 
     fun togglePlayPause() {
         BookReaderPlaybackSession.togglePlayPause()
-        notifyPlaybackState(BookReaderPlaybackSession.isPlaying())
+        notifyPlaybackState(BookReaderPlaybackSession.isPlaybackRequested())
     }
 
     fun setPlaying(play: Boolean) {
         BookReaderPlaybackSession.setPlaying(play)
-        notifyPlaybackState(BookReaderPlaybackSession.isPlaying())
+        notifyPlaybackState(BookReaderPlaybackSession.isPlaybackRequested())
     }
 
     fun seekToPosition(targetPositionMs: Long) {

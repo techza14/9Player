@@ -763,6 +763,12 @@ private fun ReaderSyncScreen() {
                 durationMs = if (player.duration > 0L) player.duration else 0L
             }
 
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                isPlaying = playWhenReady || player.isPlaying
+                positionMs = player.currentPosition.coerceAtLeast(0L)
+                durationMs = if (player.duration > 0L) player.duration else 0L
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 positionMs = player.currentPosition.coerceAtLeast(0L)
                 durationMs = if (player.duration > 0L) player.duration else 0L
@@ -799,6 +805,29 @@ private fun ReaderSyncScreen() {
             // Keep reader playback untouched when returning to home.
             return@LaunchedEffect
         }
+        val selectedReaderBook = selectedBookId?.let { id -> readerBooks.firstOrNull { it.id == id } }
+            ?: readerBooks.firstOrNull { it.audioUri == selectedAudio && it.srtUri == srtUri }
+        val shouldPrewarmLegadoReader =
+            selectedReaderBook?.ebookUri != null &&
+                loadEbookFeatureEnabled(context) &&
+                loadEbookDefaultToReader(context)
+        if (shouldPrewarmLegadoReader) {
+            val legadoPlaybackKey = buildLegadoReaderPlaybackKey(
+                title = selectedReaderBook.title,
+                audioUri = selectedReaderBook.audioUri,
+                srtUri = selectedReaderBook.srtUri,
+                bookUri = selectedReaderBook.ebookUri.toString()
+            )
+            val restoredSnapshot = loadBookReaderPlaybackSnapshotOrNull(context, legadoPlaybackKey)
+            val restorePositionMs = restoredSnapshot?.positionMs?.coerceAtLeast(0L) ?: 0L
+            BookReaderPlaybackSession.prepareAudioIfNeeded(
+                context = context,
+                audioUri = selectedReaderBook.audioUri,
+                restorePositionMs = restorePositionMs,
+                forceSeekOnSameAudio = true
+            )
+            return@LaunchedEffect
+        }
         player.setMediaItem(MediaItem.fromUri(selectedAudio))
         player.prepare()
         player.pause()
@@ -807,7 +836,11 @@ private fun ReaderSyncScreen() {
 
     LaunchedEffect(audioUri, pendingCollectionPlayMs, collectionPlayRequestNonce) {
         val targetMs = pendingCollectionPlayMs ?: return@LaunchedEffect
-        if (audioUri == null) return@LaunchedEffect
+        val selectedAudio = audioUri ?: return@LaunchedEffect
+        if (player.playbackState == Player.STATE_IDLE) {
+            player.setMediaItem(MediaItem.fromUri(selectedAudio))
+            player.prepare()
+        }
         var waitedMs = 0L
         while (player.playbackState == Player.STATE_IDLE && waitedMs < 2_000L) {
             delay(50L)
@@ -1091,6 +1124,7 @@ private fun ReaderSyncScreen() {
     }
 
     fun openReaderBook(book: ReaderBook, persist: Boolean = true) {
+        val targetAudioUri = book.audioUri.toString()
         if (
             loadEbookFeatureEnabled(context) &&
             loadEbookDefaultToReader(context) &&
@@ -1100,7 +1134,6 @@ private fun ReaderSyncScreen() {
             context.startActivity(createLegadoReaderIntent(context, book))
             return
         }
-        val targetAudioUri = book.audioUri.toString()
         val isSameReaderBook =
             !BookReaderFloatingBridge.isUiTestModeActive() &&
                 BookReaderFloatingBridge.currentAudioUri() == targetAudioUri

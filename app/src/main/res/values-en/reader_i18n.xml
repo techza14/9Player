@@ -166,6 +166,7 @@
     <string name="reader_tip_left">Left</string>
     <string name="reader_tip_middle">Center</string>
     <string name="reader_tip_right">Right</string>
+    <string name="reader_tip_top_toolbar">Top toolbar</string>
     <string name="reader_tip_header_footer">Header<![CDATA[&]]>Footer</string>
     <string name="reader_tip_text_color">Text color</string>
     <string name="reader_tip_divider_color">Divider color</string>

@@ -166,6 +166,7 @@
     <string name="reader_tip_left">左</string>
     <string name="reader_tip_middle">中</string>
     <string name="reader_tip_right">右</string>
+    <string name="reader_tip_top_toolbar">顶部工具栏</string>
     <string name="reader_tip_header_footer">页眉<![CDATA[&]]>页脚</string>
     <string name="reader_tip_text_color">文字颜色</string>
     <string name="reader_tip_divider_color">分隔线颜色</string>

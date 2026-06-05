@@ -2,6 +2,8 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.net.Uri
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
@@ -24,12 +26,23 @@ object BookReaderPlaybackSession {
             .setSeekBackIncrementMs(10_000L)
             .setSeekForwardIncrementMs(10_000L)
             .build()
-            .also { player = it }
+            .also { sharedPlayer ->
+                sharedPlayer.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+                        .build(),
+                    true
+                )
+                player = sharedPlayer
+            }
     }
 
     fun currentAudioUri(): String? = currentAudioUriText
 
     fun isPlaying(): Boolean = player?.isPlaying == true
+
+    fun isPlaybackRequested(): Boolean = player?.let { it.playWhenReady || it.isPlaying } == true
 
     fun currentPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
 
@@ -46,7 +59,7 @@ object BookReaderPlaybackSession {
 
     fun togglePlayPause() {
         val sharedPlayer = player ?: return
-        if (sharedPlayer.isPlaying) {
+        if (sharedPlayer.playWhenReady || sharedPlayer.isPlaying) {
             sharedPlayer.pause()
         } else {
             sharedPlayer.play()

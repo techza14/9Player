@@ -127,7 +127,10 @@ internal data class LegadoReaderPersistedState(
     val brightnessAuto: Boolean = true,
     val brightnessValue: Int = 160,
     val brightnessPanelOnRight: Boolean = false,
-    val showReadTitleAddition: Boolean = true,
+    val topBarMode: ReaderHeaderMode = ReaderHeaderMode.SHOW,
+    val tipTopBarLeft: ReaderTipContent = ReaderTipContent.CHAPTER_TITLE,
+    val tipTopBarMiddle: ReaderTipContent = ReaderTipContent.NONE,
+    val tipTopBarRight: ReaderTipContent = ReaderTipContent.NONE,
     val bodyTitleMode: ReaderBodyTitleMode = ReaderBodyTitleMode.LEFT,
     val bodyTitleSizeAddSp: Int = 0,
     val bodyTitleTopSpacingDp: Int = 0,
@@ -275,7 +278,13 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         brightnessAuto = json.optBoolean("brightnessAuto", true),
         brightnessValue = json.optInt("brightnessValue", 160),
         brightnessPanelOnRight = json.optBoolean("brightnessPanelOnRight", false),
-        showReadTitleAddition = json.optBoolean("showReadTitleAddition", true),
+        topBarMode = json.optEnum(
+            "topBarMode",
+            if (json.optBoolean("showReadTitleAddition", true)) ReaderHeaderMode.SHOW else ReaderHeaderMode.HIDE
+        ),
+        tipTopBarLeft = json.optTipContent("tipTopBarLeft", ReaderTipContent.CHAPTER_TITLE),
+        tipTopBarMiddle = json.optTipContent("tipTopBarMiddle", ReaderTipContent.NONE),
+        tipTopBarRight = json.optTipContent("tipTopBarRight", ReaderTipContent.NONE),
         bodyTitleMode = json.optEnum("bodyTitleMode", ReaderBodyTitleMode.LEFT),
         bodyTitleSizeAddSp = json.optInt("bodyTitleSizeAddSp", 0).coerceIn(0, 10),
         bodyTitleTopSpacingDp = json.optInt("bodyTitleTopSpacingDp", 0).coerceIn(0, 100),
@@ -433,7 +442,11 @@ private fun readStyleConfigs(
     }.takeIf { it.isNotEmpty() }
 }
 
-internal fun saveLegadoReaderPersistedState(context: Context, state: LegadoReaderPersistedState) {
+internal fun saveLegadoReaderPersistedState(
+    context: Context,
+    state: LegadoReaderPersistedState,
+    commitImmediately: Boolean = false
+) {
     val json = JSONObject().apply {
         put("textSizeSp", state.textSizeSp)
         put("lineSpacingDp", state.lineSpacingDp)
@@ -482,7 +495,10 @@ internal fun saveLegadoReaderPersistedState(context: Context, state: LegadoReade
         put("brightnessAuto", state.brightnessAuto)
         put("brightnessValue", state.brightnessValue)
         put("brightnessPanelOnRight", state.brightnessPanelOnRight)
-        put("showReadTitleAddition", state.showReadTitleAddition)
+        put("topBarMode", state.topBarMode.name)
+        put("tipTopBarLeft", state.tipTopBarLeft.name)
+        put("tipTopBarMiddle", state.tipTopBarMiddle.name)
+        put("tipTopBarRight", state.tipTopBarRight.name)
         put("bodyTitleMode", state.bodyTitleMode.name)
         put("bodyTitleSizeAddSp", state.bodyTitleSizeAddSp)
         put("bodyTitleTopSpacingDp", state.bodyTitleTopSpacingDp)
@@ -534,10 +550,14 @@ internal fun saveLegadoReaderPersistedState(context: Context, state: LegadoReade
         put("currentChapterIndex", state.currentChapterIndex)
         put("currentCharPosition", state.currentCharPosition)
     }
-    context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
+    val editor = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
         .edit()
         .putString(LEGADO_READER_SETTINGS_KEY, json.toString())
-        .apply()
+    if (commitImmediately) {
+        editor.commit()
+    } else {
+        editor.apply()
+    }
 }
 
 internal fun loadLegadoReaderBookAnchor(context: Context, bookUri: String?): LegadoReaderBookAnchor? {
@@ -556,7 +576,8 @@ internal fun loadLegadoReaderBookAnchor(context: Context, bookUri: String?): Leg
 internal fun saveLegadoReaderBookAnchor(
     context: Context,
     bookUri: String?,
-    anchor: LegadoReaderBookAnchor?
+    anchor: LegadoReaderBookAnchor?,
+    commitImmediately: Boolean = false
 ) {
     val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return
     val safeAnchor = anchor ?: return
@@ -571,9 +592,13 @@ internal fun saveLegadoReaderBookAnchor(
             put("charPosition", safeAnchor.charPosition.coerceAtLeast(0))
         }
     )
-    prefs.edit()
+    val editor = prefs.edit()
         .putString(LEGADO_READER_BOOK_ANCHORS_KEY, root.toString())
-        .apply()
+    if (commitImmediately) {
+        editor.commit()
+    } else {
+        editor.apply()
+    }
 }
 
 internal fun loadSimulatedReadingConfig(context: Context, bookUri: String?): SimulatedReadingConfig {

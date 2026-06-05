@@ -34,7 +34,7 @@ internal class TextPageFactory(
                 )
             )
         }
-        return assignGlobalPageNumbers(allPages, contentWidthPx, contentHeightPx)
+        return assignGlobalPageNumbers(allPages, document, contentWidthPx, contentHeightPx)
     }
 
     fun createChapterPages(
@@ -65,6 +65,7 @@ internal class TextPageFactory(
                     )
                 )
             },
+            document,
             contentWidthPx,
             contentHeightPx
         )
@@ -93,13 +94,24 @@ internal class TextPageFactory(
 
     private fun assignGlobalPageNumbers(
         pages: List<TextPage>,
+        document: EbookDocument,
         contentWidthPx: Int,
         contentHeightPx: Int
     ): List<TextPage> {
         val total = pages.size.coerceAtLeast(1)
+        val chapterOffsets = IntArray(document.chapters.size)
+        var charTotal = 0
+        document.chapters.forEachIndexed { index, chapter ->
+            chapterOffsets[index] = charTotal
+            charTotal += chapter.text.length.coerceAtLeast(1)
+        }
         return pages.mapIndexed { index, page ->
             page.globalIndex = index
             page.totalPages = total
+            val chapterOffset = chapterOffsets.getOrElse(page.chapterIndex) { 0 }
+            page.documentCharStart = (chapterOffset + page.charStart).coerceAtLeast(0)
+            page.documentCharEnd = (chapterOffset + page.charEnd).coerceAtLeast(page.documentCharStart + 1)
+            page.documentCharCount = charTotal.coerceAtLeast(1)
             if (page.height <= 0f) page.height = contentHeightPx.toFloat()
             if (page.width <= 0f) page.width = contentWidthPx.toFloat()
             page

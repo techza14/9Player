@@ -14,6 +14,7 @@ class FloatingOverlayReaderExitSourceTest {
             .substringBefore("override fun onDestroy()")
 
         assertTrue(onStopBlock.contains("floatingOverlayShowOnReaderExit || !appForeground"))
+        assertTrue(onStopBlock.contains("!readerOrPlayerVisible"))
         assertFalse(onStopBlock.contains("!isAppProcessInForeground(this@BookReaderActivity) &&"))
     }
 
@@ -25,6 +26,7 @@ class FloatingOverlayReaderExitSourceTest {
             .substringBefore("private fun intentLocalReaderBook()")
 
         assertTrue(onStopBlock.contains("floatingOverlayShowOnReaderExit || !appForeground"))
+        assertTrue(onStopBlock.contains("!readerOrPlayerVisible"))
     }
 
     @Test

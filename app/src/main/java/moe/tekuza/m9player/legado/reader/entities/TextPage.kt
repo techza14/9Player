@@ -15,6 +15,9 @@ internal data class TextPage(
     var totalPages: Int = 1,
     var charStart: Int = 0,
     var charEnd: Int = 0,
+    var documentCharStart: Int = 0,
+    var documentCharEnd: Int = 0,
+    var documentCharCount: Int = 0,
     var height: Float = 0f,
     var width: Float = 0f,
     private val textLines: ArrayList<TextLine> = arrayListOf()
@@ -29,6 +32,10 @@ internal data class TextPage(
 
     val readProgress: String
         get() {
+            if (documentCharCount > 0 && documentCharEnd > 0) {
+                val value = documentCharEnd.toDouble() / documentCharCount.toDouble()
+                return readProgressFormatter.format(value.coerceIn(0.0, 1.0))
+            }
             if (totalPages <= 0) return "0.0%"
             val value = (globalIndex + 1).toDouble() / totalPages.toDouble()
             return readProgressFormatter.format(value.coerceIn(0.0, 1.0))

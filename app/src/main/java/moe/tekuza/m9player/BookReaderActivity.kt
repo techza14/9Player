@@ -282,6 +282,7 @@ class BookReaderActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        ReaderPlaybackScreenVisibility.markVisible(this)
         floatingOverlayStartJob?.cancel()
         floatingOverlayStartJob = null
         stopAudiobookFloatingOverlayService(this)
@@ -289,6 +290,7 @@ class BookReaderActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
+        ReaderPlaybackScreenVisibility.markHidden(this)
         if (isUiTestMode) return
         val settings = loadAudiobookSettingsConfig(this)
         floatingOverlayStartJob?.cancel()
@@ -307,14 +309,16 @@ class BookReaderActivity : AppCompatActivity() {
             val refreshedOverlayEnabled =
                 refreshed.floatingOverlayEnabled || refreshed.floatingOverlaySubtitleEnabled
             val appForeground = isAppProcessInForeground(this@BookReaderActivity)
+            val readerOrPlayerVisible = isReaderOrPlayerScreenVisible()
             val shouldShowAfterReaderExit =
-                refreshed.floatingOverlayShowOnReaderExit || !appForeground
+                (refreshed.floatingOverlayShowOnReaderExit || !appForeground) && !readerOrPlayerVisible
             val stillPlaying = BookReaderFloatingBridge.isPlaying()
             Log.d(
                 FLOATING_OVERLAY_EXIT_LOG_TAG,
                 "BookReader delayed overlayEnabled=$refreshedOverlayEnabled appForeground=$appForeground " +
                     "showOnReaderExit=${refreshed.floatingOverlayShowOnReaderExit} " +
-                    "shouldShow=$shouldShowAfterReaderExit playing=$stillPlaying"
+                    "readerOrPlayerVisible=$readerOrPlayerVisible shouldShow=$shouldShowAfterReaderExit " +
+                    "playing=$stillPlaying"
             )
             if (refreshedOverlayEnabled && shouldShowAfterReaderExit && stillPlaying) {
                 Log.d(FLOATING_OVERLAY_EXIT_LOG_TAG, "BookReader starting overlay service")
@@ -326,6 +330,7 @@ class BookReaderActivity : AppCompatActivity() {
     override fun onDestroy() {
         floatingOverlayStartJob?.cancel()
         floatingOverlayStartJob = null
+        ReaderPlaybackScreenVisibility.markHidden(this)
         if (isUiTestMode) {
             BookReaderFloatingBridge.setUiTestModeActive(false)
         }
@@ -716,9 +721,14 @@ private fun BookReaderScreen(
     val player = remember(context) {
         BookReaderPlaybackSession.acquirePlayer(context)
     }
+    fun isReaderPlaybackRequested(): Boolean = player.playWhenReady || player.isPlaying
     fun setLookupPlaybackState(play: Boolean) {
         player.volume = 1f
-        if (play) player.play() else player.pause()
+        if (play) {
+            player.play()
+        } else {
+            player.pause()
+        }
     }
     fun setReaderPlaybackState(play: Boolean) {
         if (uiTestMode) {
@@ -726,9 +736,10 @@ private fun BookReaderScreen(
         } else {
             setLookupPlaybackState(play)
         }
+        isPlaying = play
     }
     fun toggleReaderPlaybackState() {
-        val currentlyPlaying = if (uiTestMode) isPlaying else player.isPlaying
+        val currentlyPlaying = if (uiTestMode) isPlaying else isReaderPlaybackRequested()
         setReaderPlaybackState(!currentlyPlaying)
     }
     val notificationController = remember(context, player, title, audioUri, srtUri, coverUri, uiTestMode) {
@@ -778,6 +789,7 @@ private fun BookReaderScreen(
                     ) {
                         positionMs = player.currentPosition.coerceAtLeast(0L)
                         durationMs = if (player.duration > 0L) player.duration else durationMs.coerceAtLeast(0L)
+                        isPlaying = isReaderPlaybackRequested()
                         return
                     }
                     val snapshot = loadBookReaderPlaybackSnapshotOrNull(context, playbackPositionKey)
@@ -787,6 +799,8 @@ private fun BookReaderScreen(
                         player.seekTo(targetPosition)
                         positionMs = targetPosition
                     }
+                    durationMs = if (player.duration > 0L) player.duration else durationMs.coerceAtLeast(0L)
+                    isPlaying = isReaderPlaybackRequested()
                 }
             }
         }
@@ -877,12 +891,19 @@ private fun BookReaderScreen(
     if (!uiTestMode) DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
-                isPlaying = playing
+                isPlaying = player.playWhenReady || playing
+                positionMs = player.currentPosition.coerceAtLeast(0L)
+                durationMs = if (player.duration > 0L) player.duration else 0L
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                isPlaying = playWhenReady || player.isPlaying
                 positionMs = player.currentPosition.coerceAtLeast(0L)
                 durationMs = if (player.duration > 0L) player.duration else 0L
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
+                isPlaying = isReaderPlaybackRequested()
                 positionMs = player.currentPosition.coerceAtLeast(0L)
                 durationMs = if (player.duration > 0L) player.duration else 0L
                 if (playbackState == Player.STATE_ENDED) {
@@ -993,6 +1014,8 @@ private fun BookReaderScreen(
             forceSeekOnSameAudio = false
         )
         positionMs = player.currentPosition.coerceAtLeast(0L)
+        durationMs = if (player.duration > 0L) player.duration else durationMs.coerceAtLeast(0L)
+        isPlaying = isReaderPlaybackRequested()
         playbackRestoreCompleted = true
     }
 
@@ -1206,8 +1229,8 @@ private fun BookReaderScreen(
         }
     }
 
-    LaunchedEffect(isPlaying, uiTestMode) {
-        if (!uiTestMode) {
+    LaunchedEffect(isPlaying, uiTestMode, playbackRestoreCompleted) {
+        if (!uiTestMode && playbackRestoreCompleted) {
             BookReaderFloatingBridge.notifyPlaybackState(isPlaying)
         }
     }

@@ -176,11 +176,22 @@ internal class PageView(context: Context) : LinearLayout(context) {
 
     fun selectedText(): String = contentView.selectedText()
 
-    fun selectionHandleBounds(): Pair<RectF, RectF>? {
-        val bounds = contentView.selectionHandleBounds() ?: return null
-        bounds.first.offset(contentView.left.toFloat(), contentView.top.toFloat())
-        bounds.second.offset(contentView.left.toFloat(), contentView.top.toFloat())
-        return bounds
+    val selectionBackgroundInsetPx: Float
+        get() = contentView.selectionBackgroundInsetPx
+
+    fun consumePendingSelectionHandleRole(): ContentTextView.SelectionHandleRole? {
+        return contentView.consumePendingSelectionHandleRole()
+    }
+
+    fun selectionBounds(): ContentTextView.SelectionBounds? {
+        val bounds = contentView.selectionBounds() ?: return null
+        val contentLeft = contentView.left.toFloat()
+        val contentTop = contentView.top.toFloat()
+        bounds.startRect.offset(contentLeft, contentTop)
+        bounds.endRect.offset(contentLeft, contentTop)
+        return bounds.copy(
+            startLineTop = bounds.startLineTop + contentTop
+        )
     }
 
     fun rangeBounds(range: IntRange): RectF? {

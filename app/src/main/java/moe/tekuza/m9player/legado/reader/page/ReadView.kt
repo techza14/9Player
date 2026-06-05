@@ -55,6 +55,8 @@ import kotlin.math.sin
 import java.util.Locale
 
 private const val M9_PAGE_SIMULATION_LOG_TAG = "M9PageSimulation"
+private const val M9_SELECTION_LOG_TAG = "M9Selection"
+private const val SELECTION_MENU_OPEN_SPACE_THRESHOLD_PX = 500
 
 private fun m9PageSimulationFormat(value: Float): String {
     return String.format(Locale.US, "%.1f", value)
@@ -75,8 +77,8 @@ internal class ReadView @JvmOverloads constructor(
     private val pageView = PageView(context)
     private val assistOverlay = TextView(context)
     private val crossPageCuePageOverlay = PageView(context)
-    private val selectionStartHandle = View(context)
-    private val selectionEndHandle = View(context)
+    private val selectionStartHandle = SelectionHandleView(context)
+    private val selectionEndHandle = SelectionHandleView(context)
     private val selectionActionMenu = SelectionActionMenu(
         context = context,
         onAction = { action -> performSelectionAction(action) },
@@ -165,12 +167,10 @@ internal class ReadView @JvmOverloads constructor(
         }, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         addView(selectionStartHandle.apply {
             visibility = GONE
-            background = selectionHandleDrawable()
-        }, LayoutParams(dp(18), dp(18)))
+        }, LayoutParams(dp(24), dp(24)))
         addView(selectionEndHandle.apply {
             visibility = GONE
-            background = selectionHandleDrawable()
-        }, LayoutParams(dp(18), dp(18)))
+        }, LayoutParams(dp(24), dp(24)))
         updateAssistOverlayStyle()
     }
 
@@ -1232,46 +1232,153 @@ internal class ReadView @JvmOverloads constructor(
             SelectionHandle.NONE -> false
         }
         if (changed) {
+            pageView.consumePendingSelectionHandleRole()?.let { role ->
+                activeSelectionHandle = when (role) {
+                    ContentTextView.SelectionHandleRole.START -> SelectionHandle.START
+                    ContentTextView.SelectionHandleRole.END -> SelectionHandle.END
+                }
+            }
             updateSelectionOverlays()
         }
     }
 
-    private fun updateSelectionOverlays() {
-        val bounds = pageView.selectionHandleBounds() ?: return
-        positionHandle(selectionStartHandle, bounds.first, start = true)
-        positionHandle(selectionEndHandle, bounds.second, start = false)
+    private fun updateSelectionOverlays(): SelectionOverlayFrames? {
+        val bounds = pageView.selectionBounds() ?: return null
+        val startHandleFrame = positionHandle(selectionStartHandle, bounds.startRect, start = true)
+        val endHandleFrame = positionHandle(selectionEndHandle, bounds.endRect, start = false)
         selectionStartHandle.visibility = VISIBLE
         selectionEndHandle.visibility = VISIBLE
         selectionStartHandle.bringToFront()
         selectionEndHandle.bringToFront()
+        return SelectionOverlayFrames(
+            startTextRect = bounds.startRect,
+            endTextRect = bounds.endRect,
+            startLineTop = bounds.startLineTop,
+            startHandleFrame = startHandleFrame,
+            endHandleFrame = endHandleFrame
+        )
     }
 
-    private fun positionHandle(handle: View, rect: RectF, start: Boolean) {
+    private fun positionHandle(handle: View, rect: RectF, start: Boolean): RectF {
         val params = handle.layoutParams as LayoutParams
-        val size = dp(18)
-        params.leftMargin = (rect.centerX() - size / 2f).toInt().coerceIn(0, (width - size).coerceAtLeast(0))
-        params.topMargin = if (start) {
-            (rect.top - size).toInt()
+        val size = dp(24)
+        val sizeFloat = size.toFloat()
+        val handleView = handle as? SelectionHandleView
+        val (targetX, targetY) = if (layoutMode == M9LayoutMode.VERTICAL) {
+            handleView?.mode = if (start) {
+                SelectionHandleMode.VERTICAL_START_RTL
+            } else {
+                SelectionHandleMode.VERTICAL_END_RTL
+            }
+            val visibleInset = selectionHandleVisibleInset()
+            val selectionInset = pageView.selectionBackgroundInsetPx
+            val grayLeft = rect.left + selectionInset
+            val grayRight = rect.right - selectionInset
+            val x = if (start) {
+                grayRight - sizeFloat + visibleInset
+            } else {
+                grayLeft - visibleInset
+            }
+            val y = if (start) rect.top - visibleInset else rect.bottom - visibleInset
+            x to y
         } else {
-            rect.bottom.toInt()
-        }.coerceIn(0, (height - size).coerceAtLeast(0))
+            handleView?.mode = if (start) {
+                SelectionHandleMode.HORIZONTAL_START
+            } else {
+                SelectionHandleMode.HORIZONTAL_END
+            }
+            val x = if (start) rect.left - sizeFloat else rect.right
+            val y = rect.bottom
+            x to y
+        }
+        val left = targetX.toInt().coerceIn(0, (width - size).coerceAtLeast(0))
+        val top = targetY.toInt().coerceIn(0, (height - size).coerceAtLeast(0))
+        params.leftMargin = left
+        params.topMargin = top
         handle.layoutParams = params
+        return RectF(left.toFloat(), top.toFloat(), (left + size).toFloat(), (top + size).toFloat())
     }
 
     private fun showSelectionMenu() {
-        updateSelectionOverlays()
-        val bounds = pageView.selectionHandleBounds() ?: return
-        val startRect = bounds.first
-        val endRect = bounds.second
+        val frames = updateSelectionOverlays() ?: return
+        val anchors = selectionMenuAnchors(frames)
+        val startVisible = visibleSelectionHandleFrame(frames.startHandleFrame)
+        val endVisible = visibleSelectionHandleFrame(frames.endHandleFrame)
+        Log.d(
+            M9_SELECTION_LOG_TAG,
+            "showSelectionMenu layout=$layoutMode " +
+                "startText=${formatRect(frames.startTextRect)} " +
+                "startHandle=${formatRect(frames.startHandleFrame)} " +
+                "startVisible=${formatRect(startVisible)} " +
+                "endText=${formatRect(frames.endTextRect)} " +
+                "endHandle=${formatRect(frames.endHandleFrame)} " +
+                "endVisible=${formatRect(endVisible)} " +
+                "anchors=$anchors " +
+                "view=${width}x$height"
+        )
         selectionActionMenu.show(
             anchor = this,
-            startX = minOf(startRect.centerX(), endRect.centerX()).toInt(),
-            startTopY = minOf(startRect.top, endRect.top).toInt(),
-            startBottomY = minOf(startRect.bottom, endRect.bottom).toInt(),
-            endX = maxOf(startRect.centerX(), endRect.centerX()).toInt(),
-            endBottomY = maxOf(startRect.bottom, endRect.bottom).toInt()
+            startX = anchors.startX,
+            startTopY = anchors.startTopY,
+            startBottomY = anchors.startBottomY,
+            endX = anchors.endX,
+            endBottomY = anchors.endBottomY
         )
     }
+
+    private fun selectionMenuAnchors(frames: SelectionOverlayFrames): SelectionMenuAnchors {
+        val startVisible = visibleSelectionHandleFrame(frames.startHandleFrame)
+        val endVisible = visibleSelectionHandleFrame(frames.endHandleFrame)
+        return if (layoutMode == M9LayoutMode.HORIZONTAL) {
+            SelectionMenuAnchors(
+                startX = frames.startTextRect.left.toInt(),
+                startTopY = frames.startLineTop.toInt(),
+                startBottomY = frames.startHandleFrame.bottom.toInt(),
+                endX = frames.endHandleFrame.left.toInt(),
+                endBottomY = frames.endHandleFrame.bottom.toInt()
+            )
+        } else {
+            SelectionMenuAnchors(
+                startX = startVisible.centerX().toInt(),
+                startTopY = startVisible.top.toInt(),
+                startBottomY = startVisible.bottom.toInt(),
+                endX = endVisible.centerX().toInt(),
+                endBottomY = endVisible.bottom.toInt()
+            )
+        }
+    }
+
+    private fun visibleSelectionHandleFrame(frame: RectF): RectF {
+        val inset = selectionHandleVisibleInset()
+        return RectF(
+            frame.left + inset,
+            frame.top + inset,
+            frame.right - inset,
+            frame.bottom - inset
+        )
+    }
+
+    private fun selectionHandleVisibleInset(): Float = dp(4).toFloat()
+
+    private fun formatRect(rect: RectF): String {
+        return "[${rect.left.toInt()},${rect.top.toInt()}-${rect.right.toInt()},${rect.bottom.toInt()}]"
+    }
+
+    private data class SelectionOverlayFrames(
+        val startTextRect: RectF,
+        val endTextRect: RectF,
+        val startLineTop: Float,
+        val startHandleFrame: RectF,
+        val endHandleFrame: RectF
+    )
+
+    private data class SelectionMenuAnchors(
+        val startX: Int,
+        val startTopY: Int,
+        val startBottomY: Int,
+        val endX: Int,
+        val endBottomY: Int
+    )
 
     private fun hideSelectionMenu() {
         selectionActionMenu.dismiss()
@@ -1306,14 +1413,6 @@ internal class ReadView @JvmOverloads constructor(
             hit(selectionStartHandle) -> SelectionHandle.START
             hit(selectionEndHandle) -> SelectionHandle.END
             else -> SelectionHandle.NONE
-        }
-    }
-
-    private fun selectionHandleDrawable(): GradientDrawable {
-        return GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(0xFF858585.toInt())
-            setStroke(dp(2), 0xFFFFFFFF.toInt())
         }
     }
 
@@ -1383,6 +1482,74 @@ internal class ReadView @JvmOverloads constructor(
         NONE,
         START,
         END
+    }
+
+    private enum class SelectionHandleMode {
+        HORIZONTAL_START,
+        HORIZONTAL_END,
+        VERTICAL_START_RTL,
+        VERTICAL_END_RTL
+    }
+
+    private class SelectionHandleView(context: Context) : View(context) {
+        var mode: SelectionHandleMode = SelectionHandleMode.HORIZONTAL_START
+            set(value) {
+                if (field == value) return
+                field = value
+                invalidate()
+            }
+
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF858585.toInt()
+            style = Paint.Style.FILL
+        }
+        private val stemRect = RectF()
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val scale = minOf(width, height).toFloat() / 24f
+            val radius = 8f * scale
+            when (mode) {
+                SelectionHandleMode.HORIZONTAL_START,
+                SelectionHandleMode.VERTICAL_START_RTL -> drawHandle(
+                    canvas = canvas,
+                    cx = 12f * scale,
+                    cy = 12f * scale,
+                    radius = radius,
+                    tabLeft = 12f * scale,
+                    tabTop = 4f * scale,
+                    tabRight = 20f * scale,
+                    tabBottom = 12f * scale
+                )
+                SelectionHandleMode.HORIZONTAL_END,
+                SelectionHandleMode.VERTICAL_END_RTL -> drawHandle(
+                    canvas = canvas,
+                    cx = 12f * scale,
+                    cy = 12f * scale,
+                    radius = radius,
+                    tabLeft = 4f * scale,
+                    tabTop = 4f * scale,
+                    tabRight = 12f * scale,
+                    tabBottom = 12f * scale
+                )
+            }
+        }
+
+        private fun drawHandle(
+            canvas: Canvas,
+            cx: Float,
+            cy: Float,
+            radius: Float,
+            tabLeft: Float,
+            tabTop: Float,
+            tabRight: Float,
+            tabBottom: Float
+        ) {
+            stemRect.set(tabLeft, tabTop, tabRight, tabBottom)
+            canvas.drawRect(stemRect, fillPaint)
+            canvas.drawCircle(cx, cy, radius, fillPaint)
+        }
+
     }
 
     private fun toggleAssistOverlay(token: ContentTextView.AssistToken) {
@@ -2207,10 +2374,13 @@ internal class ReadView @JvmOverloads constructor(
             val margin = dp(anchor.context, 8)
             val popupWidth = rootView.measuredWidth.coerceAtMost(anchor.width - margin * 2)
             val popupHeight = rootView.measuredHeight
-            val openSpaceThreshold = dp(anchor.context, 160)
+            val maxY = (anchor.height - popupHeight - margin).coerceAtLeast(margin)
+            val anchorInWindow = IntArray(2)
+            anchor.getLocationInWindow(anchorInWindow)
+            val openSpaceThreshold = SELECTION_MENU_OPEN_SPACE_THRESHOLD_PX
             val (targetX, targetY) = when {
                 startBottomY > openSpaceThreshold -> {
-                    startX to (startTopY - popupHeight).coerceAtLeast(margin)
+                    startX to startTopY - popupHeight
                 }
                 endBottomY - startBottomY > openSpaceThreshold -> {
                     startX to startBottomY
@@ -2219,13 +2389,25 @@ internal class ReadView @JvmOverloads constructor(
                     endX to endBottomY
                 }
             }
-            val safeX = targetX.coerceIn(margin, (anchor.width - popupWidth - margin).coerceAtLeast(margin))
+            val clampedX = targetX.coerceIn(margin, (anchor.width - popupWidth - margin).coerceAtLeast(margin))
+            val clampedY = targetY.coerceIn(margin, maxY)
+            val windowX = anchorInWindow[0] + clampedX
+            val windowY = anchorInWindow[1] + clampedY
+            Log.d(
+                M9_SELECTION_LOG_TAG,
+                "menuShow anchor=${anchor.width}x${anchor.height} " +
+                    "anchorWindow=(${anchorInWindow[0]},${anchorInWindow[1]}) " +
+                    "popup=${popupWidth}x$popupHeight margin=$margin " +
+                    "input=start($startX,$startTopY,$startBottomY) end($endX,$endBottomY) " +
+                    "target=($targetX,$targetY) clamped=($clampedX,$clampedY) " +
+                    "window=($windowX,$windowY)"
+            )
             if (popupWindow.isShowing) {
-                popupWindow.update(safeX, targetY, popupWidth, popupHeight)
+                popupWindow.update(windowX, windowY, popupWidth, popupHeight)
             } else {
                 popupWindow.width = popupWidth
                 popupWindow.height = popupHeight
-                popupWindow.showAtLocation(anchor, Gravity.TOP or Gravity.START, safeX, targetY)
+                popupWindow.showAtLocation(anchor, Gravity.TOP or Gravity.START, windowX, windowY)
             }
         }
 

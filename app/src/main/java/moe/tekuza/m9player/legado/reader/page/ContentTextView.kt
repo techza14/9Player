@@ -41,6 +41,17 @@ internal class ContentTextView @JvmOverloads constructor(
         val rect: RectF
     )
 
+    internal data class SelectionBounds(
+        val startRect: RectF,
+        val endRect: RectF,
+        val startLineTop: Float
+    )
+
+    internal enum class SelectionHandleRole {
+        START,
+        END
+    }
+
     private data class AssistColumnRef(
         val lineIndex: Int,
         val columnIndex: Int,
@@ -48,10 +59,16 @@ internal class ContentTextView @JvmOverloads constructor(
         val rect: RectF
     )
 
+    private data class SelectionColumnAnchor(
+        val rect: RectF,
+        val lineTop: Float
+    )
+
     val contentPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
     val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     val searchPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    val selectionBackgroundInsetPx: Float get() = resources.displayMetrics.density * 2f
     private val underlinePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     var textColor: Int = 0xFF2C241B.toInt()
         private set
@@ -62,6 +79,9 @@ internal class ContentTextView @JvmOverloads constructor(
     private var textWeight: M9TextWeight = M9TextWeight.NORMAL
     private var page: TextPage? = null
     private var selectionRange: IntRange? = null
+    private var selectionStartSource: Int? = null
+    private var selectionEndSource: Int? = null
+    private var pendingSelectionHandleRole: SelectionHandleRole? = null
     private var highlightRange: IntRange? = null
     private var searchRange: IntRange? = null
     private var textUnderline: Boolean = false
@@ -126,6 +146,9 @@ internal class ContentTextView @JvmOverloads constructor(
     fun setPage(page: TextPage?, highlight: IntRange?, search: IntRange?) {
         this.page = page
         selectionRange = null
+        selectionStartSource = null
+        selectionEndSource = null
+        pendingSelectionHandleRole = null
         highlightRange = highlight
         searchRange = search
         clearScrollContext()
@@ -214,7 +237,7 @@ internal class ContentTextView @JvmOverloads constructor(
         val localY = y - paddingTop
         current.lines.forEach { line ->
             val inLineBounds = when (line.layoutMode) {
-                M9LayoutMode.HORIZONTAL -> localY >= line.crossStart && localY <= line.crossEnd
+                M9LayoutMode.HORIZONTAL -> localY >= line.lineTop && localY <= line.lineBottom
                 M9LayoutMode.VERTICAL -> localX >= line.lineTop && localX <= line.lineBottom
             }
             if (!inLineBounds) return@forEach
@@ -301,31 +324,69 @@ internal class ContentTextView @JvmOverloads constructor(
         val hit = findTextHitAt(x, y) ?: return false
         val current = page ?: return false
         val wordRange = wordRangeAround(current, hit.lineIndex, hit.columnIndex)
-        selectionRange = wordRange ?: orderedRange(hit.sourceStart, hit.sourceEnd)
+        val range = wordRange ?: orderedRange(hit.sourceStart, hit.sourceEnd)
+        selectionRange = range
+        selectionStartSource = range.first
+        selectionEndSource = range.last
+        pendingSelectionHandleRole = null
         invalidate()
         return true
     }
 
     fun updateSelectionStartAt(x: Float, y: Float): Boolean {
         val hit = findTextHitAt(x, y) ?: return false
-        val currentEnd = selectionRange?.last ?: hit.sourceEnd - 1
-        selectionRange = orderedRange(hit.sourceStart, currentEnd + 1)
+        val currentEnd = selectionEndSource ?: selectionRange?.last ?: hit.sourceEnd - 1
+        if (hit.sourceStart <= currentEnd) {
+            selectionStartSource = hit.sourceStart
+            selectionEndSource = currentEnd
+            pendingSelectionHandleRole = null
+        } else {
+            selectionStartSource = currentEnd
+            selectionEndSource = hit.sourceEnd - 1
+            pendingSelectionHandleRole = SelectionHandleRole.END
+        }
+        selectionRange = orderedRange(
+            selectionStartSource ?: hit.sourceStart,
+            (selectionEndSource ?: currentEnd) + 1
+        )
         invalidate()
         return true
     }
 
     fun updateSelectionEndAt(x: Float, y: Float): Boolean {
         val hit = findTextHitAt(x, y) ?: return false
-        val currentStart = selectionRange?.first ?: hit.sourceStart
-        selectionRange = orderedRange(currentStart, hit.sourceEnd)
+        val currentStart = selectionStartSource ?: selectionRange?.first ?: hit.sourceStart
+        val hitEnd = hit.sourceEnd - 1
+        if (hitEnd >= currentStart) {
+            selectionStartSource = currentStart
+            selectionEndSource = hitEnd
+            pendingSelectionHandleRole = null
+        } else {
+            selectionStartSource = hit.sourceStart
+            selectionEndSource = currentStart
+            pendingSelectionHandleRole = SelectionHandleRole.START
+        }
+        selectionRange = orderedRange(
+            selectionStartSource ?: currentStart,
+            (selectionEndSource ?: hitEnd) + 1
+        )
         invalidate()
         return true
     }
 
     fun clearSelection() {
-        if (selectionRange == null) return
+        val hadSelection = selectionRange != null
         selectionRange = null
-        invalidate()
+        selectionStartSource = null
+        selectionEndSource = null
+        pendingSelectionHandleRole = null
+        if (hadSelection) invalidate()
+    }
+
+    fun consumePendingSelectionHandleRole(): SelectionHandleRole? {
+        val role = pendingSelectionHandleRole
+        pendingSelectionHandleRole = null
+        return role
     }
 
     fun selectedText(): String {
@@ -339,11 +400,17 @@ internal class ContentTextView @JvmOverloads constructor(
         }.trim()
     }
 
-    fun selectionHandleBounds(): Pair<RectF, RectF>? {
+    fun selectionBounds(): SelectionBounds? {
         val range = selectionRange ?: return null
-        val start = findColumnRect(range.first, preferStart = true) ?: return null
-        val end = findColumnRect(range.last, preferStart = false) ?: start
-        return start to end
+        val startSource = selectionStartSource ?: range.first
+        val endSource = selectionEndSource ?: range.last
+        val start = findColumnAnchor(startSource, preferStart = true) ?: return null
+        val end = findColumnAnchor(endSource, preferStart = false) ?: start
+        return SelectionBounds(
+            startRect = start.rect,
+            endRect = end.rect,
+            startLineTop = start.lineTop
+        )
     }
 
     fun rangeBounds(range: IntRange): RectF? {
@@ -367,7 +434,7 @@ internal class ContentTextView @JvmOverloads constructor(
         val localY = y - paddingTop
         current.lines.forEachIndexed { lineIndex, line ->
             val inLineBounds = when (line.layoutMode) {
-                M9LayoutMode.HORIZONTAL -> localY >= line.crossStart && localY <= line.crossEnd
+                M9LayoutMode.HORIZONTAL -> localY >= line.lineTop && localY <= line.lineBottom
                 M9LayoutMode.VERTICAL -> localX >= line.lineTop && localX <= line.lineBottom
             }
             if (!inLineBounds) return@forEachIndexed
@@ -451,10 +518,10 @@ internal class ContentTextView @JvmOverloads constructor(
         return null
     }
 
-    private fun findColumnRect(source: Int, preferStart: Boolean): RectF? {
+    private fun findColumnAnchor(source: Int, preferStart: Boolean): SelectionColumnAnchor? {
         val current = page ?: return null
         val range = selectionRange
-        current.lines.forEachIndexed { lineIndex, line ->
+        current.lines.forEach { line ->
             line.columns.filterIsInstance<TextColumn>().forEach { column ->
                 val hit = if (preferStart) {
                     column.sourceStart <= source && column.sourceEnd > source
@@ -462,7 +529,12 @@ internal class ContentTextView @JvmOverloads constructor(
                     column.sourceStart <= source && column.sourceEnd > source ||
                         range != null && column.sourceEnd == range.last + 1
                 }
-                if (hit) return columnRect(line, column)
+                if (hit) {
+                    return SelectionColumnAnchor(
+                        rect = columnRect(line, column),
+                        lineTop = line.lineTop + paddingTop
+                    )
+                }
             }
         }
         return null
@@ -472,9 +544,9 @@ internal class ContentTextView @JvmOverloads constructor(
         return when (line.layoutMode) {
             M9LayoutMode.HORIZONTAL -> RectF(
                 column.start + paddingLeft,
-                line.crossStart + paddingTop,
+                line.lineTop + paddingTop,
                 column.end + paddingLeft,
-                line.crossEnd + paddingTop
+                line.lineBottom + paddingTop
             )
             M9LayoutMode.VERTICAL -> RectF(
                 line.lineTop + paddingLeft,

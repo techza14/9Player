@@ -166,6 +166,7 @@
     <string name="reader_tip_left">左</string>
     <string name="reader_tip_middle">中央</string>
     <string name="reader_tip_right">右</string>
+    <string name="reader_tip_top_toolbar">上部ツールバー</string>
     <string name="reader_tip_header_footer">ヘッダー<![CDATA[&]]>フッター</string>
     <string name="reader_tip_text_color">文字色</string>
     <string name="reader_tip_divider_color">区切り線の色</string>

@@ -42,16 +42,16 @@ internal data class TextLine(
         highlight: IntRange?,
         search: IntRange?
     ) {
-        drawRangeBackground(canvas, view.selectionPaint, selection)
-        drawRangeBackground(canvas, view.highlightPaint, highlight)
-        drawRangeBackground(canvas, view.searchPaint, search)
+        drawRangeBackground(canvas, view.selectionPaint, selection, view.selectionBackgroundInsetPx)
+        drawRangeBackground(canvas, view.highlightPaint, highlight, 0f)
+        drawRangeBackground(canvas, view.searchPaint, search, 0f)
         columns.forEach { column ->
             val selected = column.intersects(selection) || column.intersects(highlight) || column.intersects(search)
             column.draw(view, canvas, this, selected)
         }
     }
 
-    private fun drawRangeBackground(canvas: Canvas, paint: Paint, range: IntRange?) {
+    private fun drawRangeBackground(canvas: Canvas, paint: Paint, range: IntRange?, inset: Float) {
         if (range == null || columns.isEmpty()) return
         val selectedColumns = columns.filter { it.intersects(range) }.sortedBy { it.start }
         if (selectedColumns.isEmpty()) return
@@ -67,26 +67,29 @@ internal data class TextLine(
             if (visualContinuous || sourceContinuous) {
                 groupEnd = column
             } else {
-                drawRangeSegment(canvas, paint, groupStart, groupEnd)
+                drawRangeSegment(canvas, paint, groupStart, groupEnd, inset)
                 groupStart = column
                 groupEnd = column
             }
         }
-        drawRangeSegment(canvas, paint, groupStart, groupEnd)
+        drawRangeSegment(canvas, paint, groupStart, groupEnd, inset)
     }
 
     private fun drawRangeSegment(
         canvas: Canvas,
         paint: Paint,
         start: BaseColumn,
-        end: BaseColumn
+        end: BaseColumn,
+        inset: Float
     ) {
         when (layoutMode) {
             M9LayoutMode.HORIZONTAL -> {
-                canvas.drawRect(start.start, lineTop, end.end, lineBottom, paint)
+                val safeInset = inset.coerceAtMost((lineBottom - lineTop) / 2f)
+                canvas.drawRect(start.start, lineTop + safeInset, end.end, lineBottom - safeInset, paint)
             }
             M9LayoutMode.VERTICAL -> {
-                canvas.drawRect(lineTop, start.start, lineBottom, end.end, paint)
+                val safeInset = inset.coerceAtMost((lineBottom - lineTop) / 2f)
+                canvas.drawRect(lineTop + safeInset, start.start, lineBottom - safeInset, end.end, paint)
             }
         }
     }
