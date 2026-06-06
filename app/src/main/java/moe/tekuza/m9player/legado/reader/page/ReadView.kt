@@ -41,6 +41,7 @@ import moe.tekuza.m9player.R
 import moe.tekuza.m9player.ReaderBodyTitleMode
 import moe.tekuza.m9player.ReaderFooterMode
 import moe.tekuza.m9player.ReaderHeaderMode
+import moe.tekuza.m9player.ReaderInfoSlot
 import moe.tekuza.m9player.ReaderTipContent
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9PageAnim
@@ -94,6 +95,7 @@ internal class ReadView @JvmOverloads constructor(
     var onTextSelectionStateChanged: ((Boolean) -> Unit)? = null
     var onImageClick: ((EbookImageRef) -> Unit)? = null
     var onPagePreview: ((Int) -> TextPage?)? = null
+    var onDisplayedPageCommitted: ((TextPage) -> Unit)? = null
     private var layoutMode: M9LayoutMode = M9LayoutMode.HORIZONTAL
     private var pageAnim: M9PageAnim = M9PageAnim.NONE
     private var clickRegionActions: List<TapAction> = defaultClickRegionActions()
@@ -284,6 +286,10 @@ internal class ReadView @JvmOverloads constructor(
         crossPageCuePageOverlay.setBookTitle(title)
     }
 
+    fun setOnReaderInfoClick(listener: ((ReaderInfoSlot) -> Unit)?) {
+        forEachPageView { it.onReaderInfoClick = listener }
+    }
+
     fun setDisplayedChapterTitle(title: String?) {
         forEachPageView { it.setDisplayedChapterTitle(title) }
     }
@@ -312,7 +318,8 @@ internal class ReadView @JvmOverloads constructor(
         footerPaddingLeftDp: Int,
         footerPaddingRightDp: Int,
         showHeaderLine: Boolean,
-        showFooterLine: Boolean
+        showFooterLine: Boolean,
+        alternateInfoSlots: Set<ReaderInfoSlot>
     ) {
         forEachPageView {
             it.setReaderInfoConfig(
@@ -339,7 +346,8 @@ internal class ReadView @JvmOverloads constructor(
                 footerPaddingLeftDp = footerPaddingLeftDp,
                 footerPaddingRightDp = footerPaddingRightDp,
                 showHeaderLine = showHeaderLine,
-                showFooterLine = showFooterLine
+                showFooterLine = showFooterLine,
+                alternateInfoSlots = alternateInfoSlots
             )
         }
         requestLayout()
@@ -936,6 +944,7 @@ internal class ReadView @JvmOverloads constructor(
             invokeTurnCallback()
             committedPage?.let {
                 pageView.setPage(it, null, null)
+                onDisplayedPageCommitted?.invoke(it)
             }
         }
         simulationCommitAfterAnim = false

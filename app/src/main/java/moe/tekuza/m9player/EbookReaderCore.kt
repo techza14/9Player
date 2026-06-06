@@ -102,6 +102,14 @@ internal data class EbookMatchData(
         }
 }
 
+internal fun shouldSkipEbookCueForMatching(cue: EbookSrtCue): Boolean {
+    return shouldSkipEbookCueForMatching(cue, cue.text.filteredReaderCodePoints())
+}
+
+private fun shouldSkipEbookCueForMatching(cue: EbookSrtCue, filteredText: List<Int>): Boolean {
+    return filteredText.isEmpty() || (cue.text.startsWith("＊") && filteredText.size < 5)
+}
+
 internal suspend fun loadEbookDocument(
     context: Context,
     book: LocalReaderBook,
@@ -132,14 +140,6 @@ internal suspend fun parseEbookSrt(
     parseEbookSrtText(raw)
 }
 
-internal fun matchEbookCues(
-    document: EbookDocument,
-    cues: List<EbookSrtCue>,
-    searchWindow: Int = 200
-): List<EbookCueMatch> {
-    return matchEbookCuesData(document, cues, searchWindow).matches
-}
-
 internal fun matchEbookCuesData(
     document: EbookDocument,
     cues: List<EbookSrtCue>,
@@ -165,7 +165,7 @@ internal fun matchEbookCuesData(
     var unmatched = 0
     cues.forEachIndexed { cueIndex, cue ->
         val text = cue.text.filteredReaderCodePoints()
-        if (text.isEmpty()) {
+        if (shouldSkipEbookCueForMatching(cue, text)) {
             unmatched += 1
             return@forEachIndexed
         }

@@ -16,6 +16,7 @@ import moe.tekuza.m9player.EbookImageRef
 import moe.tekuza.m9player.ReaderBodyTitleMode
 import moe.tekuza.m9player.ReaderFooterMode
 import moe.tekuza.m9player.ReaderHeaderMode
+import moe.tekuza.m9player.ReaderInfoSlot
 import moe.tekuza.m9player.ReaderTipContent
 import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.TextPage
@@ -60,6 +61,8 @@ internal class PageView(context: Context) : LinearLayout(context) {
     private var dividerColor: Int? = null
     private var showHeaderLine: Boolean = false
     private var showFooterLine: Boolean = true
+    private var alternateInfoSlots: Set<ReaderInfoSlot> = emptySet()
+    var onReaderInfoClick: ((ReaderInfoSlot) -> Unit)? = null
 
     init {
         orientation = VERTICAL
@@ -115,6 +118,12 @@ internal class PageView(context: Context) : LinearLayout(context) {
         horizontal: Boolean,
         reverse: Boolean
     ) {
+        pages.getOrNull(centerIndex)?.let { page ->
+            if (currentPage !== page) {
+                currentPage = page
+                updateTipText()
+            }
+        }
         contentView.setScrollContext(pages, centerIndex, offset, horizontal, reverse)
     }
 
@@ -314,7 +323,8 @@ internal class PageView(context: Context) : LinearLayout(context) {
         footerPaddingLeftDp: Int,
         footerPaddingRightDp: Int,
         showHeaderLine: Boolean,
-        showFooterLine: Boolean
+        showFooterLine: Boolean,
+        alternateInfoSlots: Set<ReaderInfoSlot>
     ) {
         this.bodyTitleMode = bodyTitleMode
         this.bodyTitleSizeAddSp = bodyTitleSizeAddSp
@@ -332,6 +342,7 @@ internal class PageView(context: Context) : LinearLayout(context) {
         this.dividerColor = dividerColor
         this.showHeaderLine = showHeaderLine
         this.showFooterLine = showFooterLine
+        this.alternateInfoSlots = alternateInfoSlots
         headerView.setPadding(
             dp(headerPaddingLeftDp),
             dp(headerPaddingTopDp),
@@ -370,12 +381,18 @@ internal class PageView(context: Context) : LinearLayout(context) {
 
     private fun updateTipText() {
         val page = currentPage
-        headerLeftView.text = tipText(tipHeaderLeft, page)
-        headerMiddleView.text = tipText(tipHeaderMiddle, page)
-        headerRightView.text = tipText(tipHeaderRight, page)
-        footerLeftView.text = tipText(tipFooterLeft, page)
-        footerMiddleView.text = tipText(tipFooterMiddle, page)
-        footerRightView.text = tipText(tipFooterRight, page)
+        headerLeftView.text = tipText(tipHeaderLeft, page, ReaderInfoSlot.HEADER_LEFT)
+        headerMiddleView.text = tipText(tipHeaderMiddle, page, ReaderInfoSlot.HEADER_MIDDLE)
+        headerRightView.text = tipText(tipHeaderRight, page, ReaderInfoSlot.HEADER_RIGHT)
+        footerLeftView.text = tipText(tipFooterLeft, page, ReaderInfoSlot.FOOTER_LEFT)
+        footerMiddleView.text = tipText(tipFooterMiddle, page, ReaderInfoSlot.FOOTER_MIDDLE)
+        footerRightView.text = tipText(tipFooterRight, page, ReaderInfoSlot.FOOTER_RIGHT)
+        bindTipClick(headerLeftView, ReaderInfoSlot.HEADER_LEFT, tipHeaderLeft)
+        bindTipClick(headerMiddleView, ReaderInfoSlot.HEADER_MIDDLE, tipHeaderMiddle)
+        bindTipClick(headerRightView, ReaderInfoSlot.HEADER_RIGHT, tipHeaderRight)
+        bindTipClick(footerLeftView, ReaderInfoSlot.FOOTER_LEFT, tipFooterLeft)
+        bindTipClick(footerMiddleView, ReaderInfoSlot.FOOTER_MIDDLE, tipFooterMiddle)
+        bindTipClick(footerRightView, ReaderInfoSlot.FOOTER_RIGHT, tipFooterRight)
         bodyTitleView.text = page?.title.orEmpty()
         applyBodyTitleStyle()
     }
@@ -397,20 +414,28 @@ internal class PageView(context: Context) : LinearLayout(context) {
         }
     }
 
-    private fun tipText(content: ReaderTipContent, page: TextPage?): String {
-        if (page == null) return ""
-        return when (content) {
-            ReaderTipContent.NONE -> ""
-            ReaderTipContent.BOOK_NAME -> bookTitle.ifBlank { page.title }
-            ReaderTipContent.CHAPTER_TITLE -> displayedChapterTitle ?: page.title
-            ReaderTipContent.TIME -> currentClockText()
-            ReaderTipContent.BATTERY_PERCENTAGE -> "${batteryPercent()}%"
-            ReaderTipContent.PAGE -> "${page.globalIndex + 1} / ${page.totalPages}"
-            ReaderTipContent.TOTAL_PROGRESS -> page.readProgress
-            ReaderTipContent.CHAPTER_PROGRESS -> "${page.pageInChapter + 1}/${page.chapterPageCount}"
-            ReaderTipContent.PAGE_AND_TOTAL -> "${page.globalIndex + 1} / ${page.totalPages}  ${page.readProgress}"
-            ReaderTipContent.TIME_BATTERY_PERCENTAGE -> "${currentClockText()} ${batteryPercent()}%"
-        }
+    private fun tipText(content: ReaderTipContent, page: TextPage?, slot: ReaderInfoSlot): String {
+        return ReaderTipFormatter.text(
+            content = content,
+            page = page,
+            alternateProgress = slot in alternateInfoSlots,
+            bookTitle = bookTitle,
+            chapterTitle = displayedChapterTitle ?: page?.title.orEmpty(),
+            clockText = currentClockText(),
+            batteryPercent = batteryPercent()
+        )
+    }
+
+    private fun bindTipClick(view: TextView, slot: ReaderInfoSlot, content: ReaderTipContent) {
+        val clickable = ReaderTipFormatter.isProgressTip(content)
+        view.isClickable = clickable
+        view.setOnClickListener(
+            if (clickable) {
+                View.OnClickListener { onReaderInfoClick?.invoke(slot) }
+            } else {
+                null
+            }
+        )
     }
 
     private fun batteryPercent(): Int {

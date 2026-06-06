@@ -77,16 +77,31 @@ internal enum class ReaderFooterMode {
     HIDE
 }
 
+internal enum class ReaderInfoSlot {
+    TOP_BAR_LEFT,
+    TOP_BAR_MIDDLE,
+    TOP_BAR_RIGHT,
+    HEADER_LEFT,
+    HEADER_MIDDLE,
+    HEADER_RIGHT,
+    FOOTER_LEFT,
+    FOOTER_MIDDLE,
+    FOOTER_RIGHT
+}
+
 internal enum class ReaderTipContent {
     NONE,
     BOOK_NAME,
     CHAPTER_TITLE,
     TIME,
+    BATTERY,
     BATTERY_PERCENTAGE,
     PAGE,
     TOTAL_PROGRESS,
     CHAPTER_PROGRESS,
     PAGE_AND_TOTAL,
+    PAGE_OR_PROGRESS,
+    TIME_BATTERY,
     TIME_BATTERY_PERCENTAGE
 }
 
@@ -143,6 +158,7 @@ internal data class LegadoReaderPersistedState(
     val tipFooterLeft: ReaderTipContent = ReaderTipContent.BOOK_NAME,
     val tipFooterMiddle: ReaderTipContent = ReaderTipContent.NONE,
     val tipFooterRight: ReaderTipContent = ReaderTipContent.PAGE_AND_TOTAL,
+    val readerInfoAlternateSlots: Set<ReaderInfoSlot> = emptySet(),
     val tipColorMode: ReaderTipColorMode = ReaderTipColorMode.FOLLOW_CONTENT,
     val tipDividerColorMode: ReaderTipDividerColorMode = ReaderTipDividerColorMode.DEFAULT,
     val tipDividerColor: Int = 0x1F000000,
@@ -322,6 +338,7 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
                 else -> ReaderTipContent.NONE
             }
         ),
+        readerInfoAlternateSlots = readReaderInfoSlots(json.optJSONArray("readerInfoAlternateSlots")),
         tipColorMode = json.optEnum("tipColorMode", ReaderTipColorMode.FOLLOW_CONTENT),
         tipDividerColorMode = json.optEnum("tipDividerColorMode", ReaderTipDividerColorMode.DEFAULT),
         tipDividerColor = json.optInt("tipDividerColor", 0x1F000000),
@@ -388,10 +405,18 @@ private inline fun <reified T : Enum<T>> JSONObject.optEnum(name: String, fallba
 
 private fun JSONObject.optTipContent(name: String, fallback: ReaderTipContent): ReaderTipContent {
     return when (val raw = optString(name).takeIf { it.isNotBlank() }) {
-        "BATTERY" -> ReaderTipContent.BATTERY_PERCENTAGE
-        "TIME_BATTERY" -> ReaderTipContent.TIME_BATTERY_PERCENTAGE
         null -> fallback
         else -> runCatching { ReaderTipContent.valueOf(raw) }.getOrNull() ?: fallback
+    }
+}
+
+private fun readReaderInfoSlots(array: JSONArray?): Set<ReaderInfoSlot> {
+    if (array == null || array.length() == 0) return emptySet()
+    return buildSet {
+        for (index in 0 until array.length()) {
+            val value = array.optString(index).takeIf { it.isNotBlank() } ?: continue
+            runCatching { ReaderInfoSlot.valueOf(value) }.getOrNull()?.let(::add)
+        }
     }
 }
 
@@ -511,6 +536,9 @@ internal fun saveLegadoReaderPersistedState(
         put("tipFooterLeft", state.tipFooterLeft.name)
         put("tipFooterMiddle", state.tipFooterMiddle.name)
         put("tipFooterRight", state.tipFooterRight.name)
+        put("readerInfoAlternateSlots", JSONArray().apply {
+            state.readerInfoAlternateSlots.forEach { put(it.name) }
+        })
         put("tipColorMode", state.tipColorMode.name)
         put("tipDividerColorMode", state.tipDividerColorMode.name)
         put("tipDividerColor", state.tipDividerColor)

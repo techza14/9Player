@@ -76,6 +76,7 @@ import moe.tekuza.m9player.legado.reader.config.ReadStyleColorItem
 import moe.tekuza.m9player.legado.reader.config.ReadStyleDialog
 import moe.tekuza.m9player.legado.reader.config.ReadStyleState
 import moe.tekuza.m9player.legado.reader.entities.TextPage
+import moe.tekuza.m9player.legado.reader.page.ReaderTipFormatter
 import moe.tekuza.m9player.legado.reader.page.ReadView
 import moe.tekuza.m9player.legado.reader.provider.TextPageFactory
 
@@ -156,7 +157,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private lateinit var readView: ReadView
     private lateinit var readerRoot: View
     private lateinit var toolbarTitleText: TextView
-    private lateinit var toolbarAdditionText: TextView
+    private lateinit var toolbarAdditionContainer: View
+    private lateinit var toolbarAdditionLeftText: TextView
+    private lateinit var toolbarAdditionMiddleText: TextView
+    private lateinit var toolbarAdditionRightText: TextView
     private lateinit var chapterSeekBar: SeekBar
     private lateinit var listenActionText: TextView
     private lateinit var audioPlayPauseText: TextView
@@ -170,6 +174,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private lateinit var floatingReplaceButton: ImageButton
     private lateinit var floatingPlaybackBarButton: ImageButton
     private lateinit var floatingNightButton: ImageButton
+    private var tipConfigDialog: AlertDialog? = null
     private var importedBook: LocalReaderBook? = null
     private var audioUri: Uri? = null
     private var srtUri: Uri? = null
@@ -209,9 +214,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private val sharedPlaybackPositionListener = object : BookReaderFloatingBridge.PlaybackPositionListener {
         override fun onPlaybackPositionChanged(positionMs: Long) {
             runOnUiThread {
-                if (useM4bChapterSource()) {
-                    updateChapterTitleSurfaces()
-                }
                 if (audioUri != null && isAudioPlaybackRequested()) {
                     syncToAudioPosition()
                 }
@@ -312,6 +314,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var clickRegionActions: List<ReadView.TapAction> = ReadView.defaultClickRegionActions()
     private var selectionPrimaryActionKey: String = ReadView.DEFAULT_SELECTION_PRIMARY_ACTION_KEY
     private var progressByChapter: Boolean = true
+    private val readerInfoAlternateSlots: MutableSet<ReaderInfoSlot> = mutableSetOf()
     private var pendingPageSeekIndex: Int? = null
     private var pendingChapterSeekIndex: Int? = null
     private var confirmSkipToChapter: Boolean = false
@@ -729,10 +732,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             setLayoutMode(readerLayoutMode)
             setNoAnimScrollPage(noAnimScrollPage)
             setClickRegionActions(clickRegionActions)
+            setOnReaderInfoClick { slot -> toggleReaderInfoProgressText(slot) }
             setBookTitle(currentReaderTitle())
             applyReaderInfoConfig()
             setSelectionPrimaryActionKey(selectionPrimaryActionKey)
             onPagePreview = { delta -> pagePreviewForDelta(delta) }
+            onDisplayedPageCommitted = { page -> updateChapterTitleSurfaces(page) }
             onMovePages = { delta -> movePage(delta) }
             onPrevPage = { movePage(-1) }
             onNextPage = { movePage(1) }
@@ -777,8 +782,17 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 toolbarTitleText = it
                 it.text = currentReaderTitle()
             }
-            findViewById<TextView>(R.id.reader_title_addition).also {
-                toolbarAdditionText = it
+            findViewById<View>(R.id.reader_title_addition).also {
+                toolbarAdditionContainer = it
+            }
+            findViewById<TextView>(R.id.reader_title_addition_left).also {
+                toolbarAdditionLeftText = it
+            }
+            findViewById<TextView>(R.id.reader_title_addition_middle).also {
+                toolbarAdditionMiddleText = it
+            }
+            findViewById<TextView>(R.id.reader_title_addition_right).also {
+                toolbarAdditionRightText = it
             }
             findViewById<TextView>(R.id.reader_encoding).also {
                 it.visibility = View.GONE
@@ -1647,6 +1661,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         tipFooterLeft = defaults.tipFooterLeft
         tipFooterMiddle = defaults.tipFooterMiddle
         tipFooterRight = defaults.tipFooterRight
+        readerInfoAlternateSlots.clear()
         tipColorMode = defaults.tipColorMode
         tipDividerColorMode = defaults.tipDividerColorMode
         tipDividerColor = defaults.tipDividerColor
@@ -2234,14 +2249,37 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         if (::readView.isInitialized) readView.setBookTitle(title)
     }
 
-    private fun updateChapterTitleSurfaces() {
-        val page = pages.getOrNull(pageIndex)
+    private fun updateChapterTitleSurfaces(pageOverride: TextPage? = null) {
+        val page = pageOverride ?: pages.getOrNull(pageIndex)
         val title = currentDisplayedChapterTitle(page)
-        if (::readView.isInitialized) readView.setDisplayedChapterTitle(title)
-        if (!::toolbarAdditionText.isInitialized) return
-        toolbarAdditionText.visibility = if (isTopBarAdditionVisible()) View.VISIBLE else View.GONE
-        if (!isTopBarAdditionVisible()) return
-        toolbarAdditionText.text = topBarTipText(page).ifBlank { title }
+        if (::readView.isInitialized) {
+            readView.setDisplayedChapterTitle(title)
+        }
+        if (!::toolbarAdditionContainer.isInitialized) return
+        val showTopBarAddition = isTopBarAdditionVisible()
+        toolbarAdditionContainer.visibility = if (showTopBarAddition) View.VISIBLE else View.GONE
+        if (!showTopBarAddition) return
+        bindToolbarAdditionTip(
+            toolbarAdditionLeftText,
+            ReaderInfoSlot.TOP_BAR_LEFT,
+            tipTopBarLeft,
+            page,
+            title
+        )
+        bindToolbarAdditionTip(
+            toolbarAdditionMiddleText,
+            ReaderInfoSlot.TOP_BAR_MIDDLE,
+            tipTopBarMiddle,
+            page,
+            title
+        )
+        bindToolbarAdditionTip(
+            toolbarAdditionRightText,
+            ReaderInfoSlot.TOP_BAR_RIGHT,
+            tipTopBarRight,
+            page,
+            title
+        )
     }
 
     private fun isTopBarAdditionVisible(): Boolean {
@@ -2252,27 +2290,67 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
     }
 
-    private fun topBarTipText(page: TextPage?): String {
-        return listOf(tipTopBarLeft, tipTopBarMiddle, tipTopBarRight)
-            .map { readerTipText(it, page) }
-            .filter { it.isNotBlank() }
-            .joinToString(separator = "   ")
+    private fun bindToolbarAdditionTip(
+        view: TextView,
+        slot: ReaderInfoSlot,
+        content: ReaderTipContent,
+        page: TextPage?,
+        chapterTitle: String
+    ) {
+        val text = readerTipText(content, page, slot, chapterTitle)
+        view.text = if (content == ReaderTipContent.CHAPTER_TITLE) text.ifBlank { chapterTitle } else text
+        view.visibility = if (view.text.isNullOrBlank()) View.INVISIBLE else View.VISIBLE
+        val clickable = ReaderTipFormatter.isProgressTip(content)
+        view.isClickable = clickable
+        view.setOnClickListener(if (clickable) View.OnClickListener { toggleReaderInfoProgressText(slot) } else null)
     }
 
-    private fun readerTipText(content: ReaderTipContent, page: TextPage?): String {
-        if (page == null) return ""
-        return when (content) {
-            ReaderTipContent.NONE -> ""
-            ReaderTipContent.BOOK_NAME -> currentReaderTitle().ifBlank { page.title }
-            ReaderTipContent.CHAPTER_TITLE -> currentDisplayedChapterTitle(page)
-            ReaderTipContent.TIME -> currentClockText()
-            ReaderTipContent.BATTERY_PERCENTAGE -> "${batteryPercent()}%"
-            ReaderTipContent.PAGE -> "${page.globalIndex + 1} / ${page.totalPages}"
-            ReaderTipContent.TOTAL_PROGRESS -> page.readProgress
-            ReaderTipContent.CHAPTER_PROGRESS -> "${page.pageInChapter + 1}/${page.chapterPageCount}"
-            ReaderTipContent.PAGE_AND_TOTAL -> "${page.globalIndex + 1} / ${page.totalPages}  ${page.readProgress}"
-            ReaderTipContent.TIME_BATTERY_PERCENTAGE -> "${currentClockText()} ${batteryPercent()}%"
+    private fun readerTipText(
+        content: ReaderTipContent,
+        page: TextPage?,
+        slot: ReaderInfoSlot,
+        chapterTitle: String = currentDisplayedChapterTitle(page)
+    ): String {
+        return ReaderTipFormatter.text(
+            content = content,
+            page = page,
+            alternateProgress = slot in readerInfoAlternateSlots,
+            bookTitle = currentReaderTitle(),
+            chapterTitle = chapterTitle,
+            clockText = currentClockText(),
+            batteryPercent = batteryPercent()
+        )
+    }
+
+    private fun readerInfoContent(slot: ReaderInfoSlot): ReaderTipContent = when (slot) {
+        ReaderInfoSlot.TOP_BAR_LEFT -> tipTopBarLeft
+        ReaderInfoSlot.TOP_BAR_MIDDLE -> tipTopBarMiddle
+        ReaderInfoSlot.TOP_BAR_RIGHT -> tipTopBarRight
+        ReaderInfoSlot.HEADER_LEFT -> tipHeaderLeft
+        ReaderInfoSlot.HEADER_MIDDLE -> tipHeaderMiddle
+        ReaderInfoSlot.HEADER_RIGHT -> tipHeaderRight
+        ReaderInfoSlot.FOOTER_LEFT -> tipFooterLeft
+        ReaderInfoSlot.FOOTER_MIDDLE -> tipFooterMiddle
+        ReaderInfoSlot.FOOTER_RIGHT -> tipFooterRight
+    }
+
+    private fun validReaderInfoAlternateSlots(): Set<ReaderInfoSlot> {
+        return readerInfoAlternateSlots.filterTo(mutableSetOf()) { slot ->
+            ReaderTipFormatter.isProgressTip(readerInfoContent(slot))
         }
+    }
+
+    private fun pruneReaderInfoAlternateSlots() {
+        readerInfoAlternateSlots.retainAll(validReaderInfoAlternateSlots())
+    }
+
+    private fun toggleReaderInfoProgressText(slot: ReaderInfoSlot) {
+        if (!readerInfoAlternateSlots.add(slot)) {
+            readerInfoAlternateSlots.remove(slot)
+        }
+        applyReaderInfoConfig()
+        updateChapterTitleSurfaces()
+        persistReaderSettings(updateAnchor = false)
     }
 
     private fun batteryPercent(): Int {
@@ -2289,12 +2367,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun currentDisplayedChapterTitle(page: TextPage? = pages.getOrNull(pageIndex)): String {
-        if (useM4bChapterSource()) {
-            m4bChapters.getOrNull(currentM4bChapterIndex())
-                ?.title
-                ?.takeIf { it.isNotBlank() }
-                ?.let { return it }
-        }
         return page?.title?.ifBlank { currentReaderTitle() } ?: currentReaderTitle()
     }
 
@@ -2973,7 +3045,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             footerPaddingLeftDp = footerPaddingLeftDp,
             footerPaddingRightDp = footerPaddingRightDp,
             showHeaderLine = showHeaderLine,
-            showFooterLine = showFooterLine
+            showFooterLine = showFooterLine,
+            alternateInfoSlots = validReaderInfoAlternateSlots()
         )
     }
 
@@ -3553,6 +3626,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun showTipConfigDialog() {
+        tipConfigDialog?.setOnDismissListener(null)
+        tipConfigDialog?.dismiss()
+        tipConfigDialog = null
         var dialog: AlertDialog? = null
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -3580,22 +3656,19 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
         addInfoSelectorRow(content, getString(R.string.reader_tip_left), tipContentLabel(tipTopBarLeft)) {
             dialog?.dismiss()
-            showTipContentSelector(tipTopBarLeft) {
-                tipTopBarLeft = it
+            showReaderInfoContentSelector(ReaderInfoSlot.TOP_BAR_LEFT, tipTopBarLeft, { tipTopBarLeft = it }) {
                 applyTopBarTipConfigChange()
             }
         }
         addInfoSelectorRow(content, getString(R.string.reader_tip_middle), tipContentLabel(tipTopBarMiddle)) {
             dialog?.dismiss()
-            showTipContentSelector(tipTopBarMiddle) {
-                tipTopBarMiddle = it
+            showReaderInfoContentSelector(ReaderInfoSlot.TOP_BAR_MIDDLE, tipTopBarMiddle, { tipTopBarMiddle = it }) {
                 applyTopBarTipConfigChange()
             }
         }
         addInfoSelectorRow(content, getString(R.string.reader_tip_right), tipContentLabel(tipTopBarRight)) {
             dialog?.dismiss()
-            showTipContentSelector(tipTopBarRight) {
-                tipTopBarRight = it
+            showReaderInfoContentSelector(ReaderInfoSlot.TOP_BAR_RIGHT, tipTopBarRight, { tipTopBarRight = it }) {
                 applyTopBarTipConfigChange()
             }
         }
@@ -3607,22 +3680,19 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
         addInfoSelectorRow(content, getString(R.string.reader_tip_left), tipContentLabel(tipHeaderLeft)) {
             dialog?.dismiss()
-            showTipContentSelector(tipHeaderLeft) {
-                tipHeaderLeft = it
+            showReaderInfoContentSelector(ReaderInfoSlot.HEADER_LEFT, tipHeaderLeft, { tipHeaderLeft = it }) {
                 applyTipConfigChange(repaginate = true)
             }
         }
         addInfoSelectorRow(content, getString(R.string.reader_tip_middle), tipContentLabel(tipHeaderMiddle)) {
             dialog?.dismiss()
-            showTipContentSelector(tipHeaderMiddle) {
-                tipHeaderMiddle = it
+            showReaderInfoContentSelector(ReaderInfoSlot.HEADER_MIDDLE, tipHeaderMiddle, { tipHeaderMiddle = it }) {
                 applyTipConfigChange(repaginate = true)
             }
         }
         addInfoSelectorRow(content, getString(R.string.reader_tip_right), tipContentLabel(tipHeaderRight)) {
             dialog?.dismiss()
-            showTipContentSelector(tipHeaderRight) {
-                tipHeaderRight = it
+            showReaderInfoContentSelector(ReaderInfoSlot.HEADER_RIGHT, tipHeaderRight, { tipHeaderRight = it }) {
                 applyTipConfigChange(repaginate = true)
             }
         }
@@ -3633,22 +3703,19 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
         addInfoSelectorRow(content, getString(R.string.reader_tip_left), tipContentLabel(tipFooterLeft)) {
             dialog?.dismiss()
-            showTipContentSelector(tipFooterLeft) {
-                tipFooterLeft = it
+            showReaderInfoContentSelector(ReaderInfoSlot.FOOTER_LEFT, tipFooterLeft, { tipFooterLeft = it }) {
                 applyTipConfigChange(repaginate = true)
             }
         }
         addInfoSelectorRow(content, getString(R.string.reader_tip_middle), tipContentLabel(tipFooterMiddle)) {
             dialog?.dismiss()
-            showTipContentSelector(tipFooterMiddle) {
-                tipFooterMiddle = it
+            showReaderInfoContentSelector(ReaderInfoSlot.FOOTER_MIDDLE, tipFooterMiddle, { tipFooterMiddle = it }) {
                 applyTipConfigChange(repaginate = true)
             }
         }
         addInfoSelectorRow(content, getString(R.string.reader_tip_right), tipContentLabel(tipFooterRight)) {
             dialog?.dismiss()
-            showTipContentSelector(tipFooterRight) {
-                tipFooterRight = it
+            showReaderInfoContentSelector(ReaderInfoSlot.FOOTER_RIGHT, tipFooterRight, { tipFooterRight = it }) {
                 applyTipConfigChange(repaginate = true)
             }
         }
@@ -3667,6 +3734,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             .setView(ScrollView(this).apply { addView(content) })
             .setPositiveButton(R.string.reader_dialog_done, null)
             .show()
+        tipConfigDialog = dialog
+        dialog.setOnDismissListener {
+            if (tipConfigDialog === dialog) {
+                tipConfigDialog = null
+            }
+        }
     }
 
     private fun addInfoSectionTitle(parent: LinearLayout, text: String) {
@@ -3861,6 +3934,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         showSimpleSelector(getString(R.string.reader_tip_top_toolbar), entries, topBarMode) {
             topBarMode = it
             applyTopBarTipConfigChange()
+            showTipConfigDialog()
         }
     }
 
@@ -3868,6 +3942,19 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         showSimpleSelector(getString(R.string.reader_tip_display_content), tipContentEntries(), current) {
             onSelected(it)
             showTipConfigDialog()
+        }
+    }
+
+    private fun showReaderInfoContentSelector(
+        slot: ReaderInfoSlot,
+        current: ReaderTipContent,
+        onSelected: (ReaderTipContent) -> Unit,
+        onApplied: () -> Unit
+    ) {
+        showTipContentSelector(current) { selected ->
+            if (selected != current) readerInfoAlternateSlots.remove(slot)
+            onSelected(selected)
+            onApplied()
         }
     }
 
@@ -3945,7 +4032,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private fun applyTopBarTipConfigChange() {
         updateChapterTitleSurfaces()
         persistReaderSettings(updateAnchor = false)
-        showTipConfigDialog()
     }
 
     private fun tipContentEntries(): List<Pair<ReaderTipContent, String>> = listOf(
@@ -3953,11 +4039,14 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         ReaderTipContent.BOOK_NAME to getString(R.string.reader_tip_book_name),
         ReaderTipContent.CHAPTER_TITLE to getString(R.string.reader_tip_chapter_title),
         ReaderTipContent.TIME to getString(R.string.reader_tip_time),
+        ReaderTipContent.BATTERY to getString(R.string.reader_tip_battery),
         ReaderTipContent.BATTERY_PERCENTAGE to getString(R.string.reader_tip_battery_percentage),
         ReaderTipContent.PAGE to getString(R.string.reader_tip_page),
         ReaderTipContent.TOTAL_PROGRESS to getString(R.string.reader_tip_total_progress),
         ReaderTipContent.CHAPTER_PROGRESS to getString(R.string.reader_tip_chapter_progress),
         ReaderTipContent.PAGE_AND_TOTAL to getString(R.string.reader_tip_page_and_total),
+        ReaderTipContent.PAGE_OR_PROGRESS to getString(R.string.reader_tip_page_or_progress),
+        ReaderTipContent.TIME_BATTERY to getString(R.string.reader_tip_time_battery),
         ReaderTipContent.TIME_BATTERY_PERCENTAGE to getString(R.string.reader_tip_time_battery_percentage)
     )
 
@@ -4510,7 +4599,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun updateCrossPageCueWindow(page: TextPage?, match: EbookCueMatch?) {
         if (!::readView.isInitialized) return
-        if (!crossPageCueWindowEnabled || page == null || match == null || match.chapterIndex != page.chapterIndex) {
+        if (
+            !crossPageCueWindowEnabled ||
+            !isAudioPlaybackRequested() ||
+            page == null ||
+            match == null ||
+            match.chapterIndex != page.chapterIndex
+        ) {
             hideCrossPageCueWindow()
             return
         }
@@ -4817,6 +4912,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun updateAudioControlLabels() {
         val isPlaying = isAudioPlaybackRequested()
+        if (!isPlaying) {
+            hideCrossPageCueWindow()
+        }
         if (::listenActionText.isInitialized) {
             listenActionText.text =
                 if (isPlaying) readerString(R.string.reader_pause) else readerString(R.string.reader_listen)
@@ -5126,13 +5224,36 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             Log.d(LEGADO_READER_LOG_TAG, "restoreMatch miss key=${storeKey.take(48)}")
             return
         }
+        val restoredMatches = withContext(Dispatchers.Default) {
+            snapshot.matches.filter { match ->
+                cues.getOrNull(match.cueIndex)
+                    ?.let { cue -> !shouldSkipEbookCueForMatching(cue) }
+                    ?: false
+            }
+        }
+        if (restoredMatches.isEmpty()) {
+            Log.d(
+                LEGADO_READER_LOG_TAG,
+                "restoreMatch skipped after sanitize removed=${snapshot.matches.size} key=${storeKey.take(48)}"
+            )
+            return
+        }
+        val removedMatches = snapshot.matches.size - restoredMatches.size
+        val restoredUnmatched = (snapshot.unmatched + removedMatches)
+            .coerceAtMost(snapshot.totalCues.coerceAtLeast(0))
+        if (removedMatches > 0) {
+            Log.d(
+                LEGADO_READER_LOG_TAG,
+                "restoreMatch sanitized removed=$removedMatches matches=${snapshot.matches.size}->${restoredMatches.size}"
+            )
+        }
         val matchesByCueIndex = withContext(Dispatchers.Default) {
-            snapshot.matches.associateBy { it.cueIndex }
+            restoredMatches.associateBy { it.cueIndex }
         }
         cueMatchesByCueIndex = matchesByCueIndex
         matchData = EbookMatchData(
-            matches = snapshot.matches,
-            unmatched = snapshot.unmatched,
+            matches = restoredMatches,
+            unmatched = restoredUnmatched,
             totalCues = snapshot.totalCues
         )
         audioCueIndex = -1
@@ -5140,7 +5261,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         Log.d(
             LEGADO_READER_LOG_TAG,
             "restoreMatch applied=${SystemClock.elapsedRealtime() - restoreStartMs}ms " +
-                "matches=${snapshot.matches.size} totalCues=${snapshot.totalCues} unmatched=${snapshot.unmatched}"
+                "matches=${restoredMatches.size} totalCues=${snapshot.totalCues} unmatched=$restoredUnmatched"
         )
     }
 
@@ -5237,6 +5358,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         tipFooterLeft = state.tipFooterLeft
         tipFooterMiddle = state.tipFooterMiddle
         tipFooterRight = state.tipFooterRight
+        readerInfoAlternateSlots.clear()
+        readerInfoAlternateSlots.addAll(state.readerInfoAlternateSlots)
         tipColorMode = state.tipColorMode
         tipDividerColorMode = state.tipDividerColorMode
         tipDividerColor = state.tipDividerColor
@@ -5308,6 +5431,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         updateAnchor: Boolean = false,
         anchorOverride: ReaderPageAnchor? = null
     ) {
+        pruneReaderInfoAlternateSlots()
         val previous = loadLegadoReaderPersistedState(this)
         val bookUri = importedBook?.uri?.toString()
         val anchor = if (updateAnchor) anchorOverride ?: currentPageAnchor(includeCueMatch = false) else null
@@ -5378,6 +5502,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 tipFooterLeft = tipFooterLeft,
                 tipFooterMiddle = tipFooterMiddle,
                 tipFooterRight = tipFooterRight,
+                readerInfoAlternateSlots = readerInfoAlternateSlots.toSet(),
                 tipColorMode = tipColorMode,
                 tipDividerColorMode = tipDividerColorMode,
                 tipDividerColor = tipDividerColor,
@@ -5878,17 +6003,15 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         if (!cueChanged && !forceReveal) return
         val previousMatch = cueMatchesByCueIndex[previousAudioCueIndex]
         audioCueIndex = cueIndex
+        val match = cueMatchesByCueIndex[cueIndex]
         if (textSelectionActive && !forceReveal) {
-            activeCueIndex = cueIndex
+            activeCueIndex = if (match != null) cueIndex else -1
             updateDisplayedCueHighlightOnly()
             return
         }
-        val match = cueMatchesByCueIndex[cueIndex] ?: run {
-            activeCueIndex = cueIndex
-            hideCrossPageCueWindow()
-            if (!allowPageJump || forceReveal) {
-                renderCurrentPage()
-            }
+        if (match == null) {
+            activeCueIndex = -1
+            updateDisplayedCueHighlightOnly()
             return
         }
         if (
@@ -5935,6 +6058,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val match = currentPageCueMatch(page)
         readView.setCueHighlight(highlightTextPage(page, match))
         updateCrossPageCueWindow(page, match)
+        updateChapterTitleSurfaces()
     }
 
     private fun findCrossedImageStopTarget(
@@ -6038,6 +6162,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     override fun onDestroy() {
+        tipConfigDialog?.setOnDismissListener(null)
+        tipConfigDialog?.dismiss()
+        tipConfigDialog = null
         reloadBookJob?.cancel()
         paginationJob?.cancel()
         chapterPreloadJob?.cancel()
