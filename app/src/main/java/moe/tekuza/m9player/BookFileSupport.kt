@@ -63,10 +63,44 @@ internal fun buildBookTitle(audioName: String, srtName: String?): String {
 }
 
 internal fun buildReaderBookPlaybackKey(book: ReaderBook): String {
-    val stableSource = book.audioUri.toString().ifBlank {
-        "title=${book.title}|srt=${book.srtUri?.toString().orEmpty()}"
+    return buildReaderAudioPlaybackKey(
+        title = book.title,
+        audioUri = book.audioUri,
+        srtUri = book.srtUri
+    )
+}
+
+internal fun buildReaderAudioPlaybackKey(
+    title: String,
+    audioUri: Uri?,
+    srtUri: Uri?
+): String {
+    val stableSource = audioUri?.toString().orEmpty().ifBlank {
+        "title=$title|srt=${srtUri?.toString().orEmpty()}"
     }
-    return buildDictionaryCacheKey(stableSource, book.title.ifBlank { "book" })
+    return buildDictionaryCacheKey(stableSource, title.ifBlank { "book" })
+}
+
+internal fun saveReaderAudioPlaybackProgress(
+    context: Context,
+    title: String,
+    audioUri: Uri?,
+    srtUri: Uri?,
+    positionMs: Long,
+    durationMs: Long,
+    allowZeroPositionWrite: Boolean = false
+) {
+    saveBookReaderPlaybackPosition(
+        context = context,
+        bookKey = buildReaderAudioPlaybackKey(
+            title = title,
+            audioUri = audioUri,
+            srtUri = srtUri
+        ),
+        positionMs = positionMs,
+        durationMs = durationMs,
+        allowZeroPositionWrite = allowZeroPositionWrite
+    )
 }
 
 internal suspend fun loadReaderBookPlaybackSnapshotsForBooks(

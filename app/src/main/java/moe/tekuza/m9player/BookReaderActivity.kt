@@ -191,6 +191,7 @@ private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
 private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
 private const val BOOK_LOOKUP_SELECTION_LOG_TAG = "BookLookupSelection"
 private const val BOOK_READER_BACK_LOG_TAG = "BookReaderBack"
+private const val BOOK_READER_SEEK_LOG_TAG = "BookReaderSeek"
 private const val BOOK_UI_MODE_LOG_TAG = "BookUiMode"
 private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
 private const val BOOK_VERTICAL_TAP_DEBUG_OVERLAY = false
@@ -253,7 +254,7 @@ class BookReaderActivity : AppCompatActivity() {
                         if (uiTestMode) {
                             finish()
                         } else {
-                            val playbackKey = buildBookReaderPlaybackKey(title, audioUri, srtUri)
+                            val playbackKey = buildReaderAudioPlaybackKey(title, audioUri, srtUri)
                             val normalized = normalizeBookReaderPlaybackPosition(
                                 currentPositionMs,
                                 currentDurationMs
@@ -504,12 +505,20 @@ class BookReaderActivity : AppCompatActivity() {
         @Volatile
         private var activeReaderRef: WeakReference<BookReaderActivity>? = null
 
+        fun hasActiveReaderForAudio(targetAudioUri: String?): Boolean {
+            val active = activeReaderRef?.get() ?: return false
+            return !targetAudioUri.isNullOrBlank() && active.currentAudioUriForBridge == targetAudioUri
+        }
+
         fun stopActiveReaderIfDifferentAudio(targetAudioUri: String?) {
             val active = activeReaderRef?.get() ?: return
-            val activeAudio = BookReaderFloatingBridge.currentAudioUri()
+            val activeAudio = active.currentAudioUriForBridge
             if (!targetAudioUri.isNullOrBlank() && activeAudio == targetAudioUri) return
             active.runOnUiThread {
-                if (BookReaderFloatingBridge.isPlaying()) {
+                val activeAudioStillOwnsSharedPlayer =
+                    activeAudio != null &&
+                        BookReaderPlaybackSession.currentAudioUri() == activeAudio
+                if (activeAudioStillOwnsSharedPlayer && BookReaderFloatingBridge.isPlaying()) {
                     BookReaderFloatingBridge.togglePlayPause()
                 }
                 active.finish()
@@ -698,7 +707,7 @@ private fun BookReaderScreen(
 
         saveBookReaderPlaybackPosition(
             context = context,
-            bookKey = buildBookReaderPlaybackKey(title, audioUri, targetSrtUri),
+            bookKey = buildReaderAudioPlaybackKey(title, audioUri, targetSrtUri),
             positionMs = normalizeBookReaderPlaybackPosition(positionMs, durationMs),
             durationMs = durationMs.coerceAtLeast(0L)
         )
@@ -713,7 +722,7 @@ private fun BookReaderScreen(
     }
 
     val playbackPositionKey = remember(title, audioUri, srtUri) {
-        buildBookReaderPlaybackKey(title, audioUri, srtUri)
+        buildReaderAudioPlaybackKey(title, audioUri, srtUri)
     }
     var playbackRestoreCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
     var playbackCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
@@ -1147,13 +1156,16 @@ private fun BookReaderScreen(
         val end = cueRangeEndIndex ?: start
         minOf(start, end)..maxOf(start, end)
     }
-    val backToMain = remember(onBack, player, durationMs) {
+    val backToMain = remember(onBack, positionMs, durationMs) {
         { source: String ->
-            val current = player.currentPosition.coerceAtLeast(0L)
+            val current = positionMs.coerceAtLeast(0L)
             val total = if (player.duration > 0L) player.duration else durationMs.coerceAtLeast(0L)
             Log.d(
                 BOOK_READER_BACK_LOG_TAG,
-                "backToMain source=$source hoshiLookupVisible=${hoshiLookupPopups.isNotEmpty()} hoshiLookupLayers=${hoshiLookupPopups.size} playing=${player.isPlaying} positionMs=$current durationMs=$total"
+                "backToMain source=$source hoshiLookupVisible=${hoshiLookupPopups.isNotEmpty()} " +
+                    "hoshiLookupLayers=${hoshiLookupPopups.size} playing=${player.isPlaying} " +
+                    "statePositionMs=$current playerPositionMs=${player.currentPosition.coerceAtLeast(0L)} " +
+                    "durationMs=$total"
             )
             onBack(current, total)
         }
@@ -1689,7 +1701,30 @@ private fun BookReaderScreen(
         if (uiTestMode) {
             positionMs = target
         } else {
+            val beforeSeekPositionMs = player.currentPosition.coerceAtLeast(0L)
             player.seekTo(target)
+            positionMs = target
+            val total = if (player.duration > 0L) player.duration else durationMs.coerceAtLeast(0L)
+            Log.d(
+                BOOK_READER_SEEK_LOG_TAG,
+                "seekToManual targetMs=$target beforePlayerMs=$beforeSeekPositionMs " +
+                    "statePositionMs=$positionMs durationMs=$total keyPresent=${playbackPositionKey.isNotBlank()}"
+            )
+            if (playbackPositionKey.isNotBlank() && total > 0L) {
+                scope.launch(Dispatchers.IO) {
+                    val normalized = normalizeBookReaderPlaybackPosition(target, total)
+                    saveBookReaderPlaybackPosition(
+                        context = context,
+                        bookKey = playbackPositionKey,
+                        positionMs = normalized,
+                        durationMs = total
+                    )
+                    Log.d(
+                        BOOK_READER_SEEK_LOG_TAG,
+                        "seekToManual saved positionMs=$normalized durationMs=$total"
+                    )
+                }
+            }
         }
         if (controlModeEnabled) {
             controlModeStatus = context.getString(R.string.status_manual_seek)
@@ -2753,7 +2788,7 @@ private fun BookReaderScreen(
                                             scope.launch(Dispatchers.IO) {
                                                 saveBookReaderPlaybackPosition(
                                                     context = context,
-                                                    bookKey = buildBookReaderPlaybackKey(title, audioUri, srtUri),
+                                                    bookKey = buildReaderAudioPlaybackKey(title, audioUri, srtUri),
                                                     positionMs = normalizeBookReaderPlaybackPosition(
                                                         immediatePositionMs,
                                                         immediateDurationMs
@@ -2783,6 +2818,7 @@ private fun BookReaderScreen(
                                                 }
                                             }
                                         )
+                                        activity?.finish()
                                     }
                                 )
                             }
@@ -6173,17 +6209,6 @@ private fun buildBookReaderNotificationPendingIntent(
         intent,
         pendingIntentFlags
     )
-}
-
-private fun buildBookReaderPlaybackKey(
-    title: String,
-    audioUri: Uri?,
-    srtUri: Uri?
-): String {
-    val stableSource = audioUri?.toString().orEmpty().ifBlank {
-        "title=$title|srt=${srtUri?.toString().orEmpty()}"
-    }
-    return buildDictionaryCacheKey(stableSource, title.ifBlank { "book" })
 }
 
 private fun normalizeBookReaderPlaybackPosition(positionMs: Long, durationMs: Long): Long {

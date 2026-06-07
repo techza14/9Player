@@ -1130,6 +1130,7 @@ private fun ReaderSyncScreen() {
             loadEbookDefaultToReader(context) &&
             book.ebookUri != null
         ) {
+            BookReaderActivity.stopActiveReaderIfDifferentAudio(targetAudioUri)
             activateReaderBook(book, persist = persist)
             context.startActivity(createLegadoReaderIntent(context, book))
             return
@@ -3476,12 +3477,18 @@ private fun loadRecentProcessLogs(maxLines: Int = 200): String {
 }
 
 private fun extractRecentReaderLogs(recentLogs: String): String {
-    val interestingTags = listOf("BookReaderBack", "BookLookupTap")
+    val interestingTags = listOf(
+        "BookReaderBack",
+        "BookReaderSeek",
+        "LegadoAudioProgress",
+        "LegadoMatch",
+        "BookLookupTap"
+    )
     return recentLogs
         .lineSequence()
         .filter { line -> interestingTags.any { tag -> line.contains(tag) } }
         .joinToString(separator = "\n")
-        .ifBlank { "(no recent BookReaderBack/BookLookupTap logs captured)" }
+        .ifBlank { "(no recent BookReaderBack/BookReaderSeek/LegadoAudioProgress/LegadoMatch/BookLookupTap logs captured)" }
 }
 
 private data class SubtitleCue(

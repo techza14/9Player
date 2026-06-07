@@ -50,6 +50,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
 import com.jaredrummler.android.colorpicker.ColorPickerDialog
@@ -82,6 +83,8 @@ import moe.tekuza.m9player.legado.reader.provider.TextPageFactory
 
 private const val LEGADO_READER_DEFAULT_TITLE = "吾輩は猫である"
 private const val LEGADO_READER_LOG_TAG = "LegadoReader"
+private const val LEGADO_AUDIO_PROGRESS_LOG_TAG = "LegadoAudioProgress"
+private const val LEGADO_MATCH_LOG_TAG = "LegadoMatch"
 private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
 private const val NIGHT_BOTTOM_BG = 0xFF3A3A3A.toInt()
 private const val NIGHT_BRIGHTNESS_BG = 0x80303030.toInt()
@@ -190,6 +193,11 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var matchSearchWindow: Int = DEFAULT_MATCH_SEARCH_WINDOW
     private var audioCueIndex: Int = -1
     private var activeCueIndex: Int = -1
+    private var audioSeekSyncTargetMs: Long? = null
+    private var audioSeekSyncDisplayMs: Long? = null
+    private var audioSeekSyncTargetUntilElapsedMs: Long = 0L
+    private var audioSeekSyncGeneration: Long = 0L
+    private var pendingAudioSyncLoadAnchor: ReaderPageAnchor? = null
     private var textSelectionActive: Boolean = false
     private var player: ExoPlayer? = null
     private var returnToPlayerOnBack: Boolean = false
@@ -593,7 +601,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             contentContainer.setPadding(0, top, 0, bottom)
             applyReadMenuTopInset(safeInsets.top)
             (statusBarScrim.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-                params.height = if (hideStatusForReader && !shouldUseBlackCutoutGuard()) 0 else safeInsets.top
+                params.height =
+                    if (hideStatusForReader && !shouldUseBlackCutoutGuard() && !shouldFillHiddenStatusBarForReaderChrome()) {
+                        0
+                    } else {
+                        safeInsets.top
+                    }
                 statusBarScrim.layoutParams = params
             }
             (navigationBarScrim.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
@@ -884,7 +897,19 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                     }
 
                     override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                        if (progressByChapter) {
+                        if (useM4bChapterSource()) {
+                            if (progressByChapter) {
+                                val targetProgress = pendingPageSeekIndex ?: seekBar?.progress ?: return
+                                pendingPageSeekIndex = null
+                                pendingChapterSeekIndex = null
+                                seekToCurrentM4bChapterProgress(targetProgress)
+                            } else {
+                                val targetChapter = pendingChapterSeekIndex ?: seekBar?.progress ?: return
+                                pendingChapterSeekIndex = null
+                                pendingPageSeekIndex = null
+                                confirmOrJumpToChapterFromSeekBar(targetChapter)
+                            }
+                        } else if (progressByChapter) {
                             val targetPage = pendingPageSeekIndex ?: seekBar?.progress ?: return
                             pendingPageSeekIndex = null
                             pendingChapterSeekIndex = null
@@ -1268,8 +1293,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         return hideStatusBar && !readBodyToLh && !isReaderChromeVisibleForSystemBars()
     }
 
+    private fun shouldFillHiddenStatusBarForReaderChrome(): Boolean {
+        return hideStatusBar && isReaderChromeVisibleForSystemBars()
+    }
+
     private fun shouldHideStatusBarForReaderChrome(): Boolean {
-        return hideStatusBar && !isReaderChromeVisibleForSystemBars()
+        return hideStatusBar
     }
 
     private fun shouldHideNavigationBarForReaderChrome(): Boolean {
@@ -2203,11 +2232,16 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun startPlayerActivity(targetAudioUri: Uri) {
+        val targetAudioUriText = targetAudioUri.toString()
+        val reuseExistingPlayer = BookReaderActivity.hasActiveReaderForAudio(targetAudioUriText)
+        BookReaderActivity.stopActiveReaderIfDifferentAudio(targetAudioUriText)
         val intent = Intent(this, BookReaderActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            if (reuseExistingPlayer) {
+                addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
             putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, currentReaderTitle())
-            putExtra(BookReaderActivity.EXTRA_AUDIO_URI, targetAudioUri.toString())
+            putExtra(BookReaderActivity.EXTRA_AUDIO_URI, targetAudioUriText)
             putExtra(BookReaderActivity.EXTRA_SRT_URI, srtUri?.toString())
             importedBook?.uri?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_URI, it.toString()) }
             importedBook?.title?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_NAME, it) }
@@ -4125,6 +4159,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 updateDisplayedBookTitle()
                 val firstRenderStartMs = SystemClock.elapsedRealtime()
                 renderCurrentPage()
+                if (safeAnchor != null && pendingAudioSyncLoadAnchor == safeAnchor) {
+                    pendingAudioSyncLoadAnchor = null
+                }
                 Log.d(
                     LEGADO_READER_LOG_TAG,
                     "readerStartup firstRender=${SystemClock.elapsedRealtime() - firstRenderStartMs}ms " +
@@ -4496,27 +4533,245 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             .coerceAtMost(m4bChapters.lastIndex)
     }
 
+    private fun currentAudioDurationMs(): Long? {
+        val currentPlayer = player
+        val durationMs = when {
+            currentPlayer != null && currentPlayer.duration > 0L -> currentPlayer.duration
+            pendingAudioRestoreDurationMs > 0L -> pendingAudioRestoreDurationMs
+            else -> 0L
+        }
+        return durationMs.takeIf { it > 0L }
+    }
+
+    private fun m4bChapterRange(index: Int): LongRange? {
+        val startMs = m4bChapters.getOrNull(index)?.startMs ?: return null
+        val nextStartMs = m4bChapters.getOrNull(index + 1)?.startMs
+        val durationMs = currentAudioDurationMs()
+        val endMs = when {
+            nextStartMs != null && nextStartMs > startMs -> nextStartMs
+            durationMs != null && durationMs > startMs -> durationMs
+            else -> null
+        } ?: return null
+        return startMs..endMs
+    }
+
+    private fun currentM4bChapterProgress(): Int {
+        val range = m4bChapterRange(currentM4bChapterIndex()) ?: return 0
+        val spanMs = (range.last - range.first).coerceAtLeast(1L)
+        val positionMs = (currentAudioPositionMs() ?: range.first).coerceIn(range.first, range.last)
+        return (((positionMs - range.first) * M4B_CHAPTER_PROGRESS_MAX) / spanMs)
+            .toInt()
+            .coerceIn(0, M4B_CHAPTER_PROGRESS_MAX)
+    }
+
+    private fun seekToCurrentM4bChapterProgress(progress: Int) {
+        if (player == null) return
+        val currentChapter = currentM4bChapterIndex()
+        val range = m4bChapterRange(currentChapter) ?: return
+        val spanMs = (range.last - range.first).coerceAtLeast(1L)
+        val clampedProgress = progress.coerceIn(0, M4B_CHAPTER_PROGRESS_MAX)
+        val targetMs = (range.first + (spanMs * clampedProgress) / M4B_CHAPTER_PROGRESS_MAX)
+            .coerceIn(range.first, range.last)
+        seekReaderAudioToTarget(targetMs)
+    }
+
     private fun seekToM4bChapter(targetIndex: Int) {
         val target = m4bChapters.getOrNull(targetIndex) ?: return
+        seekReaderAudioToTarget(
+            targetMs = target.startMs,
+            preferNextMatchedCueForText = true
+        )
+    }
+
+    private fun seekReaderAudioToTarget(
+        targetMs: Long,
+        preferNextMatchedCueForText: Boolean = false
+    ) {
         val currentPlayer = player ?: return
-        currentPlayer.seekTo(target.startMs)
+        val durationMs = currentAudioDurationMs()
+        val safeTargetMs = if (durationMs != null) {
+            targetMs.coerceIn(0L, durationMs)
+        } else {
+            targetMs.coerceAtLeast(0L)
+        }
+        val initialDisplayMs = if (preferNextMatchedCueForText) {
+            chapterSeekTextSyncPositionMs(safeTargetMs)
+        } else {
+            safeTargetMs
+        }
+        val resumePlayback = currentPlayer.playWhenReady || currentPlayer.isPlaying
+        val playbackSpeed = currentAudioPlaybackSpeed()
+        val generation = markAudioSeekSyncTarget(
+            targetMs = safeTargetMs,
+            displayMs = initialDisplayMs
+        )
+        currentPlayer.seekTo(safeTargetMs)
         activeCueIndex = -1
         publishReaderPlaybackBridgeSnapshot(notifyState = false)
-        persistAudioPlaybackSnapshot()
+        BookReaderFloatingBridge.notifyPlaybackPosition(safeTargetMs)
+        persistAudioPlaybackSnapshotAt(safeTargetMs)
         if (cues.isNotEmpty()) {
-            syncToAudioPosition(allowPageJump = true, forceReveal = true)
+            syncToAudioPositionAt(initialDisplayMs, allowPageJump = true, forceReveal = true)
         } else {
             loadSrtSyncIfNeeded {
-                syncToAudioPosition(allowPageJump = true, forceReveal = true)
+                val loadedDisplayMs = if (preferNextMatchedCueForText) {
+                    chapterSeekTextSyncPositionMs(safeTargetMs)
+                } else {
+                    safeTargetMs
+                }
+                if (generation == audioSeekSyncGeneration && audioSeekSyncTargetMs != null) {
+                    audioSeekSyncDisplayMs = loadedDisplayMs
+                }
+                syncToAudioPositionAt(loadedDisplayMs, allowPageJump = true, forceReveal = true)
             }
         }
+        verifyReaderAudioSeek(
+            currentPlayer = currentPlayer,
+            targetMs = safeTargetMs,
+            generation = generation,
+            resumePlayback = resumePlayback,
+            playbackSpeed = playbackSpeed
+        )
         updateProgressSeekBar()
         updateChapterTitleSurfaces()
     }
 
+    private fun markAudioSeekSyncTarget(targetMs: Long, displayMs: Long): Long {
+        val generation = audioSeekSyncGeneration + 1L
+        audioSeekSyncGeneration = generation
+        audioSeekSyncTargetMs = targetMs
+        audioSeekSyncDisplayMs = displayMs
+        val displayGapMs = (displayMs - targetMs).coerceAtLeast(0L)
+        audioSeekSyncTargetUntilElapsedMs = SystemClock.elapsedRealtime() +
+            AUDIO_SEEK_SYNC_LOCK_MS.coerceAtLeast(displayGapMs + AUDIO_SEEK_SYNC_LOCK_AFTER_DISPLAY_MS)
+        pendingAudioSyncLoadAnchor = null
+        return generation
+    }
+
+    private fun verifyReaderAudioSeek(
+        currentPlayer: ExoPlayer,
+        targetMs: Long,
+        generation: Long,
+        resumePlayback: Boolean,
+        playbackSpeed: Float
+    ) {
+        readView.postDelayed({
+            if (player !== currentPlayer) return@postDelayed
+            if (generation != audioSeekSyncGeneration) return@postDelayed
+            val actualMs = currentPlayer.currentPosition.coerceAtLeast(0L)
+            val deltaMs = abs(actualMs - targetMs)
+            if (deltaMs <= AUDIO_SEEK_FALLBACK_TOLERANCE_MS) {
+                maybeClearAudioSeekSyncTarget(generation, actualMs)
+                verifyReaderAudioSeekSettled(currentPlayer, targetMs, generation, resumePlayback, playbackSpeed)
+                return@postDelayed
+            }
+            recoverReaderAudioSeek(currentPlayer, targetMs, generation, resumePlayback, playbackSpeed)
+        }, AUDIO_SEEK_VERIFY_DELAY_MS)
+    }
+
+    private fun verifyReaderAudioSeekSettled(
+        currentPlayer: ExoPlayer,
+        targetMs: Long,
+        generation: Long,
+        resumePlayback: Boolean,
+        playbackSpeed: Float
+    ) {
+        readView.postDelayed({
+            if (player !== currentPlayer || generation != audioSeekSyncGeneration) return@postDelayed
+            if (audioSeekSyncTargetMs == null) return@postDelayed
+            val actualMs = currentPlayer.currentPosition.coerceAtLeast(0L)
+            val displayMs = audioSeekSyncDisplayMs ?: targetMs
+            val staleOldPosition = actualMs > displayMs + AUDIO_SEEK_STALE_POSITION_TOLERANCE_MS
+            if (staleOldPosition) {
+                recoverReaderAudioSeek(currentPlayer, targetMs, generation, resumePlayback, playbackSpeed)
+                return@postDelayed
+            }
+            maybeClearAudioSeekSyncTarget(generation, actualMs)
+        }, AUDIO_SEEK_SETTLE_VERIFY_DELAY_MS)
+    }
+
+    private fun recoverReaderAudioSeek(
+        currentPlayer: ExoPlayer,
+        targetMs: Long,
+        generation: Long,
+        resumePlayback: Boolean,
+        playbackSpeed: Float
+    ) {
+        if (generation != audioSeekSyncGeneration) return
+        val currentAudioUri = audioUri ?: return
+        currentPlayer.setMediaItem(MediaItem.fromUri(currentAudioUri), targetMs)
+        currentPlayer.prepare()
+        currentPlayer.playbackParameters = PlaybackParameters(playbackSpeed)
+        if (resumePlayback) {
+            currentPlayer.playWhenReady = true
+            currentPlayer.play()
+        } else {
+            currentPlayer.pause()
+        }
+        publishReaderPlaybackBridgeSnapshot(notifyState = true)
+        BookReaderFloatingBridge.notifyPlaybackPosition(targetMs)
+        if (cues.isNotEmpty()) {
+            syncToAudioPositionAt(audioSeekSyncDisplayMs ?: targetMs, allowPageJump = true, forceReveal = true)
+        }
+        readView.postDelayed({
+            if (player !== currentPlayer || generation != audioSeekSyncGeneration) return@postDelayed
+            val actualMs = currentPlayer.currentPosition.coerceAtLeast(0L)
+            val deltaMs = abs(actualMs - targetMs)
+            if (deltaMs <= AUDIO_SEEK_FALLBACK_TOLERANCE_MS) {
+                maybeClearAudioSeekSyncTarget(generation, actualMs)
+                verifyReaderAudioSeekSettled(currentPlayer, targetMs, generation, resumePlayback, playbackSpeed)
+            }
+        }, AUDIO_SEEK_RECOVER_VERIFY_DELAY_MS)
+        updateProgressSeekBar()
+    }
+
+    private fun lockedAudioSeekSyncTargetMs(): Long? {
+        val targetMs = audioSeekSyncTargetMs ?: return null
+        val displayMs = audioSeekSyncDisplayMs ?: targetMs
+        currentAudioPositionMs()?.let { actualMs ->
+            if (maybeClearAudioSeekSyncTarget(audioSeekSyncGeneration, actualMs)) {
+                return null
+            }
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (now <= audioSeekSyncTargetUntilElapsedMs) return displayMs
+        clearAudioSeekSyncTarget(audioSeekSyncGeneration)
+        return null
+    }
+
+    private fun maybeClearAudioSeekSyncTarget(generation: Long, actualMs: Long): Boolean {
+        if (generation != audioSeekSyncGeneration) return true
+        val targetMs = audioSeekSyncTargetMs ?: return true
+        val displayMs = audioSeekSyncDisplayMs ?: targetMs
+        val displayReached = actualMs >= displayMs &&
+            actualMs - displayMs <= AUDIO_SEEK_DISPLAY_CLEAR_TOLERANCE_MS
+        val noSeparateDisplayTarget = abs(displayMs - targetMs) <= AUDIO_SEEK_FALLBACK_TOLERANCE_MS
+        val targetReached = noSeparateDisplayTarget &&
+            actualMs >= targetMs &&
+            actualMs - targetMs <= AUDIO_SEEK_DISPLAY_CLEAR_TOLERANCE_MS
+        if (displayReached || targetReached) {
+            clearAudioSeekSyncTarget(generation)
+            return true
+        }
+        return false
+    }
+
+    private fun clearAudioSeekSyncTarget(generation: Long) {
+        if (generation != audioSeekSyncGeneration) return
+        if (audioSeekSyncTargetMs == null) return
+        audioSeekSyncTargetMs = null
+        audioSeekSyncDisplayMs = null
+        audioSeekSyncTargetUntilElapsedMs = 0L
+    }
+
     private fun updateProgressSeekBar() {
         if (pages.isEmpty()) return
-        if (!progressByChapter && useM4bChapterSource()) {
+        if (useM4bChapterSource()) {
+            if (progressByChapter) {
+                chapterSeekBar.max = M4B_CHAPTER_PROGRESS_MAX
+                chapterSeekBar.progress = currentM4bChapterProgress()
+                return
+            }
             chapterSeekBar.max = (m4bChapters.size - 1).coerceAtLeast(0)
             chapterSeekBar.progress = currentM4bChapterIndex().coerceIn(0, chapterSeekBar.max)
             return
@@ -4853,6 +5108,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             positionMs = bestSnapshot.positionMs,
             durationMs = bestSnapshot.durationMs
         )
+        saveSharedAudioPlaybackSnapshot(
+            positionMs = bestSnapshot.positionMs,
+            durationMs = bestSnapshot.durationMs
+        )
         publishReaderPlaybackBridgeSnapshot(notifyState = false)
     }
 
@@ -5032,22 +5291,61 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun persistAudioPlaybackSnapshot(allowZeroPositionWrite: Boolean = false) {
         val currentPlayer = player ?: return
+        val positionMs = currentPlayer.currentPosition.coerceAtLeast(0L)
+        persistAudioPlaybackSnapshotAt(
+            positionMs = positionMs,
+            allowZeroPositionWrite = allowZeroPositionWrite
+        )
+    }
+
+    private fun persistAudioPlaybackSnapshotAt(
+        positionMs: Long,
+        allowZeroPositionWrite: Boolean = false
+    ) {
+        val currentPlayer = player ?: return
         val playbackKey = currentReaderPlaybackKey() ?: return
         val durationMs = if (currentPlayer.duration > 0L) currentPlayer.duration else pendingAudioRestoreDurationMs
         if (durationMs <= 0L) {
             return
         }
-        val positionMs = currentPlayer.currentPosition.coerceAtLeast(0L)
-        if (!allowZeroPositionWrite && positionMs == lastSavedPlaybackPositionMs) {
+        val safePositionMs = positionMs.coerceIn(0L, durationMs)
+        if (!allowZeroPositionWrite && safePositionMs == lastSavedPlaybackPositionMs) {
             return
         }
-        lastSavedPlaybackPositionMs = positionMs
+        lastSavedPlaybackPositionMs = safePositionMs
         saveBookReaderPlaybackPosition(
             context = this,
             bookKey = playbackKey,
+            positionMs = safePositionMs,
+            durationMs = durationMs.coerceAtLeast(0L),
+            allowZeroPositionWrite = allowZeroPositionWrite
+        )
+        saveSharedAudioPlaybackSnapshot(
+            positionMs = safePositionMs,
+            durationMs = durationMs,
+            allowZeroPositionWrite = allowZeroPositionWrite
+        )
+    }
+
+    private fun saveSharedAudioPlaybackSnapshot(
+        positionMs: Long,
+        durationMs: Long,
+        allowZeroPositionWrite: Boolean = false
+    ) {
+        val currentAudioUri = audioUri ?: return
+        saveReaderAudioPlaybackProgress(
+            context = this,
+            title = currentReaderTitle(),
+            audioUri = currentAudioUri,
+            srtUri = srtUri,
             positionMs = positionMs,
             durationMs = durationMs.coerceAtLeast(0L),
             allowZeroPositionWrite = allowZeroPositionWrite
+        )
+        Log.d(
+            LEGADO_AUDIO_PROGRESS_LOG_TAG,
+            "saved shared audio progress positionMs=$positionMs durationMs=${durationMs.coerceAtLeast(0L)} " +
+                "allowZero=$allowZeroPositionWrite audioUri=${currentAudioUri.toString().take(80)}"
         )
     }
 
@@ -5193,6 +5491,72 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         return buildDictionaryCacheKey(stableSource, currentReaderTitle())
     }
 
+    private fun cueDebugText(cue: EbookSrtCue?): String {
+        return cue
+            ?.text
+            ?.replace(Regex("\\s+"), " ")
+            ?.trim()
+            ?.take(48)
+            .orEmpty()
+    }
+
+    private fun cueDebugSummary(cueIndex: Int): String {
+        val cue = cues.getOrNull(cueIndex)
+        return if (cue == null) {
+            "cue=$cueIndex missing"
+        } else {
+            "cue=$cueIndex time=${cue.startMs}-${cue.endMs} text=${cueDebugText(cue)}"
+        }
+    }
+
+    private fun matchDebugSummary(match: EbookCueMatch?): String {
+        return if (match == null) {
+            "match=null"
+        } else {
+            "match cue=${match.cueIndex} chapter=${match.chapterIndex} raw=${match.rawStart}-${match.rawEnd}"
+        }
+    }
+
+    private fun chapterSeekTextSyncPositionMs(targetMs: Long): Long {
+        if (cues.isEmpty() || cueMatchesByCueIndex.isEmpty()) return targetMs
+        val exactIndex = findEbookCueIndexAtTime(cues, targetMs)
+        val exactCue = cues.getOrNull(exactIndex)
+        if (
+            exactCue != null &&
+            targetMs in exactCue.startMs..exactCue.endMs &&
+            cueMatchesByCueIndex[exactIndex] != null
+        ) {
+            return targetMs
+        }
+        val nextIndex = cues.indices.firstOrNull { index ->
+            val cue = cues[index]
+            cue.startMs >= targetMs &&
+                cue.startMs - targetMs <= M4B_CHAPTER_TEXT_SYNC_LOOKAHEAD_MS &&
+                cueMatchesByCueIndex[index] != null
+        } ?: return targetMs
+        return cues[nextIndex].startMs
+    }
+
+    private fun nearbyMatchedCueSummary(cueIndex: Int): String {
+        val previous = cueMatchesByCueIndex.keys.filter { it < cueIndex }.maxOrNull()
+        val next = cueMatchesByCueIndex.keys.filter { it > cueIndex }.minOrNull()
+        return "prev=${previous?.let { cueDebugSummary(it) + " " + matchDebugSummary(cueMatchesByCueIndex[it]) } ?: "none"}; " +
+            "next=${next?.let { cueDebugSummary(it) + " " + matchDebugSummary(cueMatchesByCueIndex[it]) } ?: "none"}"
+    }
+
+    private fun unmatchedCueDebugSample(data: EbookMatchData, limit: Int = 5): String {
+        if (data.unmatched <= 0) return "none"
+        val matched = data.matches.mapTo(mutableSetOf()) { it.cueIndex }
+        return cues
+            .asSequence()
+            .mapIndexedNotNull { index, cue ->
+                if (index in matched || shouldSkipEbookCueForMatching(cue)) null else cueDebugSummary(index)
+            }
+            .take(limit)
+            .joinToString(separator = " | ")
+            .ifBlank { "none" }
+    }
+
     private suspend fun restorePersistedMatchIfPossible() {
         if (document == null) {
             Log.d(LEGADO_READER_LOG_TAG, "restoreMatch skipped document=null")
@@ -5217,13 +5581,22 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             LEGADO_READER_LOG_TAG,
             "restoreMatch try key=${storeKey.take(48)} cues=${cues.size} book=${importedBook?.title}"
         )
+        Log.d(
+            LEGADO_MATCH_LOG_TAG,
+            "restore try key=${storeKey.take(48)} cues=${cues.size} existingMatches=${cueMatchesByCueIndex.size}"
+        )
         val restoreStartMs = SystemClock.elapsedRealtime()
         val snapshot = withContext(Dispatchers.IO) {
             loadLegadoReaderMatchSnapshotOrNull(this@LegadoReaderActivity, storeKey)
         } ?: run {
             Log.d(LEGADO_READER_LOG_TAG, "restoreMatch miss key=${storeKey.take(48)}")
+            Log.d(LEGADO_MATCH_LOG_TAG, "restore miss key=${storeKey.take(48)}")
             return
         }
+        Log.d(
+            LEGADO_MATCH_LOG_TAG,
+            "restore hit storedMatches=${snapshot.matches.size} totalCues=${snapshot.totalCues} unmatched=${snapshot.unmatched}"
+        )
         val restoredMatches = withContext(Dispatchers.Default) {
             snapshot.matches.filter { match ->
                 cues.getOrNull(match.cueIndex)
@@ -5262,6 +5635,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             LEGADO_READER_LOG_TAG,
             "restoreMatch applied=${SystemClock.elapsedRealtime() - restoreStartMs}ms " +
                 "matches=${restoredMatches.size} totalCues=${snapshot.totalCues} unmatched=$restoredUnmatched"
+        )
+        val restoredData = matchData ?: return
+        Log.d(
+            LEGADO_MATCH_LOG_TAG,
+            "restore applied matches=${restoredMatches.size} totalCues=${snapshot.totalCues} unmatched=$restoredUnmatched " +
+                "sampleUnmatched=${unmatchedCueDebugSample(restoredData)}"
         )
     }
 
@@ -5822,6 +6201,11 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                             LEGADO_READER_LOG_TAG,
                             "manual match success matches=${data.matches.size} totalCues=${data.totalCues} unmatched=${data.unmatched}"
                         )
+                        Log.d(
+                            LEGADO_MATCH_LOG_TAG,
+                            "manual success rate=${data.matchRateText} matches=${data.matches.size} totalCues=${data.totalCues} " +
+                                "unmatched=${data.unmatched} sampleUnmatched=${unmatchedCueDebugSample(data)}"
+                        )
                         persistCurrentMatchSnapshot()
                         audioCueIndex = -1
                         activeCueIndex = -1
@@ -5888,6 +6272,11 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                         "loadSrtSyncIfNeeded cacheHit=${SystemClock.elapsedRealtime() - srtStartMs}ms " +
                             "cues=${cachedSnapshot.cues.size} uri=$uriText"
                     )
+                    Log.d(
+                        LEGADO_MATCH_LOG_TAG,
+                        "srt cacheHit cues=${cachedSnapshot.cues.size} first=${cachedSnapshot.cues.firstOrNull()?.startMs} " +
+                            "last=${cachedSnapshot.cues.lastOrNull()?.startMs} uri=${uriText.take(80)}"
+                    )
                     cachedSnapshot.cues
                 } else {
                     val loadedCues = parseEbookSrt(contentResolver, uri)
@@ -5898,6 +6287,11 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                         LEGADO_READER_LOG_TAG,
                         "loadSrtSyncIfNeeded parsed=${SystemClock.elapsedRealtime() - srtStartMs}ms " +
                             "cues=${loadedCues.size} uri=$uriText force=$force"
+                    )
+                    Log.d(
+                        LEGADO_MATCH_LOG_TAG,
+                        "srt parsed cues=${loadedCues.size} first=${loadedCues.firstOrNull()?.startMs} " +
+                            "last=${loadedCues.lastOrNull()?.startMs} force=$force uri=${uriText.take(80)}"
                     )
                     loadedCues
                 }
@@ -5912,6 +6306,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                     LEGADO_READER_LOG_TAG,
                     "loadSrtSyncIfNeeded ready=${SystemClock.elapsedRealtime() - srtStartMs}ms " +
                         "cues=${loadedCues.size} uri=$uriText reset in-memory match cache"
+                )
+                Log.d(
+                    LEGADO_MATCH_LOG_TAG,
+                    "srt ready cues=${loadedCues.size} resetMatches=true sampleFirst=${cueDebugText(loadedCues.firstOrNull())}"
                 )
                 srtLoadError = if (loadedCues.isEmpty()) {
                     readerString(R.string.reader_srt_parse_failed_detail)
@@ -5980,10 +6378,50 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         allowPageJump: Boolean = true,
         forceReveal: Boolean = false
     ) {
-        if (cues.isEmpty() || pages.isEmpty()) return
-        val currentPosition = currentAudioPositionMs() ?: return
+        lockedAudioSeekSyncTargetMs()?.let { targetMs ->
+            syncToAudioPositionAt(
+                positionMs = targetMs,
+                allowPageJump = allowPageJump,
+                forceReveal = forceReveal
+            )
+            return
+        }
+        val currentPosition = currentAudioPositionMs() ?: run {
+            if (forceReveal) {
+                Log.d(LEGADO_MATCH_LOG_TAG, "sync skipped currentPosition=null")
+            }
+            return
+        }
+        syncToAudioPositionAt(
+            positionMs = currentPosition,
+            allowPageJump = allowPageJump,
+            forceReveal = forceReveal
+        )
+    }
+
+    private fun syncToAudioPositionAt(
+        positionMs: Long,
+        allowPageJump: Boolean = true,
+        forceReveal: Boolean = false
+    ) {
+        if (cues.isEmpty() || pages.isEmpty()) {
+            if (forceReveal) {
+                Log.d(
+                    LEGADO_MATCH_LOG_TAG,
+                    "sync skipped empty cues=${cues.size} pages=${pages.size} allowPageJump=$allowPageJump forceReveal=$forceReveal"
+                )
+            }
+            return
+        }
+        val currentPosition = positionMs.coerceAtLeast(0L)
         val cueIndex = findEbookCueIndexAtTime(cues, currentPosition)
         if (cueIndex < 0) {
+            if (forceReveal) {
+                Log.d(
+                    LEGADO_MATCH_LOG_TAG,
+                    "sync noCue position=$currentPosition cues=${cues.size} first=${cues.firstOrNull()?.startMs} last=${cues.lastOrNull()?.endMs}"
+                )
+            }
             val changed = activeCueIndex != -1
             audioCueIndex = -1
             activeCueIndex = -1
@@ -6004,12 +6442,23 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val previousMatch = cueMatchesByCueIndex[previousAudioCueIndex]
         audioCueIndex = cueIndex
         val match = cueMatchesByCueIndex[cueIndex]
+        if (forceReveal || match == null) {
+            Log.d(
+                LEGADO_MATCH_LOG_TAG,
+                "sync position=$currentPosition ${cueDebugSummary(cueIndex)} ${matchDebugSummary(match)} " +
+                    "matches=${cueMatchesByCueIndex.size}/${cues.size} allowPageJump=$allowPageJump forceReveal=$forceReveal"
+            )
+        }
         if (textSelectionActive && !forceReveal) {
             activeCueIndex = if (match != null) cueIndex else -1
             updateDisplayedCueHighlightOnly()
             return
         }
         if (match == null) {
+            Log.d(
+                LEGADO_MATCH_LOG_TAG,
+                "sync missingMatch ${cueDebugSummary(cueIndex)} nearby=${nearbyMatchedCueSummary(cueIndex)}"
+            )
             activeCueIndex = -1
             updateDisplayedCueHighlightOnly()
             return
@@ -6034,8 +6483,16 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val matchAnchor = ReaderPageAnchor(match.chapterIndex, match.rawStart)
         val startPageIndex = findTextPageForMatch(match)
         if (startPageIndex == null) {
+            Log.d(
+                LEGADO_MATCH_LOG_TAG,
+                "sync noPage ${matchDebugSummary(match)} pageIndex=$pageIndex pages=${pages.size}"
+            )
             activeCueIndex = cueIndex
             persistReaderAnchor(matchAnchor)
+            if (pendingAudioSyncLoadAnchor == matchAnchor && paginationJob?.isActive == true) {
+                return
+            }
+            pendingAudioSyncLoadAnchor = matchAnchor
             loadDisplayedBook(
                 anchor = matchAnchor,
                 forceDocumentReload = false
@@ -6043,12 +6500,24 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             return
         }
         if (startPageIndex == pageIndex) {
+            if (forceReveal) {
+                Log.d(
+                    LEGADO_MATCH_LOG_TAG,
+                    "sync samePage ${matchDebugSummary(match)} pageIndex=$pageIndex"
+                )
+            }
             updateDisplayedCueHighlightOnly()
             persistReaderAnchor(matchAnchor)
             return
         }
         val previousPageIndex = pageIndex
         pageIndex = startPageIndex
+        if (forceReveal) {
+            Log.d(
+                LEGADO_MATCH_LOG_TAG,
+                "sync jumpPage ${matchDebugSummary(match)} page=$previousPageIndex->$startPageIndex"
+            )
+        }
         renderCurrentPage(forward = startPageIndex >= previousPageIndex)
         persistReaderAnchor(matchAnchor)
     }
@@ -6204,6 +6673,16 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         private const val READER_TIP_COLOR_DIALOG_ID = 124
         private const val READER_TIP_DIVIDER_COLOR_DIALOG_ID = 125
         private const val LEGADO_COLOR_PICKER_IMAGE_BG_FALLBACK = 0xFF015A86.toInt()
+        private const val M4B_CHAPTER_PROGRESS_MAX = 1000
+        private const val AUDIO_SEEK_VERIFY_DELAY_MS = 450L
+        private const val AUDIO_SEEK_RECOVER_VERIFY_DELAY_MS = 650L
+        private const val AUDIO_SEEK_SETTLE_VERIFY_DELAY_MS = 1_400L
+        private const val AUDIO_SEEK_FALLBACK_TOLERANCE_MS = 1_500L
+        private const val AUDIO_SEEK_SYNC_LOCK_MS = 3_500L
+        private const val AUDIO_SEEK_SYNC_LOCK_AFTER_DISPLAY_MS = 2_000L
+        private const val AUDIO_SEEK_DISPLAY_CLEAR_TOLERANCE_MS = 10_000L
+        private const val AUDIO_SEEK_STALE_POSITION_TOLERANCE_MS = 30_000L
+        private const val M4B_CHAPTER_TEXT_SYNC_LOOKAHEAD_MS = 8_000L
         private const val MENU_BG = 0xFFF7F0E2.toInt()
         private const val MENU_TEXT = 0xFF2C241B.toInt()
         private const val SUBTLE_TEXT = 0xFF7D6E5C.toInt()
