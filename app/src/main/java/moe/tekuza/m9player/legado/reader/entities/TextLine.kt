@@ -43,7 +43,7 @@ internal data class TextLine(
         search: IntRange?
     ) {
         drawRangeBackground(canvas, view.selectionPaint, selection, view.selectionBackgroundInsetPx)
-        drawRangeBackground(canvas, view.highlightPaint, highlight, 0f)
+        drawRangeBackground(canvas, view.highlightPaint, highlight, view.selectionBackgroundInsetPx)
         drawRangeBackground(canvas, view.searchPaint, search, 0f)
         columns.forEach { column ->
             val selected = column.intersects(selection) || column.intersects(highlight) || column.intersects(search)

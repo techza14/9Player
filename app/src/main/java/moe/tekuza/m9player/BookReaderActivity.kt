@@ -724,8 +724,21 @@ private fun BookReaderScreen(
     val playbackPositionKey = remember(title, audioUri, srtUri) {
         buildReaderAudioPlaybackKey(title, audioUri, srtUri)
     }
-    val legacyPlaybackPositionKey = remember(title, audioUri, srtUri) {
-        buildLegacyReaderAudioPlaybackKey(title, audioUri, srtUri)
+    val currentReaderBook = remember(title, audioUri, srtUri, ebookUri, ebookName, ebookFormat, coverUri) {
+        audioUri?.let { selectedAudio ->
+            ReaderBook(
+                id = "$selectedAudio|${srtUri?.toString().orEmpty()}",
+                title = title,
+                audioUri = selectedAudio,
+                audioName = title,
+                srtUri = srtUri,
+                srtName = null,
+                ebookUri = ebookUri,
+                ebookName = ebookName,
+                ebookFormat = ebookFormat,
+                coverUri = coverUri
+            )
+        }
     }
     var playbackRestoreCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
     var playbackCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
@@ -743,9 +756,7 @@ private fun BookReaderScreen(
         }
     }
     fun setReaderPlaybackState(play: Boolean) {
-        if (uiTestMode) {
-            isPlaying = play
-        } else {
+        if (!uiTestMode) {
             setLookupPlaybackState(play)
         }
         isPlaying = play
@@ -804,8 +815,13 @@ private fun BookReaderScreen(
                         isPlaying = isReaderPlaybackRequested()
                         return
                     }
-                    val snapshot = loadBookReaderPlaybackSnapshotOrNull(context, playbackPositionKey)
-                        ?: loadBookReaderPlaybackSnapshotOrNull(context, legacyPlaybackPositionKey)
+                    val snapshot = currentReaderBook?.let { book ->
+                        migrateBestReaderBookPlaybackSnapshotIfNeeded(
+                            context = context,
+                            book = book,
+                            reason = "bookReaderResume"
+                        )?.snapshot
+                    }
                     val targetPosition = snapshot?.positionMs?.coerceAtLeast(0L) ?: 0L
                     val currentPosition = player.currentPosition.coerceAtLeast(0L)
                     if (kotlin.math.abs(targetPosition - currentPosition) > 800L) {
@@ -904,13 +920,13 @@ private fun BookReaderScreen(
     if (!uiTestMode) DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
-                isPlaying = player.playWhenReady || playing
+                isPlaying = isReaderPlaybackRequested()
                 positionMs = player.currentPosition.coerceAtLeast(0L)
                 durationMs = if (player.duration > 0L) player.duration else 0L
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                isPlaying = playWhenReady || player.isPlaying
+                isPlaying = isReaderPlaybackRequested()
                 positionMs = player.currentPosition.coerceAtLeast(0L)
                 durationMs = if (player.duration > 0L) player.duration else 0L
             }
@@ -1016,11 +1032,15 @@ private fun BookReaderScreen(
         val restoredPositionMs = if (sameSharedAudio) {
             player.currentPosition.coerceAtLeast(0L)
         } else {
-            withContext(Dispatchers.IO) {
-                loadBookReaderPlaybackSnapshotOrNull(context, playbackPositionKey)?.positionMs
-                    ?: loadBookReaderPlaybackSnapshotOrNull(context, legacyPlaybackPositionKey)?.positionMs
-                    ?: 0L
-            }.coerceAtLeast(0L)
+            currentReaderBook?.let { book ->
+                withContext(Dispatchers.IO) {
+                    migrateBestReaderBookPlaybackSnapshotIfNeeded(
+                        context = context,
+                        book = book,
+                        reason = "bookReaderRestore"
+                    )?.snapshot?.positionMs ?: 0L
+                }
+            }?.coerceAtLeast(0L) ?: 0L
         }
         BookReaderPlaybackSession.prepareAudioIfNeeded(
             context = context,

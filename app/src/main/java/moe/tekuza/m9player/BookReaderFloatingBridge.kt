@@ -146,7 +146,7 @@ object BookReaderFloatingBridge {
     }
 
     fun isPlaying(): Boolean = if (BookReaderPlaybackSession.currentAudioUri() != null) {
-        BookReaderPlaybackSession.isPlaybackRequested()
+        BookReaderPlaybackSession.isPlaying()
     } else {
         playingSnapshot
     }
@@ -289,12 +289,12 @@ object BookReaderFloatingBridge {
 
     fun togglePlayPause() {
         BookReaderPlaybackSession.togglePlayPause()
-        notifyPlaybackState(BookReaderPlaybackSession.isPlaybackRequested())
+        notifyPlaybackState(BookReaderPlaybackSession.isPlaying())
     }
 
     fun setPlaying(play: Boolean) {
         BookReaderPlaybackSession.setPlaying(play)
-        notifyPlaybackState(BookReaderPlaybackSession.isPlaybackRequested())
+        notifyPlaybackState(BookReaderPlaybackSession.isPlaying())
     }
 
     fun seekToPosition(targetPositionMs: Long) {
@@ -352,25 +352,33 @@ object BookReaderFloatingBridge {
         if (cues.isEmpty()) return null
         var low = 0
         var high = cues.lastIndex
+        var previousCue: SubtitleTimelineCue? = null
         while (low <= high) {
             val mid = (low + high) ushr 1
             val cue = cues[mid]
             when {
                 positionMs < cue.startMs -> high = mid - 1
-                positionMs >= cue.endMs -> low = mid + 1
-                else -> return CueSnapshot(
-                    text = cue.text,
-                    startMs = cue.startMs,
-                    endMs = cue.endMs,
-                    bookTitle = subtitleTimelineBookTitle,
-                    audioUri = subtitleTimelineAudioUri,
-                    fullSentenceText = cue.fullSentenceText?.takeIf { it.isNotBlank() } ?: cue.text,
-                    fullSentenceStartMs = cue.fullSentenceStartMs ?: cue.startMs,
-                    fullSentenceEndMs = cue.fullSentenceEndMs ?: cue.endMs
-                )
+                positionMs >= cue.endMs -> {
+                    previousCue = cue
+                    low = mid + 1
+                }
+                else -> return cue.toCueSnapshotLocked()
             }
         }
-        return null
+        return previousCue?.toCueSnapshotLocked()
+    }
+
+    private fun SubtitleTimelineCue.toCueSnapshotLocked(): CueSnapshot {
+        return CueSnapshot(
+            text = text,
+            startMs = startMs,
+            endMs = endMs,
+            bookTitle = subtitleTimelineBookTitle,
+            audioUri = subtitleTimelineAudioUri,
+            fullSentenceText = fullSentenceText?.takeIf { it.isNotBlank() } ?: text,
+            fullSentenceStartMs = fullSentenceStartMs ?: startMs,
+            fullSentenceEndMs = fullSentenceEndMs ?: endMs
+        )
     }
 }
 

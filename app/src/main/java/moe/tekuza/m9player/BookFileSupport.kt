@@ -5,12 +5,14 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private const val BOOK_DELETE_PREFS = "book_delete_prefs"
 private const val KEY_SKIP_DELETE_CONFIRM = "skip_delete_confirm"
+private const val READER_PLAYBACK_MIGRATION_LOG_TAG = "ReaderPlaybackMigration"
 
 internal fun keepReadPermission(context: Context, uri: Uri) {
     val resolver = context.contentResolver
@@ -127,24 +129,51 @@ internal suspend fun loadReaderBookPlaybackSnapshotsForBooks(
 ): Map<String, BookReaderPlaybackSnapshot> {
     return withContext(Dispatchers.IO) {
         books.mapNotNull { book ->
-            val stored = loadBestReaderBookPlaybackSnapshotCandidate(context, book)?.snapshot
+            val stored = migrateBestReaderBookPlaybackSnapshotIfNeeded(
+                context = context,
+                book = book,
+                reason = "bookshelf"
+            )?.snapshot
             stored?.let { book.id to it }
         }
             .toMap()
     }
 }
 
+internal fun migrateBestReaderBookPlaybackSnapshotIfNeeded(
+    context: Context,
+    book: ReaderBook,
+    reason: String
+): ReaderBookPlaybackSnapshotCandidate? {
+    val best = loadBestReaderBookPlaybackSnapshotCandidate(context, book) ?: return null
+    if (best.source == "shared") return best
+    val sharedKey = buildReaderBookPlaybackKey(book)
+    saveBookReaderPlaybackPosition(
+        context = context,
+        bookKey = sharedKey,
+        positionMs = best.snapshot.positionMs,
+        durationMs = best.snapshot.durationMs
+    )
+    Log.d(
+        READER_PLAYBACK_MIGRATION_LOG_TAG,
+        "migrated reason=$reason source=${best.source} title=${book.title.take(48)} " +
+            "positionMs=${best.snapshot.positionMs} durationMs=${best.snapshot.durationMs} " +
+            "updatedAt=${best.snapshot.updatedAtMs}"
+    )
+    return best
+}
+
 internal fun loadBestReaderBookPlaybackSnapshotCandidate(
     context: Context,
     book: ReaderBook
 ): ReaderBookPlaybackSnapshotCandidate? {
-    return readerBookPlaybackSnapshotCandidates(context, book).maxWithOrNull(
+    return loadReaderBookPlaybackSnapshotCandidates(context, book).maxWithOrNull(
         compareBy<ReaderBookPlaybackSnapshotCandidate> { it.snapshot.updatedAtMs }
             .thenBy { if (it.source == "shared") 1 else 0 }
     )
 }
 
-private fun readerBookPlaybackSnapshotCandidates(
+internal fun loadReaderBookPlaybackSnapshotCandidates(
     context: Context,
     book: ReaderBook
 ): List<ReaderBookPlaybackSnapshotCandidate> {

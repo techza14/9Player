@@ -765,7 +765,7 @@ private fun ReaderSyncScreen() {
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                isPlaying = playWhenReady || player.isPlaying
+                isPlaying = player.isPlaying
                 positionMs = player.currentPosition.coerceAtLeast(0L)
                 durationMs = if (player.duration > 0L) player.duration else 0L
             }
@@ -813,7 +813,11 @@ private fun ReaderSyncScreen() {
                 loadEbookFeatureEnabled(context) &&
                 loadEbookDefaultToReader(context)
         if (shouldPrewarmLegadoReader) {
-            val restoredCandidate = loadBestReaderBookPlaybackSnapshotCandidate(context, selectedReaderBook)
+            val restoredCandidate = migrateBestReaderBookPlaybackSnapshotIfNeeded(
+                context = context,
+                book = selectedReaderBook,
+                reason = "mainPrewarm"
+            )
             val restoredSnapshot = restoredCandidate?.snapshot
             val restorePositionMs = restoredSnapshot?.positionMs?.coerceAtLeast(0L) ?: 0L
             val alreadyPreparedForAudio = BookReaderPlaybackSession.currentAudioUri() == selectedReaderBook.audioUri.toString()
@@ -3445,6 +3449,9 @@ private fun buildDiagnosticsReport(context: Context): String {
         appendLine("LookupFullSentence=${audiobookSettings.lookupExportFullSentence}")
         appendLine("LookupRangeSelection=${audiobookSettings.lookupRangeSelectionEnabled}")
         appendLine()
+        appendLine("[Reader Playback]")
+        appendLine(buildReaderPlaybackDiagnostics(context, persistedImports))
+        appendLine()
         appendLine("[Anki Diagnostics]")
         appendLine("AvailabilityState=${detectAnkiAvailability(context, requirePermission = true)}")
         appendLine("ResolvedPackage=${ankiResolvedPackage ?: "(null)"}")
@@ -3461,6 +3468,55 @@ private fun buildDiagnosticsReport(context: Context): String {
         appendLine("[Recent Logs]")
         appendLine(recentLogs.ifBlank { "(no recent logs captured)" })
     }
+}
+
+private fun buildReaderPlaybackDiagnostics(
+    context: Context,
+    persistedImports: PersistedImports
+): String {
+    if (persistedImports.books.isEmpty()) return "(no imported books)"
+    return persistedImports.books.take(20).joinToString(separator = "\n") { persistedBook ->
+        val readerBook = persistedBook.toReaderBookOrNull()
+        if (readerBook == null) {
+            "Book=${persistedBook.title.ifBlank { persistedBook.audioName }} source=invalid-audio-uri"
+        } else {
+            val candidates = loadReaderBookPlaybackSnapshotCandidates(context, readerBook)
+            val best = candidates.maxWithOrNull(
+                compareBy<ReaderBookPlaybackSnapshotCandidate> { it.snapshot.updatedAtMs }
+                    .thenBy { if (it.source == "shared") 1 else 0 }
+            )
+            val candidateSummary = candidates.joinToString(separator = ",") { candidate ->
+                "${candidate.source}:${candidate.snapshot.positionMs}/${candidate.snapshot.durationMs}@${candidate.snapshot.updatedAtMs}"
+            }.ifBlank { "none" }
+            "Book=${readerBook.title.ifBlank { readerBook.audioName }.take(48)} " +
+                "bestSource=${best?.source ?: "none"} " +
+                "bestPositionMs=${best?.snapshot?.positionMs ?: 0L} " +
+                "bestDurationMs=${best?.snapshot?.durationMs ?: 0L} " +
+                "candidates=$candidateSummary"
+        }
+    }
+}
+
+private fun PersistedReaderBook.toReaderBookOrNull(): ReaderBook? {
+    val parsedAudioUri = audioUri.trim().takeIf { it.isNotBlank() }
+        ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        ?: return null
+    val parsedSrtUri = srtUri?.trim()?.takeIf { it.isNotBlank() }
+        ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+    val parsedEbookUri = ebookUri?.trim()?.takeIf { it.isNotBlank() }
+        ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+    return ReaderBook(
+        id = id,
+        title = title,
+        audioUri = parsedAudioUri,
+        audioName = audioName,
+        srtUri = parsedSrtUri,
+        srtName = srtName,
+        ebookUri = parsedEbookUri,
+        ebookName = ebookName,
+        ebookFormat = ebookFormat,
+        coverUri = null
+    )
 }
 
 private fun loadRecentProcessLogs(maxLines: Int = 200): String {
@@ -3486,13 +3542,15 @@ private fun extractRecentReaderLogs(recentLogs: String): String {
         "MainReaderRestore",
         "LegadoAudioProgress",
         "LegadoMatch",
+        "FloatingSubtitleScroll",
+        "FloatingSubtitleRender",
         "BookLookupTap"
     )
     return recentLogs
         .lineSequence()
         .filter { line -> interestingTags.any { tag -> line.contains(tag) } }
         .joinToString(separator = "\n")
-        .ifBlank { "(no recent BookReaderBack/BookReaderSeek/MainReaderRestore/LegadoAudioProgress/LegadoMatch/BookLookupTap logs captured)" }
+        .ifBlank { "(no recent reader/subtitle logs captured)" }
 }
 
 private data class SubtitleCue(

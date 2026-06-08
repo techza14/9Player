@@ -7,6 +7,7 @@ import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlin.math.abs
 
@@ -34,6 +35,11 @@ object BookReaderPlaybackSession {
                         .build(),
                     true
                 )
+                sharedPlayer.addListener(object : Player.Listener {
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        BookReaderFloatingBridge.notifyPlaybackState(isPlaying)
+                    }
+                })
                 player = sharedPlayer
             }
     }
@@ -41,8 +47,6 @@ object BookReaderPlaybackSession {
     fun currentAudioUri(): String? = currentAudioUriText
 
     fun isPlaying(): Boolean = player?.isPlaying == true
-
-    fun isPlaybackRequested(): Boolean = player?.let { it.playWhenReady || it.isPlaying } == true
 
     fun currentPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
 

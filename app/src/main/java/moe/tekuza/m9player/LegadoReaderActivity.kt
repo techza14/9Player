@@ -227,7 +227,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private val sharedPlaybackPositionListener = object : BookReaderFloatingBridge.PlaybackPositionListener {
         override fun onPlaybackPositionChanged(positionMs: Long) {
             runOnUiThread {
-                if (audioUri != null && isAudioPlaybackRequested()) {
+                if (audioUri != null && isAudioPlaying()) {
                     syncToAudioPosition()
                 }
             }
@@ -372,7 +372,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         currentAudioPositionMs()?.let { BookReaderFloatingBridge.notifyPlaybackPosition(it) }
         publishReaderSubtitleBridgeSnapshot(clearWhenMissing = false)
         if (notifyState) {
-            BookReaderFloatingBridge.notifyPlaybackState(isAudioPlaybackRequested())
+            BookReaderFloatingBridge.notifyPlaybackState(isAudioPlaying())
         }
     }
 
@@ -4583,7 +4583,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         } else {
             safeTargetMs
         }
-        val resumePlayback = currentPlayer.playWhenReady || currentPlayer.isPlaying
+        val resumePlayback = isAudioPlaybackRequested()
         val playbackSpeed = currentAudioPlaybackSpeed()
         val generation = markAudioSeekSyncTarget(
             targetMs = safeTargetMs,
@@ -4826,7 +4826,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         if (!::readView.isInitialized) return
         if (
             !crossPageCueWindowEnabled ||
-            !isAudioPlaybackRequested() ||
+            !isAudioPlaying() ||
             page == null ||
             match == null ||
             match.chapterIndex != page.chapterIndex
@@ -5054,6 +5054,30 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val stableKey = currentReaderPlaybackKey() ?: return
         val best = latestPlaybackSnapshotCandidate() ?: return
         val bestSnapshot = best.snapshot
+        var migrated = false
+        if (best.source != "legado") {
+            saveBookReaderPlaybackPosition(
+                context = this,
+                bookKey = stableKey,
+                positionMs = bestSnapshot.positionMs,
+                durationMs = bestSnapshot.durationMs
+            )
+            migrated = true
+        }
+        if (best.source != "shared") {
+            saveSharedAudioPlaybackSnapshot(
+                positionMs = bestSnapshot.positionMs,
+                durationMs = bestSnapshot.durationMs
+            )
+            migrated = true
+        }
+        if (migrated) {
+            Log.d(
+                LEGADO_AUDIO_PROGRESS_LOG_TAG,
+                "migrateKeys reason=$reason source=${best.source} positionMs=${bestSnapshot.positionMs} " +
+                    "durationMs=${bestSnapshot.durationMs} updatedAt=${bestSnapshot.updatedAtMs}"
+            )
+        }
         val currentPosition = currentPlayer.currentPosition.coerceAtLeast(0L)
         val shouldSeekForward = bestSnapshot.positionMs > currentPosition + 800L
         if (!shouldSeekForward) return
@@ -5064,16 +5088,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         )
         currentPlayer.seekTo(bestSnapshot.positionMs)
         lastSavedPlaybackPositionMs = Long.MIN_VALUE
-        saveBookReaderPlaybackPosition(
-            context = this,
-            bookKey = stableKey,
-            positionMs = bestSnapshot.positionMs,
-            durationMs = bestSnapshot.durationMs
-        )
-        saveSharedAudioPlaybackSnapshot(
-            positionMs = bestSnapshot.positionMs,
-            durationMs = bestSnapshot.durationMs
-        )
         publishReaderPlaybackBridgeSnapshot(notifyState = false)
     }
 
@@ -5115,7 +5129,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             Toast.makeText(this, R.string.reader_no_audio, Toast.LENGTH_SHORT).show()
             return
         }
-        if (currentPlayer.playWhenReady || currentPlayer.isPlaying) {
+        if (isAudioPlaybackRequested()) {
             currentPlayer.pause()
         } else {
             clearImagePauseResume()
@@ -5123,10 +5137,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
         publishReaderPlaybackBridgeSnapshot(notifyState = true)
         updateAudioControlLabels()
-        if (isAudioPlaybackRequested()) {
+        if (isAudioPlaying()) {
             syncToAudioPosition(allowPageJump = true, forceReveal = true)
         }
-        if (!isAudioPlaybackRequested()) {
+        if (!isAudioPlaying()) {
             persistAudioPlaybackSnapshot()
         }
     }
@@ -5479,7 +5493,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             pageIndex = safeAnchor?.let { pageIndexForAnchor(loadedPages, it) } ?: pageIndex.coerceIn(0, pages.lastIndex)
             renderCurrentPage()
             if (cueMatchesByCueIndex.isNotEmpty()) {
-                syncToAudioPosition(allowPageJump = isAudioPlaybackRequested())
+                syncToAudioPosition(allowPageJump = isAudioPlaying())
             } else {
                 Log.d(
                     LEGADO_READER_LOG_TAG,
@@ -6226,7 +6240,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                         persistCurrentMatchSnapshot()
                         audioCueIndex = -1
                         activeCueIndex = -1
-                        syncToAudioPosition(allowPageJump = isAudioPlaybackRequested())
+                        syncToAudioPosition(allowPageJump = isAudioPlaying())
                         renderCurrentPage()
                         summaryText.text = matchSummaryText()
                     }.onFailure { error ->
@@ -6384,7 +6398,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 }
                 publishReaderPlaybackBridgeSnapshot(notifyState = false)
                 updateAudioControlLabels()
-                if (isAudioPlaybackRequested()) {
+                if (isAudioPlaying()) {
                     syncToAudioPosition(allowPageJump = true)
                 }
             }
