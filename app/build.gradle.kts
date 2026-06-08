@@ -17,8 +17,8 @@ android {
         applicationId = "moe.tekuza.m9player"
         minSdk = 29
         targetSdk = 36
-        versionCode = 40
-        versionName = "1.6.9"
+        versionCode = 41
+        versionName = "1.6.10"
 
         externalNativeBuild {
             cmake {
@@ -155,6 +155,7 @@ tasks.register("buildMdictRust") {
 tasks.named("preBuild") {
     dependsOn("buildMdictRust")
 }
+
 
 
 
