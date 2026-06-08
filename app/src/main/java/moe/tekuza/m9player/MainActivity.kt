@@ -475,6 +475,7 @@ private fun ReaderSyncScreen() {
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
     var versionTapCount by remember { mutableStateOf(0) }
     var showVersionEasterGif by remember { mutableStateOf(false) }
+    var mdxExperimentalUnlocked by remember { mutableStateOf(loadMdxExperimentalUnlocked(context)) }
 
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
@@ -2229,7 +2230,10 @@ private fun ReaderSyncScreen() {
         else -> (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     }
 
-    val mountedDictionaryCount = mdxMountState.entries.count { it.enabled }
+    val visibleMdxMountState = remember(mdxExperimentalUnlocked, mdxMountState) {
+        if (mdxExperimentalUnlocked) mdxMountState else MdxMountState()
+    }
+    val mountedDictionaryCount = visibleMdxMountState.entries.count { it.enabled }
     val dictionaryCount = loadedDictionaries.size + mountedDictionaryCount
     val cueLookupTokens = remember(activeCue?.text) {
         activeCue?.let { tokenizeLookupTerms(it.text).take(12) } ?: emptyList()
@@ -2677,7 +2681,7 @@ private fun ReaderSyncScreen() {
                             showDictionaryDeleteActions = showDictionaryDeleteActions,
                             dictionaryRefs = dictionaryRefs,
                             dictionaryOrderIds = dictionaryOrderIds,
-                            mdxMountState = mdxMountState,
+                            mdxMountState = visibleMdxMountState,
                             onImportClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) },
                             onShowDictionaryManagerToggle = {
                                 val nextShowDictionaryManager = !showDictionaryManager
@@ -2693,8 +2697,12 @@ private fun ReaderSyncScreen() {
                                 }
                             },
                             onShowDictionaryDeleteActionsToggle = { showDictionaryDeleteActions = !showDictionaryDeleteActions },
-                            onOpenMdxClick = {
-                                context.startActivity(Intent(context, MdxMountSettingsActivity::class.java))
+                            onOpenMdxClick = if (mdxExperimentalUnlocked) {
+                                {
+                                    context.startActivity(Intent(context, MdxMountSettingsActivity::class.java))
+                                }
+                            } else {
+                                null
                             },
                             onMoveCombinedDictionary = { fromIndex, toIndex ->
                                 dictionaryController.moveCombinedDictionary(
@@ -2937,6 +2945,10 @@ private fun ReaderSyncScreen() {
                             versionTapCount += 1
                             if (versionTapCount >= 5) {
                                 versionTapCount = 0
+                                if (!mdxExperimentalUnlocked) {
+                                    saveMdxExperimentalUnlocked(context, true)
+                                    mdxExperimentalUnlocked = true
+                                }
                                 showVersionEasterGif = true
                             }
                         }

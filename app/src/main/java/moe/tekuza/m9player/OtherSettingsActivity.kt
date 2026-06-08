@@ -54,6 +54,7 @@ private fun OtherSettingsScreen(
     val context = LocalContext.current
     var ebookEnabled by remember { mutableStateOf(loadEbookFeatureEnabled(context)) }
     var ebookDefaultToReader by remember { mutableStateOf(loadEbookDefaultToReader(context)) }
+    val mdxUnlocked = remember { loadMdxExperimentalUnlocked(context) }
     var showEbookSettings by remember { mutableStateOf(false) }
     SettingsScaffold(
         title = if (showEbookSettings) "" else stringResource(R.string.settings_other_title),
@@ -99,12 +100,14 @@ private fun OtherSettingsScreen(
                     showDivider = false
                 )
             } else {
-                SettingsLikeItem(
-                    icon = Icons.Outlined.FolderCopy,
-                    title = stringResource(R.string.settings_mdx_title),
-                    onClick = onOpenMdx,
-                    showDivider = true
-                )
+                if (mdxUnlocked) {
+                    SettingsLikeItem(
+                        icon = Icons.Outlined.FolderCopy,
+                        title = stringResource(R.string.settings_mdx_title),
+                        onClick = onOpenMdx,
+                        showDivider = true
+                    )
+                }
                 SettingsLikeItem(
                     icon = Icons.Outlined.Science,
                     title = "",

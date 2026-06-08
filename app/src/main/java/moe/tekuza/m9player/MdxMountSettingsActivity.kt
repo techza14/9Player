@@ -44,6 +44,10 @@ class MdxMountSettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         applySavedAppLanguage(this)
         super.onCreate(savedInstanceState)
+        if (!loadMdxExperimentalUnlocked(this)) {
+            finish()
+            return
+        }
         enableEdgeToEdge()
         setContent {
             TsetTheme {

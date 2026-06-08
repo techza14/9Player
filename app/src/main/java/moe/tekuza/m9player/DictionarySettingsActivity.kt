@@ -90,6 +90,10 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
     var uiConfig by remember { mutableStateOf(loadDictionaryUiConfig(context)) }
     var dictionarySettings by remember { mutableStateOf(loadDictionarySettings(context)) }
     var destination by remember { mutableStateOf(DictionarySettingsDestination.Home) }
+    val mdxExperimentalUnlocked = remember { loadMdxExperimentalUnlocked(context) }
+    val visibleMdxMountState = remember(mdxExperimentalUnlocked, mdxMountState) {
+        if (mdxExperimentalUnlocked) mdxMountState else MdxMountState()
+    }
 
     fun persistDictionarySettings(next: DictionarySettings) {
         val normalized = next.normalized()
@@ -126,10 +130,10 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
         dictionaryController.setPersistedDictionaryRefs(loadPersistedImports(context).dictionaries)
     }
 
-    val termDictionaryNames = remember(dictionaryRefs, mdxMountState) {
+    val termDictionaryNames = remember(dictionaryRefs, visibleMdxMountState) {
         termDictionaryNames(
             dictionaryRefs = dictionaryRefs,
-            mdxMountState = mdxMountState
+            mdxMountState = visibleMdxMountState
         )
     }
     val visibleCollapsedDictionaries = remember(dictionarySettings.collapsedDictionaries, termDictionaryNames) {
@@ -242,7 +246,7 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
 
             DictionaryManagementCard(
                 context = context,
-                dictionaryCount = dictionaryRefs.size + mdxMountState.entries.count { it.enabled },
+                dictionaryCount = dictionaryRefs.size + visibleMdxMountState.entries.count { it.enabled },
                 showHeader = false,
                 containerColor = hoshiPanelBackgroundColor(),
                 itemContainerColor = hoshiCardBackgroundColor(),
@@ -254,12 +258,16 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
                 showDictionaryDeleteActions = showDictionaryDeleteActions,
                 dictionaryRefs = dictionaryRefs,
                 dictionaryOrderIds = dictionaryOrderIds,
-                mdxMountState = mdxMountState,
+                mdxMountState = visibleMdxMountState,
                 onImportClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) },
                 onShowDictionaryManagerToggle = { showDictionaryManager = !showDictionaryManager },
                 onShowDictionaryDeleteActionsToggle = { showDictionaryDeleteActions = !showDictionaryDeleteActions },
-                onOpenMdxClick = {
-                    context.startActivity(Intent(context, MdxMountSettingsActivity::class.java))
+                onOpenMdxClick = if (mdxExperimentalUnlocked) {
+                    {
+                        context.startActivity(Intent(context, MdxMountSettingsActivity::class.java))
+                    }
+                } else {
+                    null
                 },
                 onMoveCombinedDictionary = { fromIndex, toIndex ->
                     dictionaryController.moveCombinedDictionary(fromIndex, toIndex, ::refreshLookupData)
