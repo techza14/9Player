@@ -15,7 +15,8 @@ private const val COL_UPDATED_AT = "updated_at"
 
 internal data class BookReaderPlaybackSnapshot(
     val positionMs: Long,
-    val durationMs: Long
+    val durationMs: Long,
+    val updatedAtMs: Long = 0L
 ) {
     val progressPercent: Int
         get() {
@@ -82,7 +83,7 @@ private class ReaderPlaybackDbHelper private constructor(context: Context) :
     fun readSnapshot(bookKey: String): BookReaderPlaybackSnapshot? {
         readableDatabase.query(
             PLAYBACK_TABLE,
-            arrayOf(COL_POSITION_MS, COL_DURATION_MS),
+            arrayOf(COL_POSITION_MS, COL_DURATION_MS, COL_UPDATED_AT),
             "$COL_BOOK_KEY = ?",
             arrayOf(bookKey),
             null,
@@ -93,7 +94,8 @@ private class ReaderPlaybackDbHelper private constructor(context: Context) :
             if (!cursor.moveToFirst()) return null
             return BookReaderPlaybackSnapshot(
                 positionMs = cursor.getLong(0).coerceAtLeast(0L),
-                durationMs = cursor.getLong(1).coerceAtLeast(0L)
+                durationMs = cursor.getLong(1).coerceAtLeast(0L),
+                updatedAtMs = cursor.getLong(2).coerceAtLeast(0L)
             )
         }
     }

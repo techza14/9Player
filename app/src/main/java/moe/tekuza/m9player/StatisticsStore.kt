@@ -118,7 +118,13 @@ internal fun loadStatisticsReport(context: Context): StatisticsReport {
             coverUri = null
         )
         val bookKey = buildReaderBookPlaybackKey(readerBook)
-        val playback = loadBookReaderPlaybackSnapshotOrNull(context, bookKey)
+        val legacyBookKey = buildLegacyReaderAudioPlaybackKey(
+            title = readerBook.title,
+            audioUri = readerBook.audioUri,
+            srtUri = readerBook.srtUri
+        )
+        val statisticsKeys = listOf(bookKey, legacyBookKey).distinct()
+        val playback = loadBestReaderBookPlaybackSnapshotCandidate(context, readerBook)?.snapshot
         val durationMs = playback?.durationMs ?: 0L
         val positionMs = playback?.positionMs ?: 0L
         val totalChars = srtUri?.let { countSrtTextChars(context, it) } ?: 0
@@ -127,11 +133,11 @@ internal fun loadStatisticsReport(context: Context): StatisticsReport {
             title = persistedBook.title.ifBlank { persistedBook.audioName },
             bookKey = bookKey,
             progress = if (durationMs > 0L) positionMs.coerceIn(0L, durationMs).toFloat() / durationMs.toFloat() else 0f,
-            listenedMs = prefs.getLong(bookListenedKey(bookKey), 0L),
+            listenedMs = statisticsKeys.sumOf { key -> prefs.getLong(bookListenedKey(key), 0L) },
             durationMs = durationMs,
             totalChars = totalChars,
-            lookupCount = prefs.getLong(bookLookupKey(bookKey), 0L),
-            completed = prefs.getBoolean(bookCompletedKey(bookKey), false)
+            lookupCount = statisticsKeys.sumOf { key -> prefs.getLong(bookLookupKey(key), 0L) },
+            completed = statisticsKeys.any { key -> prefs.getBoolean(bookCompletedKey(key), false) }
         )
     }
     val selected = persisted.selectedBookId?.let { selectedId -> books.firstOrNull { it.id == selectedId } }

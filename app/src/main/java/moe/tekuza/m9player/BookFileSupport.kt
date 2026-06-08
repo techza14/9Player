@@ -70,7 +70,25 @@ internal fun buildReaderBookPlaybackKey(book: ReaderBook): String {
     )
 }
 
+internal data class ReaderBookPlaybackSnapshotCandidate(
+    val source: String,
+    val snapshot: BookReaderPlaybackSnapshot
+)
+
 internal fun buildReaderAudioPlaybackKey(
+    title: String,
+    audioUri: Uri?,
+    srtUri: Uri?
+): String {
+    val stableSource = audioUri?.toString().orEmpty().ifBlank {
+        "title=$title|srt=${srtUri?.toString().orEmpty()}"
+    }
+    val stableName = audioUri?.toString()?.takeIf { it.isNotBlank() }
+        ?: title.ifBlank { "book" }
+    return buildDictionaryCacheKey(stableSource, stableName)
+}
+
+internal fun buildLegacyReaderAudioPlaybackKey(
     title: String,
     audioUri: Uri?,
     srtUri: Uri?
@@ -109,11 +127,65 @@ internal suspend fun loadReaderBookPlaybackSnapshotsForBooks(
 ): Map<String, BookReaderPlaybackSnapshot> {
     return withContext(Dispatchers.IO) {
         books.mapNotNull { book ->
-            val playbackKey = buildReaderBookPlaybackKey(book)
-            val stored = loadBookReaderPlaybackSnapshotOrNull(context, playbackKey)
+            val stored = loadBestReaderBookPlaybackSnapshotCandidate(context, book)?.snapshot
             stored?.let { book.id to it }
         }
             .toMap()
+    }
+}
+
+internal fun loadBestReaderBookPlaybackSnapshotCandidate(
+    context: Context,
+    book: ReaderBook
+): ReaderBookPlaybackSnapshotCandidate? {
+    return readerBookPlaybackSnapshotCandidates(context, book).maxWithOrNull(
+        compareBy<ReaderBookPlaybackSnapshotCandidate> { it.snapshot.updatedAtMs }
+            .thenBy { if (it.source == "shared") 1 else 0 }
+    )
+}
+
+private fun readerBookPlaybackSnapshotCandidates(
+    context: Context,
+    book: ReaderBook
+): List<ReaderBookPlaybackSnapshotCandidate> {
+    val addedKeys = mutableSetOf<String>()
+    return buildList {
+        fun addCandidate(source: String, key: String) {
+            if (!addedKeys.add(key)) return
+            loadBookReaderPlaybackSnapshotOrNull(context, key)?.let { snapshot ->
+                add(ReaderBookPlaybackSnapshotCandidate(source, snapshot))
+            }
+        }
+        addCandidate("shared", buildReaderBookPlaybackKey(book))
+        addCandidate(
+            "sharedLegacy",
+            buildLegacyReaderAudioPlaybackKey(
+                title = book.title,
+                audioUri = book.audioUri,
+                srtUri = book.srtUri
+            )
+        )
+        book.ebookName?.trim()?.takeIf { it.isNotBlank() }?.let { ebookTitle ->
+            addCandidate(
+                "sharedLegacyEbookName",
+                buildLegacyReaderAudioPlaybackKey(
+                    title = ebookTitle,
+                    audioUri = book.audioUri,
+                    srtUri = book.srtUri
+                )
+            )
+        }
+        book.ebookUri?.toString()?.takeIf { it.isNotBlank() }?.let { ebookUri ->
+            addCandidate(
+                "legado",
+                buildLegadoReaderPlaybackKey(
+                    title = book.title,
+                    audioUri = book.audioUri,
+                    srtUri = book.srtUri,
+                    bookUri = ebookUri
+                )
+            )
+        }
     }
 }
 

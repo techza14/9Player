@@ -332,6 +332,7 @@ private val FIELD_VARIABLE_CHOICES = listOf(
 )
 private const val ANKI_CONFIG_LOG_TAG = "AnkiConfig"
 private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
+private const val MAIN_READER_RESTORE_LOG_TAG = "MainReaderRestore"
 
 internal data class ReaderBook(
     val id: String,
@@ -812,19 +813,21 @@ private fun ReaderSyncScreen() {
                 loadEbookFeatureEnabled(context) &&
                 loadEbookDefaultToReader(context)
         if (shouldPrewarmLegadoReader) {
-            val legadoPlaybackKey = buildLegadoReaderPlaybackKey(
-                title = selectedReaderBook.title,
-                audioUri = selectedReaderBook.audioUri,
-                srtUri = selectedReaderBook.srtUri,
-                bookUri = selectedReaderBook.ebookUri.toString()
-            )
-            val restoredSnapshot = loadBookReaderPlaybackSnapshotOrNull(context, legadoPlaybackKey)
+            val restoredCandidate = loadBestReaderBookPlaybackSnapshotCandidate(context, selectedReaderBook)
+            val restoredSnapshot = restoredCandidate?.snapshot
             val restorePositionMs = restoredSnapshot?.positionMs?.coerceAtLeast(0L) ?: 0L
+            val alreadyPreparedForAudio = BookReaderPlaybackSession.currentAudioUri() == selectedReaderBook.audioUri.toString()
+            Log.d(
+                MAIN_READER_RESTORE_LOG_TAG,
+                "prewarm source=${restoredCandidate?.source ?: "none"} positionMs=$restorePositionMs " +
+                    "durationMs=${restoredSnapshot?.durationMs ?: 0L} updatedAt=${restoredSnapshot?.updatedAtMs ?: 0L} " +
+                    "sameAudio=$alreadyPreparedForAudio"
+            )
             BookReaderPlaybackSession.prepareAudioIfNeeded(
                 context = context,
                 audioUri = selectedReaderBook.audioUri,
                 restorePositionMs = restorePositionMs,
-                forceSeekOnSameAudio = true
+                forceSeekOnSameAudio = false
             )
             return@LaunchedEffect
         }
@@ -3480,6 +3483,7 @@ private fun extractRecentReaderLogs(recentLogs: String): String {
     val interestingTags = listOf(
         "BookReaderBack",
         "BookReaderSeek",
+        "MainReaderRestore",
         "LegadoAudioProgress",
         "LegadoMatch",
         "BookLookupTap"
@@ -3488,7 +3492,7 @@ private fun extractRecentReaderLogs(recentLogs: String): String {
         .lineSequence()
         .filter { line -> interestingTags.any { tag -> line.contains(tag) } }
         .joinToString(separator = "\n")
-        .ifBlank { "(no recent BookReaderBack/BookReaderSeek/LegadoAudioProgress/LegadoMatch/BookLookupTap logs captured)" }
+        .ifBlank { "(no recent BookReaderBack/BookReaderSeek/MainReaderRestore/LegadoAudioProgress/LegadoMatch/BookLookupTap logs captured)" }
 }
 
 private data class SubtitleCue(

@@ -724,6 +724,9 @@ private fun BookReaderScreen(
     val playbackPositionKey = remember(title, audioUri, srtUri) {
         buildReaderAudioPlaybackKey(title, audioUri, srtUri)
     }
+    val legacyPlaybackPositionKey = remember(title, audioUri, srtUri) {
+        buildLegacyReaderAudioPlaybackKey(title, audioUri, srtUri)
+    }
     var playbackRestoreCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
     var playbackCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -802,6 +805,7 @@ private fun BookReaderScreen(
                         return
                     }
                     val snapshot = loadBookReaderPlaybackSnapshotOrNull(context, playbackPositionKey)
+                        ?: loadBookReaderPlaybackSnapshotOrNull(context, legacyPlaybackPositionKey)
                     val targetPosition = snapshot?.positionMs?.coerceAtLeast(0L) ?: 0L
                     val currentPosition = player.currentPosition.coerceAtLeast(0L)
                     if (kotlin.math.abs(targetPosition - currentPosition) > 800L) {
@@ -1013,7 +1017,9 @@ private fun BookReaderScreen(
             player.currentPosition.coerceAtLeast(0L)
         } else {
             withContext(Dispatchers.IO) {
-                loadBookReaderPlaybackSnapshotOrNull(context, playbackPositionKey)?.positionMs ?: 0L
+                loadBookReaderPlaybackSnapshotOrNull(context, playbackPositionKey)?.positionMs
+                    ?: loadBookReaderPlaybackSnapshotOrNull(context, legacyPlaybackPositionKey)?.positionMs
+                    ?: 0L
             }.coerceAtLeast(0L)
         }
         BookReaderPlaybackSession.prepareAudioIfNeeded(
