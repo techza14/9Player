@@ -121,11 +121,11 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Audiotrack
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ClosedCaption
-import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -943,6 +943,16 @@ private fun ReaderSyncScreen() {
         )
     }
 
+    fun persistHomeLibraryView(nextView: HomeLibraryView) {
+        scope.launch(Dispatchers.IO) {
+            val previous = loadPersistedImports(context)
+            savePersistedImports(
+                context = context,
+                state = previous.copy(homeLibraryView = nextView.name)
+            )
+        }
+    }
+
     fun persistAnkiConfig() {
         Log.d(
             ANKI_CONFIG_LOG_TAG,
@@ -1409,7 +1419,10 @@ private fun ReaderSyncScreen() {
                                 audio = candidate.audioUri,
                                 audioDisplayName = candidate.audioName,
                                 srt = candidate.srtUri,
-                                srtDisplayName = candidate.srtName
+                                srtDisplayName = candidate.srtName,
+                                ebook = candidate.ebookUri,
+                                ebookDisplayName = candidate.ebookName,
+                                ebookFormat = candidate.ebookFormat
                             )
                             val persistedTitle = persistedTitleById[rebuilt.id]
                                 ?: persistedTitleByAudioUri[rebuilt.audioUri.toString()]
@@ -2251,7 +2264,11 @@ private fun ReaderSyncScreen() {
                             onClick = { refreshBookshelfFromFolder() },
                             containerColor = MaterialTheme.colorScheme.secondaryContainer
                         ) {
-                            Text(stringResource(R.string.home_refresh))
+                            Icon(
+                                imageVector = Icons.Outlined.Refresh,
+                                contentDescription = stringResource(R.string.home_refresh),
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                         FloatingActionButton(
                             onClick = {
@@ -2259,7 +2276,11 @@ private fun ReaderSyncScreen() {
                                 addBookDialogVisible = true
                             }
                         ) {
-                            Text(stringResource(R.string.home_add_book))
+                            Icon(
+                                imageVector = Icons.Outlined.Add,
+                                contentDescription = stringResource(R.string.home_add_book),
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                     }
                 }
@@ -2359,12 +2380,13 @@ private fun ReaderSyncScreen() {
                             }
                             OutlinedButton(
                                 onClick = {
-                                    homeLibraryView = if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
+                                    val nextView = if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
                                         HomeLibraryView.LIST
                                     } else {
                                         HomeLibraryView.BOOKSHELF
                                     }
-                                    persistImportState()
+                                    homeLibraryView = nextView
+                                    persistHomeLibraryView(nextView)
                                 }
                             ) {
                                 Text(
@@ -2460,22 +2482,13 @@ private fun ReaderSyncScreen() {
                                                         )
                                                     }
                                                 }
-                                                if (book.srtUri != null) {
-                                                    Surface(
-                                                        modifier = Modifier
-                                                            .align(Alignment.BottomStart)
-                                                            .padding(6.dp),
-                                                        shape = RoundedCornerShape(8.dp),
-                                                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Outlined.ClosedCaption,
-                                                            contentDescription = stringResource(R.string.home_subtitle_attached),
-                                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                            modifier = Modifier.padding(4.dp).size(16.dp)
-                                                        )
-                                                    }
-                                                }
+                                                BookAttachmentBadges(
+                                                    hasSubtitle = book.srtUri != null,
+                                                    hasEbook = book.ebookUri != null,
+                                                    modifier = Modifier
+                                                        .align(Alignment.BottomStart)
+                                                        .padding(6.dp)
+                                                )
                                             }
                                             Surface(
                                                 modifier = Modifier.fillMaxWidth(),
@@ -2613,13 +2626,10 @@ private fun ReaderSyncScreen() {
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text("$playbackPercent%")
-                                            if (book.srtUri != null) {
-                                                Text(
-                                                    text = stringResource(R.string.home_subtitle_attached),
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
+                                            BookAttachmentBadges(
+                                                hasSubtitle = book.srtUri != null,
+                                                hasEbook = book.ebookUri != null
+                                            )
                                         }
                                         if (multiSelected) {
                                             Text(stringResource(R.string.home_selected), color = MaterialTheme.colorScheme.primary)
@@ -3554,6 +3564,7 @@ private fun extractRecentReaderLogs(recentLogs: String): String {
         "MainReaderRestore",
         "LegadoAudioProgress",
         "LegadoMatch",
+        "ReaderPausedSeek",
         "FloatingSubtitleScroll",
         "FloatingSubtitleRender",
         "BookLookupTap"
@@ -3577,6 +3588,53 @@ private fun SubtitleCue.toReaderSubtitleCue(): ReaderSubtitleCue {
         endMs = endMs,
         text = text
     )
+}
+
+@Composable
+private fun BookAttachmentBadges(
+    hasSubtitle: Boolean,
+    hasEbook: Boolean,
+    modifier: Modifier = Modifier
+) {
+    if (!hasSubtitle && !hasEbook) return
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (hasSubtitle) {
+            BookAttachmentBadge(
+                icon = Icons.Outlined.ClosedCaption,
+                contentDescription = stringResource(R.string.home_subtitle_attached)
+            )
+        }
+        if (hasEbook) {
+            BookAttachmentBadge(
+                icon = Icons.Outlined.Book,
+                contentDescription = stringResource(R.string.home_ebook_attached)
+            )
+        }
+    }
+}
+
+@Composable
+private fun BookAttachmentBadge(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .padding(4.dp)
+                .size(16.dp)
+        )
+    }
 }
 
 @Composable
@@ -3861,7 +3919,10 @@ private data class FolderBookCandidate(
     val audioUri: Uri,
     val audioName: String,
     val srtUri: Uri?,
-    val srtName: String?
+    val srtName: String?,
+    val ebookUri: Uri?,
+    val ebookName: String?,
+    val ebookFormat: String?
 )
 
 private data class FolderBookScanResult(
@@ -4033,7 +4094,9 @@ private fun scanBooksFromRootFolder(
                 .sortedBy { it.name?.lowercase(Locale.ROOT) ?: it.uri.toString() }
 
             val audioFile = files.firstOrNull { isAudioDocumentFile(it) }
-            val srtFile = files.firstOrNull { isSrtDocumentFile(it) }
+            val srtFile = files.firstOrNull { it.name?.trim().orEmpty().endsWith(".srt", ignoreCase = true) }
+                ?: files.firstOrNull { isSrtDocumentFile(it) && !isEbookDocumentFile(it) }
+            val ebookFile = files.firstOrNull { it.uri != srtFile?.uri && isEbookDocumentFile(it) }
             if (audioFile == null) {
                 skippedFolders += folderName
                 return@forEach
@@ -4043,13 +4106,19 @@ private fun scanBooksFromRootFolder(
                 ?: queryDisplayName(contentResolver, audioFile.uri)
             val srtName = srtFile?.name?.trim()?.takeUnless { it.isNullOrBlank() }
                 ?: srtFile?.let { queryDisplayName(contentResolver, it.uri) }
+            val ebookName = ebookFile?.name?.trim()?.takeUnless { it.isNullOrBlank() }
+                ?: ebookFile?.let { queryDisplayName(contentResolver, it.uri) }
+            val ebookFormat = ebookName?.let { inferLocalReaderBookFormat(it, ebookFile?.type) }
 
             books += FolderBookCandidate(
                 folderName = folderName,
                 audioUri = audioFile.uri,
                 audioName = audioName,
                 srtUri = srtFile?.uri,
-                srtName = srtName
+                srtName = srtName,
+                ebookUri = ebookFile?.uri,
+                ebookName = ebookName,
+                ebookFormat = ebookFormat
             )
         }
 
@@ -4080,6 +4149,11 @@ private fun isSrtDocumentFile(file: DocumentFile): Boolean {
     val mime = file.type?.lowercase(Locale.ROOT).orEmpty()
     if (name.endsWith(".srt")) return true
     return mime == "application/x-subrip" || mime.contains("subrip") || mime == "text/plain"
+}
+
+private fun isEbookDocumentFile(file: DocumentFile): Boolean {
+    val displayName = file.name?.trim().orEmpty()
+    return inferLocalReaderBookFormat(displayName, file.type) != null
 }
 
 private fun resolveMimeTypeForDocument(fileName: String, sourceMime: String?): String {

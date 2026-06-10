@@ -103,6 +103,7 @@
     <string name="home_no_books">まだ書籍がありません。</string>
     <string name="home_no_books_hint">+書籍 を押して、先にオーディオブックフォルダを選び、その後 audio/m4b を選択してください（SRT は任意）。</string>
     <string name="home_subtitle_attached">字幕付き</string>
+    <string name="home_ebook_attached">ebook 付き</string>
     <string name="home_selected">選択済み</string>
     <string name="home_opened">開いている</string>
     <string name="dictionary_title">検索</string>
@@ -409,7 +410,6 @@
     <string name="bookreader_jump_by_cue">字幕単位</string>
     <string name="bookreader_jump_by_duration">時間単位(%1$d秒)</string>
     <string name="bookreader_sleep_timer">タイマー</string>
-    <string name="bookreader_sleep_timer_running">タイマー %1$s</string>
     <string name="bookreader_control_mode">コントロールモード</string>
     <string name="bookreader_hide_controls">再生バーを隠す</string>
     <string name="bookreader_show_controls">再生バーを表示</string>

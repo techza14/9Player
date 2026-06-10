@@ -149,7 +149,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Audiotrack
+import androidx.compose.material.icons.outlined.Timer
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -2766,13 +2766,19 @@ private fun BookReaderScreen(
                         Text(if (favoriteCueCollected) "★" else "☆")
                     }
                     TextButton(onClick = { sleepTimerOptionsVisible = !sleepTimerOptionsVisible }) {
-                        Text(
-                            if (sleepRemainingLabel != null) {
-                                stringResource(R.string.bookreader_sleep_timer_running, sleepRemainingLabel)
-                            } else {
-                                stringResource(R.string.bookreader_sleep_timer)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Outlined.Timer,
+                                contentDescription = stringResource(R.string.bookreader_sleep_timer),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            sleepRemainingLabel?.let { remaining ->
+                                Text(remaining)
                             }
-                        )
+                        }
                     }
                     Box {
                         TextButton(onClick = { speedMenuExpanded = true }) {

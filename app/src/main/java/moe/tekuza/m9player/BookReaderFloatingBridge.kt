@@ -2,8 +2,11 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.os.SystemClock
+import android.util.Log
 
 object BookReaderFloatingBridge {
+    private const val READER_PAUSED_SEEK_LOG_TAG = "ReaderPausedSeek"
+
     data class SubtitleTimelineCue(
         val startMs: Long,
         val endMs: Long,
@@ -299,8 +302,18 @@ object BookReaderFloatingBridge {
 
     fun seekToPosition(targetPositionMs: Long) {
         val normalized = targetPositionMs.coerceAtLeast(0L)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "bridge seekToPosition request target=$normalized beforeSession=${BookReaderPlaybackSession.currentPositionMs()} " +
+                "beforeBridge=$playbackPositionSnapshot cue=${cueForLog(currentCue())}"
+        )
         BookReaderPlaybackSession.seekToPosition(normalized)
-        notifyPlaybackPosition(BookReaderPlaybackSession.currentPositionMs())
+        notifyPlaybackPosition(normalized)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "bridge seekToPosition notify target=$normalized afterSession=${BookReaderPlaybackSession.currentPositionMs()} " +
+                "afterBridge=$playbackPositionSnapshot cue=${cueForLog(currentCue())}"
+        )
     }
 
     fun setPlaybackSpeed(speed: Float) {
@@ -309,19 +322,58 @@ object BookReaderFloatingBridge {
     }
 
     fun seekPrevious() {
-        BookReaderPlaybackSession.seekPrevious()
-        notifyPlaybackPosition(BookReaderPlaybackSession.currentPositionMs())
+        val beforeSession = BookReaderPlaybackSession.currentPositionMs()
+        val beforeCue = currentCue()
+        val targetMs = BookReaderPlaybackSession.seekPrevious() ?: return
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "bridge seekPrevious target=$targetMs beforeSession=$beforeSession beforeBridge=$playbackPositionSnapshot " +
+                "beforeCue=${cueForLog(beforeCue)}"
+        )
+        notifyPlaybackPosition(targetMs)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "bridge seekPrevious notify target=$targetMs afterSession=${BookReaderPlaybackSession.currentPositionMs()} " +
+                "afterBridge=$playbackPositionSnapshot afterCue=${cueForLog(currentCue())}"
+        )
     }
 
     fun seekNext() {
-        BookReaderPlaybackSession.seekNext()
-        notifyPlaybackPosition(BookReaderPlaybackSession.currentPositionMs())
+        val beforeSession = BookReaderPlaybackSession.currentPositionMs()
+        val beforeCue = currentCue()
+        val targetMs = BookReaderPlaybackSession.seekNext() ?: return
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "bridge seekNext target=$targetMs beforeSession=$beforeSession beforeBridge=$playbackPositionSnapshot " +
+                "beforeCue=${cueForLog(beforeCue)}"
+        )
+        notifyPlaybackPosition(targetMs)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "bridge seekNext notify target=$targetMs afterSession=${BookReaderPlaybackSession.currentPositionMs()} " +
+                "afterBridge=$playbackPositionSnapshot afterCue=${cueForLog(currentCue())}"
+        )
     }
 
     fun replayCurrentCue() {
         val cueStartMs = currentCue()?.startMs ?: return
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "bridge replayCurrentCue target=$cueStartMs beforeSession=${BookReaderPlaybackSession.currentPositionMs()} " +
+                "beforeBridge=$playbackPositionSnapshot cue=${cueForLog(currentCue())}"
+        )
         BookReaderPlaybackSession.seekToPosition(cueStartMs)
-        notifyPlaybackPosition(BookReaderPlaybackSession.currentPositionMs())
+        notifyPlaybackPosition(cueStartMs)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "bridge replayCurrentCue notify target=$cueStartMs afterSession=${BookReaderPlaybackSession.currentPositionMs()} " +
+                "afterBridge=$playbackPositionSnapshot cue=${cueForLog(currentCue())}"
+        )
+    }
+
+    private fun cueForLog(cue: CueSnapshot?): String {
+        if (cue == null) return "null"
+        return "${cue.startMs}-${cue.endMs}/${cue.text.replace('\n', ' ').take(36)}"
     }
 
     fun refreshSubtitleForCurrentPlaybackPosition(): CueSnapshot? {

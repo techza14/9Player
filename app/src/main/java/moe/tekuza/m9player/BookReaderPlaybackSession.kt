@@ -2,6 +2,7 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
@@ -13,6 +14,9 @@ import kotlin.math.abs
 
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 object BookReaderPlaybackSession {
+    private const val SEEK_INCREMENT_MS = 10_000L
+    private const val READER_PAUSED_SEEK_LOG_TAG = "ReaderPausedSeek"
+
     @Volatile
     private var player: ExoPlayer? = null
 
@@ -24,8 +28,8 @@ object BookReaderPlaybackSession {
         val existing = player
         if (existing != null) return existing
         return ExoPlayer.Builder(context.applicationContext)
-            .setSeekBackIncrementMs(10_000L)
-            .setSeekForwardIncrementMs(10_000L)
+            .setSeekBackIncrementMs(SEEK_INCREMENT_MS)
+            .setSeekForwardIncrementMs(SEEK_INCREMENT_MS)
             .build()
             .also { sharedPlayer ->
                 sharedPlayer.setAudioAttributes(
@@ -38,6 +42,23 @@ object BookReaderPlaybackSession {
                 sharedPlayer.addListener(object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         BookReaderFloatingBridge.notifyPlaybackState(isPlaying)
+                    }
+
+                    override fun onPositionDiscontinuity(
+                        oldPosition: Player.PositionInfo,
+                        newPosition: Player.PositionInfo,
+                        reason: Int
+                    ) {
+                        if (
+                            reason == Player.DISCONTINUITY_REASON_SEEK ||
+                            reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT
+                        ) {
+                            Log.d(
+                                READER_PAUSED_SEEK_LOG_TAG,
+                                "session discontinuity reason=$reason old=${oldPosition.positionMs} " +
+                                    "new=${newPosition.positionMs} ${sharedPlayer.seekStateForLog()}"
+                            )
+                        }
                     }
                 })
                 player = sharedPlayer
@@ -70,16 +91,63 @@ object BookReaderPlaybackSession {
         }
     }
 
-    fun seekToPosition(positionMs: Long) {
-        player?.seekTo(positionMs.coerceAtLeast(0L))
+    fun seekToPosition(positionMs: Long): Long? {
+        val sharedPlayer = player ?: return null
+        val targetMs = positionMs.coerceAtLeast(0L)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "session seekToPosition request target=$targetMs ${sharedPlayer.seekStateForLog()}"
+        )
+        sharedPlayer.seekTo(targetMs)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "session seekToPosition immediate target=$targetMs ${sharedPlayer.seekStateForLog()}"
+        )
+        return targetMs
     }
 
-    fun seekPrevious() {
-        player?.seekBack()
+    fun seekPrevious(): Long? {
+        val sharedPlayer = player ?: return null
+        val targetMs = (sharedPlayer.currentPosition - SEEK_INCREMENT_MS).coerceAtLeast(0L)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "session seekPrevious request target=$targetMs ${sharedPlayer.seekStateForLog()}"
+        )
+        sharedPlayer.seekTo(targetMs)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "session seekPrevious immediate target=$targetMs ${sharedPlayer.seekStateForLog()}"
+        )
+        return targetMs
     }
 
-    fun seekNext() {
-        player?.seekForward()
+    fun seekNext(): Long? {
+        val sharedPlayer = player ?: return null
+        val durationMs = sharedPlayer.duration
+        val targetMs = (sharedPlayer.currentPosition + SEEK_INCREMENT_MS)
+            .let { positionMs ->
+                if (durationMs > 0L) {
+                    positionMs.coerceAtMost(durationMs)
+                } else {
+                    positionMs
+                }
+            }
+            .coerceAtLeast(0L)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "session seekNext request target=$targetMs ${sharedPlayer.seekStateForLog()}"
+        )
+        sharedPlayer.seekTo(targetMs)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "session seekNext immediate target=$targetMs ${sharedPlayer.seekStateForLog()}"
+        )
+        return targetMs
+    }
+
+    private fun Player.seekStateForLog(): String {
+        return "actual=$currentPosition duration=$duration playWhenReady=$playWhenReady " +
+            "isPlaying=$isPlaying state=$playbackState suppression=$playbackSuppressionReason"
     }
 
     fun setPlaybackSpeed(speed: Float) {

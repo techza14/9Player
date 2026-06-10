@@ -86,6 +86,7 @@ private const val LEGADO_READER_LOG_TAG = "LegadoReader"
 private const val LEGADO_AUDIO_PROGRESS_LOG_TAG = "LegadoAudioProgress"
 private const val LEGADO_MATCH_LOG_TAG = "LegadoMatch"
 private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
+private const val READER_PAUSED_SEEK_LOG_TAG = "ReaderPausedSeek"
 private const val NIGHT_BOTTOM_BG = 0xFF3A3A3A.toInt()
 private const val NIGHT_BRIGHTNESS_BG = 0x80303030.toInt()
 private const val NIGHT_ACCENT = 0xFFE36A3C.toInt()
@@ -198,6 +199,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var matchSearchWindow: Int = DEFAULT_MATCH_SEARCH_WINDOW
     private var audioCueIndex: Int = -1
     private var activeCueIndex: Int = -1
+    private var manualCueIndex: Int = -1
     private var audioSeekSyncTargetMs: Long? = null
     private var audioSeekSyncDisplayMs: Long? = null
     private var audioSeekSyncTargetUntilElapsedMs: Long = 0L
@@ -2133,6 +2135,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 matchData = null
                 audioCueIndex = -1
                 activeCueIndex = -1
+                manualCueIndex = -1
                 loadDisplayedBook(anchor = currentPageAnchor(), forceDocumentReload = true)
                 true
             }
@@ -5173,18 +5176,26 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private fun seekToAdjacentCue(delta: Int) {
         val currentPlayer = player
         if (currentPlayer == null) {
+            Log.d(READER_PAUSED_SEEK_LOG_TAG, "legado adjacentCue ignored reason=no-player delta=$delta")
             Toast.makeText(this, R.string.reader_no_audio, Toast.LENGTH_SHORT).show()
             return
         }
         if (cues.isEmpty()) {
             if (srtUri == null) {
+                Log.d(READER_PAUSED_SEEK_LOG_TAG, "legado adjacentCue ignored reason=no-srt delta=$delta")
                 Toast.makeText(this, R.string.reader_no_srt, Toast.LENGTH_SHORT).show()
                 return
             }
+            Log.d(READER_PAUSED_SEEK_LOG_TAG, "legado adjacentCue loading-srt delta=$delta")
             loadSrtSyncIfNeeded(force = true) { success ->
                 if (success) {
+                    Log.d(READER_PAUSED_SEEK_LOG_TAG, "legado adjacentCue retry-after-srt delta=$delta cues=${cues.size}")
                     seekToAdjacentCue(delta)
                 } else {
+                    Log.d(
+                        READER_PAUSED_SEEK_LOG_TAG,
+                        "legado adjacentCue srt-load-failed delta=$delta error=${srtLoadError.orEmpty().take(80)}"
+                    )
                     Toast.makeText(
                         this,
                         srtLoadError ?: readerString(R.string.reader_srt_parse_failed),
@@ -5199,16 +5210,67 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val exactIndex = findEbookCueIndexAtTime(cues, position)
         val beforeIndex = cues.indexOfLast { it.startMs <= position }
         val baseIndex = if (exactIndex >= 0) exactIndex else beforeIndex
-        val targetIndex = if (delta < 0) {
-            (baseIndex - 1).coerceAtLeast(0)
-        } else {
-            (baseIndex + 1).coerceIn(0, cues.lastIndex)
+        val targetIndex = findAdjacentCueIndex(baseIndex, delta)
+        val targetMs = cues[targetIndex].startMs.coerceAtLeast(0L)
+        val targetCue = cues.getOrNull(targetIndex)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "legado adjacentCue request delta=$delta before=$position exact=$exactIndex beforeIndex=$beforeIndex " +
+                "base=$baseIndex baseMs=${cues.getOrNull(baseIndex)?.startMs} manual=$manualCueIndex " +
+                "manualMs=${cues.getOrNull(manualCueIndex)?.startMs} targetIndex=$targetIndex targetMs=$targetMs " +
+                "playing=${currentPlayer.isPlaying} " +
+                "playWhenReady=${currentPlayer.playWhenReady} state=${currentPlayer.playbackState} " +
+                "duration=${currentPlayer.duration} cue=${targetCue?.text.orEmpty().replace('\n', ' ').take(48)}"
+        )
+        currentPlayer.seekTo(targetMs)
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "legado adjacentCue after-seek-immediate targetMs=$targetMs actual=${currentPlayer.currentPosition} " +
+                "playing=${currentPlayer.isPlaying} playWhenReady=${currentPlayer.playWhenReady} state=${currentPlayer.playbackState}"
+        )
+        manualCueIndex = targetIndex
+        audioCueIndex = targetIndex
+        activeCueIndex = if (cueMatchesByCueIndex.containsKey(targetIndex)) targetIndex else -1
+        BookReaderFloatingBridge.notifyPlaybackPosition(targetMs)
+        persistAudioPlaybackSnapshotAt(targetMs)
+        syncToAudioPositionAt(
+            positionMs = targetMs,
+            allowPageJump = true,
+            forceReveal = true,
+            preferredCueIndex = targetIndex
+        )
+        window.decorView.postDelayed(
+            {
+                Log.d(
+                    READER_PAUSED_SEEK_LOG_TAG,
+                    "legado adjacentCue verify targetMs=$targetMs actual=${currentPlayer.currentPosition} " +
+                        "delta=${currentPlayer.currentPosition - targetMs} playing=${currentPlayer.isPlaying} " +
+                        "playWhenReady=${currentPlayer.playWhenReady} state=${currentPlayer.playbackState}"
+                )
+            },
+            350L
+        )
+    }
+
+    private fun findAdjacentCueIndex(fallbackBaseIndex: Int, delta: Int): Int {
+        if (cues.isEmpty()) return -1
+        val steps = abs(delta).coerceAtLeast(1)
+        val baseIndex = when {
+            manualCueIndex in cues.indices -> manualCueIndex
+            audioCueIndex in cues.indices -> audioCueIndex
+            fallbackBaseIndex in cues.indices -> fallbackBaseIndex
+            delta < 0 -> cues.lastIndex
+            else -> 0
         }
-        currentPlayer.seekTo(cues[targetIndex].startMs)
-        activeCueIndex = -1
-        publishReaderPlaybackBridgeSnapshot(notifyState = false)
-        persistAudioPlaybackSnapshot()
-        syncToAudioPosition(allowPageJump = true, forceReveal = true)
+        var targetIndex = baseIndex
+        repeat(steps) {
+            targetIndex = if (delta < 0) {
+                (targetIndex - 1).coerceAtLeast(0)
+            } else {
+                (targetIndex + 1).coerceAtMost(cues.lastIndex)
+            }
+        }
+        return targetIndex
     }
 
     private fun currentAudioPositionMs(): Long? {
@@ -6333,6 +6395,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 matchData = null
                 audioCueIndex = -1
                 activeCueIndex = -1
+                manualCueIndex = -1
                 Log.d(
                     LEGADO_READER_LOG_TAG,
                     "loadSrtSyncIfNeeded ready=${SystemClock.elapsedRealtime() - srtStartMs}ms " +
@@ -6368,6 +6431,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 )
                 cues = emptyList()
                 loadedSrtUriText = null
+                manualCueIndex = -1
                 publishReaderSubtitleBridgeSnapshot(clearWhenMissing = true)
                 onComplete?.invoke(false)
             }
@@ -6433,7 +6497,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private fun syncToAudioPositionAt(
         positionMs: Long,
         allowPageJump: Boolean = true,
-        forceReveal: Boolean = false
+        forceReveal: Boolean = false,
+        preferredCueIndex: Int? = null
     ) {
         if (cues.isEmpty() || pages.isEmpty()) {
             if (forceReveal) {
@@ -6445,7 +6510,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             return
         }
         val currentPosition = positionMs.coerceAtLeast(0L)
-        val cueIndex = findEbookCueIndexAtTime(cues, currentPosition)
+        val cueIndex = preferredCueIndex
+            ?.takeIf { it in cues.indices }
+            ?: findEbookCueIndexAtTime(cues, currentPosition)
         if (cueIndex < 0) {
             if (forceReveal) {
                 Log.d(
@@ -6472,12 +6539,16 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         if (!cueChanged && !forceReveal) return
         val previousMatch = cueMatchesByCueIndex[previousAudioCueIndex]
         audioCueIndex = cueIndex
+        if (preferredCueIndex != null) {
+            manualCueIndex = cueIndex
+        }
         val match = cueMatchesByCueIndex[cueIndex]
         if (forceReveal || match == null) {
             Log.d(
                 LEGADO_MATCH_LOG_TAG,
                 "sync position=$currentPosition ${cueDebugSummary(cueIndex)} ${matchDebugSummary(match)} " +
-                    "matches=${cueMatchesByCueIndex.size}/${cues.size} allowPageJump=$allowPageJump forceReveal=$forceReveal"
+                    "matches=${cueMatchesByCueIndex.size}/${cues.size} allowPageJump=$allowPageJump " +
+                    "forceReveal=$forceReveal preferred=$preferredCueIndex"
             )
         }
         if (textSelectionActive && !forceReveal) {
@@ -6589,6 +6660,11 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun pausePlaybackAtImage(target: ReaderImageStopTarget) {
+        Log.d(
+            READER_PAUSED_SEEK_LOG_TAG,
+            "legado pauseAtImage chapter=${target.chapterIndex} position=${target.imagePosition} " +
+                "page=$pageIndex actual=${player?.currentPosition} manual=$manualCueIndex audioCue=$audioCueIndex"
+        )
         lastImageStopKey = target.key
         player?.pause()
         BookReaderFloatingBridge.notifyPlaybackState(false)

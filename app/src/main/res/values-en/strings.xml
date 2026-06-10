@@ -407,7 +407,6 @@
     <string name="bookreader_jump_by_cue">By subtitle</string>
     <string name="bookreader_jump_by_duration">By time (%1$ds)</string>
     <string name="bookreader_sleep_timer">Timer</string>
-    <string name="bookreader_sleep_timer_running">Timer %1$s</string>
     <string name="bookreader_control_mode">Control mode</string>
     <string name="bookreader_hide_controls">Hide playback bar</string>
     <string name="bookreader_show_controls">Show playback bar</string>
@@ -536,6 +535,7 @@
     <string name="anki_field_placeholder">Type a placeholder or choose from the list</string>
     <string name="common_pause">Pause</string>
     <string name="home_subtitle_attached">Subtitles attached</string>
+    <string name="home_ebook_attached">ebook attached</string>
     <string name="bookreader_ui_test_chapter_on">Chapters: on</string>
     <string name="bookreader_ui_test_chapter_off">Chapters: off</string>
     <string name="bookreader_ui_test_layout_mode">Layout mode: %1$d/2</string>

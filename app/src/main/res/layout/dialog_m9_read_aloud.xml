@@ -100,14 +100,14 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <TextView
+        <ImageView
             android:id="@+id/audio_timer_label"
             android:layout_width="80dp"
             android:layout_height="match_parent"
-            android:gravity="center_vertical"
-            android:text="@string/bookreader_sleep_timer"
-            android:textColor="#2C241B"
-            android:textSize="14sp" />
+            android:contentDescription="@string/bookreader_sleep_timer"
+            android:padding="12dp"
+            android:src="@drawable/reader_ic_timer"
+            app:tint="#2C241B" />
 
         <TextView
             android:id="@+id/audio_timer_10"
