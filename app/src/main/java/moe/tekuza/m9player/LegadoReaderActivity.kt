@@ -199,7 +199,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var matchSearchWindow: Int = DEFAULT_MATCH_SEARCH_WINDOW
     private var audioCueIndex: Int = -1
     private var activeCueIndex: Int = -1
-    private var manualCueIndex: Int = -1
     private var audioSeekSyncTargetMs: Long? = null
     private var audioSeekSyncDisplayMs: Long? = null
     private var audioSeekSyncTargetUntilElapsedMs: Long = 0L
@@ -2135,7 +2134,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 matchData = null
                 audioCueIndex = -1
                 activeCueIndex = -1
-                manualCueIndex = -1
                 loadDisplayedBook(anchor = currentPageAnchor(), forceDocumentReload = true)
                 true
             }
@@ -5216,8 +5214,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         Log.d(
             READER_PAUSED_SEEK_LOG_TAG,
             "legado adjacentCue request delta=$delta before=$position exact=$exactIndex beforeIndex=$beforeIndex " +
-                "base=$baseIndex baseMs=${cues.getOrNull(baseIndex)?.startMs} manual=$manualCueIndex " +
-                "manualMs=${cues.getOrNull(manualCueIndex)?.startMs} targetIndex=$targetIndex targetMs=$targetMs " +
+                "base=$baseIndex baseMs=${cues.getOrNull(baseIndex)?.startMs} audioCue=$audioCueIndex " +
+                "audioCueMs=${cues.getOrNull(audioCueIndex)?.startMs} targetIndex=$targetIndex targetMs=$targetMs " +
                 "playing=${currentPlayer.isPlaying} " +
                 "playWhenReady=${currentPlayer.playWhenReady} state=${currentPlayer.playbackState} " +
                 "duration=${currentPlayer.duration} cue=${targetCue?.text.orEmpty().replace('\n', ' ').take(48)}"
@@ -5228,7 +5226,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             "legado adjacentCue after-seek-immediate targetMs=$targetMs actual=${currentPlayer.currentPosition} " +
                 "playing=${currentPlayer.isPlaying} playWhenReady=${currentPlayer.playWhenReady} state=${currentPlayer.playbackState}"
         )
-        manualCueIndex = targetIndex
         audioCueIndex = targetIndex
         activeCueIndex = if (cueMatchesByCueIndex.containsKey(targetIndex)) targetIndex else -1
         BookReaderFloatingBridge.notifyPlaybackPosition(targetMs)
@@ -5256,7 +5253,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         if (cues.isEmpty()) return -1
         val steps = abs(delta).coerceAtLeast(1)
         val baseIndex = when {
-            manualCueIndex in cues.indices -> manualCueIndex
             audioCueIndex in cues.indices -> audioCueIndex
             fallbackBaseIndex in cues.indices -> fallbackBaseIndex
             delta < 0 -> cues.lastIndex
@@ -6395,7 +6391,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 matchData = null
                 audioCueIndex = -1
                 activeCueIndex = -1
-                manualCueIndex = -1
                 Log.d(
                     LEGADO_READER_LOG_TAG,
                     "loadSrtSyncIfNeeded ready=${SystemClock.elapsedRealtime() - srtStartMs}ms " +
@@ -6431,7 +6426,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 )
                 cues = emptyList()
                 loadedSrtUriText = null
-                manualCueIndex = -1
                 publishReaderSubtitleBridgeSnapshot(clearWhenMissing = true)
                 onComplete?.invoke(false)
             }
@@ -6539,9 +6533,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         if (!cueChanged && !forceReveal) return
         val previousMatch = cueMatchesByCueIndex[previousAudioCueIndex]
         audioCueIndex = cueIndex
-        if (preferredCueIndex != null) {
-            manualCueIndex = cueIndex
-        }
         val match = cueMatchesByCueIndex[cueIndex]
         if (forceReveal || match == null) {
             Log.d(
@@ -6663,7 +6654,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         Log.d(
             READER_PAUSED_SEEK_LOG_TAG,
             "legado pauseAtImage chapter=${target.chapterIndex} position=${target.imagePosition} " +
-                "page=$pageIndex actual=${player?.currentPosition} manual=$manualCueIndex audioCue=$audioCueIndex"
+                "page=$pageIndex actual=${player?.currentPosition} audioCue=$audioCueIndex"
         )
         lastImageStopKey = target.key
         player?.pause()

@@ -4094,9 +4094,8 @@ private fun scanBooksFromRootFolder(
                 .sortedBy { it.name?.lowercase(Locale.ROOT) ?: it.uri.toString() }
 
             val audioFile = files.firstOrNull { isAudioDocumentFile(it) }
-            val srtFile = files.firstOrNull { it.name?.trim().orEmpty().endsWith(".srt", ignoreCase = true) }
-                ?: files.firstOrNull { isSrtDocumentFile(it) && !isEbookDocumentFile(it) }
-            val ebookFile = files.firstOrNull { it.uri != srtFile?.uri && isEbookDocumentFile(it) }
+            val srtFile = files.firstOrNull { isSrtDocumentFile(it) }
+            val ebookFile = files.firstOrNull { isEbookDocumentFile(it) }
             if (audioFile == null) {
                 skippedFolders += folderName
                 return@forEach
@@ -4148,11 +4147,12 @@ private fun isSrtDocumentFile(file: DocumentFile): Boolean {
     val name = file.name?.trim().orEmpty().lowercase(Locale.ROOT)
     val mime = file.type?.lowercase(Locale.ROOT).orEmpty()
     if (name.endsWith(".srt")) return true
-    return mime == "application/x-subrip" || mime.contains("subrip") || mime == "text/plain"
+    return mime == "application/x-subrip" || mime.contains("subrip")
 }
 
 private fun isEbookDocumentFile(file: DocumentFile): Boolean {
     val displayName = file.name?.trim().orEmpty()
+    if (displayName.endsWith(".srt", ignoreCase = true)) return false
     return inferLocalReaderBookFormat(displayName, file.type) != null
 }
 
