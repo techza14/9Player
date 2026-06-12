@@ -144,4 +144,14 @@
             android:textColor="#2C241B"
             android:textSize="14sp" />
     </LinearLayout>
+
+    <CheckBox
+        android:id="@+id/audio_timer_fade_out"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:buttonTint="#2C241B"
+        android:gravity="center_vertical"
+        android:text="@string/bookreader_sleep_fade_out_audio"
+        android:textColor="#2C241B"
+        android:textSize="14sp" />
 </LinearLayout>

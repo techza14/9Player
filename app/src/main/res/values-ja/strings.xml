@@ -40,7 +40,10 @@
     <string name="settings_controller_title">コントローラー</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX（制作中）</string>
-    <string name="settings_ebook_default_reader_title">既定</string>
+    <string name="settings_ebook_title">ebook</string>
+    <string name="settings_ebook_enabled_title">ebook を有効にする</string>
+    <string name="settings_ebook_default_reader_title">ebook を既定で開く</string>
+    <string name="settings_ebook_only_import_title">ebook のみのインポートを許可</string>
     <string name="settings_other_title">実験的機能</string>
     <string name="settings_statistics_title">統計</string>
     <string name="settings_update_title">アップデート</string>
@@ -96,8 +99,11 @@
     <string name="home_bookshelf_title">マイ本棚</string>
     <string name="home_delete_selected">削除(%1$d)</string>
     <string name="home_cancel_selection">選択解除</string>
-    <string name="home_switch_to_list">一覧に切替</string>
-    <string name="home_switch_to_shelf">本棚に切替</string>
+    <string name="home_display_menu">表示</string>
+    <string name="home_display_bookshelf">本棚</string>
+    <string name="home_display_list">一覧</string>
+    <string name="home_cover_aspect_book">表紙比率：5:7</string>
+    <string name="home_cover_aspect_square">表紙比率：正方形</string>
     <string name="home_rename_book">名前を変更</string>
     <string name="home_book_name">名前</string>
     <string name="home_no_books">まだ書籍がありません。</string>
@@ -226,9 +232,12 @@
     <string name="status_control_hint_replay_bookmark">シングルタップ：現在の行を再生してお気に入り</string>
     <string name="status_control_hint_footer">\n再生中にダブルタップ：前の行を再生してお気に入り\n左スワイプ：前の行\n右スワイプ：次の行\n二本指の短い長押し：終了</string>
     <string name="status_playback_speed">再生速度：%1$sx</string>
+    <string name="status_books_removed_from_library">%1$d 冊を書棚から削除しました。元ファイルは削除していません。</string>
     <string name="status_books_deleted_with_folder">%1$d 冊を削除しました。オーディオブックフォルダ内の項目は対応フォルダも削除されました。</string>
     <string name="status_books_deleted_files_only">%1$d 冊を削除しました（選択ファイルのみ）。</string>
     <string name="status_books_deleted_with_failures">%1$d 冊を削除しました。ファイル削除失敗 %2$d 件、フォルダ削除失敗 %3$d 件。</string>
+    <string name="status_books_archived_sources">%1$d 冊を書棚から削除しました。元ファイルは 9Player Sources に移動しました。</string>
+    <string name="status_books_archived_with_failures">%1$d 冊を書棚から削除しました。%2$d 件のファイルの退避に失敗し、%3$d 件の元ファイルの移動に失敗しました。</string>
     <string name="status_pick_audiobook_folder_first">先にオーディオブックフォルダを選択してください。</string>
     <string name="status_pick_audio_first">音声ファイルを選択してください。</string>
     <string name="status_pick_audio_srt_before_ebook">先に音声と SRT を選択してから ebook を追加してください。</string>
@@ -278,8 +287,8 @@
     <string name="import_mode_auto_move">自動移動</string>
     <string name="import_mode_keep_original">移動しない</string>
     <string name="delete_books_title">書籍を削除</string>
-    <string name="delete_books_message">選択した書籍と対応フォルダを削除しますか？\n（フォルダがオーディオブックフォルダ内にある場合のみ）</string>
-    <string name="delete_books_skip_next_time">次回から確認しない</string>
+    <string name="delete_books_message">選択した書籍を書棚から削除しますか？</string>
+    <string name="delete_books_delete_source_files">元ファイルを削除</string>
     <string name="add_book_title">書籍を追加</string>
     <string name="add_book_folder_label">オーディオブックフォルダ: %1$s</string>
     <string name="add_book_pick_folder">フォルダを選択</string>
@@ -290,6 +299,7 @@
     <string name="add_book_ebook_label">ebook（任意）: %1$s</string>
     <string name="add_book_pick_ebook">TXT/EPUB を選択</string>
     <string name="add_book_ebook_requires_audio_srt">ebook を追加するには先に音声と SRT を選択してください。</string>
+    <string name="add_book_ebook_only_enabled_hint">ebook のみのインポートが有効です。</string>
     <string name="lookup_audio_enable_first">先に設定 &gt; オーディオブックで検索音声を有効にしてください。</string>
     <string name="lookup_audio_empty_term">現在の語句が空のため再生できません。</string>
     <string name="lookup_audio_android_db_missing">android.db がインポートされていません。</string>
@@ -443,6 +453,7 @@
     <string name="bookreader_set">設定</string>
     <string name="bookreader_sleep_exit_control">タイマー終了時にコントロールモードを終了</string>
     <string name="bookreader_sleep_disconnect_bluetooth">タイマー終了時にコントローラー Bluetooth を切断 (Shizuku)</string>
+    <string name="bookreader_sleep_fade_out_audio">タイマー終了時に音声をフェードアウト</string>
     <string name="bookreader_open_bluetooth">スマホの Bluetooth 設定を開く</string>
     <string name="bookreader_ui_test_chapter_on">章表示: オン</string>
     <string name="bookreader_ui_test_chapter_off">章表示: オフ</string>

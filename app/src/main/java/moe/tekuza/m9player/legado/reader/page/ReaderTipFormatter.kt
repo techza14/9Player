@@ -11,6 +11,12 @@ internal object ReaderTipFormatter {
         else -> false
     }
 
+    fun isBatteryGraphicTip(content: ReaderTipContent): Boolean = when (content) {
+        ReaderTipContent.BATTERY,
+        ReaderTipContent.TIME_BATTERY -> true
+        else -> false
+    }
+
     fun text(
         content: ReaderTipContent,
         page: TextPage?,
@@ -26,7 +32,7 @@ internal object ReaderTipFormatter {
             ReaderTipContent.BOOK_NAME -> bookTitle.ifBlank { page.title }
             ReaderTipContent.CHAPTER_TITLE -> chapterTitle
             ReaderTipContent.TIME -> clockText
-            ReaderTipContent.BATTERY -> batteryIconText(batteryPercent)
+            ReaderTipContent.BATTERY -> batteryPercent.toString()
             ReaderTipContent.BATTERY_PERCENTAGE -> "$batteryPercent%"
             ReaderTipContent.PAGE -> page.chapterPageText()
             ReaderTipContent.PAGE_OR_PROGRESS -> {
@@ -35,7 +41,7 @@ internal object ReaderTipFormatter {
             ReaderTipContent.TOTAL_PROGRESS -> if (alternateProgress) page.chapterReadProgress() else page.readProgress
             ReaderTipContent.CHAPTER_PROGRESS -> page.chapterProgressText()
             ReaderTipContent.PAGE_AND_TOTAL -> "${page.chapterPageText()}  ${page.readProgress}"
-            ReaderTipContent.TIME_BATTERY -> "$clockText ${batteryIconText(batteryPercent)}"
+            ReaderTipContent.TIME_BATTERY -> "$clockText  $batteryPercent"
             ReaderTipContent.TIME_BATTERY_PERCENTAGE -> "$clockText $batteryPercent%"
         }
     }
@@ -56,13 +62,4 @@ internal object ReaderTipFormatter {
         return "${chapterIndex + 1}/$count"
     }
 
-    private fun batteryIconText(percent: Int): String {
-        return when {
-            percent >= 95 -> "▰▰▰▰"
-            percent >= 70 -> "▰▰▰▱"
-            percent >= 40 -> "▰▰▱▱"
-            percent >= 15 -> "▰▱▱▱"
-            else -> "▱▱▱▱"
-        }
-    }
 }

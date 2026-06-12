@@ -77,6 +77,7 @@ import moe.tekuza.m9player.legado.reader.config.ReadStyleColorItem
 import moe.tekuza.m9player.legado.reader.config.ReadStyleDialog
 import moe.tekuza.m9player.legado.reader.config.ReadStyleState
 import moe.tekuza.m9player.legado.reader.entities.TextPage
+import moe.tekuza.m9player.legado.reader.page.ReaderBatteryTextView
 import moe.tekuza.m9player.legado.reader.page.ReaderTipFormatter
 import moe.tekuza.m9player.legado.reader.page.ReadView
 import moe.tekuza.m9player.legado.reader.provider.TextPageFactory
@@ -286,6 +287,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         selectReaderStyle(index)
     }
     private var audioStopAtMs: Long? = null
+    private var audioTimerFadeOutEnabled: Boolean = false
     private var hideStatusBar: Boolean = false
     private var readBodyToLh: Boolean = true
     private var hideNavigationBar: Boolean = false
@@ -1020,11 +1022,27 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             findViewById<TextView>(R.id.audio_timer_30).setOnClickListener { setAudioTimer(30) }
             findViewById<TextView>(R.id.audio_timer_off).setOnClickListener {
                 audioStopAtMs = null
+                player?.volume = 1f
                 Toast.makeText(
                     this@LegadoReaderActivity,
                     readerString(R.string.reader_timer_closed),
                     Toast.LENGTH_SHORT
                 ).show()
+            }
+            findViewById<CheckBox>(R.id.audio_timer_fade_out).also { checkbox ->
+                val options = loadBookReaderSleepOptions(this@LegadoReaderActivity)
+                audioTimerFadeOutEnabled = options.fadeOutAudioWhenDone
+                checkbox.isChecked = audioTimerFadeOutEnabled
+                checkbox.setOnCheckedChangeListener { _, checked ->
+                    audioTimerFadeOutEnabled = checked
+                    val current = loadBookReaderSleepOptions(this@LegadoReaderActivity)
+                    saveBookReaderSleepOptions(
+                        context = this@LegadoReaderActivity,
+                        exitControlModeWhenDone = current.exitControlModeWhenDone,
+                        disconnectBluetoothWhenDone = current.disconnectBluetoothWhenDone,
+                        fadeOutAudioWhenDone = checked
+                    )
+                }
             }
         }
     }
@@ -2348,8 +2366,20 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         page: TextPage?,
         chapterTitle: String
     ) {
-        val text = readerTipText(content, page, slot, chapterTitle)
-        view.text = if (content == ReaderTipContent.CHAPTER_TITLE) text.ifBlank { chapterTitle } else text
+        if (view is ReaderBatteryTextView && ReaderTipFormatter.isBatteryGraphicTip(content) && page != null) {
+            view.setBatteryValue(
+                value = batteryPercent(),
+                prefix = if (content == ReaderTipContent.TIME_BATTERY) currentClockText() else null
+            )
+        } else {
+            val text = readerTipText(content, page, slot, chapterTitle)
+            val displayText = if (content == ReaderTipContent.CHAPTER_TITLE) text.ifBlank { chapterTitle } else text
+            if (view is ReaderBatteryTextView) {
+                view.setPlainText(displayText)
+            } else {
+                view.text = displayText
+            }
+        }
         view.visibility = if (view.text.isNullOrBlank()) View.INVISIBLE else View.VISIBLE
         val clickable = ReaderTipFormatter.isProgressTip(content)
         view.isClickable = clickable
@@ -5031,18 +5061,22 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             restoredSnapshot != null -> restoredSnapshot.positionMs
             else -> 0L
         }.coerceAtLeast(0L)
+        val sameSharedAudio = BookReaderPlaybackSession.currentAudioUri() == uri.toString()
+        val keepLiveSession = sameSharedAudio && BookReaderPlaybackSession.isPlaybackRequested()
+        val forceSeekOnSameAudio = sameSharedAudio && !keepLiveSession && restoredPositionMs > 0L
         Log.d(
             LEGADO_AUDIO_PROGRESS_LOG_TAG,
             "restore source=${if (pendingAudioRestorePositionMs > 0L) "pending" else restoredCandidate?.source ?: "none"} " +
                 "positionMs=$restoredPositionMs durationMs=${restoredSnapshot?.durationMs ?: pendingAudioRestoreDurationMs} " +
-                "updatedAt=${restoredSnapshot?.updatedAtMs ?: 0L}"
+                "updatedAt=${restoredSnapshot?.updatedAtMs ?: 0L} sameAudio=$sameSharedAudio " +
+                "keepLive=$keepLiveSession forceSeek=$forceSeekOnSameAudio"
         )
         audioCueIndex = -1
         player = BookReaderPlaybackSession.prepareAudioIfNeeded(
             context = this,
             audioUri = uri,
             restorePositionMs = restoredPositionMs,
-            forceSeekOnSameAudio = false
+            forceSeekOnSameAudio = forceSeekOnSameAudio
         )
         publishReaderPlaybackBridgeSnapshot(notifyState = true)
         updateAudioControlLabels()
@@ -5167,6 +5201,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun setAudioTimer(minutes: Int) {
+        player?.volume = 1f
         audioStopAtMs = System.currentTimeMillis() + minutes * 60_000L
         Toast.makeText(this, getString(R.string.reader_stop_after_minutes, minutes), Toast.LENGTH_SHORT).show()
     }
@@ -5914,6 +5949,11 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 ),
                 commitImmediately = true
             )
+            saveEbookReadingProgressPercent(
+                context = this,
+                bookUri = bookUri,
+                progressPercent = currentReadingProgressPercent()
+            )
         }
         val persistedBookUri = if (updateAnchor && anchor != null) bookUri else previous.currentBookUri
         val persistedChapterIndex = if (updateAnchor && anchor != null) {
@@ -6010,6 +6050,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             ),
             commitImmediately = commitAnchorImmediately
         )
+    }
+
+    private fun currentReadingProgressPercent(): Int {
+        if (pages.isEmpty()) return 0
+        return (((pageIndex.coerceIn(0, pages.lastIndex) + 1) * 100L) / pages.size)
+            .toInt()
+            .coerceIn(0, 100)
     }
 
     private fun showSasayakiMatchDialog() {
@@ -6440,13 +6487,33 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         syncJob?.cancel()
         syncJob = lifecycleScope.launch {
             var lastProgressSaveAt = 0L
+            var timerFadeApplied = false
             while (true) {
                 delay(350L)
                 audioStopAtMs?.let { stopAt ->
-                    if (System.currentTimeMillis() >= stopAt) {
-                        player?.pause()
+                    val remainingMs = stopAt - System.currentTimeMillis()
+                    val currentPlayer = player
+                    if (
+                        audioTimerFadeOutEnabled &&
+                        remainingMs in 1L until BOOK_READER_SLEEP_FADE_OUT_MS &&
+                        isAudioPlaybackRequested()
+                    ) {
+                        currentPlayer?.volume = sleepFadeVolume(remainingMs, BOOK_READER_SLEEP_FADE_OUT_MS)
+                        timerFadeApplied = true
+                    } else if (timerFadeApplied && remainingMs > BOOK_READER_SLEEP_FADE_OUT_MS) {
+                        currentPlayer?.volume = 1f
+                        timerFadeApplied = false
+                    }
+                    if (remainingMs <= 0L) {
+                        if (currentPlayer != null && audioTimerFadeOutEnabled) {
+                            pauseWithSleepFadeRewind(currentPlayer)
+                        } else {
+                            currentPlayer?.volume = 1f
+                            currentPlayer?.pause()
+                        }
                         BookReaderFloatingBridge.notifyPlaybackState(false)
                         audioStopAtMs = null
+                        timerFadeApplied = false
                     }
                 }
                 val now = System.currentTimeMillis()
@@ -6795,19 +6862,20 @@ private fun isLegadoAppProcessInForeground(): Boolean {
 
 internal fun buildLegadoReaderPlaybackKey(
     title: String,
-    audioUri: Uri,
+    audioUri: Uri?,
     srtUri: Uri?,
     bookUri: String?
 ): String {
+    val audioUriText = audioUri?.toString().orEmpty()
     val stableSource = buildString {
-        append("audio=").append(audioUri.toString())
+        append("audio=").append(audioUriText)
         append("|srt=").append(srtUri?.toString().orEmpty())
         append("|book=").append(bookUri.orEmpty())
     }
     val stableName = bookUri
         ?.trim()
         ?.takeIf { it.isNotBlank() }
-        ?: audioUri.toString().ifBlank { title.ifBlank { "book" } }
+        ?: audioUriText.ifBlank { title.ifBlank { "book" } }
     return buildDictionaryCacheKey(stableSource, stableName)
 }
 

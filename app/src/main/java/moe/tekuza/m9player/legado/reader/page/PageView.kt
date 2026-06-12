@@ -25,14 +25,14 @@ import java.util.Date
 import java.util.Locale
 
 internal class PageView(context: Context) : LinearLayout(context) {
-    private val headerLeftView = TextView(context)
-    private val headerMiddleView = TextView(context)
-    private val headerRightView = TextView(context)
+    private val headerLeftView = ReaderBatteryTextView(context)
+    private val headerMiddleView = ReaderBatteryTextView(context)
+    private val headerRightView = ReaderBatteryTextView(context)
     private val bodyTitleView = TextView(context)
     val contentView = ContentTextView(context)
-    private val footerLeftView = TextView(context)
-    private val footerMiddleView = TextView(context)
-    private val footerRightView = TextView(context)
+    private val footerLeftView = ReaderBatteryTextView(context)
+    private val footerMiddleView = ReaderBatteryTextView(context)
+    private val footerRightView = ReaderBatteryTextView(context)
     private val headerDividerView = View(context)
     private val footerDividerView = View(context)
     var solidBackgroundColor: Int? = null
@@ -381,12 +381,14 @@ internal class PageView(context: Context) : LinearLayout(context) {
 
     private fun updateTipText() {
         val page = currentPage
-        headerLeftView.text = tipText(tipHeaderLeft, page, ReaderInfoSlot.HEADER_LEFT)
-        headerMiddleView.text = tipText(tipHeaderMiddle, page, ReaderInfoSlot.HEADER_MIDDLE)
-        headerRightView.text = tipText(tipHeaderRight, page, ReaderInfoSlot.HEADER_RIGHT)
-        footerLeftView.text = tipText(tipFooterLeft, page, ReaderInfoSlot.FOOTER_LEFT)
-        footerMiddleView.text = tipText(tipFooterMiddle, page, ReaderInfoSlot.FOOTER_MIDDLE)
-        footerRightView.text = tipText(tipFooterRight, page, ReaderInfoSlot.FOOTER_RIGHT)
+        val clockText = currentClockText()
+        val batteryPercent = batteryPercent()
+        updateTipView(headerLeftView, tipHeaderLeft, page, ReaderInfoSlot.HEADER_LEFT, clockText, batteryPercent)
+        updateTipView(headerMiddleView, tipHeaderMiddle, page, ReaderInfoSlot.HEADER_MIDDLE, clockText, batteryPercent)
+        updateTipView(headerRightView, tipHeaderRight, page, ReaderInfoSlot.HEADER_RIGHT, clockText, batteryPercent)
+        updateTipView(footerLeftView, tipFooterLeft, page, ReaderInfoSlot.FOOTER_LEFT, clockText, batteryPercent)
+        updateTipView(footerMiddleView, tipFooterMiddle, page, ReaderInfoSlot.FOOTER_MIDDLE, clockText, batteryPercent)
+        updateTipView(footerRightView, tipFooterRight, page, ReaderInfoSlot.FOOTER_RIGHT, clockText, batteryPercent)
         bindTipClick(headerLeftView, ReaderInfoSlot.HEADER_LEFT, tipHeaderLeft)
         bindTipClick(headerMiddleView, ReaderInfoSlot.HEADER_MIDDLE, tipHeaderMiddle)
         bindTipClick(headerRightView, ReaderInfoSlot.HEADER_RIGHT, tipHeaderRight)
@@ -395,6 +397,24 @@ internal class PageView(context: Context) : LinearLayout(context) {
         bindTipClick(footerRightView, ReaderInfoSlot.FOOTER_RIGHT, tipFooterRight)
         bodyTitleView.text = page?.title.orEmpty()
         applyBodyTitleStyle()
+    }
+
+    private fun updateTipView(
+        view: ReaderBatteryTextView,
+        content: ReaderTipContent,
+        page: TextPage?,
+        slot: ReaderInfoSlot,
+        clockText: String,
+        batteryPercent: Int
+    ) {
+        if (ReaderTipFormatter.isBatteryGraphicTip(content) && page != null) {
+            view.setBatteryValue(
+                value = batteryPercent,
+                prefix = if (content == ReaderTipContent.TIME_BATTERY) clockText else null
+            )
+        } else {
+            view.setPlainText(tipText(content, page, slot, clockText, batteryPercent))
+        }
     }
 
     private fun applyBodyTitleStyle() {
@@ -414,15 +434,21 @@ internal class PageView(context: Context) : LinearLayout(context) {
         }
     }
 
-    private fun tipText(content: ReaderTipContent, page: TextPage?, slot: ReaderInfoSlot): String {
+    private fun tipText(
+        content: ReaderTipContent,
+        page: TextPage?,
+        slot: ReaderInfoSlot,
+        clockText: String = currentClockText(),
+        batteryPercent: Int = batteryPercent()
+    ): String {
         return ReaderTipFormatter.text(
             content = content,
             page = page,
             alternateProgress = slot in alternateInfoSlots,
             bookTitle = bookTitle,
             chapterTitle = displayedChapterTitle ?: page?.title.orEmpty(),
-            clockText = currentClockText(),
-            batteryPercent = batteryPercent()
+            clockText = clockText,
+            batteryPercent = batteryPercent
         )
     }
 

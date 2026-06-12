@@ -81,7 +81,7 @@
             android:paddingEnd="20dp"
             android:visibility="gone">
 
-            <TextView
+            <moe.tekuza.m9player.legado.reader.page.ReaderBatteryTextView
                 android:id="@+id/reader_title_addition_left"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
@@ -92,7 +92,7 @@
                 android:textColor="#2C241B"
                 android:textSize="14sp" />
 
-            <TextView
+            <moe.tekuza.m9player.legado.reader.page.ReaderBatteryTextView
                 android:id="@+id/reader_title_addition_middle"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
@@ -103,7 +103,7 @@
                 android:textColor="#2C241B"
                 android:textSize="14sp" />
 
-            <TextView
+            <moe.tekuza.m9player.legado.reader.page.ReaderBatteryTextView
                 android:id="@+id/reader_title_addition_right"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"

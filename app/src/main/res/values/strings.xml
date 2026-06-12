@@ -43,7 +43,10 @@
     <string name="settings_controller_title">手柄</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX(制作中)</string>
-    <string name="settings_ebook_default_reader_title">默认</string>
+    <string name="settings_ebook_title">ebook</string>
+    <string name="settings_ebook_enabled_title">开启ebook</string>
+    <string name="settings_ebook_default_reader_title">默认打开ebook</string>
+    <string name="settings_ebook_only_import_title">允许只导入书</string>
     <string name="settings_other_title">实验性功能</string>
     <string name="settings_statistics_title">统计</string>
     <string name="settings_update_title">更新</string>
@@ -99,8 +102,11 @@
     <string name="home_bookshelf_title">我的书架</string>
     <string name="home_delete_selected">删除(%1$d)</string>
     <string name="home_cancel_selection">取消选择</string>
-    <string name="home_switch_to_list">切换到列表</string>
-    <string name="home_switch_to_shelf">切换到书架</string>
+    <string name="home_display_menu">显示</string>
+    <string name="home_display_bookshelf">书架</string>
+    <string name="home_display_list">列表</string>
+    <string name="home_cover_aspect_book">封面比例：5:7</string>
+    <string name="home_cover_aspect_square">封面比例：正方形</string>
     <string name="home_no_books">还没有书籍。</string>
     <string name="home_no_books_hint">点击 +书籍，先选择有声书文件夹，再选择音频/m4b（SRT可选）。</string>
     <string name="home_subtitle_attached">附字幕</string>
@@ -229,9 +235,12 @@
     <string name="status_control_hint_replay_bookmark">单击：重播当前句并收藏</string>
     <string name="status_control_hint_footer">\n重播中双击：播放上一句并收藏\n左滑：上一句\n右滑：下一句\n双指短长按：退出</string>
     <string name="status_playback_speed">播放速度：%1$sx</string>
+    <string name="status_books_removed_from_library">已从书架移除 %1$d 本书；未删除源文件。</string>
     <string name="status_books_deleted_with_folder">已删除 %1$d 本书；有声书文件夹内的条目已删除对应文件夹。</string>
     <string name="status_books_deleted_files_only">已删除 %1$d 本书（仅删除所选文件）。</string>
     <string name="status_books_deleted_with_failures">已删书 %1$d 本；%2$d 个文件删除失败，%3$d 个文件夹删除失败。</string>
+    <string name="status_books_archived_sources">已从书架移除 %1$d 本书；源文件已移至 9Player Sources。</string>
+    <string name="status_books_archived_with_failures">已从书架移除 %1$d 本书；%2$d 个文件归档失败，%3$d 个原文件移除失败。</string>
     <string name="status_pick_audiobook_folder_first">请先选择有声书文件夹。</string>
     <string name="status_pick_audio_first">请选择音频文件。</string>
     <string name="status_pick_audio_srt_before_ebook">请先选择音频和 SRT，再添加 ebook。</string>
@@ -283,8 +292,8 @@
     <string name="import_mode_keep_original">不自动移动</string>
 
     <string name="delete_books_title">删除书籍</string>
-    <string name="delete_books_message">确认删除所选书籍，并删除对应文件夹吗？\n（如果文件夹处于有声书文件夹）</string>
-    <string name="delete_books_skip_next_time">下次不再提醒</string>
+    <string name="delete_books_message">确认从书架移除所选书籍吗？</string>
+    <string name="delete_books_delete_source_files">删除源文件</string>
 
     <string name="add_book_title">添加书籍</string>
     <string name="add_book_folder_label">有声书文件夹: %1$s</string>
@@ -296,6 +305,7 @@
     <string name="add_book_ebook_label">ebook（可选）: %1$s</string>
     <string name="add_book_pick_ebook">选择 TXT/EPUB</string>
     <string name="add_book_ebook_requires_audio_srt">先选择音频和 SRT 后才能添加 ebook。</string>
+    <string name="add_book_ebook_only_enabled_hint">已允许只导入书。</string>
     <string name="lookup_audio_enable_first">请先在设置 &gt; 有声书开启查词播放音频。</string>
     <string name="lookup_audio_empty_term">当前词条为空，无法播放。</string>
     <string name="lookup_audio_android_db_missing">未导入 android.db。</string>
@@ -451,6 +461,7 @@
     <string name="bookreader_set">设置</string>
     <string name="bookreader_sleep_exit_control">计时完关闭控制模式</string>
     <string name="bookreader_sleep_disconnect_bluetooth">计时完断开手柄蓝牙(Shizuku)</string>
+    <string name="bookreader_sleep_fade_out_audio">计时完音频淡出</string>
     <string name="bookreader_open_bluetooth">打开手机蓝牙界面</string>
     <string name="bookreader_ui_test_chapter_on">章节开</string>
     <string name="bookreader_ui_test_chapter_off">章节关</string>

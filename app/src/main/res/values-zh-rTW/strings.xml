@@ -39,7 +39,10 @@
     <string name="settings_controller_title">手柄</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX（製作中）</string>
-    <string name="settings_ebook_default_reader_title">預設</string>
+    <string name="settings_ebook_title">ebook</string>
+    <string name="settings_ebook_enabled_title">開啟ebook</string>
+    <string name="settings_ebook_default_reader_title">預設開啟ebook</string>
+    <string name="settings_ebook_only_import_title">允許只匯入書</string>
     <string name="settings_other_title">實驗性功能</string>
     <string name="settings_statistics_title">統計</string>
     <string name="settings_update_title">更新</string>
@@ -95,8 +98,11 @@
     <string name="home_bookshelf_title">我的書架</string>
     <string name="home_delete_selected">刪除(%1$d)</string>
     <string name="home_cancel_selection">取消選擇</string>
-    <string name="home_switch_to_list">切換到列表</string>
-    <string name="home_switch_to_shelf">切換到書架</string>
+    <string name="home_display_menu">顯示</string>
+    <string name="home_display_bookshelf">書架</string>
+    <string name="home_display_list">列表</string>
+    <string name="home_cover_aspect_book">封面比例：5:7</string>
+    <string name="home_cover_aspect_square">封面比例：正方形</string>
     <string name="home_rename_book">修改名稱</string>
     <string name="home_book_name">名稱</string>
     <string name="home_no_books">還沒有書籍。</string>
@@ -223,9 +229,12 @@
     <string name="status_control_hint_replay_bookmark">單擊：重播當前句並收藏</string>
     <string name="status_control_hint_footer">\n重播中雙擊：播放上一句並收藏\n左滑：上一句\n右滑：下一句\n雙指短長按：退出</string>
     <string name="status_playback_speed">播放速度：%1$sx</string>
+    <string name="status_books_removed_from_library">已從書架移除 %1$d 本書；未刪除來源檔案。</string>
     <string name="status_books_deleted_with_folder">已刪除 %1$d 本書；有聲書資料夾內的條目已刪除對應資料夾。</string>
     <string name="status_books_deleted_files_only">已刪除 %1$d 本書（僅刪除所選檔案）。</string>
     <string name="status_books_deleted_with_failures">已刪書 %1$d 本；%2$d 個檔案刪除失敗，%3$d 個資料夾刪除失敗。</string>
+    <string name="status_books_archived_sources">已從書架移除 %1$d 本書；來源檔案已移至 9Player Sources。</string>
+    <string name="status_books_archived_with_failures">已從書架移除 %1$d 本書；%2$d 個檔案歸檔失敗，%3$d 個原始檔案移除失敗。</string>
     <string name="status_pick_audiobook_folder_first">請先選擇有聲書資料夾。</string>
     <string name="status_pick_audio_first">請選擇音訊檔案。</string>
     <string name="status_pick_audio_srt_before_ebook">請先選擇音訊和 SRT，再新增 ebook。</string>
@@ -275,8 +284,8 @@
     <string name="import_mode_auto_move">自動移動</string>
     <string name="import_mode_keep_original">不自動移動</string>
     <string name="delete_books_title">刪除書籍</string>
-    <string name="delete_books_message">確認刪除所選書籍，並刪除對應資料夾嗎？\n（如果資料夾位於有聲書資料夾內）</string>
-    <string name="delete_books_skip_next_time">下次不再提醒</string>
+    <string name="delete_books_message">確認從書架移除所選書籍嗎？</string>
+    <string name="delete_books_delete_source_files">刪除來源檔案</string>
     <string name="add_book_title">新增書籍</string>
     <string name="add_book_folder_label">有聲書資料夾: %1$s</string>
     <string name="add_book_pick_folder">選擇資料夾</string>
@@ -287,6 +296,7 @@
     <string name="add_book_ebook_label">ebook（可選）: %1$s</string>
     <string name="add_book_pick_ebook">選擇 TXT/EPUB</string>
     <string name="add_book_ebook_requires_audio_srt">先選擇音訊和 SRT 後才能新增 ebook。</string>
+    <string name="add_book_ebook_only_enabled_hint">已允許只匯入書。</string>
     <string name="lookup_audio_enable_first">請先在設定 &gt; 有聲書啟用查詞播放音訊。</string>
     <string name="lookup_audio_empty_term">目前詞條為空，無法播放。</string>
     <string name="lookup_audio_android_db_missing">尚未匯入 android.db。</string>
@@ -440,6 +450,7 @@
     <string name="bookreader_set">設定</string>
     <string name="bookreader_sleep_exit_control">計時完關閉控制模式</string>
     <string name="bookreader_sleep_disconnect_bluetooth">計時完斷開手柄藍牙(Shizuku)</string>
+    <string name="bookreader_sleep_fade_out_audio">計時完音訊淡出</string>
     <string name="bookreader_open_bluetooth">打開手機藍牙介面</string>
     <string name="bookreader_lookup_no_dict">未載入辭典，請先在主頁匯入辭典。</string>
     <string name="bookreader_lookup_failed">查詢失敗</string>

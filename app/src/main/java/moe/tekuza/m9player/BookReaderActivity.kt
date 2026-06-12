@@ -188,6 +188,8 @@ private const val BOOK_READER_UI_SWAP_PREV_NEXT_VERTICAL_KEY = "ui_swap_prev_nex
 private const val BOOK_READER_UI_CHAPTER_VISIBLE_KEY = "ui_chapter_visible"
 private const val BOOK_READER_SLEEP_EXIT_CONTROL_KEY = "sleep_exit_control"
 private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
+private const val BOOK_READER_SLEEP_FADE_OUT_KEY = "sleep_fade_out"
+internal const val BOOK_READER_SLEEP_FADE_OUT_MS = 10_000L
 private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
 private const val BOOK_LOOKUP_SELECTION_LOG_TAG = "BookLookupSelection"
 private const val BOOK_READER_BACK_LOG_TAG = "BookReaderBack"
@@ -609,6 +611,7 @@ private fun BookReaderScreen(
     var sleepCustomMinutesInput by remember { mutableStateOf("") }
     var sleepExitControlModeWhenDone by remember { mutableStateOf(false) }
     var sleepDisconnectControllerBluetoothWhenDone by remember { mutableStateOf(false) }
+    var sleepFadeOutAudioWhenDone by remember { mutableStateOf(false) }
     var sleepOptionsReady by remember { mutableStateOf(false) }
     var adjacentJumpMode by remember { mutableStateOf(AdjacentJumpMode.CUE) }
     var playbackSpeed by remember { mutableStateOf(1.0f) }
@@ -736,7 +739,8 @@ private fun BookReaderScreen(
                 ebookUri = ebookUri,
                 ebookName = ebookName,
                 ebookFormat = ebookFormat,
-                coverUri = coverUri
+                coverUri = coverUri,
+                coverSource = coverUri?.let { ReaderBookCoverSource.AUDIO }
             )
         }
     }
@@ -1029,8 +1033,9 @@ private fun BookReaderScreen(
             return@LaunchedEffect
         }
         val sameSharedAudio = BookReaderPlaybackSession.currentAudioUri() == selectedAudio.toString()
-        val restoredPositionMs = if (sameSharedAudio) {
-            player.currentPosition.coerceAtLeast(0L)
+        val keepLiveSession = sameSharedAudio && isReaderPlaybackRequested()
+        val restoredSnapshotPositionMs = if (keepLiveSession) {
+            null
         } else {
             currentReaderBook?.let { book ->
                 withContext(Dispatchers.IO) {
@@ -1038,15 +1043,28 @@ private fun BookReaderScreen(
                         context = context,
                         book = book,
                         reason = "bookReaderRestore"
-                    )?.snapshot?.positionMs ?: 0L
+                    )?.snapshot?.positionMs
                 }
-            }?.coerceAtLeast(0L) ?: 0L
+            }?.coerceAtLeast(0L)
         }
+        val sessionPositionMs = if (sameSharedAudio) player.currentPosition.coerceAtLeast(0L) else 0L
+        val restoredPositionMs = when {
+            keepLiveSession -> sessionPositionMs
+            restoredSnapshotPositionMs != null -> restoredSnapshotPositionMs
+            else -> sessionPositionMs
+        }
+        val forceSeekOnSameAudio = !keepLiveSession && restoredSnapshotPositionMs != null
+        Log.d(
+            BOOK_READER_BACK_LOG_TAG,
+            "restoreAudio sameAudio=$sameSharedAudio keepLive=$keepLiveSession " +
+                "forceSeek=$forceSeekOnSameAudio snapshot=$restoredSnapshotPositionMs " +
+                "session=$sessionPositionMs target=$restoredPositionMs"
+        )
         BookReaderPlaybackSession.prepareAudioIfNeeded(
             context = context,
             audioUri = selectedAudio,
             restorePositionMs = restoredPositionMs,
-            forceSeekOnSameAudio = false
+            forceSeekOnSameAudio = forceSeekOnSameAudio
         )
         positionMs = player.currentPosition.coerceAtLeast(0L)
         durationMs = if (player.duration > 0L) player.duration else durationMs.coerceAtLeast(0L)
@@ -1244,19 +1262,22 @@ private fun BookReaderScreen(
         val options = loadBookReaderSleepOptions(context)
         sleepExitControlModeWhenDone = options.exitControlModeWhenDone
         sleepDisconnectControllerBluetoothWhenDone = options.disconnectBluetoothWhenDone
+        sleepFadeOutAudioWhenDone = options.fadeOutAudioWhenDone
         sleepOptionsReady = true
     }
 
     LaunchedEffect(
         sleepExitControlModeWhenDone,
         sleepDisconnectControllerBluetoothWhenDone,
+        sleepFadeOutAudioWhenDone,
         sleepOptionsReady
     ) {
         if (!sleepOptionsReady) return@LaunchedEffect
         saveBookReaderSleepOptions(
             context = context,
             exitControlModeWhenDone = sleepExitControlModeWhenDone,
-            disconnectBluetoothWhenDone = sleepDisconnectControllerBluetoothWhenDone
+            disconnectBluetoothWhenDone = sleepDisconnectControllerBluetoothWhenDone,
+            fadeOutAudioWhenDone = sleepFadeOutAudioWhenDone
         )
     }
 
@@ -1466,49 +1487,74 @@ private fun BookReaderScreen(
     LaunchedEffect(
         sleepTimerDeadlineMs,
         sleepExitControlModeWhenDone,
-        sleepDisconnectControllerBluetoothWhenDone
+        sleepDisconnectControllerBluetoothWhenDone,
+        sleepFadeOutAudioWhenDone
     ) {
         val deadline = sleepTimerDeadlineMs ?: return@LaunchedEffect
-        while (sleepTimerDeadlineMs == deadline) {
-            if (System.currentTimeMillis() >= deadline) {
-                setReaderPlaybackState(false)
-                sleepTimerDeadlineMs = null
-                val statusParts = mutableListOf<String>()
-                if (sleepDisconnectControllerBluetoothWhenDone) {
-                    val address = latestControllerAddressProvider()
-                    val behavior = loadControllerBluetoothBehaviorConfig(context)
-                    val bluetoothResult = withContext(Dispatchers.IO) {
-                        tryDisconnectTargetControllerThenDisableBluetooth(
-                            context = context,
-                            targetAddress = address,
-                            allowDisableBluetoothFallback = behavior.disableBluetoothIfControllerMissing
-                        )
+        var fadeApplied = false
+        try {
+            while (sleepTimerDeadlineMs == deadline) {
+                val remainingMs = deadline - System.currentTimeMillis()
+                if (
+                    sleepFadeOutAudioWhenDone &&
+                    !uiTestMode &&
+                    remainingMs in 1L until BOOK_READER_SLEEP_FADE_OUT_MS &&
+                    isReaderPlaybackRequested()
+                ) {
+                    player.volume = sleepFadeVolume(remainingMs, BOOK_READER_SLEEP_FADE_OUT_MS)
+                    fadeApplied = true
+                } else if (fadeApplied && remainingMs > BOOK_READER_SLEEP_FADE_OUT_MS) {
+                    player.volume = 1f
+                    fadeApplied = false
+                }
+                if (remainingMs <= 0L) {
+                    if (sleepFadeOutAudioWhenDone && !uiTestMode) {
+                        pauseWithSleepFadeRewind(player)
+                    } else {
+                        setReaderPlaybackState(false)
                     }
-                    when (bluetoothResult.outcome) {
-                        SleepBluetoothOutcome.TARGET_DISCONNECTED -> {
-                            statusParts += context.getString(R.string.status_controller_disconnected)
+                    sleepTimerDeadlineMs = null
+                    val statusParts = mutableListOf<String>()
+                    if (sleepDisconnectControllerBluetoothWhenDone) {
+                        val address = latestControllerAddressProvider()
+                        val behavior = loadControllerBluetoothBehaviorConfig(context)
+                        val bluetoothResult = withContext(Dispatchers.IO) {
+                            tryDisconnectTargetControllerThenDisableBluetooth(
+                                context = context,
+                                targetAddress = address,
+                                allowDisableBluetoothFallback = behavior.disableBluetoothIfControllerMissing
+                            )
                         }
-                        SleepBluetoothOutcome.BLUETOOTH_DISABLED -> {
-                            statusParts += context.getString(R.string.status_bluetooth_disabled_fallback)
-                        }
-                        SleepBluetoothOutcome.FAILED -> {
-                            statusParts += context.getString(R.string.status_bluetooth_failed, bluetoothResult.detail)
+                        when (bluetoothResult.outcome) {
+                            SleepBluetoothOutcome.TARGET_DISCONNECTED -> {
+                                statusParts += context.getString(R.string.status_controller_disconnected)
+                            }
+                            SleepBluetoothOutcome.BLUETOOTH_DISABLED -> {
+                                statusParts += context.getString(R.string.status_bluetooth_disabled_fallback)
+                            }
+                            SleepBluetoothOutcome.FAILED -> {
+                                statusParts += context.getString(R.string.status_bluetooth_failed, bluetoothResult.detail)
+                            }
                         }
                     }
+                    if (sleepExitControlModeWhenDone) {
+                        controlModeEnabled = false
+                        view.keepScreenOn = false
+                        statusParts += context.getString(R.string.status_control_mode_exited)
+                    }
+                    if (statusParts.isEmpty()) {
+                        controlModeStatus = context.getString(R.string.status_timer_finished)
+                    } else {
+                        controlModeStatus = context.getString(R.string.status_timer_finished_with_parts, statusParts.joinToString(", "))
+                    }
+                    break
                 }
-                if (sleepExitControlModeWhenDone) {
-                    controlModeEnabled = false
-                    view.keepScreenOn = false
-                    statusParts += context.getString(R.string.status_control_mode_exited)
-                }
-                if (statusParts.isEmpty()) {
-                    controlModeStatus = context.getString(R.string.status_timer_finished)
-                } else {
-                    controlModeStatus = context.getString(R.string.status_timer_finished_with_parts, statusParts.joinToString(", "))
-                }
-                break
+                delay(if (fadeApplied) 200L else 250L)
             }
-            delay(250L)
+        } finally {
+            if (fadeApplied && sleepTimerDeadlineMs != null && !uiTestMode) {
+                player.volume = 1f
+            }
         }
     }
 
@@ -1794,6 +1840,9 @@ private fun BookReaderScreen(
     }
 
     fun setSleepTimer(minutes: Int) {
+        if (!uiTestMode) {
+            player.volume = 1f
+        }
         sleepTimerDeadlineMs = if (minutes <= 0) {
             null
         } else {
@@ -3832,6 +3881,22 @@ private fun BookReaderScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
+                                text = stringResource(R.string.bookreader_sleep_fade_out_audio),
+                                modifier = Modifier.weight(1f).padding(end = 12.dp)
+                            )
+                            Switch(
+                                checked = sleepFadeOutAudioWhenDone,
+                                onCheckedChange = { checked ->
+                                    sleepFadeOutAudioWhenDone = checked
+                                }
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
                                 text = stringResource(R.string.bookreader_sleep_exit_control),
                                 modifier = Modifier.weight(1f).padding(end = 12.dp)
                             )
@@ -3898,10 +3963,118 @@ private fun BookReaderScreen(
             }
         }
 
-        if (controlModeEnabled && cues.isNotEmpty()) {
+    }
+
+    if (!hoshiLookupPopupTemporarilyHidden) LookupPopupStackView(
+        popups = hoshiLookupPopups,
+        onPopupsChange = { next ->
+            hoshiLookupPopups.clear()
+            hoshiLookupPopups.addAll(next)
+            if (next.isEmpty()) {
+                hoshiLookupSelectionCueIndex = null
+                hoshiLookupSelectionRange = null
+                hoshiLookupPopupTemporarilyHidden = false
+                reopenHoshiLookupPopupAfterCueRangeSelection = false
+            }
+        },
+        lookupChildPopup = { selection ->
+            Log.d(
+                "AnkiExportDebug",
+                "bookHoshi lookupChildPopup request text='${selection.text.take(24)}' sentenceOffset=${selection.sentenceOffset} hasResults=${hoshiLookupPopups.isNotEmpty()} stackSize=${hoshiLookupPopups.size}"
+            )
+            val popup = bookHoshiLookupSession.createPopup(
+                selection = selection,
+                options = LookupPopupOptions(
+                    isVertical = false,
+                    isFullWidth = false,
+                    width = 320,
+                    height = 250,
+                    swipeToDismiss = true,
+                    swipeThreshold = 40,
+                    topInset = 0.0,
+                    bottomInset = navigationBarBottomInsetDp,
+                    dictionarySettings = loadDictionarySettings(context),
+                    darkMode = isDarkTheme,
+                    eInkMode = false,
+                    audioSettings = audiobookSettings,
+                    showRangeSelection = false,
+                    showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
+                    popupActionBar = true,
+                ),
+            )
+            if (popup == null) {
+                Log.d(
+                    "AnkiExportDebug",
+                    "bookHoshi lookupChildPopup empty text='${selection.text.take(24)}'"
+                )
+            }
+            popup
+        },
+        onLookupRedirect = { query ->
+            val dictionarySettings = loadDictionarySettings(context)
+            bookHoshiLookupSession.lookup(
+                query,
+                dictionarySettings.maxResults,
+                dictionarySettings.scanLength,
+            )
+        },
+        onRangeSelection = {
+            beginHoshiCueRangeSelection(reopenLookupPopupAfterSelection = true)
+        },
+        onMineEntryAsync = { content, onComplete ->
+            Log.d(
+                "AnkiExportDebug",
+                "bookHoshi onMineEntry contentSize=${content.length} selectionCueIndex=$hoshiLookupSelectionCueIndex activeCueIndex=$activeCueIndex"
+            )
+            exportBookHoshiLookupEntryToAnkiAsync(content, onComplete)
+        },
+        onDuplicateCheckAsync = { expression, onComplete -> checkBookAnkiDuplicateAsync(expression, onComplete) },
+        onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
+        onPlayWordAudio = { _url, term, reading ->
+            if (!term.isNullOrBlank()) {
+                playLookupAudioForTerm(
+                    context = context,
+                    term = term,
+                    reading = reading,
+                    settings = audiobookSettings
+                )
+            }
+        },
+        onCloseAll = {
+            Log.d(
+                "AnkiExportDebug",
+                "bookHoshi onCloseAll stackSize=${hoshiLookupPopups.size} topIndex=${hoshiLookupPopups.lastIndex}"
+            )
+            closeHoshiLookupPopup()
+        },
+        modifier = Modifier.fillMaxSize(),
+        onRootPopupDismissed = {
+            hoshiLookupPopups.clear()
+            hoshiLookupSelectionCueIndex = null
+            hoshiLookupSelectionRange = null
+            hoshiLookupPopupTemporarilyHidden = false
+            reopenHoshiLookupPopupAfterCueRangeSelection = false
+            clearCueRangeSelection()
+        },
+    )
+
+    if (controlModeEnabled && cues.isNotEmpty()) {
+        val configuration = LocalConfiguration.current
+        Popup(
+            alignment = Alignment.Center,
+            properties = PopupProperties(
+                focusable = false,
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false,
+                clippingEnabled = false
+            )
+        ) {
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .size(
+                        width = configuration.screenWidthDp.dp,
+                        height = configuration.screenHeightDp.dp
+                    )
                     .background(if (controlModePowerSaveEnabled) Color.Black else Color.Gray.copy(alpha = 0.38f))
                     .pointerInput(playbackCueIndex, isPlaying, cues.size) {
                         detectTapGestures(onTap = { handleControlOverlayTap() })
@@ -3982,99 +4155,6 @@ private fun BookReaderScreen(
             }
         }
     }
-
-    if (!hoshiLookupPopupTemporarilyHidden) LookupPopupStackView(
-        popups = hoshiLookupPopups,
-        onPopupsChange = { next ->
-            hoshiLookupPopups.clear()
-            hoshiLookupPopups.addAll(next)
-            if (next.isEmpty()) {
-                hoshiLookupSelectionCueIndex = null
-                hoshiLookupSelectionRange = null
-                hoshiLookupPopupTemporarilyHidden = false
-                reopenHoshiLookupPopupAfterCueRangeSelection = false
-            }
-        },
-        lookupChildPopup = { selection ->
-            Log.d(
-                "AnkiExportDebug",
-                "bookHoshi lookupChildPopup request text='${selection.text.take(24)}' sentenceOffset=${selection.sentenceOffset} hasResults=${hoshiLookupPopups.isNotEmpty()} stackSize=${hoshiLookupPopups.size}"
-            )
-            val popup = bookHoshiLookupSession.createPopup(
-                selection = selection,
-                options = LookupPopupOptions(
-                    isVertical = false,
-                    isFullWidth = audiobookSettings.lookupRootFullWidthEnabled,
-                    width = 320,
-                    height = 250,
-                    swipeToDismiss = true,
-                    swipeThreshold = 40,
-                    topInset = 0.0,
-                    bottomInset = navigationBarBottomInsetDp,
-                    dictionarySettings = loadDictionarySettings(context),
-                    darkMode = isDarkTheme,
-                    eInkMode = false,
-                    audioSettings = audiobookSettings,
-                    showRangeSelection = false,
-                    showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
-                    popupActionBar = true,
-                ),
-            )
-            if (popup == null) {
-                Log.d(
-                    "AnkiExportDebug",
-                    "bookHoshi lookupChildPopup empty text='${selection.text.take(24)}'"
-                )
-            }
-            popup
-        },
-        onLookupRedirect = { query ->
-            val dictionarySettings = loadDictionarySettings(context)
-            bookHoshiLookupSession.lookup(
-                query,
-                dictionarySettings.maxResults,
-                dictionarySettings.scanLength,
-            )
-        },
-        onRangeSelection = {
-            beginHoshiCueRangeSelection(reopenLookupPopupAfterSelection = true)
-        },
-        onMineEntryAsync = { content, onComplete ->
-            Log.d(
-                "AnkiExportDebug",
-                "bookHoshi onMineEntry contentSize=${content.length} selectionCueIndex=$hoshiLookupSelectionCueIndex activeCueIndex=$activeCueIndex"
-            )
-            exportBookHoshiLookupEntryToAnkiAsync(content, onComplete)
-        },
-        onDuplicateCheckAsync = { expression, onComplete -> checkBookAnkiDuplicateAsync(expression, onComplete) },
-        onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
-        onPlayWordAudio = { _url, term, reading ->
-            if (!term.isNullOrBlank()) {
-                playLookupAudioForTerm(
-                    context = context,
-                    term = term,
-                    reading = reading,
-                    settings = audiobookSettings
-                )
-            }
-        },
-        onCloseAll = {
-            Log.d(
-                "AnkiExportDebug",
-                "bookHoshi onCloseAll stackSize=${hoshiLookupPopups.size} topIndex=${hoshiLookupPopups.lastIndex}"
-            )
-            closeHoshiLookupPopup()
-        },
-        modifier = Modifier.fillMaxSize(),
-        onRootPopupDismissed = {
-            hoshiLookupPopups.clear()
-            hoshiLookupSelectionCueIndex = null
-            hoshiLookupSelectionRange = null
-            hoshiLookupPopupTemporarilyHidden = false
-            reopenHoshiLookupPopupAfterCueRangeSelection = false
-            clearCueRangeSelection()
-        },
-    )
 
 }
 }
@@ -6164,28 +6244,46 @@ private fun findCueIndexAtOrAfterTime(cues: List<ReaderSubtitleCue>, timeMs: Lon
     return candidate
 }
 
-private data class BookReaderSleepOptions(
+internal data class BookReaderSleepOptions(
     val exitControlModeWhenDone: Boolean,
-    val disconnectBluetoothWhenDone: Boolean
+    val disconnectBluetoothWhenDone: Boolean,
+    val fadeOutAudioWhenDone: Boolean
 )
 
-private fun loadBookReaderSleepOptions(context: Context): BookReaderSleepOptions {
+internal fun sleepFadeVolume(remainingMs: Long, fadeOutMs: Long = BOOK_READER_SLEEP_FADE_OUT_MS): Float {
+    val percentage = (remainingMs.toDouble() / fadeOutMs.toDouble()).coerceIn(0.0, 1.0)
+    val progress = 1.0 - percentage
+    val eased = progress * progress * (3.0 - 2.0 * progress)
+    return (1.0 - eased).toFloat().coerceIn(0f, 1f)
+}
+
+internal fun pauseWithSleepFadeRewind(player: Player, fadeOutMs: Long = BOOK_READER_SLEEP_FADE_OUT_MS) {
+    player.volume = 1f
+    player.pause()
+    val target = (player.currentPosition.coerceAtLeast(0L) - fadeOutMs).coerceAtLeast(0L)
+    player.seekTo(target)
+}
+
+internal fun loadBookReaderSleepOptions(context: Context): BookReaderSleepOptions {
     val prefs = context.getSharedPreferences(BOOK_READER_SLEEP_OPTIONS_PREFS, Context.MODE_PRIVATE)
     return BookReaderSleepOptions(
         exitControlModeWhenDone = prefs.getBoolean(BOOK_READER_SLEEP_EXIT_CONTROL_KEY, false),
-        disconnectBluetoothWhenDone = prefs.getBoolean(BOOK_READER_SLEEP_DISCONNECT_BT_KEY, false)
+        disconnectBluetoothWhenDone = prefs.getBoolean(BOOK_READER_SLEEP_DISCONNECT_BT_KEY, false),
+        fadeOutAudioWhenDone = prefs.getBoolean(BOOK_READER_SLEEP_FADE_OUT_KEY, false)
     )
 }
 
-private fun saveBookReaderSleepOptions(
+internal fun saveBookReaderSleepOptions(
     context: Context,
     exitControlModeWhenDone: Boolean,
-    disconnectBluetoothWhenDone: Boolean
+    disconnectBluetoothWhenDone: Boolean,
+    fadeOutAudioWhenDone: Boolean
 ) {
     context.getSharedPreferences(BOOK_READER_SLEEP_OPTIONS_PREFS, Context.MODE_PRIVATE)
         .edit()
         .putBoolean(BOOK_READER_SLEEP_EXIT_CONTROL_KEY, exitControlModeWhenDone)
         .putBoolean(BOOK_READER_SLEEP_DISCONNECT_BT_KEY, disconnectBluetoothWhenDone)
+        .putBoolean(BOOK_READER_SLEEP_FADE_OUT_KEY, fadeOutAudioWhenDone)
         .apply()
 }
 

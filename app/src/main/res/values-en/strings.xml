@@ -39,7 +39,10 @@
     <string name="settings_controller_title">Controller</string>
     <string name="settings_anki_title">Anki</string>
     <string name="settings_mdx_title">MDX (WIP)</string>
-    <string name="settings_ebook_default_reader_title">Default</string>
+    <string name="settings_ebook_title">ebook</string>
+    <string name="settings_ebook_enabled_title">Enable ebook</string>
+    <string name="settings_ebook_default_reader_title">Open ebook by default</string>
+    <string name="settings_ebook_only_import_title">Allow ebook-only import</string>
     <string name="settings_other_title">Experimental features</string>
     <string name="settings_statistics_title">Statistics</string>
     <string name="settings_update_title">Updates</string>
@@ -95,8 +98,11 @@
     <string name="home_bookshelf_title">My library</string>
     <string name="home_delete_selected">Delete (%1$d)</string>
     <string name="home_cancel_selection">Cancel selection</string>
-    <string name="home_switch_to_list">Switch to list</string>
-    <string name="home_switch_to_shelf">Switch to shelf</string>
+    <string name="home_display_menu">Display</string>
+    <string name="home_display_bookshelf">Shelf</string>
+    <string name="home_display_list">List</string>
+    <string name="home_cover_aspect_book">Cover ratio: 5:7</string>
+    <string name="home_cover_aspect_square">Cover ratio: square</string>
     <string name="home_rename_book">Rename</string>
     <string name="home_book_name">Name</string>
     <string name="home_no_books">No books yet.</string>
@@ -223,9 +229,12 @@
     <string name="status_control_hint_replay_bookmark">Single tap: replay current line and bookmark it</string>
     <string name="status_control_hint_footer">\nDouble tap during replay: play previous line and bookmark it\nSwipe left: previous line\nSwipe right: next line\nTwo-finger short long-press: exit</string>
     <string name="status_playback_speed">Playback speed: %1$sx</string>
+    <string name="status_books_removed_from_library">Removed %1$d books from the library; source files were not deleted.</string>
     <string name="status_books_deleted_with_folder">Deleted %1$d books; entries inside the audiobook folder also removed their folders.</string>
     <string name="status_books_deleted_files_only">Deleted %1$d books (selected files only).</string>
     <string name="status_books_deleted_with_failures">Deleted %1$d books; %2$d file deletions failed, %3$d folder deletions failed.</string>
+    <string name="status_books_archived_sources">Removed %1$d books from the shelf; source files were moved to 9Player Sources.</string>
+    <string name="status_books_archived_with_failures">Removed %1$d books from the shelf; %2$d files failed to archive and %3$d originals failed to move away.</string>
     <string name="status_pick_audiobook_folder_first">Choose the audiobook folder first.</string>
     <string name="status_pick_audio_first">Choose an audio file.</string>
     <string name="status_pick_audio_srt_before_ebook">Choose audio and SRT before adding an ebook.</string>
@@ -275,8 +284,8 @@
     <string name="import_mode_auto_move">Auto move</string>
     <string name="import_mode_keep_original">Keep original</string>
     <string name="delete_books_title">Delete books</string>
-    <string name="delete_books_message">Delete the selected books and their folders?\n(Only if the folder is inside the audiobook folder)</string>
-    <string name="delete_books_skip_next_time">Do not ask again</string>
+    <string name="delete_books_message">Remove the selected books from the library?</string>
+    <string name="delete_books_delete_source_files">Delete source files</string>
     <string name="add_book_title">Add book</string>
     <string name="add_book_folder_label">Audiobook folder: %1$s</string>
     <string name="add_book_pick_folder">Choose folder</string>
@@ -287,6 +296,7 @@
     <string name="add_book_ebook_label">ebook (optional): %1$s</string>
     <string name="add_book_pick_ebook">Choose TXT/EPUB</string>
     <string name="add_book_ebook_requires_audio_srt">Choose audio and SRT before adding an ebook.</string>
+    <string name="add_book_ebook_only_enabled_hint">ebook-only import is enabled.</string>
     <string name="lookup_audio_enable_first">Enable lookup audio first in Settings &gt; Audiobooks.</string>
     <string name="lookup_audio_empty_term">The current term is empty and cannot be played.</string>
     <string name="lookup_audio_android_db_missing">android.db has not been imported.</string>
@@ -440,6 +450,7 @@
     <string name="bookreader_set">Set</string>
     <string name="bookreader_sleep_exit_control">Exit control mode when timer ends</string>
     <string name="bookreader_sleep_disconnect_bluetooth">Disconnect controller Bluetooth when timer ends (Shizuku)</string>
+    <string name="bookreader_sleep_fade_out_audio">Fade out audio when timer ends</string>
     <string name="bookreader_open_bluetooth">Open phone Bluetooth settings</string>
     <string name="bookreader_lookup_no_dict">No dictionary loaded. Import one from Home first.</string>
     <string name="bookreader_lookup_failed">Lookup failed</string>

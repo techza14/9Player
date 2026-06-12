@@ -28,7 +28,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.FolderCopy
-import androidx.compose.material.icons.outlined.Science
+import androidx.compose.material.icons.outlined.PlayLesson
 import androidx.compose.ui.graphics.vector.ImageVector
 import moe.tekuza.m9player.ui.theme.TsetTheme
 
@@ -54,6 +54,7 @@ private fun OtherSettingsScreen(
     val context = LocalContext.current
     var ebookEnabled by remember { mutableStateOf(loadEbookFeatureEnabled(context)) }
     var ebookDefaultToReader by remember { mutableStateOf(loadEbookDefaultToReader(context)) }
+    var ebookOnlyImportEnabled by remember { mutableStateOf(loadEbookOnlyImportEnabled(context)) }
     val mdxUnlocked = remember { loadMdxExperimentalUnlocked(context) }
     var showEbookSettings by remember { mutableStateOf(false) }
     SettingsScaffold(
@@ -75,21 +76,21 @@ private fun OtherSettingsScreen(
         ) {
             if (showEbookSettings) {
                 SettingsSwitchItem(
-                    icon = Icons.Outlined.Science,
-                    title = "",
+                    title = stringResource(R.string.settings_ebook_enabled_title),
                     checked = ebookEnabled,
                     onCheckedChange = { enabled ->
                         ebookEnabled = enabled
                         saveEbookFeatureEnabled(context, enabled)
                         if (!enabled) {
                             ebookDefaultToReader = false
+                            ebookOnlyImportEnabled = false
                             saveEbookDefaultToReader(context, false)
+                            saveEbookOnlyImportEnabled(context, false)
                         }
                     },
                     showDivider = true
                 )
                 SettingsSwitchItem(
-                    icon = Icons.Outlined.Science,
                     title = stringResource(R.string.settings_ebook_default_reader_title),
                     checked = ebookDefaultToReader,
                     enabled = ebookEnabled,
@@ -97,23 +98,33 @@ private fun OtherSettingsScreen(
                         ebookDefaultToReader = enabled
                         saveEbookDefaultToReader(context, enabled)
                     },
+                    showDivider = true
+                )
+                SettingsSwitchItem(
+                    title = stringResource(R.string.settings_ebook_only_import_title),
+                    checked = ebookOnlyImportEnabled,
+                    enabled = ebookEnabled,
+                    onCheckedChange = { enabled ->
+                        ebookOnlyImportEnabled = enabled
+                        saveEbookOnlyImportEnabled(context, enabled)
+                    },
                     showDivider = false
                 )
             } else {
+                SettingsLikeItem(
+                    icon = Icons.Outlined.PlayLesson,
+                    title = stringResource(R.string.settings_ebook_title),
+                    onClick = { showEbookSettings = true },
+                    showDivider = mdxUnlocked
+                )
                 if (mdxUnlocked) {
                     SettingsLikeItem(
                         icon = Icons.Outlined.FolderCopy,
                         title = stringResource(R.string.settings_mdx_title),
                         onClick = onOpenMdx,
-                        showDivider = true
+                        showDivider = false
                     )
                 }
-                SettingsLikeItem(
-                    icon = Icons.Outlined.Science,
-                    title = "",
-                    onClick = { showEbookSettings = true },
-                    showDivider = false
-                )
             }
         }
     }

@@ -99,7 +99,7 @@ internal fun loadStatisticsReport(context: Context): StatisticsReport {
     val enabled = prefs.getBoolean(KEY_ENABLED, false)
     val persisted = loadPersistedImports(context)
     val books = persisted.books.mapNotNull { persistedBook ->
-        val audioUri = persistedBook.audioUri.trim().takeIf { it.isNotBlank() }
+        val audioUri = persistedBook.audioUri?.trim()?.takeIf { it.isNotBlank() }
             ?.let { runCatching { Uri.parse(it) }.getOrNull() }
             ?: return@mapNotNull null
         val srtUri = persistedBook.srtUri?.trim()?.takeIf { it.isNotBlank() }
@@ -115,7 +115,8 @@ internal fun loadStatisticsReport(context: Context): StatisticsReport {
                 ?.let { runCatching { Uri.parse(it) }.getOrNull() },
             ebookName = persistedBook.ebookName,
             ebookFormat = persistedBook.ebookFormat,
-            coverUri = null
+            coverUri = null,
+            coverSource = null
         )
         val bookKey = buildReaderBookPlaybackKey(readerBook)
         val legacyBookKey = buildLegacyReaderAudioPlaybackKey(
@@ -130,7 +131,7 @@ internal fun loadStatisticsReport(context: Context): StatisticsReport {
         val totalChars = srtUri?.let { countSrtTextChars(context, it) } ?: 0
         BookStatisticsSnapshot(
             id = persistedBook.id,
-            title = persistedBook.title.ifBlank { persistedBook.audioName },
+            title = persistedBook.title.ifBlank { persistedBook.audioName ?: persistedBook.ebookName.orEmpty() },
             bookKey = bookKey,
             progress = if (durationMs > 0L) positionMs.coerceIn(0L, durationMs).toFloat() / durationMs.toFloat() else 0f,
             listenedMs = statisticsKeys.sumOf { key -> prefs.getLong(bookListenedKey(key), 0L) },

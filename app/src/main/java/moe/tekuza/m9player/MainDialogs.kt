@@ -140,8 +140,8 @@ internal fun ClearCollectionsDialog(
 
 @Composable
 internal fun DeleteBooksConfirmDialog(
-    deleteBooksDontAskAgain: Boolean,
-    onDontAskAgainChange: (Boolean) -> Unit,
+    deleteSourceFiles: Boolean,
+    onDeleteSourceFilesChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
@@ -156,10 +156,10 @@ internal fun DeleteBooksConfirmDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Checkbox(
-                        checked = deleteBooksDontAskAgain,
-                        onCheckedChange = onDontAskAgainChange
+                        checked = deleteSourceFiles,
+                        onCheckedChange = onDeleteSourceFilesChange
                     )
-                    Text(stringResource(R.string.delete_books_skip_next_time))
+                    Text(stringResource(R.string.delete_books_delete_source_files))
                 }
             }
         },
@@ -184,9 +184,12 @@ internal fun AddBookDialog(
     audioUri: Uri?,
     srtName: String?,
     ebookEnabled: Boolean,
+    ebookOnlyImportEnabled: Boolean,
     ebookName: String?,
     ebookUri: Uri?,
     autoMoveToAudiobookFolder: Boolean,
+    deleteSourceFilesWhenAutoMove: Boolean,
+    onDeleteSourceFilesWhenAutoMoveChange: (Boolean) -> Unit,
     srtLoading: Boolean,
     onPickFolder: () -> Unit,
     onClearFolderSelection: () -> Unit,
@@ -255,12 +258,26 @@ internal fun AddBookDialog(
                     )
                     OutlinedButton(
                         onClick = onPickEbook,
-                        enabled = audioUri != null && srtName != null
+                        enabled = ebookOnlyImportEnabled || (audioUri != null && srtName != null)
                     ) {
                         Text(stringResource(R.string.add_book_pick_ebook))
                     }
-                    if (audioUri == null || srtName == null) {
+                    if (ebookOnlyImportEnabled) {
+                        Text(stringResource(R.string.add_book_ebook_only_enabled_hint))
+                    } else if (audioUri == null || srtName == null) {
                         Text(stringResource(R.string.add_book_ebook_requires_audio_srt))
+                    }
+                }
+                if (autoMoveToAudiobookFolder) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Checkbox(
+                            checked = deleteSourceFilesWhenAutoMove,
+                            onCheckedChange = onDeleteSourceFilesWhenAutoMoveChange
+                        )
+                        Text(stringResource(R.string.delete_books_delete_source_files))
                     }
                 }
             }
@@ -274,7 +291,7 @@ internal fun AddBookDialog(
             Button(
                 onClick = onConfirm,
                 enabled = (folderUri != null || !autoMoveToAudiobookFolder) &&
-                    audioUri != null &&
+                    (audioUri != null || (ebookOnlyImportEnabled && ebookUri != null)) &&
                     !srtLoading
             ) {
                 Text(stringResource(R.string.common_confirm))

@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
+import android.graphics.Matrix
 import android.graphics.drawable.AnimatedImageDrawable
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -37,6 +38,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -58,6 +60,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
@@ -125,6 +129,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ClosedCaption
+import androidx.compose.material.icons.outlined.Crop
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.FileProvider
@@ -282,6 +287,16 @@ private enum class HomeLibraryView {
     LIST
 }
 
+internal enum class HomeCoverAspect {
+    SQUARE,
+    BOOK
+}
+
+internal enum class HomeCoverCropFocus {
+    CENTER,
+    START
+}
+
 private sealed interface MainLookupRequest {
     data class Cue(
         val cue: SubtitleCue,
@@ -331,21 +346,36 @@ private val FIELD_VARIABLE_CHOICES = listOf(
     "{search-query}"
 )
 private const val ANKI_CONFIG_LOG_TAG = "AnkiConfig"
+private const val BOOK_DELETE_LOG_TAG = "BookDelete"
+private const val BOOK_IMPORT_MOVE_LOG_TAG = "BookImportMove"
 private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
 private const val MAIN_READER_RESTORE_LOG_TAG = "MainReaderRestore"
+private const val BOOK_SOURCES_FOLDER_NAME = "9Player Sources"
 
 internal data class ReaderBook(
     val id: String,
     val title: String,
-    val audioUri: Uri,
-    val audioName: String,
+    val audioUri: Uri?,
+    val audioName: String?,
     val srtUri: Uri?,
     val srtName: String?,
     val ebookUri: Uri?,
     val ebookName: String?,
     val ebookFormat: String?,
-    val coverUri: Uri?
-)
+    val coverUri: Uri?,
+    val coverSource: ReaderBookCoverSource?,
+    val coverFocus: HomeCoverCropFocus = HomeCoverCropFocus.CENTER
+) {
+    val isEbookOnly: Boolean
+        get() = audioUri == null && ebookUri != null
+}
+
+internal enum class ReaderBookCoverSource {
+    AUDIO,
+    EBOOK
+}
+
+private const val ReaderBookCoverAspectRatio = 5f / 7f
 
 private data class ReturnedBookProgress(
     val audioUri: String,
@@ -389,6 +419,9 @@ private fun ReaderSyncScreen() {
     }
     var selectedBookId by remember { mutableStateOf<String?>(null) }
     var homeLibraryView by remember { mutableStateOf(HomeLibraryView.BOOKSHELF) }
+    var homeCoverAspect by remember { mutableStateOf(HomeCoverAspect.BOOK) }
+    var homeCoverFocusEditMode by remember { mutableStateOf(false) }
+    var homeDisplayMenuExpanded by remember { mutableStateOf(false) }
     var addBookDialogVisible by remember { mutableStateOf(false) }
     var addBookAudioUri by remember { mutableStateOf<Uri?>(null) }
     var addBookAudioName by remember { mutableStateOf<String?>(null) }
@@ -401,6 +434,7 @@ private fun ReaderSyncScreen() {
     var addBookFolderName by remember { mutableStateOf<String?>(null) }
     var ebookFeatureEnabled by remember { mutableStateOf(loadEbookFeatureEnabled(context)) }
     var autoMoveToAudiobookFolder by remember { mutableStateOf(true) }
+    var keepSourceFilesWhenAutoMove by remember { mutableStateOf(false) }
     var importOnboardingCompleted by remember { mutableStateOf(false) }
     var importGuideVisible by remember { mutableStateOf(false) }
     var persistedImportsLoaded by remember { mutableStateOf(false) }
@@ -453,9 +487,8 @@ private fun ReaderSyncScreen() {
     var collectedCues by remember { mutableStateOf<List<BookReaderCollectedCue>>(emptyList()) }
     var clearCollectionsConfirmVisible by remember { mutableStateOf(false) }
     var deleteBooksConfirmVisible by remember { mutableStateOf(false) }
-    var deleteBooksDontAskAgain by remember { mutableStateOf(false) }
+    var deleteBooksDeleteSourceFiles by remember { mutableStateOf(false) }
     var pendingDeleteBookIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var skipDeleteBookConfirm by remember { mutableStateOf(loadSkipDeleteBookConfirm(context)) }
     var renameBookDialogVisible by remember { mutableStateOf(false) }
     var renameTargetBookId by remember { mutableStateOf<String?>(null) }
     var renameBookInput by remember { mutableStateOf("") }
@@ -620,7 +653,9 @@ private fun ReaderSyncScreen() {
                             val persistedByAudio = persistedNow.books.associateBy { it.audioUri }
                             var changed = false
                             val mergedBooks = readerBooks.map { book ->
-                                val persistedBook = persistedByAudio[book.audioUri.toString()] ?: return@map book
+                                val bookAudioUri = book.audioUri ?: return@map book
+                                val bookAudioName = book.audioName ?: return@map book
+                                val persistedBook = persistedByAudio[bookAudioUri.toString()] ?: return@map book
                                 val persistedSrtRaw = persistedBook.srtUri?.trim().orEmpty()
                                 if (persistedSrtRaw.isBlank()) return@map book
                                 val persistedSrt = runCatching { Uri.parse(persistedSrtRaw) }.getOrNull()
@@ -629,10 +664,10 @@ private fun ReaderSyncScreen() {
                                 changed = true
                                 val mergedSrtName = persistedBook.srtName?.ifBlank { null }
                                     ?: queryDisplayName(contentResolver, persistedSrt)
-                                val mergedTitle = buildBookTitle(book.audioName, mergedSrtName)
+                                val mergedTitle = buildBookTitle(bookAudioName, mergedSrtName)
                                 val mergedId = buildDictionaryCacheKey(
-                                    uri = "book|${book.audioUri}|$persistedSrtRaw",
-                                    displayName = "${book.audioName}|${mergedSrtName.orEmpty()}"
+                                    uri = "book|$bookAudioUri|$persistedSrtRaw",
+                                    displayName = "$bookAudioName|${mergedSrtName.orEmpty()}"
                                 )
                                 book.copy(
                                     id = mergedId,
@@ -644,7 +679,7 @@ private fun ReaderSyncScreen() {
                             if (changed) {
                                 readerBooks = mergedBooks
                                 val selected = mergedBooks.firstOrNull { it.id == selectedBookId }
-                                    ?: mergedBooks.firstOrNull { it.audioUri.toString() == audioUri?.toString().orEmpty() }
+                                    ?: mergedBooks.firstOrNull { it.audioUri?.toString() == audioUri?.toString() }
                                 if (selected != null) {
                                     selectedBookId = selected.id
                                     audioUri = selected.audioUri
@@ -658,35 +693,43 @@ private fun ReaderSyncScreen() {
                     val returnedProgress = consumeReturnedBookProgress(activity?.intent)
                     if (returnedProgress != null) {
                         val targetBook = readerBooks.firstOrNull {
-                            it.audioUri.toString() == returnedProgress.audioUri
+                            it.audioUri?.toString() == returnedProgress.audioUri
                         }
                         if (targetBook != null) {
+                            val targetAudioName = targetBook.audioName
+                            val targetAudioUri = targetBook.audioUri
                             val returnedSrt = returnedProgress.srtUri
                                 ?.trim()
                                 ?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
                                 ?.let { raw -> runCatching { Uri.parse(raw) }.getOrNull() }
-                            if ((targetBook.srtUri?.toString().orEmpty()) != (returnedSrt?.toString().orEmpty())) {
+                            if (
+                                targetAudioName != null &&
+                                targetAudioUri != null &&
+                                (targetBook.srtUri?.toString().orEmpty()) != (returnedSrt?.toString().orEmpty())
+                            ) {
                                 val updatedSrtName = returnedSrt?.let { queryDisplayName(contentResolver, it) }
-                                val updatedTitle = buildBookTitle(targetBook.audioName, updatedSrtName)
+                                val updatedTitle = buildBookTitle(targetAudioName, updatedSrtName)
                                 val updatedId = buildDictionaryCacheKey(
-                                    uri = "book|${targetBook.audioUri}|${returnedSrt?.toString().orEmpty()}",
-                                    displayName = "${targetBook.audioName}|${updatedSrtName.orEmpty()}"
+                                    uri = "book|$targetAudioUri|${returnedSrt?.toString().orEmpty()}",
+                                    displayName = "$targetAudioName|${updatedSrtName.orEmpty()}"
                                 )
                                 val updatedBook = ReaderBook(
                                     id = updatedId,
                                     title = updatedTitle,
-                                    audioUri = targetBook.audioUri,
-                                    audioName = targetBook.audioName,
+                                    audioUri = targetAudioUri,
+                                    audioName = targetAudioName,
                                     srtUri = returnedSrt,
                                     srtName = updatedSrtName,
                                     ebookUri = targetBook.ebookUri,
                                     ebookName = targetBook.ebookName,
                                     ebookFormat = targetBook.ebookFormat,
-                                    coverUri = targetBook.coverUri
+                                    coverUri = targetBook.coverUri,
+                                    coverSource = targetBook.coverSource,
+                                    coverFocus = targetBook.coverFocus
                                 )
                                 val wasSelected = selectedBookId == targetBook.id
                                 readerBooks = listOf(updatedBook) + readerBooks.filterNot {
-                                    it.audioUri.toString() == targetBook.audioUri.toString()
+                                    it.audioUri?.toString() == targetAudioUri.toString()
                                 }
                                 if (wasSelected) {
                                     selectedBookId = updatedBook.id
@@ -700,13 +743,14 @@ private fun ReaderSyncScreen() {
                                     PersistedReaderBook(
                                         id = book.id,
                                         title = book.title,
-                                        audioUri = book.audioUri.toString(),
+                                        audioUri = book.audioUri?.toString(),
                                         audioName = book.audioName,
                                         srtUri = book.srtUri?.toString(),
                                         srtName = book.srtName,
                                         ebookUri = book.ebookUri?.toString(),
                                         ebookName = book.ebookName,
-                                        ebookFormat = book.ebookFormat
+                                        ebookFormat = book.ebookFormat,
+                                        coverFocus = book.coverFocus.name
                                     )
                                 }
                                 savePersistedImports(
@@ -719,6 +763,7 @@ private fun ReaderSyncScreen() {
                                         audiobookFolderUri = addBookFolderUri?.toString(),
                                         audiobookFolderName = addBookFolderName,
                                         autoMoveToAudiobookFolder = autoMoveToAudiobookFolder,
+                                        keepSourceFilesWhenAutoMove = keepSourceFilesWhenAutoMove,
                                         importOnboardingCompleted = importOnboardingCompleted,
                                         books = persistedBooks,
                                         selectedBookId = selectedBookId,
@@ -727,9 +772,9 @@ private fun ReaderSyncScreen() {
                                     )
                                 )
                             }
-                            if (returnedProgress.positionMs >= 0L && returnedProgress.durationMs > 0L) {
+                            if (targetAudioUri != null && returnedProgress.positionMs >= 0L && returnedProgress.durationMs > 0L) {
                                 val effectiveBook = readerBooks.firstOrNull {
-                                    it.audioUri.toString() == targetBook.audioUri.toString()
+                                    it.audioUri?.toString() == targetAudioUri.toString()
                                 } ?: targetBook
                                 val immediate = BookReaderPlaybackSnapshot(
                                     positionMs = returnedProgress.positionMs.coerceAtLeast(0L),
@@ -807,7 +852,7 @@ private fun ReaderSyncScreen() {
             // Keep reader playback untouched when returning to home.
             return@LaunchedEffect
         }
-        val selectedReaderBook = selectedBookId?.let { id -> readerBooks.firstOrNull { it.id == id } }
+        val selectedReaderBook = selectedBookId?.let { id -> readerBooks.firstOrNull { it.id == id && it.audioUri != null } }
             ?: readerBooks.firstOrNull { it.audioUri == selectedAudio && it.srtUri == srtUri }
         val shouldPrewarmLegadoReader =
             selectedReaderBook?.ebookUri != null &&
@@ -821,7 +866,7 @@ private fun ReaderSyncScreen() {
             )
             val restoredSnapshot = restoredCandidate?.snapshot
             val restorePositionMs = restoredSnapshot?.positionMs?.coerceAtLeast(0L) ?: 0L
-            val alreadyPreparedForAudio = BookReaderPlaybackSession.currentAudioUri() == selectedReaderBook.audioUri.toString()
+            val alreadyPreparedForAudio = BookReaderPlaybackSession.currentAudioUri() == selectedAudio.toString()
             Log.d(
                 MAIN_READER_RESTORE_LOG_TAG,
                 "prewarm source=${restoredCandidate?.source ?: "none"} positionMs=$restorePositionMs " +
@@ -830,16 +875,33 @@ private fun ReaderSyncScreen() {
             )
             BookReaderPlaybackSession.prepareAudioIfNeeded(
                 context = context,
-                audioUri = selectedReaderBook.audioUri,
+                audioUri = selectedAudio,
                 restorePositionMs = restorePositionMs,
                 forceSeekOnSameAudio = false
             )
             return@LaunchedEffect
         }
+        val restoredCandidate = selectedReaderBook?.let { book ->
+            migrateBestReaderBookPlaybackSnapshotIfNeeded(
+                context = context,
+                book = book,
+                reason = "mainPlayerPrepare"
+            )
+        }
+        val restoredSnapshot = restoredCandidate?.snapshot
+        val restorePositionMs = restoredSnapshot?.positionMs?.coerceAtLeast(0L) ?: 0L
+        Log.d(
+            MAIN_READER_RESTORE_LOG_TAG,
+            "mainPlayerPrepare source=${restoredCandidate?.source ?: "none"} positionMs=$restorePositionMs " +
+                "durationMs=${restoredSnapshot?.durationMs ?: 0L} updatedAt=${restoredSnapshot?.updatedAtMs ?: 0L}"
+        )
         player.setMediaItem(MediaItem.fromUri(selectedAudio))
         player.prepare()
         player.pause()
-        player.seekTo(0L)
+        player.seekTo(restorePositionMs)
+        if (selectedReaderBook != null && restoredSnapshot != null) {
+            readerBookPlaybackSnapshots = readerBookPlaybackSnapshots + (selectedReaderBook.id to restoredSnapshot)
+        }
     }
 
     LaunchedEffect(audioUri, pendingCollectionPlayMs, collectionPlayRequestNonce) {
@@ -893,10 +955,10 @@ private fun ReaderSyncScreen() {
 
     fun persistImportState(dictionaryRefsOverride: List<PersistedDictionaryRef> = dictionaryRefs) {
         val previous = loadPersistedImports(context)
-        val previousByAudio = previous.books.associateBy { it.audioUri }
+        val previousByBookKey = previous.books.associateBy { persistedBookImportKey(it) }
         val persistedBooks = readerBooks.map { book ->
-            val audioKey = book.audioUri.toString()
-            val previousBook = previousByAudio[audioKey]
+            val audioKey = book.audioUri?.toString()
+            val previousBook = previousByBookKey[readerBookImportKey(book)]
             val currentSrt = book.srtUri?.toString()?.takeIf { it.isNotBlank() }
             val mergedSrt = currentSrt ?: previousBook?.srtUri?.takeIf { it.isNotBlank() }
             val mergedSrtName = if (currentSrt != null) {
@@ -913,7 +975,8 @@ private fun ReaderSyncScreen() {
                 srtName = mergedSrtName,
                 ebookUri = book.ebookUri?.toString(),
                 ebookName = book.ebookName,
-                ebookFormat = book.ebookFormat
+                ebookFormat = book.ebookFormat,
+                coverFocus = book.coverFocus.name
             )
         }
         val previousSelectedSrt = previous.srtUri?.takeIf { it.isNotBlank() }
@@ -934,21 +997,55 @@ private fun ReaderSyncScreen() {
                 audiobookFolderUri = addBookFolderUri?.toString(),
                 audiobookFolderName = addBookFolderName,
                 autoMoveToAudiobookFolder = autoMoveToAudiobookFolder,
+                keepSourceFilesWhenAutoMove = keepSourceFilesWhenAutoMove,
                 importOnboardingCompleted = importOnboardingCompleted,
                 books = persistedBooks,
                 selectedBookId = selectedBookId,
                 homeLibraryView = homeLibraryView.name,
+                homeCoverAspect = homeCoverAspect.name,
                 dictionaries = dictionaryRefsOverride
             )
         )
     }
 
-    fun persistHomeLibraryView(nextView: HomeLibraryView) {
+    fun persistHomeDisplaySettings(
+        nextView: HomeLibraryView = homeLibraryView,
+        nextAspect: HomeCoverAspect = homeCoverAspect
+    ) {
         scope.launch(Dispatchers.IO) {
             val previous = loadPersistedImports(context)
             savePersistedImports(
                 context = context,
-                state = previous.copy(homeLibraryView = nextView.name)
+                state = previous.copy(
+                    homeLibraryView = nextView.name,
+                    homeCoverAspect = nextAspect.name
+                )
+            )
+        }
+    }
+
+    fun toggleBookCoverFocus(book: ReaderBook) {
+        val nextFocus = if (book.coverFocus == HomeCoverCropFocus.START) {
+            HomeCoverCropFocus.CENTER
+        } else {
+            HomeCoverCropFocus.START
+        }
+        readerBooks = readerBooks.map { current ->
+            if (current.id == book.id) current.copy(coverFocus = nextFocus) else current
+        }
+        scope.launch(Dispatchers.IO) {
+            val previous = loadPersistedImports(context)
+            savePersistedImports(
+                context = context,
+                state = previous.copy(
+                    books = previous.books.map { persisted ->
+                        if (persisted.id == book.id) {
+                            persisted.copy(coverFocus = nextFocus.name)
+                        } else {
+                            persisted
+                        }
+                    }
+                )
             )
         }
     }
@@ -1075,7 +1172,7 @@ private fun ReaderSyncScreen() {
     }
 
     fun buildReaderBook(
-        audio: Uri,
+        audio: Uri?,
         audioDisplayName: String?,
         srt: Uri?,
         srtDisplayName: String?,
@@ -1083,23 +1180,47 @@ private fun ReaderSyncScreen() {
         ebookDisplayName: String? = null,
         ebookFormat: String? = null
     ): ReaderBook {
-        val resolvedAudioName = audioDisplayName?.takeIf { it.isNotBlank() }
-            ?: queryDisplayName(contentResolver, audio)
+        val resolvedAudioName = audio?.let {
+            audioDisplayName?.takeIf { name -> name.isNotBlank() }
+                ?: queryDisplayName(contentResolver, it)
+        }
         val resolvedSrtName = srt?.let {
             srtDisplayName?.takeIf { name -> name.isNotBlank() }
                 ?: queryDisplayName(contentResolver, it)
         }
-        val title = buildBookTitle(resolvedAudioName, resolvedSrtName)
-        val coverUri = resolveEmbeddedCoverUriForM4b(
+        val resolvedEbookName = ebook?.let {
+            ebookDisplayName?.takeIf { name -> name.isNotBlank() }
+                ?: queryDisplayName(contentResolver, it)
+        }
+        val title = resolvedAudioName?.let { buildBookTitle(it, resolvedSrtName) }
+            ?: buildEbookTitle(resolvedEbookName)
+        val audioCoverUri = audio?.let {
+            resolveEmbeddedCoverUriForM4b(
+                context = context,
+                audioUri = it,
+                audioDisplayName = resolvedAudioName.orEmpty()
+            )
+        }
+        val ebookCoverUri = resolveEmbeddedCoverUriForEpub(
             context = context,
-            audioUri = audio,
-            audioDisplayName = resolvedAudioName
+            ebookUri = ebook,
+            ebookDisplayName = resolvedEbookName,
+            ebookFormat = ebookFormat
         )
+        val coverUri = audioCoverUri ?: ebookCoverUri
+        val coverSource = when {
+            audioCoverUri != null -> ReaderBookCoverSource.AUDIO
+            ebookCoverUri != null -> ReaderBookCoverSource.EBOOK
+            audio == null && ebook != null -> ReaderBookCoverSource.EBOOK
+            else -> null
+        }
         val srtIdPart = srt?.toString().orEmpty()
         val srtNamePart = resolvedSrtName.orEmpty()
+        val stableSource = audio?.toString() ?: ebook?.toString().orEmpty()
+        val stableName = resolvedAudioName ?: resolvedEbookName.orEmpty()
         val id = buildDictionaryCacheKey(
-            uri = "book|${audio}|$srtIdPart",
-            displayName = "$resolvedAudioName|$srtNamePart"
+            uri = "book|$stableSource|$srtIdPart",
+            displayName = "$stableName|$srtNamePart"
         )
         return ReaderBook(
             id = id,
@@ -1109,9 +1230,10 @@ private fun ReaderSyncScreen() {
             srtUri = srt,
             srtName = resolvedSrtName,
             ebookUri = ebook,
-            ebookName = ebookDisplayName,
+            ebookName = resolvedEbookName,
             ebookFormat = ebookFormat,
-            coverUri = coverUri
+            coverUri = coverUri,
+            coverSource = coverSource
         )
     }
 
@@ -1136,13 +1258,19 @@ private fun ReaderSyncScreen() {
             book.ebookUri?.let { putExtra(LegadoReaderActivity.EXTRA_EBOOK_URI, it.toString()) }
             book.ebookName?.let { putExtra(LegadoReaderActivity.EXTRA_EBOOK_NAME, it) }
             book.ebookFormat?.let { putExtra(LegadoReaderActivity.EXTRA_EBOOK_FORMAT, it) }
-            putExtra(LegadoReaderActivity.EXTRA_AUDIO_URI, book.audioUri.toString())
+            book.audioUri?.let { putExtra(LegadoReaderActivity.EXTRA_AUDIO_URI, it.toString()) }
             book.srtUri?.let { putExtra(LegadoReaderActivity.EXTRA_SRT_URI, it.toString()) }
         }
     }
 
     fun openReaderBook(book: ReaderBook, persist: Boolean = true) {
-        val targetAudioUri = book.audioUri.toString()
+        val targetAudioUri = book.audioUri?.toString()
+        if (book.audioUri == null && book.ebookUri != null) {
+            activateReaderBook(book, persist = persist)
+            context.startActivity(createLegadoReaderIntent(context, book))
+            return
+        }
+        if (targetAudioUri == null) return
         if (
             loadEbookFeatureEnabled(context) &&
             loadEbookDefaultToReader(context) &&
@@ -1168,8 +1296,8 @@ private fun ReaderSyncScreen() {
         BookReaderActivity.stopActiveReaderIfDifferentAudio(targetAudioUri)
         activateReaderBook(book, persist = persist)
         val intent = Intent(context, BookReaderActivity::class.java).apply {
-            putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, buildBookTitle(book.audioName, book.srtName))
-            putExtra(BookReaderActivity.EXTRA_AUDIO_URI, book.audioUri.toString())
+            putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, book.audioName?.let { buildBookTitle(it, book.srtName) } ?: book.title)
+            putExtra(BookReaderActivity.EXTRA_AUDIO_URI, targetAudioUri)
             book.srtUri?.let { putExtra(BookReaderActivity.EXTRA_SRT_URI, it.toString()) }
             book.ebookUri?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_URI, it.toString()) }
             book.ebookName?.let { putExtra(BookReaderActivity.EXTRA_EBOOK_NAME, it) }
@@ -1225,20 +1353,49 @@ private fun ReaderSyncScreen() {
         isBookSelectionMode = true
     }
 
-    fun deleteSelectedBooks(removeIds: Set<String>) {
+    fun deleteSelectedBooks(removeIds: Set<String>, deleteSourceFiles: Boolean) {
         if (removeIds.isEmpty()) return
         val deletingBooks = readerBooks.filter { it.id in removeIds }
-        val deleteResults = deletingBooks.map { book ->
-            deleteBookStorage(
-                context = context,
-                contentResolver = contentResolver,
-                book = book,
-                audiobookFolderUri = addBookFolderUri
-            )
+        Log.d(
+            BOOK_DELETE_LOG_TAG,
+            "deleteSelected count=${removeIds.size} matched=${deletingBooks.size} " +
+                "deleteSourceFiles=$deleteSourceFiles ids=${removeIds.joinToString(separator = ",") { it.take(12) }}"
+        )
+        val deleteResults = if (deleteSourceFiles) {
+            deletingBooks.map { book ->
+                deleteBookStorage(
+                    context = context,
+                    contentResolver = contentResolver,
+                    book = book,
+                    audiobookFolderUri = addBookFolderUri
+                )
+            }
+        } else {
+            emptyList()
+        }
+        val archiveResults = if (deleteSourceFiles) {
+            emptyList()
+        } else {
+            deletingBooks.map { book ->
+                archiveBookStorage(
+                    context = context,
+                    contentResolver = contentResolver,
+                    book = book,
+                    audiobookFolderUri = addBookFolderUri
+                )
+            }
         }
         val folderDeleteFailures = deleteResults.count { it.folderDeleteAttempted && !it.folderDeleteSucceeded }
         val fileDeleteFailures = deleteResults.sumOf { it.fileDeleteFailures }
         val deletedFolders = deleteResults.count { it.folderDeleteSucceeded }
+        val archiveCopyFailures = archiveResults.sumOf { it.fileCopyFailures }
+        val archiveDeleteFailures = archiveResults.sumOf { it.fileDeleteFailures }
+        Log.d(
+            BOOK_DELETE_LOG_TAG,
+            "deleteSelected result folderFailures=$folderDeleteFailures fileFailures=$fileDeleteFailures " +
+                "deletedFolders=$deletedFolders archiveCopyFailures=$archiveCopyFailures " +
+                "archiveDeleteFailures=$archiveDeleteFailures"
+        )
         val remaining = readerBooks.filterNot { it.id in removeIds }
         readerBooks = remaining
         if (selectedBookId in removeIds) {
@@ -1256,7 +1413,18 @@ private fun ReaderSyncScreen() {
         }
         persistImportState()
         clearBookSelection()
-        exportStatus = if (folderDeleteFailures == 0 && fileDeleteFailures == 0) {
+        exportStatus = if (!deleteSourceFiles) {
+            if (archiveCopyFailures == 0 && archiveDeleteFailures == 0) {
+                context.getString(R.string.status_books_archived_sources, removeIds.size)
+            } else {
+                context.getString(
+                    R.string.status_books_archived_with_failures,
+                    removeIds.size,
+                    archiveCopyFailures,
+                    archiveDeleteFailures
+                )
+            }
+        } else if (folderDeleteFailures == 0 && fileDeleteFailures == 0) {
             if (deletedFolders > 0) {
                 context.getString(R.string.status_books_deleted_with_folder, removeIds.size)
             } else {
@@ -1275,12 +1443,8 @@ private fun ReaderSyncScreen() {
     fun requestDeleteSelectedBooks() {
         val removeIds = selectedBookIds.toSet()
         if (removeIds.isEmpty()) return
-        if (skipDeleteBookConfirm) {
-            deleteSelectedBooks(removeIds)
-            return
-        }
         pendingDeleteBookIds = removeIds
-        deleteBooksDontAskAgain = false
+        deleteBooksDeleteSourceFiles = false
         deleteBooksConfirmVisible = true
     }
 
@@ -1304,16 +1468,26 @@ private fun ReaderSyncScreen() {
             return
         }
         val pickedAudio = addBookAudioUri
-        if (pickedAudio == null) {
+        val pickedEbook = addBookEbookUri
+        val ebookOnlyImport = loadEbookOnlyImportEnabled(context)
+        if (pickedAudio == null && !(ebookOnlyImport && pickedEbook != null)) {
             exportStatus = context.getString(R.string.status_pick_audio_first)
             return
         }
         val pickedSrt = addBookSrtUri
         val pickedAudioName = addBookAudioName
         val pickedSrtName = addBookSrtName
-        val pickedEbook = addBookEbookUri
         val pickedEbookName = addBookEbookName
         val pickedEbookFormat = addBookEbookFormat
+        val deleteSourceFilesForAutoMove = !keepSourceFilesWhenAutoMove
+        Log.d(
+            BOOK_IMPORT_MOVE_LOG_TAG,
+            "confirm autoMove=$shouldAutoMove deleteSourceFiles=$deleteSourceFilesForAutoMove " +
+                "ebookOnly=$ebookOnlyImport " +
+                "root=${selectedFolder?.toString()?.take(96)} " +
+                "audio=${pickedAudio?.toString()?.take(96)} srt=${pickedSrt?.toString()?.take(96)} " +
+                "ebook=${pickedEbook?.toString()?.take(96)}"
+        )
         scope.launch {
             srtLoading = true
             srtError = null
@@ -1329,7 +1503,8 @@ private fun ReaderSyncScreen() {
                             srtSourceUri = pickedSrt,
                             srtSourceName = pickedSrtName,
                             ebookSourceUri = pickedEbook,
-                            ebookSourceName = pickedEbookName
+                            ebookSourceName = pickedEbookName,
+                            deleteSourceFiles = deleteSourceFilesForAutoMove
                         )
                         val book = buildReaderBook(
                             audio = relocated.audioUri,
@@ -1372,6 +1547,10 @@ private fun ReaderSyncScreen() {
                     if (!folderName.isNullOrBlank()) {
                         append(' ')
                         append(context.getString(R.string.status_book_saved_to, folderName))
+                        if (keepSourceFilesWhenAutoMove) {
+                            append(' ')
+                            append(context.getString(R.string.status_book_keep_original))
+                        }
                     } else {
                         append(' ')
                         append(context.getString(R.string.status_book_keep_original))
@@ -1399,8 +1578,24 @@ private fun ReaderSyncScreen() {
             .associate { it.id to it.title.trim() }
             .filterValues { it.isNotBlank() }
         val persistedTitleByAudioUri = persistedState.books
-            .associate { it.audioUri to it.title.trim() }
+            .mapNotNull { book -> book.audioUri?.let { it to book.title.trim() } }
+            .toMap()
             .filterValues { it.isNotBlank() }
+        val persistedFocusById = persistedState.books
+            .mapNotNull { book ->
+                book.coverFocus
+                    ?.let { focus -> runCatching { HomeCoverCropFocus.valueOf(focus) }.getOrNull() }
+                    ?.let { focus -> book.id to focus }
+            }
+            .toMap()
+        val persistedFocusByAudioUri = persistedState.books
+            .mapNotNull { book ->
+                val audio = book.audioUri ?: return@mapNotNull null
+                book.coverFocus
+                    ?.let { focus -> runCatching { HomeCoverCropFocus.valueOf(focus) }.getOrNull() }
+                    ?.let { focus -> audio to focus }
+            }
+            .toMap()
         val previousSelectedId = selectedBookId
         scope.launch {
             srtLoading = true
@@ -1410,7 +1605,8 @@ private fun ReaderSyncScreen() {
                     val scanResult = scanBooksFromRootFolder(
                         context = context,
                         contentResolver = contentResolver,
-                        rootFolderUri = selectedFolder
+                        rootFolderUri = selectedFolder,
+                        includeEbookOnly = loadEbookOnlyImportEnabled(context)
                     )
                     val refreshedBooks = mutableListOf<ReaderBook>()
                     scanResult.books.forEach { candidate ->
@@ -1425,12 +1621,16 @@ private fun ReaderSyncScreen() {
                                 ebookFormat = candidate.ebookFormat
                             )
                             val persistedTitle = persistedTitleById[rebuilt.id]
-                                ?: persistedTitleByAudioUri[rebuilt.audioUri.toString()]
-                            if (!persistedTitle.isNullOrBlank()) {
+                                ?: rebuilt.audioUri?.toString()?.let { persistedTitleByAudioUri[it] }
+                            val persistedFocus = persistedFocusById[rebuilt.id]
+                                ?: rebuilt.audioUri?.toString()?.let { persistedFocusByAudioUri[it] }
+                                ?: HomeCoverCropFocus.CENTER
+                            val titled = if (!persistedTitle.isNullOrBlank()) {
                                 rebuilt.copy(title = persistedTitle)
                             } else {
                                 rebuilt
                             }
+                            titled.copy(coverFocus = persistedFocus)
                         }.onSuccess { refreshedBooks += it }
                     }
                     refreshedBooks to scanResult.skippedFolders
@@ -1577,12 +1777,17 @@ private fun ReaderSyncScreen() {
             }
         ebookFeatureEnabled = loadEbookFeatureEnabled(context)
         autoMoveToAudiobookFolder = persisted.autoMoveToAudiobookFolder
+        keepSourceFilesWhenAutoMove = persisted.keepSourceFilesWhenAutoMove
         importOnboardingCompleted = persisted.importOnboardingCompleted
         importGuideVisible = !persisted.importOnboardingCompleted
         persistedImportsLoaded = true
         homeLibraryView = when (persisted.homeLibraryView.uppercase(Locale.ROOT)) {
             HomeLibraryView.LIST.name -> HomeLibraryView.LIST
             else -> HomeLibraryView.BOOKSHELF
+        }
+        homeCoverAspect = when (persisted.homeCoverAspect.uppercase(Locale.ROOT)) {
+            HomeCoverAspect.SQUARE.name -> HomeCoverAspect.SQUARE
+            else -> HomeCoverAspect.BOOK
         }
 
         if (persisted.books.isNotEmpty()) {
@@ -1593,11 +1798,11 @@ private fun ReaderSyncScreen() {
                     val restoredBooks = mutableListOf<ReaderBook>()
                     val failedBooks = mutableListOf<String>()
                     persisted.books.forEach { savedBook ->
-                        val audio = runCatching { Uri.parse(savedBook.audioUri) }.getOrNull()
+                        val audio = savedBook.audioUri?.let { raw -> runCatching { Uri.parse(raw) }.getOrNull() }
                         val srt = savedBook.srtUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
                         val ebook = savedBook.ebookUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
-                        if (audio == null) {
-                            failedBooks += savedBook.title.ifBlank { savedBook.audioName }
+                        if (audio == null && ebook == null) {
+                            failedBooks += savedBook.title.ifBlank { savedBook.audioName ?: savedBook.ebookName.orEmpty() }
                             return@forEach
                         }
                         runCatching {
@@ -1610,15 +1815,20 @@ private fun ReaderSyncScreen() {
                                 ebookDisplayName = savedBook.ebookName,
                                 ebookFormat = savedBook.ebookFormat
                             )
+                            val coverFocus = when (savedBook.coverFocus?.uppercase(Locale.ROOT)) {
+                                HomeCoverCropFocus.START.name -> HomeCoverCropFocus.START
+                                else -> HomeCoverCropFocus.CENTER
+                            }
                             val persistedTitle = savedBook.title.trim()
-                            if (persistedTitle.isNotBlank()) {
+                            val restored = if (persistedTitle.isNotBlank()) {
                                 rebuilt.copy(title = persistedTitle)
                             } else {
                                 rebuilt
                             }
+                            restored.copy(coverFocus = coverFocus)
                         }.onSuccess { restoredBooks += it }
                             .onFailure {
-                                failedBooks += savedBook.title.ifBlank { savedBook.audioName }
+                                failedBooks += savedBook.title.ifBlank { savedBook.audioName ?: savedBook.ebookName.orEmpty() }
                             }
                     }
                     restoredBooks to failedBooks
@@ -1770,6 +1980,7 @@ private fun ReaderSyncScreen() {
     fun currentStatisticsBookKey(): String? {
         val selected = selectedBookId?.let { id -> readerBooks.firstOrNull { it.id == id } }
             ?: readerBooks.firstOrNull()
+        if (selected?.audioUri == null) return null
         return selected?.let { buildReaderBookPlaybackKey(it) }
     }
 
@@ -2188,7 +2399,7 @@ private fun ReaderSyncScreen() {
 
     val pickBookEbookLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        if (addBookAudioUri == null || addBookSrtUri == null) {
+        if (!loadEbookOnlyImportEnabled(context) && (addBookAudioUri == null || addBookSrtUri == null)) {
             exportStatus = context.getString(R.string.status_pick_audio_srt_before_ebook)
             return@rememberLauncherForActivityResult
         }
@@ -2370,32 +2581,92 @@ private fun ReaderSyncScreen() {
                             }
                         }
                         if (!isBookSelectionMode) {
+                            if (homeCoverAspect == HomeCoverAspect.BOOK) {
+                                OutlinedButton(
+                                    onClick = { homeCoverFocusEditMode = !homeCoverFocusEditMode },
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = if (homeCoverFocusEditMode) {
+                                            MaterialTheme.colorScheme.primaryContainer
+                                        } else {
+                                            Color.Transparent
+                                        }
+                                    )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Crop,
+                                        contentDescription = "Crop",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
                             OutlinedButton(
-                                onClick = { enterBookSelectionMode() }
+                                onClick = {
+                                    homeCoverFocusEditMode = false
+                                    enterBookSelectionMode()
+                                }
                             ) {
                                 Icon(
                                     imageVector = Icons.Outlined.Checklist,
                                     contentDescription = stringResource(R.string.home_selected)
                                 )
                             }
-                            OutlinedButton(
-                                onClick = {
-                                    val nextView = if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
-                                        HomeLibraryView.LIST
-                                    } else {
-                                        HomeLibraryView.BOOKSHELF
-                                    }
-                                    homeLibraryView = nextView
-                                    persistHomeLibraryView(nextView)
+                            Box {
+                                OutlinedButton(
+                                    onClick = { homeDisplayMenuExpanded = true }
+                                ) {
+                                    Text(stringResource(R.string.home_display_menu))
                                 }
-                            ) {
-                                Text(
-                                    if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
-                                        stringResource(R.string.home_switch_to_list)
-                                    } else {
-                                        stringResource(R.string.home_switch_to_shelf)
-                                    }
-                                )
+                                DropdownMenu(
+                                    expanded = homeDisplayMenuExpanded,
+                                    onDismissRequest = { homeDisplayMenuExpanded = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                "${stringResource(R.string.home_display_menu)}：" +
+                                                    if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
+                                                        stringResource(R.string.home_display_bookshelf)
+                                                    } else {
+                                                        stringResource(R.string.home_display_list)
+                                                    }
+                                            )
+                                        },
+                                        onClick = {
+                                            val nextView = if (homeLibraryView == HomeLibraryView.BOOKSHELF) {
+                                                HomeLibraryView.LIST
+                                            } else {
+                                                HomeLibraryView.BOOKSHELF
+                                            }
+                                            homeLibraryView = nextView
+                                            persistHomeDisplaySettings(nextView = nextView)
+                                            homeDisplayMenuExpanded = false
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                if (homeCoverAspect == HomeCoverAspect.BOOK) {
+                                                    stringResource(R.string.home_cover_aspect_book)
+                                                } else {
+                                                    stringResource(R.string.home_cover_aspect_square)
+                                                }
+                                            )
+                                        },
+                                        onClick = {
+                                            val nextAspect = if (homeCoverAspect == HomeCoverAspect.BOOK) {
+                                                HomeCoverAspect.SQUARE
+                                            } else {
+                                                HomeCoverAspect.BOOK
+                                            }
+                                            homeCoverAspect = nextAspect
+                                            persistHomeDisplaySettings(nextAspect = nextAspect)
+                                            if (nextAspect != HomeCoverAspect.BOOK) {
+                                                homeCoverFocusEditMode = false
+                                            }
+                                            homeDisplayMenuExpanded = false
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -2432,6 +2703,8 @@ private fun ReaderSyncScreen() {
                                             onClick = {
                                                 if (isBookSelectionMode) {
                                                     toggleBookSelection(book.id)
+                                                } else if (homeCoverFocusEditMode && homeCoverAspect == HomeCoverAspect.BOOK) {
+                                                    // Cover focus edit mode only reacts to cover taps.
                                                 } else {
                                                     openReaderBook(book, persist = true)
                                                 }
@@ -2449,46 +2722,103 @@ private fun ReaderSyncScreen() {
                                             modifier = Modifier.fillMaxWidth(),
                                             verticalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            Box(
+                                            BoxWithConstraints(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .aspectRatio(1f)
-                                                    .clip(RoundedCornerShape(12.dp))
-                                            ) {
-                                                if (book.coverUri != null) {
-                                                    BookCoverThumbnail(
-                                                        coverUri = book.coverUri,
-                                                        modifier = Modifier.fillMaxSize()
+                                                    .aspectRatio(
+                                                        if (homeCoverAspect == HomeCoverAspect.BOOK) {
+                                                            ReaderBookCoverAspectRatio
+                                                        } else {
+                                                            1f
+                                                        }
                                                     )
-                                                } else {
-                                                    Surface(
-                                                        modifier = Modifier.fillMaxSize(),
-                                                        shape = RoundedCornerShape(10.dp),
-                                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                                                    ) {}
-                                                }
-                                                if (selected) {
-                                                    Surface(
-                                                        modifier = Modifier
-                                                            .align(Alignment.BottomEnd)
-                                                            .padding(6.dp),
-                                                        shape = RoundedCornerShape(8.dp),
-                                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f)
-                                                    ) {
-                                                        Text(
-                                                            text = stringResource(R.string.home_opened),
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                        )
-                                                    }
-                                                }
-                                                BookAttachmentBadges(
-                                                    hasSubtitle = book.srtUri != null,
-                                                    hasEbook = book.ebookUri != null,
+                                            ) {
+                                                val coverSlotWidth = maxWidth
+                                                val canEditCoverFocus =
+                                                    homeCoverFocusEditMode &&
+                                                        homeCoverAspect == HomeCoverAspect.BOOK &&
+                                                        book.coverSource == ReaderBookCoverSource.AUDIO
+                                                Box(
                                                     modifier = Modifier
-                                                        .align(Alignment.BottomStart)
-                                                        .padding(6.dp)
-                                                )
+                                                        .fillMaxSize()
+                                                        .clip(RoundedCornerShape(12.dp))
+                                                        .then(
+                                                            if (canEditCoverFocus) {
+                                                                Modifier.clickable {
+                                                                    toggleBookCoverFocus(book)
+                                                                }
+                                                            } else {
+                                                                Modifier
+                                                            }
+                                                        )
+                                                ) {
+                                                    if (book.coverUri != null) {
+                                                        val squareEbookCover =
+                                                            homeCoverAspect == HomeCoverAspect.SQUARE &&
+                                                                book.coverSource == ReaderBookCoverSource.EBOOK
+                                                        BookCoverThumbnail(
+                                                            coverUri = book.coverUri,
+                                                            modifier = if (squareEbookCover) {
+                                                                Modifier
+                                                                    .width(coverSlotWidth * ReaderBookCoverAspectRatio)
+                                                                    .height(coverSlotWidth)
+                                                                    .align(Alignment.Center)
+                                                                    .clip(RoundedCornerShape(12.dp))
+                                                            } else {
+                                                                Modifier.fillMaxSize()
+                                                            },
+                                                            coverFocus = book.coverFocus,
+                                                            useStartFocus = homeCoverAspect == HomeCoverAspect.BOOK
+                                                        )
+                                                    } else {
+                                                        Surface(
+                                                            modifier = Modifier.fillMaxSize(),
+                                                            shape = RoundedCornerShape(10.dp),
+                                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                                        ) {}
+                                                    }
+                                                    if (canEditCoverFocus) {
+                                                        Surface(
+                                                            modifier = Modifier
+                                                                .align(Alignment.TopEnd)
+                                                                .padding(6.dp),
+                                                            shape = RoundedCornerShape(8.dp),
+                                                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f)
+                                                        ) {
+                                                            Text(
+                                                                text = if (book.coverFocus == HomeCoverCropFocus.START) {
+                                                                    "左"
+                                                                } else {
+                                                                    "中"
+                                                                },
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                    if (selected) {
+                                                        Surface(
+                                                            modifier = Modifier
+                                                                .align(Alignment.BottomEnd)
+                                                                .padding(6.dp),
+                                                            shape = RoundedCornerShape(8.dp),
+                                                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f)
+                                                        ) {
+                                                            Text(
+                                                                text = stringResource(R.string.home_opened),
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                    BookAttachmentBadges(
+                                                        hasSubtitle = book.srtUri != null,
+                                                        hasEbook = book.ebookUri != null,
+                                                        modifier = Modifier
+                                                            .align(Alignment.BottomStart)
+                                                            .padding(6.dp)
+                                                    )
+                                                }
                                             }
                                             Surface(
                                                 modifier = Modifier.fillMaxWidth(),
@@ -2545,6 +2875,10 @@ private fun ReaderSyncScreen() {
                         val multiSelected = selectedBookIds.contains(book.id)
                         val playbackSnapshot = readerBookPlaybackSnapshots[book.id]
                         val playbackPercent = playbackSnapshot?.progressPercent ?: 0
+                        val canEditCoverFocus =
+                            homeCoverFocusEditMode &&
+                                homeCoverAspect == HomeCoverAspect.BOOK &&
+                                book.coverSource == ReaderBookCoverSource.AUDIO
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2552,6 +2886,8 @@ private fun ReaderSyncScreen() {
                                     onClick = {
                                         if (isBookSelectionMode) {
                                             toggleBookSelection(book.id)
+                                        } else if (homeCoverFocusEditMode && homeCoverAspect == HomeCoverAspect.BOOK) {
+                                            // Cover focus edit mode only reacts to cover taps.
                                         } else {
                                             openReaderBook(book, persist = true)
                                         }
@@ -2570,16 +2906,71 @@ private fun ReaderSyncScreen() {
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalAlignment = Alignment.Top
                                 ) {
-                                    if (book.coverUri != null) {
+                                    if (book.coverUri != null || book.isEbookOnly) {
                                         Box(
                                             modifier = Modifier
-                                                .size(92.dp)
+                                                .then(
+                                                    if (homeCoverAspect == HomeCoverAspect.BOOK) {
+                                                        Modifier.width(96.dp).height(96.dp / ReaderBookCoverAspectRatio)
+                                                    } else {
+                                                        Modifier.size(96.dp)
+                                                    }
+                                                )
                                                 .clip(RoundedCornerShape(10.dp))
+                                                .then(
+                                                    if (canEditCoverFocus) {
+                                                        Modifier.clickable {
+                                                            toggleBookCoverFocus(book)
+                                                        }
+                                                    } else {
+                                                        Modifier
+                                                    }
+                                                )
                                         ) {
-                                            BookCoverThumbnail(
-                                                coverUri = book.coverUri,
-                                                modifier = Modifier.fillMaxSize()
-                                            )
+                                            if (book.coverUri != null) {
+                                                val squareEbookCover =
+                                                    homeCoverAspect == HomeCoverAspect.SQUARE &&
+                                                        book.coverSource == ReaderBookCoverSource.EBOOK
+                                                BookCoverThumbnail(
+                                                    coverUri = book.coverUri,
+                                                    modifier = if (squareEbookCover) {
+                                                        Modifier
+                                                            .width(96.dp * ReaderBookCoverAspectRatio)
+                                                            .height(96.dp)
+                                                            .align(Alignment.Center)
+                                                            .clip(RoundedCornerShape(10.dp))
+                                                    } else {
+                                                        Modifier.fillMaxSize()
+                                                    },
+                                                    coverFocus = book.coverFocus,
+                                                    useStartFocus = homeCoverAspect == HomeCoverAspect.BOOK
+                                                )
+                                            } else {
+                                                Surface(
+                                                    modifier = Modifier.fillMaxSize(),
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                                ) {}
+                                            }
+                                            if (canEditCoverFocus) {
+                                                Surface(
+                                                    modifier = Modifier
+                                                        .align(Alignment.TopEnd)
+                                                        .padding(4.dp),
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f)
+                                                ) {
+                                                    Text(
+                                                        text = if (book.coverFocus == HomeCoverCropFocus.START) {
+                                                            "左"
+                                                        } else {
+                                                            "中"
+                                                        },
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                            }
                                             if (!isBookSelectionMode && selected) {
                                                 Surface(
                                                     modifier = Modifier
@@ -3026,12 +3417,14 @@ private fun ReaderSyncScreen() {
             ImportGuideDialog(
                 onKeepOriginal = {
                     autoMoveToAudiobookFolder = false
+                    keepSourceFilesWhenAutoMove = false
                     importOnboardingCompleted = true
                     importGuideVisible = false
                     persistImportState()
                 },
                 onAutoMove = {
                     autoMoveToAudiobookFolder = true
+                    keepSourceFilesWhenAutoMove = false
                     importOnboardingCompleted = true
                     importGuideVisible = false
                     persistImportState()
@@ -3076,21 +3469,19 @@ private fun ReaderSyncScreen() {
 
         if (deleteBooksConfirmVisible) {
             DeleteBooksConfirmDialog(
-                deleteBooksDontAskAgain = deleteBooksDontAskAgain,
-                onDontAskAgainChange = { checked -> deleteBooksDontAskAgain = checked },
+                deleteSourceFiles = deleteBooksDeleteSourceFiles,
+                onDeleteSourceFilesChange = { checked -> deleteBooksDeleteSourceFiles = checked },
                 onDismiss = {
                     deleteBooksConfirmVisible = false
                     pendingDeleteBookIds = emptySet()
                 },
                 onConfirm = {
-                    if (deleteBooksDontAskAgain) {
-                        skipDeleteBookConfirm = true
-                        saveSkipDeleteBookConfirm(context, true)
-                    }
                     val removeIds = pendingDeleteBookIds
+                    val deleteSourceFiles = deleteBooksDeleteSourceFiles
                     deleteBooksConfirmVisible = false
                     pendingDeleteBookIds = emptySet()
-                    deleteSelectedBooks(removeIds)
+                    deleteBooksDeleteSourceFiles = false
+                    deleteSelectedBooks(removeIds, deleteSourceFiles = deleteSourceFiles)
                 }
             )
         }
@@ -3103,9 +3494,15 @@ private fun ReaderSyncScreen() {
                 audioUri = addBookAudioUri,
                 srtName = addBookSrtName,
                 ebookEnabled = ebookFeatureEnabled,
+                ebookOnlyImportEnabled = loadEbookOnlyImportEnabled(context),
                 ebookName = addBookEbookName,
                 ebookUri = addBookEbookUri,
                 autoMoveToAudiobookFolder = autoMoveToAudiobookFolder,
+                deleteSourceFilesWhenAutoMove = !keepSourceFilesWhenAutoMove,
+                onDeleteSourceFilesWhenAutoMoveChange = { checked ->
+                    keepSourceFilesWhenAutoMove = !checked
+                    persistImportState()
+                },
                 srtLoading = srtLoading,
                 onPickFolder = { pickBookFolderLauncher.launch(null) },
                 onClearFolderSelection = {
@@ -3456,7 +3853,9 @@ private fun buildDiagnosticsReport(context: Context): String {
         appendLine("ImportedBooks=${persistedImports.books.size}")
         appendLine("ImportedDictionaries=${persistedImports.dictionaries.size}")
         appendLine("AutoMoveToAudiobookFolder=${persistedImports.autoMoveToAudiobookFolder}")
+        appendLine("DeleteSourceFilesWhenAutoMove=${!persistedImports.keepSourceFilesWhenAutoMove}")
         appendLine("HomeLibraryView=${persistedImports.homeLibraryView}")
+        appendLine("HomeCoverAspect=${persistedImports.homeCoverAspect}")
         appendLine("FloatingOverlayEnabled=${audiobookSettings.floatingOverlayEnabled}")
         appendLine("FloatingOverlaySubtitleEnabled=${audiobookSettings.floatingOverlaySubtitleEnabled}")
         appendLine("FloatingOverlaySubtitleY=${audiobookSettings.floatingOverlaySubtitleY}")
@@ -3503,33 +3902,30 @@ private fun buildReaderPlaybackDiagnostics(
             "Book=${persistedBook.title.ifBlank { persistedBook.audioName }} source=invalid-audio-uri"
         } else {
             val candidates = loadReaderBookPlaybackSnapshotCandidates(context, readerBook)
-            val best = candidates.maxWithOrNull(
-                compareBy<ReaderBookPlaybackSnapshotCandidate> { it.snapshot.updatedAtMs }
-                    .thenBy { if (it.source == "shared") 1 else 0 }
-            )
-            val candidateSummary = candidates.joinToString(separator = ",") { candidate ->
-                "${candidate.source}:${candidate.snapshot.positionMs}/${candidate.snapshot.durationMs}@${candidate.snapshot.updatedAtMs}"
-            }.ifBlank { "none" }
-            "Book=${readerBook.title.ifBlank { readerBook.audioName }.take(48)} " +
+            val best = selectBestReaderBookPlaybackSnapshotCandidate(candidates)
+            val suspiciousZeroShared = hasSuspiciousZeroSharedPlaybackCandidate(candidates, best)
+            val candidateSummary = formatReaderBookPlaybackCandidates(candidates)
+            "Book=${readerBook.title.ifBlank { readerBook.audioName ?: readerBook.ebookName.orEmpty() }.take(48)} " +
                 "bestSource=${best?.source ?: "none"} " +
                 "bestPositionMs=${best?.snapshot?.positionMs ?: 0L} " +
                 "bestDurationMs=${best?.snapshot?.durationMs ?: 0L} " +
+                "suspiciousZeroShared=$suspiciousZeroShared " +
                 "candidates=$candidateSummary"
         }
     }
 }
 
 private fun PersistedReaderBook.toReaderBookOrNull(): ReaderBook? {
-    val parsedAudioUri = audioUri.trim().takeIf { it.isNotBlank() }
+    val parsedAudioUri = audioUri?.trim()?.takeIf { it.isNotBlank() }
         ?.let { runCatching { Uri.parse(it) }.getOrNull() }
-        ?: return null
     val parsedSrtUri = srtUri?.trim()?.takeIf { it.isNotBlank() }
         ?.let { runCatching { Uri.parse(it) }.getOrNull() }
     val parsedEbookUri = ebookUri?.trim()?.takeIf { it.isNotBlank() }
         ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+    if (parsedAudioUri == null && parsedEbookUri == null) return null
     return ReaderBook(
         id = id,
-        title = title,
+        title = title.ifBlank { audioName?.let { buildBookTitle(it, srtName) } ?: buildEbookTitle(ebookName) },
         audioUri = parsedAudioUri,
         audioName = audioName,
         srtUri = parsedSrtUri,
@@ -3537,8 +3933,25 @@ private fun PersistedReaderBook.toReaderBookOrNull(): ReaderBook? {
         ebookUri = parsedEbookUri,
         ebookName = ebookName,
         ebookFormat = ebookFormat,
-        coverUri = null
+        coverUri = null,
+        coverSource = if (parsedAudioUri == null && parsedEbookUri != null) ReaderBookCoverSource.EBOOK else null,
+        coverFocus = when (coverFocus?.uppercase(Locale.ROOT)) {
+            HomeCoverCropFocus.START.name -> HomeCoverCropFocus.START
+            else -> HomeCoverCropFocus.CENTER
+        }
     )
+}
+
+private fun persistedBookImportKey(book: PersistedReaderBook): String {
+    return book.audioUri?.takeIf { it.isNotBlank() }
+        ?: book.ebookUri?.takeIf { it.isNotBlank() }
+        ?: book.id
+}
+
+private fun readerBookImportKey(book: ReaderBook): String {
+    return book.audioUri?.toString()?.takeIf { it.isNotBlank() }
+        ?: book.ebookUri?.toString()?.takeIf { it.isNotBlank() }
+        ?: book.id
 }
 
 private fun loadRecentProcessLogs(maxLines: Int = 200): String {
@@ -3561,7 +3974,10 @@ private fun extractRecentReaderLogs(recentLogs: String): String {
     val interestingTags = listOf(
         "BookReaderBack",
         "BookReaderSeek",
+        "BookDelete",
+        "BookImportMove",
         "MainReaderRestore",
+        "ReaderPlaybackDiagnostic",
         "LegadoAudioProgress",
         "LegadoMatch",
         "ReaderPausedSeek",
@@ -3640,7 +4056,9 @@ private fun BookAttachmentBadge(
 @Composable
 private fun BookCoverThumbnail(
     coverUri: Uri,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    coverFocus: HomeCoverCropFocus = HomeCoverCropFocus.CENTER,
+    useStartFocus: Boolean = false
 ) {
     AndroidView(
         modifier = modifier,
@@ -3650,9 +4068,36 @@ private fun BookCoverThumbnail(
             }
         },
         update = { view ->
+            view.scaleType = when {
+                useStartFocus && coverFocus == HomeCoverCropFocus.START -> ImageView.ScaleType.MATRIX
+                else -> ImageView.ScaleType.CENTER_CROP
+            }
             view.setImageURI(coverUri)
+            if (useStartFocus && coverFocus == HomeCoverCropFocus.START) {
+                view.post { applyStartCrop(view) }
+            } else if (!useStartFocus) {
+                view.imageMatrix = null
+            }
         }
     )
+}
+
+private fun applyStartCrop(view: ImageView) {
+    val drawable = view.drawable ?: return
+    val drawableWidth = drawable.intrinsicWidth.takeIf { it > 0 } ?: return
+    val drawableHeight = drawable.intrinsicHeight.takeIf { it > 0 } ?: return
+    val viewWidth = view.width.takeIf { it > 0 } ?: return
+    val viewHeight = view.height.takeIf { it > 0 } ?: return
+    val scale = maxOf(
+        viewWidth.toFloat() / drawableWidth.toFloat(),
+        viewHeight.toFloat() / drawableHeight.toFloat()
+    )
+    val scaledHeight = drawableHeight * scale
+    val dy = (viewHeight - scaledHeight) * 0.5f
+    view.imageMatrix = Matrix().apply {
+        setScale(scale, scale)
+        postTranslate(0f, dy)
+    }
 }
 
 private fun resolveEmbeddedCoverUriForM4b(
@@ -3900,8 +4345,8 @@ private fun openBookInputStream(contentResolver: ContentResolver, uri: Uri): Inp
 
 private data class RelocatedBookFiles(
     val folderName: String,
-    val audioUri: Uri,
-    val audioName: String,
+    val audioUri: Uri?,
+    val audioName: String?,
     val srtUri: Uri?,
     val srtName: String?,
     val ebookUri: Uri?,
@@ -3916,8 +4361,8 @@ private data class CopiedBookFile(
 
 private data class FolderBookCandidate(
     val folderName: String,
-    val audioUri: Uri,
-    val audioName: String,
+    val audioUri: Uri?,
+    val audioName: String?,
     val srtUri: Uri?,
     val srtName: String?,
     val ebookUri: Uri?,
@@ -3934,28 +4379,46 @@ private fun relocateSelectedBookFilesToAudFolder(
     context: Context,
     contentResolver: ContentResolver,
     rootFolderUri: Uri,
-    audioSourceUri: Uri,
+    audioSourceUri: Uri?,
     audioSourceName: String?,
     srtSourceUri: Uri?,
     srtSourceName: String?,
     ebookSourceUri: Uri?,
-    ebookSourceName: String?
+    ebookSourceName: String?,
+    deleteSourceFiles: Boolean
 ): RelocatedBookFiles {
     val root = DocumentFile.fromTreeUri(context, rootFolderUri)
         ?: error(context.getString(R.string.error_audiobook_folder_inaccessible))
     if (!root.isDirectory) error(context.getString(R.string.error_audiobook_folder_not_directory))
 
     val audFolder = createNextAudFolder(context, root)
-    val audioDisplayName = audioSourceName?.trim().takeUnless { it.isNullOrBlank() }
-        ?: queryDisplayName(contentResolver, audioSourceUri)
-
-    val copiedAudio = copyUriIntoFolder(
-        context = context,
-        contentResolver = contentResolver,
-        parentFolder = audFolder,
-        sourceUri = audioSourceUri,
-        preferredDisplayName = audioDisplayName
+    Log.d(
+        BOOK_IMPORT_MOVE_LOG_TAG,
+        "relocate start deleteSourceFiles=$deleteSourceFiles root=${rootFolderUri.toString().take(96)} " +
+            "targetFolder=${audFolder.name} " +
+            "audioName=$audioSourceName srtName=$srtSourceName ebookName=$ebookSourceName"
     )
+    val audioDisplayName = audioSourceUri?.let { sourceUri ->
+        audioSourceName?.trim().takeUnless { it.isNullOrBlank() }
+            ?: queryDisplayName(contentResolver, sourceUri)
+    }
+
+    val copiedAudio = audioSourceUri?.let { sourceUri ->
+        copyUriIntoFolder(
+            context = context,
+            contentResolver = contentResolver,
+            parentFolder = audFolder,
+            sourceUri = sourceUri,
+            preferredDisplayName = audioDisplayName.orEmpty()
+        )
+    }
+    if (audioSourceUri != null) {
+        Log.d(
+            BOOK_IMPORT_MOVE_LOG_TAG,
+            "copy audio source=${audioSourceUri.toString().take(96)} target=${copiedAudio?.uri?.toString()?.take(96)} " +
+                "name=${copiedAudio?.displayName}"
+        )
+    }
     val copiedSrt = srtSourceUri?.let { sourceUri ->
         val srtDisplayName = srtSourceName?.trim().takeUnless { it.isNullOrBlank() }
             ?: queryDisplayName(contentResolver, sourceUri)
@@ -3965,6 +4428,13 @@ private fun relocateSelectedBookFilesToAudFolder(
             parentFolder = audFolder,
             sourceUri = sourceUri,
             preferredDisplayName = srtDisplayName
+        )
+    }
+    if (srtSourceUri != null) {
+        Log.d(
+            BOOK_IMPORT_MOVE_LOG_TAG,
+            "copy srt source=${srtSourceUri.toString().take(96)} target=${copiedSrt?.uri?.toString()?.take(96)} " +
+                "name=${copiedSrt?.displayName}"
         )
     }
     val copiedEbook = ebookSourceUri?.let { sourceUri ->
@@ -3978,22 +4448,49 @@ private fun relocateSelectedBookFilesToAudFolder(
             preferredDisplayName = ebookDisplayName
         )
     }
+    if (ebookSourceUri != null) {
+        Log.d(
+            BOOK_IMPORT_MOVE_LOG_TAG,
+            "copy ebook source=${ebookSourceUri.toString().take(96)} target=${copiedEbook?.uri?.toString()?.take(96)} " +
+                "name=${copiedEbook?.displayName}"
+        )
+    }
 
     val warnings = mutableListOf<String>()
-    if (!deleteSourceUri(context, contentResolver, audioSourceUri)) {
-        warnings += context.getString(R.string.error_audio_delete_failed)
-    }
-    if (srtSourceUri != null && !deleteSourceUri(context, contentResolver, srtSourceUri)) {
-        warnings += context.getString(R.string.error_srt_delete_failed)
-    }
-    if (ebookSourceUri != null && !deleteSourceUri(context, contentResolver, ebookSourceUri)) {
-        warnings += context.getString(R.string.error_ebook_delete_failed)
+    if (deleteSourceFiles) {
+        audioSourceUri?.let { uri ->
+            val deleted = deleteSourceUri(context, contentResolver, uri)
+            Log.d(BOOK_IMPORT_MOVE_LOG_TAG, "delete audio source=${uri.toString().take(96)} success=$deleted")
+            if (!deleted) {
+                warnings += context.getString(R.string.error_audio_delete_failed)
+            }
+        }
+        srtSourceUri?.let { uri ->
+            val deleted = deleteSourceUri(context, contentResolver, uri)
+            Log.d(BOOK_IMPORT_MOVE_LOG_TAG, "delete srt source=${uri.toString().take(96)} success=$deleted")
+            if (!deleted) {
+                warnings += context.getString(R.string.error_srt_delete_failed)
+            }
+        }
+        ebookSourceUri?.let { uri ->
+            val deleted = deleteSourceUri(context, contentResolver, uri)
+            Log.d(BOOK_IMPORT_MOVE_LOG_TAG, "delete ebook source=${uri.toString().take(96)} success=$deleted")
+            if (!deleted) {
+                warnings += context.getString(R.string.error_ebook_delete_failed)
+            }
+        }
+    } else {
+        Log.d(
+            BOOK_IMPORT_MOVE_LOG_TAG,
+            "keep original sources audio=${audioSourceUri?.toString()?.take(96)} " +
+                "srt=${srtSourceUri?.toString()?.take(96)} ebook=${ebookSourceUri?.toString()?.take(96)}"
+        )
     }
 
     return RelocatedBookFiles(
         folderName = audFolder.name?.ifBlank { "Aud" } ?: "Aud",
-        audioUri = copiedAudio.uri,
-        audioName = copiedAudio.displayName,
+        audioUri = copiedAudio?.uri,
+        audioName = copiedAudio?.displayName,
         srtUri = copiedSrt?.uri,
         srtName = copiedSrt?.displayName,
         ebookUri = copiedEbook?.uri,
@@ -4023,6 +4520,33 @@ private fun createNextAudFolder(context: Context, rootFolder: DocumentFile): Doc
         next += 1
     }
     error(context.getString(R.string.error_create_aud_folder_failed))
+}
+
+private fun ensureChildDirectory(context: Context, parentFolder: DocumentFile, name: String): DocumentFile {
+    parentFolder.findFile(name)?.let { existing ->
+        if (existing.isDirectory) return existing
+        error(context.getString(R.string.error_create_folder_failed, name))
+    }
+    return parentFolder.createDirectory(name) ?: error(context.getString(R.string.error_create_folder_failed, name))
+}
+
+private fun createUniqueChildDirectory(context: Context, parentFolder: DocumentFile, preferredName: String): DocumentFile {
+    val uniqueName = resolveUniqueDirectoryName(parentFolder, preferredName)
+    return parentFolder.createDirectory(uniqueName)
+        ?: error(context.getString(R.string.error_create_folder_failed, uniqueName))
+}
+
+private fun resolveUniqueDirectoryName(folder: DocumentFile, originalName: String): String {
+    val cleaned = originalName.trim().ifBlank { "folder" }
+    if (folder.findFile(cleaned) == null) return cleaned
+
+    var index = 2
+    while (index <= 9999) {
+        val candidate = "$cleaned ($index)"
+        if (folder.findFile(candidate) == null) return candidate
+        index += 1
+    }
+    return "$cleaned-${System.currentTimeMillis()}"
 }
 
 private fun copyUriIntoFolder(
@@ -4074,7 +4598,8 @@ private fun resolveUniqueDocumentName(folder: DocumentFile, originalName: String
 private fun scanBooksFromRootFolder(
     context: Context,
     contentResolver: ContentResolver,
-    rootFolderUri: Uri
+    rootFolderUri: Uri,
+    includeEbookOnly: Boolean = false
 ): FolderBookScanResult {
     val root = DocumentFile.fromTreeUri(context, rootFolderUri)
         ?: error(context.getString(R.string.error_audiobook_folder_inaccessible))
@@ -4085,6 +4610,7 @@ private fun scanBooksFromRootFolder(
 
     root.listFiles()
         .filter { it.isDirectory }
+        .filterNot { folder -> folder.name?.trim().orEmpty().equals(BOOK_SOURCES_FOLDER_NAME, ignoreCase = true) }
         .sortedBy { it.name?.lowercase(Locale.ROOT) ?: it.uri.toString() }
         .forEach { folder ->
             val folderName = folder.name?.trim().takeUnless { it.isNullOrBlank() }
@@ -4096,13 +4622,13 @@ private fun scanBooksFromRootFolder(
             val audioFile = files.firstOrNull { isAudioDocumentFile(it) }
             val srtFile = files.firstOrNull { isSrtDocumentFile(it) }
             val ebookFile = files.firstOrNull { isEbookDocumentFile(it) }
-            if (audioFile == null) {
+            if (audioFile == null && !(includeEbookOnly && ebookFile != null)) {
                 skippedFolders += folderName
                 return@forEach
             }
 
-            val audioName = audioFile.name?.trim().takeUnless { it.isNullOrBlank() }
-                ?: queryDisplayName(contentResolver, audioFile.uri)
+            val audioName = audioFile?.name?.trim()?.takeUnless { it.isBlank() }
+                ?: audioFile?.let { queryDisplayName(contentResolver, it.uri) }
             val srtName = srtFile?.name?.trim()?.takeUnless { it.isNullOrBlank() }
                 ?: srtFile?.let { queryDisplayName(contentResolver, it.uri) }
             val ebookName = ebookFile?.name?.trim()?.takeUnless { it.isNullOrBlank() }
@@ -4111,7 +4637,7 @@ private fun scanBooksFromRootFolder(
 
             books += FolderBookCandidate(
                 folderName = folderName,
-                audioUri = audioFile.uri,
+                audioUri = audioFile?.uri,
                 audioName = audioName,
                 srtUri = srtFile?.uri,
                 srtName = srtName,
@@ -4210,20 +4736,144 @@ private data class DeleteBookStorageResult(
     val fileDeleteFailures: Int
 )
 
+private data class ArchiveBookStorageResult(
+    val fileCopyFailures: Int,
+    val fileDeleteFailures: Int
+)
+
+private data class BookArchiveFile(
+    val kind: String,
+    val uri: Uri,
+    val displayName: String?
+)
+
+private fun archiveBookStorage(
+    context: Context,
+    contentResolver: ContentResolver,
+    book: ReaderBook,
+    audiobookFolderUri: Uri?
+): ArchiveBookStorageResult {
+    val rootUri = audiobookFolderUri ?: run {
+        Log.d(BOOK_DELETE_LOG_TAG, "archiveStorage skipped reason=no-root title=${book.title.take(48)}")
+        return ArchiveBookStorageResult(fileCopyFailures = 1, fileDeleteFailures = 0)
+    }
+    val root = DocumentFile.fromTreeUri(context, rootUri) ?: run {
+        Log.d(BOOK_DELETE_LOG_TAG, "archiveStorage skipped reason=root-inaccessible root=${rootUri.toString().take(96)}")
+        return ArchiveBookStorageResult(fileCopyFailures = 1, fileDeleteFailures = 0)
+    }
+    val sourcesRoot = runCatching {
+        ensureChildDirectory(context, root, BOOK_SOURCES_FOLDER_NAME)
+    }.getOrElse { error ->
+        Log.d(BOOK_DELETE_LOG_TAG, "archiveStorage skipped reason=sources-create-failed error=${error.message}")
+        return ArchiveBookStorageResult(fileCopyFailures = 1, fileDeleteFailures = 0)
+    }
+    val primaryFileUri = book.audioUri ?: book.ebookUri
+    val archiveFolderName = importedBookFolderNameFromUri(context, primaryFileUri)
+        ?: book.title.trim().ifBlank { book.audioName ?: book.ebookName ?: "Book" }
+    val archiveFolder = runCatching {
+        createUniqueChildDirectory(context, sourcesRoot, archiveFolderName)
+    }.getOrElse { error ->
+        Log.d(BOOK_DELETE_LOG_TAG, "archiveStorage skipped reason=archive-folder-create-failed error=${error.message}")
+        return ArchiveBookStorageResult(fileCopyFailures = 1, fileDeleteFailures = 0)
+    }
+    val files = buildList {
+        book.audioUri?.let { add(BookArchiveFile("audio", it, book.audioName)) }
+        book.srtUri?.let { add(BookArchiveFile("srt", it, book.srtName)) }
+        book.ebookUri?.let { add(BookArchiveFile("ebook", it, book.ebookName)) }
+    }.distinctBy { it.uri.toString() }
+    Log.d(
+        BOOK_DELETE_LOG_TAG,
+        "archiveStorage start title=${book.title.take(48)} target=$BOOK_SOURCES_FOLDER_NAME/${archiveFolder.name} " +
+            "files=${files.joinToString(separator = ",") { it.kind }}"
+    )
+
+    val copiedFiles = mutableListOf<BookArchiveFile>()
+    var copyFailures = 0
+    files.forEach { file ->
+        val displayName = file.displayName?.trim().takeUnless { it.isNullOrBlank() }
+            ?: queryDisplayName(contentResolver, file.uri)
+        val copied = runCatching {
+            copyUriIntoFolder(
+                context = context,
+                contentResolver = contentResolver,
+                parentFolder = archiveFolder,
+                sourceUri = file.uri,
+                preferredDisplayName = displayName
+            )
+        }.onSuccess { copiedFile ->
+            copiedFiles += file
+            Log.d(
+                BOOK_DELETE_LOG_TAG,
+                "archiveStorage copy ${file.kind} source=${file.uri.toString().take(96)} " +
+                    "target=${copiedFile.uri.toString().take(96)} name=${copiedFile.displayName}"
+            )
+        }.onFailure { error ->
+            copyFailures += 1
+            Log.d(
+                BOOK_DELETE_LOG_TAG,
+                "archiveStorage copyFailed ${file.kind} source=${file.uri.toString().take(96)} error=${error.message}"
+            )
+        }
+        copied.getOrNull()
+    }
+    if (copyFailures > 0) {
+        return ArchiveBookStorageResult(fileCopyFailures = copyFailures, fileDeleteFailures = 0)
+    }
+
+    val isInsideAudiobookFolder = isUriInsideAudiobookFolder(
+        context = context,
+        fileUri = primaryFileUri,
+        audiobookFolderUri = rootUri
+    )
+    if (isInsideAudiobookFolder && primaryFileUri != null) {
+        val folderDeleted = deleteAudParentFolder(context, primaryFileUri)
+        Log.d(
+            BOOK_DELETE_LOG_TAG,
+            "archiveStorage deleteOriginalFolder primary=${primaryFileUri.toString().take(96)} success=$folderDeleted"
+        )
+        if (folderDeleted) {
+            return ArchiveBookStorageResult(fileCopyFailures = 0, fileDeleteFailures = 0)
+        }
+    }
+
+    var deleteFailures = 0
+    copiedFiles.forEach { file ->
+        val deleted = deleteSourceUri(context, contentResolver, file.uri)
+        Log.d(
+            BOOK_DELETE_LOG_TAG,
+            "archiveStorage deleteOriginalFile ${file.kind} source=${file.uri.toString().take(96)} success=$deleted"
+        )
+        if (!deleted) deleteFailures += 1
+    }
+    return ArchiveBookStorageResult(fileCopyFailures = 0, fileDeleteFailures = deleteFailures)
+}
+
 private fun deleteBookStorage(
     context: Context,
     contentResolver: ContentResolver,
     book: ReaderBook,
     audiobookFolderUri: Uri?
 ): DeleteBookStorageResult {
+    val primaryFileUri = book.audioUri ?: book.ebookUri
     val isInsideAudiobookFolder = isUriInsideAudiobookFolder(
         context = context,
-        fileUri = book.audioUri,
+        fileUri = primaryFileUri,
         audiobookFolderUri = audiobookFolderUri
     )
+    Log.d(
+        BOOK_DELETE_LOG_TAG,
+        "deleteStorage title=${book.title.take(48)} insideRoot=$isInsideAudiobookFolder " +
+            "primary=${primaryFileUri?.toString()?.take(96)} root=${audiobookFolderUri?.toString()?.take(96)} " +
+            "audio=${book.audioUri?.toString()?.take(96)} srt=${book.srtUri?.toString()?.take(96)} " +
+            "ebook=${book.ebookUri?.toString()?.take(96)}"
+    )
 
-    if (isInsideAudiobookFolder) {
-        val folderDeleted = deleteAudParentFolder(context, book.audioUri)
+    if (isInsideAudiobookFolder && primaryFileUri != null) {
+        val folderDeleted = deleteAudParentFolder(context, primaryFileUri)
+        Log.d(
+            BOOK_DELETE_LOG_TAG,
+            "deleteStorage parentFolder primary=${primaryFileUri.toString().take(96)} success=$folderDeleted"
+        )
         if (folderDeleted) {
             return DeleteBookStorageResult(
                 folderDeleteAttempted = true,
@@ -4234,12 +4884,23 @@ private fun deleteBookStorage(
     }
 
     var fileDeleteFailures = 0
-    if (!deleteSourceUri(context, contentResolver, book.audioUri)) {
-        fileDeleteFailures += 1
+    val audio = book.audioUri
+    if (audio != null) {
+        val deleted = deleteSourceUri(context, contentResolver, audio)
+        Log.d(BOOK_DELETE_LOG_TAG, "deleteStorage file audio=${audio.toString().take(96)} success=$deleted")
+        if (!deleted) fileDeleteFailures += 1
     }
     val srt = book.srtUri
-    if (srt != null && !deleteSourceUri(context, contentResolver, srt)) {
-        fileDeleteFailures += 1
+    if (srt != null) {
+        val deleted = deleteSourceUri(context, contentResolver, srt)
+        Log.d(BOOK_DELETE_LOG_TAG, "deleteStorage file srt=${srt.toString().take(96)} success=$deleted")
+        if (!deleted) fileDeleteFailures += 1
+    }
+    val ebook = book.ebookUri
+    if (ebook != null && ebook != audio) {
+        val deleted = deleteSourceUri(context, contentResolver, ebook)
+        Log.d(BOOK_DELETE_LOG_TAG, "deleteStorage file ebook=${ebook.toString().take(96)} success=$deleted")
+        if (!deleted) fileDeleteFailures += 1
     }
 
     return DeleteBookStorageResult(
@@ -4251,9 +4912,10 @@ private fun deleteBookStorage(
 
 private fun isUriInsideAudiobookFolder(
     context: Context,
-    fileUri: Uri,
+    fileUri: Uri?,
     audiobookFolderUri: Uri?
 ): Boolean {
+    fileUri ?: return false
     val rootUri = audiobookFolderUri ?: return false
     if (fileUri.scheme.equals("file", ignoreCase = true) && rootUri.scheme.equals("file", ignoreCase = true)) {
         val filePath = runCatching { File(fileUri.path ?: return false).canonicalPath }.getOrNull() ?: return false
@@ -4288,7 +4950,7 @@ private fun deleteAudParentFolder(context: Context, fileUri: Uri): Boolean {
     if (fileUri.scheme.equals("file", ignoreCase = true)) {
         val file = fileUri.path?.let { File(it) } ?: return false
         val parent = file.parentFile ?: return false
-        if (!Regex("^Aud\\d+$", RegexOption.IGNORE_CASE).matches(parent.name)) return false
+        if (!isImportedBookFolderName(parent.name)) return false
         return runCatching { parent.deleteRecursively() }.getOrDefault(false)
     }
 
@@ -4297,7 +4959,7 @@ private fun deleteAudParentFolder(context: Context, fileUri: Uri): Boolean {
     val parentDocumentId = documentId.substringBeforeLast('/', missingDelimiterValue = "")
     if (parentDocumentId.isBlank()) return false
     val parentName = parentDocumentId.substringAfterLast('/')
-    if (!Regex("^Aud\\d+$", RegexOption.IGNORE_CASE).matches(parentName)) return false
+    if (!isImportedBookFolderName(parentName)) return false
 
     val parentUri = runCatching {
         DocumentsContract.buildDocumentUriUsingTree(fileUri, parentDocumentId)
@@ -4305,6 +4967,25 @@ private fun deleteAudParentFolder(context: Context, fileUri: Uri): Boolean {
 
     val parentDocument = DocumentFile.fromSingleUri(context, parentUri) ?: return false
     return runCatching { parentDocument.delete() }.getOrDefault(false)
+}
+
+private fun isImportedBookFolderName(name: String): Boolean {
+    return Regex("^Aud\\d+$", RegexOption.IGNORE_CASE).matches(name) ||
+        Regex("^aud\\d+$", RegexOption.IGNORE_CASE).matches(name)
+}
+
+private fun importedBookFolderNameFromUri(context: Context, fileUri: Uri?): String? {
+    fileUri ?: return null
+    if (fileUri.scheme.equals("file", ignoreCase = true)) {
+        val parentName = fileUri.path?.let { File(it).parentFile?.name } ?: return null
+        return parentName.takeIf { isImportedBookFolderName(it) }
+    }
+    if (!DocumentsContract.isDocumentUri(context, fileUri)) return null
+    val documentId = runCatching { DocumentsContract.getDocumentId(fileUri) }.getOrNull() ?: return null
+    val parentDocumentId = documentId.substringBeforeLast('/', missingDelimiterValue = "")
+    if (parentDocumentId.isBlank()) return null
+    val parentName = parentDocumentId.substringAfterLast('/')
+    return parentName.takeIf { isImportedBookFolderName(it) }
 }
 
 private fun findCueAtTime(cues: List<SubtitleCue>, timeMs: Long): SubtitleCue? {

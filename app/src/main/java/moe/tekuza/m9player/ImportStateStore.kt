@@ -16,13 +16,14 @@ internal data class PersistedDictionaryRef(
 internal data class PersistedReaderBook(
     val id: String,
     val title: String,
-    val audioUri: String,
-    val audioName: String,
+    val audioUri: String?,
+    val audioName: String?,
     val srtUri: String?,
     val srtName: String?,
     val ebookUri: String? = null,
     val ebookName: String? = null,
-    val ebookFormat: String? = null
+    val ebookFormat: String? = null,
+    val coverFocus: String? = null
 )
 
 internal data class PersistedImports(
@@ -33,10 +34,12 @@ internal data class PersistedImports(
     val audiobookFolderUri: String? = null,
     val audiobookFolderName: String? = null,
     val autoMoveToAudiobookFolder: Boolean = true,
+    val keepSourceFilesWhenAutoMove: Boolean = false,
     val importOnboardingCompleted: Boolean = false,
     val books: List<PersistedReaderBook> = emptyList(),
     val selectedBookId: String? = null,
     val homeLibraryView: String = "BOOKSHELF",
+    val homeCoverAspect: String = "BOOK",
     val dictionaries: List<PersistedDictionaryRef>
 )
 
@@ -54,10 +57,12 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         audiobookFolderUri = null,
         audiobookFolderName = null,
         autoMoveToAudiobookFolder = true,
+        keepSourceFilesWhenAutoMove = false,
         importOnboardingCompleted = false,
         books = emptyList(),
         selectedBookId = null,
         homeLibraryView = "BOOKSHELF",
+        homeCoverAspect = "BOOK",
         dictionaries = emptyList()
     )
 
@@ -69,10 +74,12 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         audiobookFolderUri = null,
         audiobookFolderName = null,
         autoMoveToAudiobookFolder = true,
+        keepSourceFilesWhenAutoMove = false,
         importOnboardingCompleted = false,
         books = emptyList(),
         selectedBookId = null,
         homeLibraryView = "BOOKSHELF",
+        homeCoverAspect = "BOOK",
         dictionaries = emptyList()
     )
 
@@ -100,17 +107,27 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
     for (i in 0 until booksArray.length()) {
         val item = booksArray.optJSONObject(i) ?: continue
         val id = item.optString("id").trim()
-        val audioUri = item.optString("audioUri").trim()
+        val audioUri = item.optString("audioUri").trim().ifBlank { null }
         val srtUri = item.optString("srtUri").trim().ifBlank { null }
-        if (audioUri.isBlank()) continue
-        val audioName = item.optString("audioName").trim().ifBlank { "Unknown audio" }
-        val srtName = item.optString("srtName").trim().ifBlank { null }
         val ebookUri = item.optString("ebookUri").trim().ifBlank { null }
+        if (audioUri.isNullOrBlank() && ebookUri.isNullOrBlank()) continue
+        val audioName = item.optString("audioName").trim().ifBlank { null }
+        val srtName = item.optString("srtName").trim().ifBlank { null }
         val ebookName = item.optString("ebookName").trim().ifBlank { null }
         val ebookFormat = item.optString("ebookFormat").trim().ifBlank { null }
-        val title = item.optString("title").trim().ifBlank { audioName.substringBeforeLast('.') }
+        val coverFocus = item.optString("coverFocus").trim().ifBlank { null }
+        val fallbackTitle = audioName
+            ?.substringBeforeLast('.')
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: ebookName
+                ?.substringBeforeLast('.')
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+            ?: "Untitled Book"
+        val title = item.optString("title").trim().ifBlank { fallbackTitle }
         books += PersistedReaderBook(
-            id = id.ifBlank { "$audioUri|${srtUri.orEmpty()}" },
+            id = id.ifBlank { "${audioUri ?: ebookUri.orEmpty()}|${srtUri.orEmpty()}" },
             title = title.ifBlank { "Untitled Book" },
             audioUri = audioUri,
             audioName = audioName,
@@ -118,7 +135,8 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
             srtName = srtName,
             ebookUri = ebookUri,
             ebookName = ebookName,
-            ebookFormat = ebookFormat
+            ebookFormat = ebookFormat,
+            coverFocus = coverFocus
         )
     }
 
@@ -130,10 +148,12 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         audiobookFolderUri = obj.optString("audiobookFolderUri").trim().ifBlank { null },
         audiobookFolderName = obj.optString("audiobookFolderName").trim().ifBlank { null },
         autoMoveToAudiobookFolder = obj.optBoolean("autoMoveToAudiobookFolder", true),
+        keepSourceFilesWhenAutoMove = obj.optBoolean("keepSourceFilesWhenAutoMove", false),
         importOnboardingCompleted = obj.optBoolean("importOnboardingCompleted", false),
         books = books,
         selectedBookId = obj.optString("selectedBookId").trim().ifBlank { null },
         homeLibraryView = obj.optString("homeLibraryView").trim().ifBlank { "BOOKSHELF" },
+        homeCoverAspect = obj.optString("homeCoverAspect").trim().ifBlank { "BOOK" },
         dictionaries = dictionaries
     )
 }
@@ -147,6 +167,7 @@ internal fun savePersistedImports(context: Context, state: PersistedImports) {
         put("audiobookFolderUri", state.audiobookFolderUri ?: "")
         put("audiobookFolderName", state.audiobookFolderName ?: "")
         put("autoMoveToAudiobookFolder", state.autoMoveToAudiobookFolder)
+        put("keepSourceFilesWhenAutoMove", state.keepSourceFilesWhenAutoMove)
         put("importOnboardingCompleted", state.importOnboardingCompleted)
         put(
             "books",
@@ -155,19 +176,21 @@ internal fun savePersistedImports(context: Context, state: PersistedImports) {
                     put(JSONObject().apply {
                         put("id", book.id)
                         put("title", book.title)
-                        put("audioUri", book.audioUri)
-                        put("audioName", book.audioName)
+                        put("audioUri", book.audioUri ?: "")
+                        put("audioName", book.audioName ?: "")
                         put("srtUri", book.srtUri ?: "")
                         put("srtName", book.srtName ?: "")
                         put("ebookUri", book.ebookUri ?: "")
                         put("ebookName", book.ebookName ?: "")
                         put("ebookFormat", book.ebookFormat ?: "")
+                        put("coverFocus", book.coverFocus ?: "")
                     })
                 }
             }
         )
         put("selectedBookId", state.selectedBookId ?: "")
         put("homeLibraryView", state.homeLibraryView)
+        put("homeCoverAspect", state.homeCoverAspect)
         put(
             "dictionaries",
             JSONArray().apply {

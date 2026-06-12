@@ -69,6 +69,8 @@ object BookReaderPlaybackSession {
 
     fun isPlaying(): Boolean = player?.isPlaying == true
 
+    fun isPlaybackRequested(): Boolean = player?.let { it.playWhenReady || it.isPlaying } == true
+
     fun currentPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
 
     fun currentPlaybackSpeed(): Float = player?.playbackParameters?.speed ?: 1f

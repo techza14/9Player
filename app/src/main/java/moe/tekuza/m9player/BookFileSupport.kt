@@ -10,9 +10,8 @@ import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-private const val BOOK_DELETE_PREFS = "book_delete_prefs"
-private const val KEY_SKIP_DELETE_CONFIRM = "skip_delete_confirm"
 private const val READER_PLAYBACK_MIGRATION_LOG_TAG = "ReaderPlaybackMigration"
+private const val READER_PLAYBACK_DIAGNOSTIC_LOG_TAG = "ReaderPlaybackDiagnostic"
 
 internal fun keepReadPermission(context: Context, uri: Uri) {
     val resolver = context.contentResolver
@@ -29,7 +28,6 @@ internal fun keepReadPermission(context: Context, uri: Uri) {
         // Some providers do not support persistable permission.
     }
 }
-
 internal fun queryDisplayName(contentResolver: ContentResolver, uri: Uri): String {
     val fallback = uri.lastPathSegment ?: "Unknown"
     return contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
@@ -62,6 +60,15 @@ internal fun buildBookTitle(audioName: String, srtName: String?): String {
     }.orEmpty()
     if (srtBase.isNotBlank()) return srtBase
     return "Untitled Book"
+}
+
+internal fun buildEbookTitle(ebookName: String?): String {
+    val ebookBase = ebookName
+        ?.substringBeforeLast('.')
+        ?.trim()
+        ?.ifBlank { ebookName.trim() }
+        .orEmpty()
+    return ebookBase.ifBlank { "Untitled Book" }
 }
 
 internal fun buildReaderBookPlaybackKey(book: ReaderBook): String {
@@ -129,11 +136,15 @@ internal suspend fun loadReaderBookPlaybackSnapshotsForBooks(
 ): Map<String, BookReaderPlaybackSnapshot> {
     return withContext(Dispatchers.IO) {
         books.mapNotNull { book ->
-            val stored = migrateBestReaderBookPlaybackSnapshotIfNeeded(
-                context = context,
-                book = book,
-                reason = "bookshelf"
-            )?.snapshot
+            val stored = if (book.audioUri != null) {
+                migrateBestReaderBookPlaybackSnapshotIfNeeded(
+                    context = context,
+                    book = book,
+                    reason = "bookshelf"
+                )?.snapshot
+            } else {
+                book.ebookUri?.let { loadEbookReadingProgressSnapshot(context, it.toString()) }
+            }
             stored?.let { book.id to it }
         }
             .toMap()
@@ -145,7 +156,11 @@ internal fun migrateBestReaderBookPlaybackSnapshotIfNeeded(
     book: ReaderBook,
     reason: String
 ): ReaderBookPlaybackSnapshotCandidate? {
-    val best = loadBestReaderBookPlaybackSnapshotCandidate(context, book) ?: return null
+    if (book.audioUri == null) return null
+    val candidates = loadReaderBookPlaybackSnapshotCandidates(context, book)
+    val best = selectBestReaderBookPlaybackSnapshotCandidate(candidates)
+    logReaderPlaybackCandidateSelection(reason, book, candidates, best)
+    best ?: return null
     if (best.source == "shared") return best
     val sharedKey = buildReaderBookPlaybackKey(book)
     saveBookReaderPlaybackPosition(
@@ -167,9 +182,52 @@ internal fun loadBestReaderBookPlaybackSnapshotCandidate(
     context: Context,
     book: ReaderBook
 ): ReaderBookPlaybackSnapshotCandidate? {
-    return loadReaderBookPlaybackSnapshotCandidates(context, book).maxWithOrNull(
+    return selectBestReaderBookPlaybackSnapshotCandidate(
+        loadReaderBookPlaybackSnapshotCandidates(context, book)
+    )
+}
+
+internal fun selectBestReaderBookPlaybackSnapshotCandidate(
+    candidates: List<ReaderBookPlaybackSnapshotCandidate>
+): ReaderBookPlaybackSnapshotCandidate? {
+    return candidates.maxWithOrNull(
         compareBy<ReaderBookPlaybackSnapshotCandidate> { it.snapshot.updatedAtMs }
             .thenBy { if (it.source == "shared") 1 else 0 }
+    )
+}
+
+internal fun hasSuspiciousZeroSharedPlaybackCandidate(
+    candidates: List<ReaderBookPlaybackSnapshotCandidate>,
+    best: ReaderBookPlaybackSnapshotCandidate?
+): Boolean {
+    return best?.source == "shared" &&
+        best.snapshot.positionMs <= 0L &&
+        candidates.any { it.source != "shared" && it.snapshot.positionMs > 0L }
+}
+
+internal fun formatReaderBookPlaybackCandidates(
+    candidates: List<ReaderBookPlaybackSnapshotCandidate>
+): String {
+    return candidates.joinToString(separator = ",") { candidate ->
+        "${candidate.source}:${candidate.snapshot.positionMs}/${candidate.snapshot.durationMs}@${candidate.snapshot.updatedAtMs}"
+    }.ifBlank { "none" }
+}
+
+private fun logReaderPlaybackCandidateSelection(
+    reason: String,
+    book: ReaderBook,
+    candidates: List<ReaderBookPlaybackSnapshotCandidate>,
+    best: ReaderBookPlaybackSnapshotCandidate?
+) {
+    val suspiciousZeroShared = hasSuspiciousZeroSharedPlaybackCandidate(candidates, best)
+    if (candidates.size <= 1 && !suspiciousZeroShared) return
+    Log.d(
+        READER_PLAYBACK_DIAGNOSTIC_LOG_TAG,
+        "select reason=$reason title=${book.title.take(48)} " +
+            "best=${best?.source ?: "none"}:${best?.snapshot?.positionMs ?: 0L}/" +
+            "${best?.snapshot?.durationMs ?: 0L}@${best?.snapshot?.updatedAtMs ?: 0L} " +
+            "suspiciousZeroShared=$suspiciousZeroShared " +
+            "candidates=${formatReaderBookPlaybackCandidates(candidates)}"
     )
 }
 
@@ -216,18 +274,4 @@ internal fun loadReaderBookPlaybackSnapshotCandidates(
             )
         }
     }
-}
-
-internal fun loadSkipDeleteBookConfirm(context: Context): Boolean {
-    return context
-        .getSharedPreferences(BOOK_DELETE_PREFS, Context.MODE_PRIVATE)
-        .getBoolean(KEY_SKIP_DELETE_CONFIRM, false)
-}
-
-internal fun saveSkipDeleteBookConfirm(context: Context, skip: Boolean) {
-    context
-        .getSharedPreferences(BOOK_DELETE_PREFS, Context.MODE_PRIVATE)
-        .edit()
-        .putBoolean(KEY_SKIP_DELETE_CONFIRM, skip)
-        .apply()
 }
