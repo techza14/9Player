@@ -44,16 +44,24 @@ After tapping `+` at the bottom-right:
    - Create an `AudX` folder under your audiobook folder.
    - Move audio and SRT into that folder.
 
-```text
+# Delete Books
+
+After enabling auto move to audiobook folder, deleting a book without deleting source files moves them to `9Player Sources` so refresh will not import them again.
+
+```
 Example:
 
 audiobook-folder/
 ├── Aud1/
 │   ├── 1.mp3
 │   └── 1.srt
-└── Aud2/
-    ├── 2.m4b
-    └── 2.srt
+├── Aud2/
+│   ├── 2.m4b
+│   └── 2.srt
+└── 9Player Sources/
+    └── Aud3/
+        ├── 3.mp3
+        └── 3.srt
 ```
 
 SRT reference:
