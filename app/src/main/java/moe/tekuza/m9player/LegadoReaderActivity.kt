@@ -46,10 +46,18 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.PopupMenu
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import coil3.request.ImageRequest
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
@@ -61,6 +69,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
+import me.saket.telephoto.zoomable.rememberZoomableState
+import me.saket.telephoto.zoomable.zoomable
 import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.util.Date
@@ -136,8 +147,20 @@ private enum class ReaderOverflowAction(val menuId: Int) {
     REMOVE_RUBY(4),
     SWITCH_LAYOUT(5),
     CHARSET(6),
-    HELP(7)
+    HELP(7),
+    IMAGES(8)
 }
+
+private enum class ImageGallerySystemBarMode {
+    LIST,
+    FOCUS
+}
+
+private data class ReaderImageGalleryItem(
+    val image: EbookImageRef,
+    val chapterIndex: Int,
+    val chapterPosition: Int
+)
 
 private data class ReaderImageStopTarget(
     val chapterIndex: Int,
@@ -166,6 +189,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private lateinit var searchResultListView: ListView
     private lateinit var readView: ReadView
     private lateinit var readerRoot: View
+    private lateinit var contentContainer: FrameLayout
     private lateinit var toolbarTitleText: TextView
     private lateinit var toolbarAdditionContainer: View
     private lateinit var toolbarAdditionLeftText: TextView
@@ -359,6 +383,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var loadedDocumentCharsetName: String? = null
     private var floatingOverlayStartJob: Job? = null
     private var suppressFloatingOverlayOnStop: Boolean = false
+    private var imageGalleryOverlay: View? = null
+    private var imageGalleryHideFocus: (() -> Boolean)? = null
+    private var imageGalleryDismiss: (() -> Unit)? = null
+    private var imageGallerySystemBarMode: ImageGallerySystemBarMode? = null
 
     private fun readerString(resId: Int): String = getString(resId)
 
@@ -438,6 +466,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun handleReaderBackPressed(): Boolean {
+        imageGalleryHideFocus?.let { hideFocus ->
+            if (hideFocus()) return true
+        }
+        imageGalleryDismiss?.let { dismiss ->
+            dismiss()
+            return true
+        }
         if (disableReturnKey) {
             setReadMenuVisible(true)
             return true
@@ -568,7 +603,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             readerRoot = this
             setBackgroundColor(readerBgColor)
         }
-        val contentContainer = FrameLayout(this)
+        contentContainer = FrameLayout(this)
         statusBarScrim = View(this).apply {
             setBackgroundColor(currentSystemBarColor())
         }
@@ -726,6 +761,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         applyReadBarStyle()
         ViewCompat.requestApplyInsets(root)
         return root
+    }
+
+    private fun readerRootAsViewGroup(): ViewGroup? {
+        return if (::readerRoot.isInitialized) readerRoot as? ViewGroup else null
     }
 
     private fun buildStaticPage(): View {
@@ -1276,11 +1315,29 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
     }
 
+    private fun currentImageGallerySystemBarColor(): Int? {
+        return when (imageGallerySystemBarMode) {
+            ImageGallerySystemBarMode.LIST -> Color.WHITE
+            ImageGallerySystemBarMode.FOCUS -> Color.TRANSPARENT
+            null -> null
+        }
+    }
+
+    private fun currentImageGallerySystemBarUsesDarkIcons(): Boolean? {
+        return when (imageGallerySystemBarMode) {
+            ImageGallerySystemBarMode.LIST -> true
+            ImageGallerySystemBarMode.FOCUS -> false
+            null -> null
+        }
+    }
+
     private fun currentSystemBarColor(): Int {
+        currentImageGallerySystemBarColor()?.let { return it }
         return if (isReaderChromeVisibleForSystemBars()) currentMenuBackgroundColor() else readerBgColor
     }
 
     private fun currentStatusBarSurfaceColor(): Int {
+        currentImageGallerySystemBarColor()?.let { return it }
         return if (shouldUseBlackCutoutGuard()) Color.BLACK else currentSystemBarColor()
     }
 
@@ -1293,6 +1350,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun currentSystemBarUsesDarkIcons(): Boolean {
+        currentImageGallerySystemBarUsesDarkIcons()?.let { return it }
         return when {
             !isReaderChromeVisibleForSystemBars() -> readerDarkStatusIcon
             readBarStyleFollowPage -> readerDarkStatusIcon
@@ -1301,6 +1359,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun currentStatusBarUsesDarkIcons(): Boolean {
+        currentImageGallerySystemBarUsesDarkIcons()?.let { return it }
         return if (shouldUseBlackCutoutGuard()) false else currentSystemBarUsesDarkIcons()
     }
 
@@ -1964,9 +2023,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         PopupMenu(this, anchor).apply {
             menu.add(0, ReaderOverflowAction.PLAYER.menuId, 0, R.string.reader_menu_player)
             menu.add(0, ReaderOverflowAction.ADD_BOOKMARK.menuId, 1, R.string.reader_menu_add_bookmark)
-            menu.add(0, ReaderOverflowAction.SIMULATED_READING.menuId, 2, R.string.reader_simulated_reading_title)
+            if (collectReaderImageGalleryItems().isNotEmpty()) {
+                menu.add(0, ReaderOverflowAction.IMAGES.menuId, 2, R.string.reader_menu_images)
+            }
+            menu.add(0, ReaderOverflowAction.SIMULATED_READING.menuId, 3, R.string.reader_simulated_reading_title)
             if (hasRubySpans()) {
-                menu.add(0, ReaderOverflowAction.REMOVE_RUBY.menuId, 3, R.string.del_ruby_tag).apply {
+                menu.add(0, ReaderOverflowAction.REMOVE_RUBY.menuId, 4, R.string.del_ruby_tag).apply {
                     isCheckable = true
                     isChecked = !showRubyText
                 }
@@ -1974,15 +2036,16 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             menu.add(
                 0,
                 ReaderOverflowAction.SWITCH_LAYOUT.menuId,
-                4,
+                5,
                 if (readerLayoutMode == M9LayoutMode.VERTICAL) R.string.reader_menu_switch_horizontal else R.string.reader_menu_switch_vertical
             )
-            menu.add(0, ReaderOverflowAction.CHARSET.menuId, 5, R.string.reader_encoding_set)
-            menu.add(0, ReaderOverflowAction.HELP.menuId, 6, R.string.reader_menu_help)
+            menu.add(0, ReaderOverflowAction.CHARSET.menuId, 6, R.string.reader_encoding_set)
+            menu.add(0, ReaderOverflowAction.HELP.menuId, 7, R.string.reader_menu_help)
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     ReaderOverflowAction.PLAYER.menuId -> openPlayerFromReader()
                     ReaderOverflowAction.ADD_BOOKMARK.menuId -> addCurrentBookmark()
+                    ReaderOverflowAction.IMAGES.menuId -> showImageGalleryDialog()
                     ReaderOverflowAction.SIMULATED_READING.menuId -> showSimulatedReadingDialog()
                     ReaderOverflowAction.REMOVE_RUBY.menuId -> {
                         item.isChecked = !item.isChecked
@@ -3617,6 +3680,314 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             .setView(imageView)
             .setPositiveButton(R.string.close, null)
             .show()
+    }
+
+    private fun collectReaderImageGalleryItems(): List<ReaderImageGalleryItem> {
+        val seen = mutableSetOf<String>()
+        return document?.chapters
+            .orEmpty()
+            .flatMapIndexed { chapterIndex, chapter ->
+                chapter.images
+                    .toSortedMap()
+                    .mapNotNull { (position, image) ->
+                        val key = image.cacheIdentity()
+                        if (seen.add(key)) {
+                            ReaderImageGalleryItem(
+                                image = image,
+                                chapterIndex = chapterIndex,
+                                chapterPosition = position
+                            )
+                        } else {
+                            null
+                        }
+                    }
+            }
+    }
+
+    private fun initialImageGalleryIndex(items: List<ReaderImageGalleryItem>): Int {
+        val currentPage = pages.getOrNull(pageIndex) ?: return 0
+        val samePage = items.indexOfFirst { item ->
+            item.chapterIndex == currentPage.chapterIndex &&
+                item.chapterPosition in currentPage.charStart until currentPage.charEnd
+        }
+        if (samePage >= 0) return samePage
+        val nextImage = items.indexOfFirst { item ->
+            item.chapterIndex > currentPage.chapterIndex ||
+                (item.chapterIndex == currentPage.chapterIndex && item.chapterPosition >= currentPage.charStart)
+        }
+        return nextImage.takeIf { it >= 0 } ?: 0
+    }
+
+    private fun showImageGalleryDialog() {
+        val items = collectReaderImageGalleryItems()
+        if (items.isEmpty()) {
+            Toast.makeText(this, R.string.reader_image_gallery_empty, Toast.LENGTH_SHORT).show()
+            return
+        }
+        imageGalleryDismiss?.invoke()
+        val initialIndex = initialImageGalleryIndex(items).coerceIn(0, items.lastIndex)
+        val displayMetrics = resources.displayMetrics
+        val screenWidth = displayMetrics.widthPixels.coerceAtLeast(1)
+        val screenHeight = displayMetrics.heightPixels.coerceAtLeast(1)
+        val headerHeight = dp(56)
+        val topInset = contentContainer.paddingTop
+        val bottomInset = contentContainer.paddingBottom
+        val listImageHeight = (screenHeight * 0.58f).toInt().coerceIn(dp(260), dp(520))
+        val thumbnailTargetWidth = (screenWidth - dp(32)).coerceAtLeast(1)
+        val galleryBgColor = Color.WHITE
+        val galleryTextColor = Color.BLACK
+        val focusBgColor = Color.BLACK
+        val imageJobs = mutableListOf<Job>()
+        var focusJob: Job? = null
+
+        fun applyGallerySystemBarSurfaces() {
+            imageGallerySystemBarMode = ImageGallerySystemBarMode.LIST
+            updateSystemBarSurfaces()
+        }
+
+        fun applyFocusSystemBarSurfaces() {
+            imageGallerySystemBarMode = ImageGallerySystemBarMode.FOCUS
+            updateSystemBarSurfaces()
+        }
+
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(galleryBgColor)
+            isClickable = true
+        }
+        val statusText = TextView(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            textSize = 16f
+            maxLines = 1
+            setTextColor(galleryTextColor)
+            setPadding(dp(16), 0, dp(72), 0)
+            text = imageGalleryStatusText(items[initialIndex], initialIndex, items.size)
+        }
+        val closeButton = TextView(this).apply {
+            gravity = Gravity.CENTER
+            textSize = 16f
+            setTextColor(galleryTextColor)
+            setText(R.string.close)
+        }
+        val header = FrameLayout(this).apply {
+            setBackgroundColor(galleryBgColor)
+            addView(
+                statusText,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            )
+            addView(
+                closeButton,
+                FrameLayout.LayoutParams(dp(72), FrameLayout.LayoutParams.MATCH_PARENT, Gravity.END)
+            )
+        }
+        val imageContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(12), dp(12), dp(24))
+        }
+        val imageRows = mutableListOf<View>()
+        val scrollView = ScrollView(this).apply {
+            isFillViewport = true
+            addView(
+                imageContainer,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+        val focusOverlay = FrameLayout(this).apply {
+            visibility = View.GONE
+            setBackgroundColor(focusBgColor)
+        }
+        val focusImage = ComposeView(this).apply {
+            setBackgroundColor(focusBgColor)
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+        }
+        focusOverlay.addView(
+            focusImage,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        fun updateStatusFromScroll() {
+            if (imageRows.isEmpty()) return
+            val viewportCenter = scrollView.scrollY + scrollView.height / 2
+            val visibleIndex = imageRows.indices.minByOrNull { index ->
+                abs((imageRows[index].top + imageRows[index].height / 2) - viewportCenter)
+            } ?: initialIndex
+            statusText.text = imageGalleryStatusText(items[visibleIndex], visibleIndex, items.size)
+        }
+
+        fun hideFocus(): Boolean {
+            if (focusOverlay.visibility != View.VISIBLE) return false
+            focusJob?.cancel()
+            focusJob = null
+            focusImage.setContent {}
+            focusOverlay.visibility = View.GONE
+            applyGallerySystemBarSurfaces()
+            return true
+        }
+
+        fun showFocus(index: Int) {
+            val item = items[index]
+            focusImage.setContent {}
+            applyFocusSystemBarSurfaces()
+            focusOverlay.visibility = View.VISIBLE
+            focusJob?.cancel()
+            focusJob = lifecycleScope.launch {
+                val imageBytes = withContext(Dispatchers.IO) {
+                    item.image.readBytes()
+                }
+                if (imageBytes == null) {
+                    Toast.makeText(
+                        this@LegadoReaderActivity,
+                        R.string.reader_image_preview_unavailable,
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    hideFocus()
+                    return@launch
+                }
+                focusImage.setContent {
+                    val zoomableState = rememberZoomableState()
+                    val request = remember(imageBytes) {
+                        ImageRequest.Builder(this@LegadoReaderActivity)
+                            .data(imageBytes)
+                            .build()
+                    }
+                    ZoomableAsyncImage(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(ComposeColor.Black)
+                            .zoomable(state = zoomableState),
+                        model = request,
+                        contentDescription = null
+                    )
+                }
+            }
+        }
+
+        items.forEachIndexed { index, item ->
+            val imageView = ImageView(this).apply {
+                adjustViewBounds = true
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                setBackgroundColor(galleryBgColor)
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+                setOnClickListener { showFocus(index) }
+            }
+            val row = FrameLayout(this).apply {
+                addView(
+                    imageView,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                )
+            }
+            imageRows += row
+            imageContainer.addView(
+                row,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    listImageHeight
+                ).apply {
+                    bottomMargin = dp(18)
+                }
+            )
+            imageJobs += lifecycleScope.launch {
+                val bitmap = withContext(Dispatchers.IO) {
+                    val bytes = item.image.readBytes() ?: return@withContext null
+                    decodeSampledBitmap(
+                        bytes = bytes,
+                        targetWidthPx = thumbnailTargetWidth,
+                        targetHeightPx = listImageHeight
+                    )
+                }
+                if (bitmap != null) {
+                    imageView.setImageBitmap(bitmap)
+                }
+            }
+        }
+
+        scrollView.setOnScrollChangeListener { _, _, _, _, _ -> updateStatusFromScroll() }
+        focusOverlay.setOnClickListener { hideFocus() }
+        closeButton.setOnClickListener { imageGalleryDismiss?.invoke() }
+
+        root.addView(
+            scrollView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ).apply {
+                topMargin = topInset + headerHeight
+                bottomMargin = bottomInset
+            }
+        )
+        root.addView(
+            header,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                headerHeight,
+                Gravity.TOP
+            ).apply {
+                topMargin = topInset
+            }
+        )
+        root.addView(
+            focusOverlay,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        fun dismissGallery() {
+            imageJobs.forEach { it.cancel() }
+            focusJob?.cancel()
+            imageGalleryHideFocus = null
+            imageGalleryDismiss = null
+            imageGallerySystemBarMode = null
+            if (imageGalleryOverlay === root) {
+                (root.parent as? ViewGroup)?.removeView(root)
+                imageGalleryOverlay = null
+            }
+            applySystemUiSettings()
+            updateSystemBarSurfaces()
+        }
+        imageGalleryOverlay = root
+        imageGalleryHideFocus = { hideFocus() }
+        imageGalleryDismiss = { dismissGallery() }
+        applyGallerySystemBarSurfaces()
+        (readerRootAsViewGroup() ?: contentContainer).addView(
+            root,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+        scrollView.post {
+            imageRows.getOrNull(initialIndex)?.let { row ->
+                scrollView.scrollTo(0, row.top)
+            }
+            updateStatusFromScroll()
+        }
+    }
+
+    private fun imageGalleryStatusText(
+        item: ReaderImageGalleryItem,
+        index: Int,
+        total: Int
+    ): String {
+        val base = getString(R.string.reader_image_gallery_title, index + 1, total)
+        val chapterTitle = document?.chapters
+            ?.getOrNull(item.chapterIndex)
+            ?.title
+            .orEmpty()
+            .trim()
+        return if (chapterTitle.isBlank()) base else "$base · $chapterTitle"
     }
 
     private fun showPaddingDialog() {

@@ -113,6 +113,7 @@
     <string name="reader_click_region_menu_required">至少保留一个菜单区域，已将中间区域恢复为菜单</string>
     <string name="reader_menu_player">播放器</string>
     <string name="reader_menu_add_bookmark">添加书签</string>
+    <string name="reader_menu_images">插图</string>
     <string name="reader_menu_switch_vertical">切换纵书</string>
     <string name="reader_menu_switch_horizontal">切换横排</string>
     <string name="reader_menu_help">帮助</string>
@@ -149,6 +150,8 @@
     <string name="reader_font_monospace">等宽字体</string>
     <string name="reader_title_font">字体</string>
     <string name="reader_image_preview_unavailable">图片无法预览</string>
+    <string name="reader_image_gallery_title">插图 %1$d/%2$d</string>
+    <string name="reader_image_gallery_empty">没有插图</string>
     <string name="reader_title_margin">边距</string>
     <string name="reader_margin_header">页眉</string>
     <string name="reader_margin_body">正文</string>

@@ -364,6 +364,8 @@ internal data class ReaderBook(
     val ebookFormat: String?,
     val coverUri: Uri?,
     val coverSource: ReaderBookCoverSource?,
+    val audioCoverUri: Uri? = if (coverSource == ReaderBookCoverSource.AUDIO) coverUri else null,
+    val ebookCoverUri: Uri? = if (coverSource == ReaderBookCoverSource.EBOOK) coverUri else null,
     val coverFocus: HomeCoverCropFocus = HomeCoverCropFocus.CENTER
 ) {
     val isEbookOnly: Boolean
@@ -376,6 +378,28 @@ internal enum class ReaderBookCoverSource {
 }
 
 private const val ReaderBookCoverAspectRatio = 5f / 7f
+
+private data class ReaderBookDisplayCover(
+    val uri: Uri,
+    val source: ReaderBookCoverSource
+)
+
+private fun ReaderBook.displayCoverFor(aspect: HomeCoverAspect): ReaderBookDisplayCover? {
+    val preferred = when (aspect) {
+        HomeCoverAspect.BOOK -> listOf(
+            ebookCoverUri?.let { ReaderBookDisplayCover(it, ReaderBookCoverSource.EBOOK) },
+            audioCoverUri?.let { ReaderBookDisplayCover(it, ReaderBookCoverSource.AUDIO) }
+        )
+        HomeCoverAspect.SQUARE -> listOf(
+            audioCoverUri?.let { ReaderBookDisplayCover(it, ReaderBookCoverSource.AUDIO) },
+            ebookCoverUri?.let { ReaderBookDisplayCover(it, ReaderBookCoverSource.EBOOK) }
+        )
+    }.filterNotNull()
+    return preferred.firstOrNull()
+        ?: coverUri?.let { uri ->
+            ReaderBookDisplayCover(uri, coverSource ?: ReaderBookCoverSource.AUDIO)
+        }
+}
 
 private data class ReturnedBookProgress(
     val audioUri: String,
@@ -713,19 +737,13 @@ private fun ReaderSyncScreen() {
                                     uri = "book|$targetAudioUri|${returnedSrt?.toString().orEmpty()}",
                                     displayName = "$targetAudioName|${updatedSrtName.orEmpty()}"
                                 )
-                                val updatedBook = ReaderBook(
+                                val updatedBook = targetBook.copy(
                                     id = updatedId,
                                     title = updatedTitle,
                                     audioUri = targetAudioUri,
                                     audioName = targetAudioName,
                                     srtUri = returnedSrt,
-                                    srtName = updatedSrtName,
-                                    ebookUri = targetBook.ebookUri,
-                                    ebookName = targetBook.ebookName,
-                                    ebookFormat = targetBook.ebookFormat,
-                                    coverUri = targetBook.coverUri,
-                                    coverSource = targetBook.coverSource,
-                                    coverFocus = targetBook.coverFocus
+                                    srtName = updatedSrtName
                                 )
                                 val wasSelected = selectedBookId == targetBook.id
                                 readerBooks = listOf(updatedBook) + readerBooks.filterNot {
@@ -1233,7 +1251,9 @@ private fun ReaderSyncScreen() {
             ebookName = resolvedEbookName,
             ebookFormat = ebookFormat,
             coverUri = coverUri,
-            coverSource = coverSource
+            coverSource = coverSource,
+            audioCoverUri = audioCoverUri,
+            ebookCoverUri = ebookCoverUri
         )
     }
 
@@ -2734,10 +2754,11 @@ private fun ReaderSyncScreen() {
                                                     )
                                             ) {
                                                 val coverSlotWidth = maxWidth
+                                                val displayCover = book.displayCoverFor(homeCoverAspect)
                                                 val canEditCoverFocus =
                                                     homeCoverFocusEditMode &&
                                                         homeCoverAspect == HomeCoverAspect.BOOK &&
-                                                        book.coverSource == ReaderBookCoverSource.AUDIO
+                                                        displayCover?.source == ReaderBookCoverSource.AUDIO
                                                 Box(
                                                     modifier = Modifier
                                                         .fillMaxSize()
@@ -2752,12 +2773,12 @@ private fun ReaderSyncScreen() {
                                                             }
                                                         )
                                                 ) {
-                                                    if (book.coverUri != null) {
+                                                    if (displayCover != null) {
                                                         val squareEbookCover =
                                                             homeCoverAspect == HomeCoverAspect.SQUARE &&
-                                                                book.coverSource == ReaderBookCoverSource.EBOOK
+                                                                displayCover.source == ReaderBookCoverSource.EBOOK
                                                         BookCoverThumbnail(
-                                                            coverUri = book.coverUri,
+                                                            coverUri = displayCover.uri,
                                                             modifier = if (squareEbookCover) {
                                                                 Modifier
                                                                     .width(coverSlotWidth * ReaderBookCoverAspectRatio)
@@ -2875,10 +2896,11 @@ private fun ReaderSyncScreen() {
                         val multiSelected = selectedBookIds.contains(book.id)
                         val playbackSnapshot = readerBookPlaybackSnapshots[book.id]
                         val playbackPercent = playbackSnapshot?.progressPercent ?: 0
+                        val displayCover = book.displayCoverFor(homeCoverAspect)
                         val canEditCoverFocus =
                             homeCoverFocusEditMode &&
                                 homeCoverAspect == HomeCoverAspect.BOOK &&
-                                book.coverSource == ReaderBookCoverSource.AUDIO
+                                displayCover?.source == ReaderBookCoverSource.AUDIO
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2906,7 +2928,7 @@ private fun ReaderSyncScreen() {
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalAlignment = Alignment.Top
                                 ) {
-                                    if (book.coverUri != null || book.isEbookOnly) {
+                                    if (displayCover != null || book.isEbookOnly) {
                                         Box(
                                             modifier = Modifier
                                                 .then(
@@ -2927,12 +2949,12 @@ private fun ReaderSyncScreen() {
                                                     }
                                                 )
                                         ) {
-                                            if (book.coverUri != null) {
+                                            if (displayCover != null) {
                                                 val squareEbookCover =
                                                     homeCoverAspect == HomeCoverAspect.SQUARE &&
-                                                        book.coverSource == ReaderBookCoverSource.EBOOK
+                                                        displayCover.source == ReaderBookCoverSource.EBOOK
                                                 BookCoverThumbnail(
-                                                    coverUri = book.coverUri,
+                                                    coverUri = displayCover.uri,
                                                     modifier = if (squareEbookCover) {
                                                         Modifier
                                                             .width(96.dp * ReaderBookCoverAspectRatio)

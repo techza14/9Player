@@ -979,17 +979,18 @@ private fun buildEpubImageMapFromCache(
             }
         }
     }
-    if (manifest.isEmpty()) {
-        root.walkTopDown()
-            .filter { it.isFile && it.name.isEpubImagePath() }
-            .forEach { file ->
-                val path = file.relativeTo(root).invariantSeparatorsPath
-                images[path] = EpubImageResource(
+    root.walkTopDown()
+        .filter { it.isFile && it.name.isEpubImagePath() }
+        .forEach { file ->
+            val path = file.relativeTo(root).invariantSeparatorsPath
+            images.putIfAbsent(
+                path,
+                EpubImageResource(
                     mediaType = path.mediaTypeFromExtension(),
                     filePath = file.absolutePath
                 )
-            }
-    }
+            )
+        }
     return images
 }
 
@@ -1014,9 +1015,9 @@ private fun htmlToReaderContent(
         }
     }
     val imageTags = mutableListOf<HtmlImageTag>()
-    body = Regex("(?is)<img\\b[^>]*>").replace(body) { match ->
+    body = Regex("(?is)<svg\\b[^>]*>.*?</svg>|<img\\b[^>]*>|<image\\b[^>]*>").replace(body) { match ->
         val tag = match.value
-        val src = tag.htmlAttribute("src")
+        val src = tag.htmlImageSource()
         if (src.isBlank()) {
             ""
         } else {
@@ -1417,6 +1418,12 @@ private fun String.htmlAttribute(name: String): String {
                 .getOrElse { value.substringBefore('#') }
         }
         .orEmpty()
+}
+
+private fun String.htmlImageSource(): String {
+    return htmlAttribute("src")
+        .ifBlank { htmlAttribute("xlink:href") }
+        .ifBlank { htmlAttribute("href") }
 }
 
 private fun String.isEpubImagePath(): Boolean {

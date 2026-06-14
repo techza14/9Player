@@ -113,6 +113,7 @@
     <string name="reader_click_region_menu_required">At least one menu zone is required. Center was restored to Menu.</string>
     <string name="reader_menu_player">Player</string>
     <string name="reader_menu_add_bookmark">Add bookmark</string>
+    <string name="reader_menu_images">Illustrations</string>
     <string name="reader_menu_switch_vertical">Switch to vertical</string>
     <string name="reader_menu_switch_horizontal">Switch to horizontal</string>
     <string name="reader_menu_help">Help</string>
@@ -149,6 +150,8 @@
     <string name="reader_font_monospace">Monospace font</string>
     <string name="reader_title_font">Font</string>
     <string name="reader_image_preview_unavailable">Image preview unavailable</string>
+    <string name="reader_image_gallery_title">Illustrations %1$d/%2$d</string>
+    <string name="reader_image_gallery_empty">No illustrations</string>
     <string name="reader_title_margin">Margins</string>
     <string name="reader_margin_header">Header</string>
     <string name="reader_margin_body">Body</string>

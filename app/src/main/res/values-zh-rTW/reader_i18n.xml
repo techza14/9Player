@@ -113,6 +113,7 @@
     <string name="reader_click_region_menu_required">至少要保留一個選單區域，已將中間區域恢復為選單</string>
     <string name="reader_menu_player">播放器</string>
     <string name="reader_menu_add_bookmark">新增書籤</string>
+    <string name="reader_menu_images">插圖</string>
     <string name="reader_menu_switch_vertical">切換直排</string>
     <string name="reader_menu_switch_horizontal">切換橫排</string>
     <string name="reader_menu_help">說明</string>
@@ -149,6 +150,8 @@
     <string name="reader_font_monospace">等寬字型</string>
     <string name="reader_title_font">字型</string>
     <string name="reader_image_preview_unavailable">圖片無法預覽</string>
+    <string name="reader_image_gallery_title">插圖 %1$d/%2$d</string>
+    <string name="reader_image_gallery_empty">沒有插圖</string>
     <string name="reader_title_margin">邊距</string>
     <string name="reader_margin_header">頁眉</string>
     <string name="reader_margin_body">正文</string>

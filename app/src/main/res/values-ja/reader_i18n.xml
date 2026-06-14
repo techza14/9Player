@@ -113,6 +113,7 @@
     <string name="reader_click_region_menu_required">少なくとも1つのメニュー領域が必要なため、中央をメニューに戻しました</string>
     <string name="reader_menu_player">プレーヤー</string>
     <string name="reader_menu_add_bookmark">しおりを追加</string>
+    <string name="reader_menu_images">挿絵</string>
     <string name="reader_menu_switch_vertical">縦書きに切替</string>
     <string name="reader_menu_switch_horizontal">横組みに切替</string>
     <string name="reader_menu_help">ヘルプ</string>
@@ -149,6 +150,8 @@
     <string name="reader_font_monospace">等幅フォント</string>
     <string name="reader_title_font">フォント</string>
     <string name="reader_image_preview_unavailable">画像をプレビューできません</string>
+    <string name="reader_image_gallery_title">挿絵 %1$d/%2$d</string>
+    <string name="reader_image_gallery_empty">挿絵がありません</string>
     <string name="reader_title_margin">余白</string>
     <string name="reader_margin_header">ヘッダー</string>
     <string name="reader_margin_body">本文</string>
