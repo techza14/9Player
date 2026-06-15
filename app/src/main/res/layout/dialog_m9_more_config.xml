@@ -165,6 +165,16 @@
                 android:layout_height="wrap_content" />
         </LinearLayout>
 
+        <LinearLayout style="@style/ReaderMoreRow">
+            <TextView
+                style="@style/ReaderMoreLabel"
+                android:text="@string/settings_ebook_image_spoiler_title" />
+            <Switch
+                android:id="@+id/more_hide_unread_images"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
         <LinearLayout
             android:id="@+id/more_click_regional_config"
             style="@style/ReaderMoreRow">

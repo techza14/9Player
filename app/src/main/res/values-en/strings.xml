@@ -43,6 +43,7 @@
     <string name="settings_ebook_enabled_title">Enable ebook</string>
     <string name="settings_ebook_default_reader_title">Open ebook by default</string>
     <string name="settings_ebook_only_import_title">Allow ebook-only import</string>
+    <string name="settings_ebook_image_spoiler_title">Hide unread illustrations</string>
     <string name="settings_other_title">Experimental features</string>
     <string name="settings_statistics_title">Statistics</string>
     <string name="settings_update_title">Updates</string>
@@ -229,11 +230,11 @@
     <string name="status_control_hint_replay_bookmark">Single tap: replay current line and bookmark it</string>
     <string name="status_control_hint_footer">\nDouble tap during replay: play previous line and bookmark it\nSwipe left: previous line\nSwipe right: next line\nTwo-finger short long-press: exit</string>
     <string name="status_playback_speed">Playback speed: %1$sx</string>
-    <string name="status_books_removed_from_library">Removed %1$d books from the library; source files were not deleted.</string>
     <string name="status_books_deleted_with_folder">Deleted %1$d books; entries inside the audiobook folder also removed their folders.</string>
     <string name="status_books_deleted_files_only">Deleted %1$d books (selected files only).</string>
     <string name="status_books_deleted_with_failures">Deleted %1$d books; %2$d file deletions failed, %3$d folder deletions failed.</string>
-    <string name="status_books_archived_sources">Removed %1$d books from the shelf; source files were moved to 9Player Sources.</string>
+    <string name="status_books_archiving_sources">Removed %1$d books from the shelf; moving source files...</string>
+    <string name="status_books_archived_sources_toast">Source files moved to 9Player Sources</string>
     <string name="status_books_archived_with_failures">Removed %1$d books from the shelf; %2$d files failed to archive and %3$d originals failed to move away.</string>
     <string name="status_pick_audiobook_folder_first">Choose the audiobook folder first.</string>
     <string name="status_pick_audio_first">Choose an audio file.</string>

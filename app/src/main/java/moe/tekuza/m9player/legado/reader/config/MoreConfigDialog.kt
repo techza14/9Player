@@ -26,6 +26,7 @@ internal data class MoreConfigState(
     val textBottomJustify: Boolean = true,
     val noAnimScrollPage: Boolean = false,
     val previewImageByClick: Boolean = false,
+    val hideUnreadImages: Boolean = false,
     val disableReturnKey: Boolean = false,
     val readBarStyleFollowPage: Boolean = false
 )
@@ -44,6 +45,7 @@ internal class MoreConfigDialog @JvmOverloads constructor(
     var onTextBottomJustifyChanged: ((Boolean) -> Unit)? = null
     var onNoAnimScrollPageChanged: ((Boolean) -> Unit)? = null
     var onPreviewImageByClickChanged: ((Boolean) -> Unit)? = null
+    var onHideUnreadImagesChanged: ((Boolean) -> Unit)? = null
     var onDisableReturnKeyChanged: ((Boolean) -> Unit)? = null
     var onReadBarStyleFollowPageChanged: ((Boolean) -> Unit)? = null
     var onScreenOrientationClicked: (() -> Unit)? = null
@@ -82,6 +84,7 @@ internal class MoreConfigDialog @JvmOverloads constructor(
         bindSwitch(R.id.more_text_bottom_justify, state.textBottomJustify, onTextBottomJustifyChanged)
         bindSwitch(R.id.more_no_anim_scroll_page, state.noAnimScrollPage, onNoAnimScrollPageChanged)
         bindSwitch(R.id.more_preview_image_by_click, state.previewImageByClick, onPreviewImageByClickChanged)
+        bindSwitch(R.id.more_hide_unread_images, state.hideUnreadImages, onHideUnreadImagesChanged)
         bindSwitch(R.id.more_disable_return_key, state.disableReturnKey, onDisableReturnKeyChanged)
         bindSwitch(R.id.more_read_bar_style_follow_page, state.readBarStyleFollowPage, onReadBarStyleFollowPageChanged)
 

@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.pm.ActivityInfo
 import android.graphics.Color
+import android.graphics.RenderEffect
+import android.graphics.Shader
 import android.graphics.drawable.ColorDrawable
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
@@ -160,7 +162,9 @@ private data class ReaderImageGalleryItem(
     val image: EbookImageRef,
     val chapterIndex: Int,
     val chapterPosition: Int
-)
+) {
+    val key: String get() = "$chapterIndex:$chapterPosition:${image.cacheIdentity()}"
+}
 
 private data class ReaderImageStopTarget(
     val chapterIndex: Int,
@@ -1138,6 +1142,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 previewImageByClick = it
                 persistReaderSettings()
             }
+            onHideUnreadImagesChanged = {
+                saveEbookImageSpoilerEnabled(this@LegadoReaderActivity, it)
+                bind(currentMoreConfigState())
+            }
             onDisableReturnKeyChanged = {
                 disableReturnKey = it
                 persistReaderSettings()
@@ -1179,6 +1187,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             textBottomJustify = textBottomJustify,
             noAnimScrollPage = noAnimScrollPage,
             previewImageByClick = previewImageByClick,
+            hideUnreadImages = loadEbookImageSpoilerEnabled(this),
             disableReturnKey = disableReturnKey,
             readBarStyleFollowPage = readBarStyleFollowPage
         )
@@ -1793,6 +1802,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         keepScreenOn = defaults.keepScreenOn
         noAnimScrollPage = defaults.noAnimScrollPage
         previewImageByClick = defaults.previewImageByClick
+        saveEbookImageSpoilerEnabled(this, false)
         disableReturnKey = defaults.disableReturnKey
         readBarStyleFollowPage = defaults.readBarStyleFollowPage
 
@@ -3718,12 +3728,28 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         return nextImage.takeIf { it >= 0 } ?: 0
     }
 
+    private fun isImageGalleryItemUnlocked(
+        item: ReaderImageGalleryItem,
+        unlockAnchor: ReaderPageAnchor?
+    ): Boolean {
+        val anchor = unlockAnchor ?: return false
+        return item.chapterIndex < anchor.chapterIndex ||
+            (item.chapterIndex == anchor.chapterIndex && item.chapterPosition <= anchor.charPosition)
+    }
+
     private fun showImageGalleryDialog() {
         val items = collectReaderImageGalleryItems()
         if (items.isEmpty()) {
             Toast.makeText(this, R.string.reader_image_gallery_empty, Toast.LENGTH_SHORT).show()
             return
         }
+        val spoilerEnabled = loadEbookImageSpoilerEnabled(this)
+        val unlockAnchor = if (spoilerEnabled) {
+            currentPageAnchor(includeCueMatch = false) ?: pendingRestoreAnchor
+        } else {
+            null
+        }
+        val temporaryUnlockedImageKeys = mutableSetOf<String>()
         imageGalleryDismiss?.invoke()
         val initialIndex = initialImageGalleryIndex(items).coerceIn(0, items.lastIndex)
         val displayMetrics = resources.displayMetrics
@@ -3871,12 +3897,49 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
 
         items.forEachIndexed { index, item ->
+            val unlockedByProgress = !spoilerEnabled || isImageGalleryItemUnlocked(item, unlockAnchor)
             val imageView = ImageView(this).apply {
                 adjustViewBounds = true
                 scaleType = ImageView.ScaleType.FIT_CENTER
                 setBackgroundColor(galleryBgColor)
                 setPadding(dp(4), dp(4), dp(4), dp(4))
-                setOnClickListener { showFocus(index) }
+                setOnClickListener {
+                    if (unlockedByProgress || item.key in temporaryUnlockedImageKeys) {
+                        showFocus(index)
+                    }
+                }
+            }
+            val spoilerLabel = TextView(this).apply {
+                gravity = Gravity.CENTER
+                textSize = 18f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.BLACK)
+                setText(R.string.reader_image_gallery_spoiler)
+                setPadding(dp(18), dp(8), dp(18), dp(8))
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = dp(20).toFloat()
+                    setColor(0xE6FFFFFF.toInt())
+                    setStroke(dp(1), 0x33000000)
+                }
+            }
+            val spoilerOverlay = FrameLayout(this).apply {
+                setBackgroundColor(
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        0x99FFFFFF.toInt()
+                    } else {
+                        0xEAF5F5F5.toInt()
+                    }
+                )
+                isClickable = true
+                addView(
+                    spoilerLabel,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.WRAP_CONTENT,
+                        FrameLayout.LayoutParams.WRAP_CONTENT,
+                        Gravity.CENTER
+                    )
+                )
             }
             val row = FrameLayout(this).apply {
                 addView(
@@ -3886,7 +3949,32 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                         FrameLayout.LayoutParams.MATCH_PARENT
                     )
                 )
+                addView(
+                    spoilerOverlay,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                )
             }
+            fun updateSpoilerState() {
+                val unlocked = unlockedByProgress || item.key in temporaryUnlockedImageKeys
+                spoilerOverlay.visibility = if (unlocked) View.GONE else View.VISIBLE
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    imageView.setRenderEffect(
+                        if (unlocked) {
+                            null
+                        } else {
+                            RenderEffect.createBlurEffect(44f, 44f, Shader.TileMode.CLAMP)
+                        }
+                    )
+                }
+            }
+            spoilerOverlay.setOnClickListener {
+                temporaryUnlockedImageKeys += item.key
+                updateSpoilerState()
+            }
+            updateSpoilerState()
             imageRows += row
             imageContainer.addView(
                 row,

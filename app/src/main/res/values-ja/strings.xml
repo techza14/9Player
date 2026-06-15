@@ -44,6 +44,7 @@
     <string name="settings_ebook_enabled_title">ebook を有効にする</string>
     <string name="settings_ebook_default_reader_title">ebook を既定で開く</string>
     <string name="settings_ebook_only_import_title">ebook のみのインポートを許可</string>
+    <string name="settings_ebook_image_spoiler_title">未読の挿絵を隠す</string>
     <string name="settings_other_title">実験的機能</string>
     <string name="settings_statistics_title">統計</string>
     <string name="settings_update_title">アップデート</string>
@@ -232,11 +233,11 @@
     <string name="status_control_hint_replay_bookmark">シングルタップ：現在の行を再生してお気に入り</string>
     <string name="status_control_hint_footer">\n再生中にダブルタップ：前の行を再生してお気に入り\n左スワイプ：前の行\n右スワイプ：次の行\n二本指の短い長押し：終了</string>
     <string name="status_playback_speed">再生速度：%1$sx</string>
-    <string name="status_books_removed_from_library">%1$d 冊を書棚から削除しました。元ファイルは削除していません。</string>
     <string name="status_books_deleted_with_folder">%1$d 冊を削除しました。オーディオブックフォルダ内の項目は対応フォルダも削除されました。</string>
     <string name="status_books_deleted_files_only">%1$d 冊を削除しました（選択ファイルのみ）。</string>
     <string name="status_books_deleted_with_failures">%1$d 冊を削除しました。ファイル削除失敗 %2$d 件、フォルダ削除失敗 %3$d 件。</string>
-    <string name="status_books_archived_sources">%1$d 冊を書棚から削除しました。元ファイルは 9Player Sources に移動しました。</string>
+    <string name="status_books_archiving_sources">%1$d 冊を書棚から削除しました。元ファイルを移動しています...</string>
+    <string name="status_books_archived_sources_toast">元ファイルを 9Player Sources に移動しました</string>
     <string name="status_books_archived_with_failures">%1$d 冊を書棚から削除しました。%2$d 件のファイルの退避に失敗し、%3$d 件の元ファイルの移動に失敗しました。</string>
     <string name="status_pick_audiobook_folder_first">先にオーディオブックフォルダを選択してください。</string>
     <string name="status_pick_audio_first">音声ファイルを選択してください。</string>

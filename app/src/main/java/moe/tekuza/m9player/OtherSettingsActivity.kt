@@ -86,6 +86,7 @@ private fun OtherSettingsScreen(
                             ebookOnlyImportEnabled = false
                             saveEbookDefaultToReader(context, false)
                             saveEbookOnlyImportEnabled(context, false)
+                            saveEbookImageSpoilerEnabled(context, false)
                         }
                     },
                     showDivider = true

@@ -47,6 +47,7 @@
     <string name="settings_ebook_enabled_title">开启ebook</string>
     <string name="settings_ebook_default_reader_title">默认打开ebook</string>
     <string name="settings_ebook_only_import_title">允许只导入书</string>
+    <string name="settings_ebook_image_spoiler_title">隐藏未读插图</string>
     <string name="settings_other_title">实验性功能</string>
     <string name="settings_statistics_title">统计</string>
     <string name="settings_update_title">更新</string>
@@ -235,11 +236,11 @@
     <string name="status_control_hint_replay_bookmark">单击：重播当前句并收藏</string>
     <string name="status_control_hint_footer">\n重播中双击：播放上一句并收藏\n左滑：上一句\n右滑：下一句\n双指短长按：退出</string>
     <string name="status_playback_speed">播放速度：%1$sx</string>
-    <string name="status_books_removed_from_library">已从书架移除 %1$d 本书；未删除源文件。</string>
     <string name="status_books_deleted_with_folder">已删除 %1$d 本书；有声书文件夹内的条目已删除对应文件夹。</string>
     <string name="status_books_deleted_files_only">已删除 %1$d 本书（仅删除所选文件）。</string>
     <string name="status_books_deleted_with_failures">已删书 %1$d 本；%2$d 个文件删除失败，%3$d 个文件夹删除失败。</string>
-    <string name="status_books_archived_sources">已从书架移除 %1$d 本书；源文件已移至 9Player Sources。</string>
+    <string name="status_books_archiving_sources">已从书架移除 %1$d 本书；正在移动源文件...</string>
+    <string name="status_books_archived_sources_toast">源文件已移至 9Player Sources</string>
     <string name="status_books_archived_with_failures">已从书架移除 %1$d 本书；%2$d 个文件归档失败，%3$d 个原文件移除失败。</string>
     <string name="status_pick_audiobook_folder_first">请先选择有声书文件夹。</string>
     <string name="status_pick_audio_first">请选择音频文件。</string>

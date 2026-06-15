@@ -1373,49 +1373,7 @@ private fun ReaderSyncScreen() {
         isBookSelectionMode = true
     }
 
-    fun deleteSelectedBooks(removeIds: Set<String>, deleteSourceFiles: Boolean) {
-        if (removeIds.isEmpty()) return
-        val deletingBooks = readerBooks.filter { it.id in removeIds }
-        Log.d(
-            BOOK_DELETE_LOG_TAG,
-            "deleteSelected count=${removeIds.size} matched=${deletingBooks.size} " +
-                "deleteSourceFiles=$deleteSourceFiles ids=${removeIds.joinToString(separator = ",") { it.take(12) }}"
-        )
-        val deleteResults = if (deleteSourceFiles) {
-            deletingBooks.map { book ->
-                deleteBookStorage(
-                    context = context,
-                    contentResolver = contentResolver,
-                    book = book,
-                    audiobookFolderUri = addBookFolderUri
-                )
-            }
-        } else {
-            emptyList()
-        }
-        val archiveResults = if (deleteSourceFiles) {
-            emptyList()
-        } else {
-            deletingBooks.map { book ->
-                archiveBookStorage(
-                    context = context,
-                    contentResolver = contentResolver,
-                    book = book,
-                    audiobookFolderUri = addBookFolderUri
-                )
-            }
-        }
-        val folderDeleteFailures = deleteResults.count { it.folderDeleteAttempted && !it.folderDeleteSucceeded }
-        val fileDeleteFailures = deleteResults.sumOf { it.fileDeleteFailures }
-        val deletedFolders = deleteResults.count { it.folderDeleteSucceeded }
-        val archiveCopyFailures = archiveResults.sumOf { it.fileCopyFailures }
-        val archiveDeleteFailures = archiveResults.sumOf { it.fileDeleteFailures }
-        Log.d(
-            BOOK_DELETE_LOG_TAG,
-            "deleteSelected result folderFailures=$folderDeleteFailures fileFailures=$fileDeleteFailures " +
-                "deletedFolders=$deletedFolders archiveCopyFailures=$archiveCopyFailures " +
-                "archiveDeleteFailures=$archiveDeleteFailures"
-        )
+    fun removeBooksFromShelf(removeIds: Set<String>) {
         val remaining = readerBooks.filterNot { it.id in removeIds }
         readerBooks = remaining
         if (selectedBookId in removeIds) {
@@ -1433,18 +1391,78 @@ private fun ReaderSyncScreen() {
         }
         persistImportState()
         clearBookSelection()
-        exportStatus = if (!deleteSourceFiles) {
-            if (archiveCopyFailures == 0 && archiveDeleteFailures == 0) {
-                context.getString(R.string.status_books_archived_sources, removeIds.size)
-            } else {
-                context.getString(
-                    R.string.status_books_archived_with_failures,
-                    removeIds.size,
-                    archiveCopyFailures,
-                    archiveDeleteFailures
+    }
+
+    fun deleteSelectedBooks(removeIds: Set<String>, deleteSourceFiles: Boolean) {
+        if (removeIds.isEmpty()) return
+        val deletingBooks = readerBooks.filter { it.id in removeIds }
+        Log.d(
+            BOOK_DELETE_LOG_TAG,
+            "deleteSelected count=${removeIds.size} matched=${deletingBooks.size} " +
+                "deleteSourceFiles=$deleteSourceFiles ids=${removeIds.joinToString(separator = ",") { it.take(12) }}"
+        )
+        if (!deleteSourceFiles) {
+            val archiveRootUri = addBookFolderUri
+            removeBooksFromShelf(removeIds)
+            exportStatus = context.getString(R.string.status_books_archiving_sources, removeIds.size)
+            scope.launch {
+                val archiveResults = withContext(Dispatchers.IO) {
+                    deletingBooks.map { book ->
+                        archiveBookStorage(
+                            context = context,
+                            contentResolver = contentResolver,
+                            book = book,
+                            audiobookFolderUri = archiveRootUri
+                        )
+                    }
+                }
+                val archiveCopyFailures = archiveResults.sumOf { it.fileCopyFailures }
+                val archiveDeleteFailures = archiveResults.sumOf { it.fileDeleteFailures }
+                Log.d(
+                    BOOK_DELETE_LOG_TAG,
+                    "deleteSelected archiveResult archiveCopyFailures=$archiveCopyFailures " +
+                        "archiveDeleteFailures=$archiveDeleteFailures"
+                )
+                if (archiveCopyFailures == 0 && archiveDeleteFailures == 0) {
+                    exportStatus = null
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.status_books_archived_sources_toast),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    exportStatus = context.getString(
+                        R.string.status_books_archived_with_failures,
+                        removeIds.size,
+                        archiveCopyFailures,
+                        archiveDeleteFailures
+                    )
+                }
+            }
+            return
+        }
+        val deleteResults = if (deleteSourceFiles) {
+            deletingBooks.map { book ->
+                deleteBookStorage(
+                    context = context,
+                    contentResolver = contentResolver,
+                    book = book,
+                    audiobookFolderUri = addBookFolderUri
                 )
             }
-        } else if (folderDeleteFailures == 0 && fileDeleteFailures == 0) {
+        } else {
+            emptyList()
+        }
+        val folderDeleteFailures = deleteResults.count { it.folderDeleteAttempted && !it.folderDeleteSucceeded }
+        val fileDeleteFailures = deleteResults.sumOf { it.fileDeleteFailures }
+        val deletedFolders = deleteResults.count { it.folderDeleteSucceeded }
+        Log.d(
+            BOOK_DELETE_LOG_TAG,
+            "deleteSelected result folderFailures=$folderDeleteFailures fileFailures=$fileDeleteFailures " +
+                "deletedFolders=$deletedFolders"
+        )
+        removeBooksFromShelf(removeIds)
+        exportStatus = if (folderDeleteFailures == 0 && fileDeleteFailures == 0) {
             if (deletedFolders > 0) {
                 context.getString(R.string.status_books_deleted_with_folder, removeIds.size)
             } else {
