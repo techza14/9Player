@@ -1,4 +1,4 @@
-import org.gradle.internal.os.OperatingSystem
+﻿import org.gradle.internal.os.OperatingSystem
 import java.io.File
 
 plugins {
@@ -17,8 +17,8 @@ android {
         applicationId = "moe.tekuza.m9player"
         minSdk = 29
         targetSdk = 36
-        versionCode = 43
-        versionName = "1.6.12"
+        versionCode = 44
+        versionName = "1.6.13"
 
         externalNativeBuild {
             cmake {
@@ -156,6 +156,7 @@ tasks.register("buildMdictRust") {
 tasks.named("preBuild") {
     dependsOn("buildMdictRust")
 }
+
 
 
 
