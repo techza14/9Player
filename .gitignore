@@ -25,6 +25,8 @@ classes-shizuku-provider.jar
 
 # Local temporary/work directories
 /.codex_tmp/
+*.tmp
+*.temp
 /third_party/
 /release/
 /scripts/

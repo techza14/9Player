@@ -142,6 +142,7 @@ Anki模板：[Lapis](https://github.com/donkuri/lapis)
 - [APlayer](https://github.com/rRemix/APlayer)
 - [mdict-rs](https://crates.io/crates/mdict-rs)
 - [Legado](https://github.com/gedoor/legado)
+- [ッツ Ebook Reader](https://github.com/ttu-ttu/ebook-reader)
 
 ## License
 

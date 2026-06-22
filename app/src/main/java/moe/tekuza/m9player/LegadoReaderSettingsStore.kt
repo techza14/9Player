@@ -179,7 +179,6 @@ internal data class LegadoReaderPersistedState(
     val progressByChapter: Boolean = true,
     val keepScreenOn: Boolean = false,
     val noAnimScrollPage: Boolean = false,
-    val previewImageByClick: Boolean = false,
     val disableReturnKey: Boolean = false,
     val readBarStyleFollowPage: Boolean = false,
     val playbackBarPinnedVisible: Boolean = false,
@@ -360,7 +359,6 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         progressByChapter = json.optBoolean("progressByChapter", true),
         keepScreenOn = json.optBoolean("keepScreenOn", false),
         noAnimScrollPage = json.optBoolean("noAnimScrollPage", false),
-        previewImageByClick = json.optBoolean("previewImageByClick", false),
         disableReturnKey = json.optBoolean("disableReturnKey", false),
         readBarStyleFollowPage = json.optBoolean("readBarStyleFollowPage", false),
         playbackBarPinnedVisible = json.optBoolean("playbackBarPinnedVisible", false),
@@ -561,7 +559,6 @@ internal fun saveLegadoReaderPersistedState(
         put("progressByChapter", state.progressByChapter)
         put("keepScreenOn", state.keepScreenOn)
         put("noAnimScrollPage", state.noAnimScrollPage)
-        put("previewImageByClick", state.previewImageByClick)
         put("disableReturnKey", state.disableReturnKey)
         put("readBarStyleFollowPage", state.readBarStyleFollowPage)
         put("playbackBarPinnedVisible", state.playbackBarPinnedVisible)

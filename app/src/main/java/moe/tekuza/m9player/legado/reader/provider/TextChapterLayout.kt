@@ -104,16 +104,22 @@ internal class TextChapterLayout(
                 } else {
                     0f
                 }
-                val letterExtra = config.letterSpacingPx.coerceAtLeast(0f)
                 val count = contentPaint.breakText(
                     text,
                     lineStart,
                     paragraphEnd,
                     true,
-                    (visibleWidth - indentWidth - letterExtra * 8).coerceAtLeast(1f),
+                    (visibleWidth - indentWidth).coerceAtLeast(1f),
                     null
                 ).coerceAtLeast(1).let { count ->
-                    adjustBreakCountForZhLayout(text, lineStart, paragraphEnd, count)
+                    val safeCount = fitBreakCountToLineWidth(
+                        text = text,
+                        start = lineStart,
+                        paragraphEnd = paragraphEnd,
+                        count = count,
+                        startX = indentWidth
+                    )
+                    adjustBreakCountForZhLayout(text, lineStart, paragraphEnd, safeCount)
                 }
                 val lineEnd = (lineStart + count).coerceAtMost(paragraphEnd)
                 val lineText = text.substring(lineStart, lineEnd)
@@ -201,6 +207,35 @@ internal class TextChapterLayout(
         if (count <= 1 || start + count >= paragraphEnd) return count
         val nextChar = text[start + count]
         return if (nextChar in noLineStartChars) count - 1 else count
+    }
+
+    private fun fitBreakCountToLineWidth(
+        text: String,
+        start: Int,
+        paragraphEnd: Int,
+        count: Int,
+        startX: Float
+    ): Int {
+        val maxWidth = visibleWidth - startX
+        if (maxWidth <= 1f) return 1
+        var safeCount = count.coerceIn(1, paragraphEnd - start)
+        while (safeCount > 1 && measuredLineWidth(text, start, start + safeCount) > maxWidth) {
+            val previousIndex = text.offsetByCodePoints(start + safeCount, -1)
+            safeCount = (previousIndex - start).coerceAtLeast(1)
+        }
+        return safeCount
+    }
+
+    private fun measuredLineWidth(text: String, start: Int, end: Int): Float {
+        var width = 0f
+        var index = start
+        while (index < end) {
+            val codePoint = text.codePointAt(index)
+            val char = String(Character.toChars(codePoint))
+            width += contentPaint.measureText(char) + config.letterSpacingPx
+            index += char.length
+        }
+        return width
     }
 
     private fun justifyTextLine(line: TextLine) {

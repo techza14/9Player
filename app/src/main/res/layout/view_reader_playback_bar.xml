@@ -57,4 +57,15 @@
             android:src="@drawable/reader_ic_skip_next"
             app:tint="#2C241B" />
     </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/reader_playback_repeat"
+        android:layout_width="46dp"
+        android:layout_height="46dp"
+        android:layout_gravity="end|center_vertical"
+        android:background="@drawable/reader_menu_touch"
+        android:contentDescription="@null"
+        android:padding="10dp"
+        android:src="@drawable/reader_ic_repeat"
+        app:tint="#2C241B" />
 </FrameLayout>

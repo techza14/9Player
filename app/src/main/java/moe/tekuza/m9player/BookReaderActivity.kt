@@ -189,6 +189,7 @@ private const val BOOK_READER_UI_CHAPTER_VISIBLE_KEY = "ui_chapter_visible"
 private const val BOOK_READER_SLEEP_EXIT_CONTROL_KEY = "sleep_exit_control"
 private const val BOOK_READER_SLEEP_DISCONNECT_BT_KEY = "sleep_disconnect_bt"
 private const val BOOK_READER_SLEEP_FADE_OUT_KEY = "sleep_fade_out"
+private const val BOOK_READER_SLEEP_DEFAULT_TIMER_MINUTES_KEY = "sleep_default_timer_minutes"
 internal const val BOOK_READER_SLEEP_FADE_OUT_MS = 10_000L
 private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
 private const val BOOK_LOOKUP_SELECTION_LOG_TAG = "BookLookupSelection"
@@ -1273,11 +1274,13 @@ private fun BookReaderScreen(
         sleepOptionsReady
     ) {
         if (!sleepOptionsReady) return@LaunchedEffect
+        val currentSleepOptions = loadBookReaderSleepOptions(context)
         saveBookReaderSleepOptions(
             context = context,
             exitControlModeWhenDone = sleepExitControlModeWhenDone,
             disconnectBluetoothWhenDone = sleepDisconnectControllerBluetoothWhenDone,
-            fadeOutAudioWhenDone = sleepFadeOutAudioWhenDone
+            fadeOutAudioWhenDone = sleepFadeOutAudioWhenDone,
+            defaultTimerMinutes = currentSleepOptions.defaultTimerMinutes
         )
     }
 
@@ -6247,7 +6250,8 @@ private fun findCueIndexAtOrAfterTime(cues: List<ReaderSubtitleCue>, timeMs: Lon
 internal data class BookReaderSleepOptions(
     val exitControlModeWhenDone: Boolean,
     val disconnectBluetoothWhenDone: Boolean,
-    val fadeOutAudioWhenDone: Boolean
+    val fadeOutAudioWhenDone: Boolean,
+    val defaultTimerMinutes: Int
 )
 
 internal fun sleepFadeVolume(remainingMs: Long, fadeOutMs: Long = BOOK_READER_SLEEP_FADE_OUT_MS): Float {
@@ -6269,7 +6273,8 @@ internal fun loadBookReaderSleepOptions(context: Context): BookReaderSleepOption
     return BookReaderSleepOptions(
         exitControlModeWhenDone = prefs.getBoolean(BOOK_READER_SLEEP_EXIT_CONTROL_KEY, false),
         disconnectBluetoothWhenDone = prefs.getBoolean(BOOK_READER_SLEEP_DISCONNECT_BT_KEY, false),
-        fadeOutAudioWhenDone = prefs.getBoolean(BOOK_READER_SLEEP_FADE_OUT_KEY, false)
+        fadeOutAudioWhenDone = prefs.getBoolean(BOOK_READER_SLEEP_FADE_OUT_KEY, false),
+        defaultTimerMinutes = prefs.getInt(BOOK_READER_SLEEP_DEFAULT_TIMER_MINUTES_KEY, 0)
     )
 }
 
@@ -6277,13 +6282,15 @@ internal fun saveBookReaderSleepOptions(
     context: Context,
     exitControlModeWhenDone: Boolean,
     disconnectBluetoothWhenDone: Boolean,
-    fadeOutAudioWhenDone: Boolean
+    fadeOutAudioWhenDone: Boolean,
+    defaultTimerMinutes: Int
 ) {
     context.getSharedPreferences(BOOK_READER_SLEEP_OPTIONS_PREFS, Context.MODE_PRIVATE)
         .edit()
         .putBoolean(BOOK_READER_SLEEP_EXIT_CONTROL_KEY, exitControlModeWhenDone)
         .putBoolean(BOOK_READER_SLEEP_DISCONNECT_BT_KEY, disconnectBluetoothWhenDone)
         .putBoolean(BOOK_READER_SLEEP_FADE_OUT_KEY, fadeOutAudioWhenDone)
+        .putInt(BOOK_READER_SLEEP_DEFAULT_TIMER_MINUTES_KEY, defaultTimerMinutes.coerceAtLeast(0))
         .apply()
 }
 

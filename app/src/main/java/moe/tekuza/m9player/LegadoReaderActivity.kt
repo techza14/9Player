@@ -173,6 +173,14 @@ private data class ReaderImageStopTarget(
     val key: String get() = "$chapterIndex:$imagePosition"
 }
 
+private data class ReaderChapterImageStop(
+    val target: ReaderImageStopTarget,
+    val pageIndex: Int,
+    val triggerCueIndex: Int? = null,
+    val tailCueIndex: Int? = null,
+    val tailCueEndMs: Long? = null
+)
+
 class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private lateinit var readMenu: View
     private lateinit var statusBarScrim: View
@@ -203,6 +211,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private lateinit var listenActionText: TextView
     private lateinit var audioPlayPauseText: TextView
     private lateinit var playbackBarToggleButton: ImageButton
+    private lateinit var playbackBarRepeatButton: ImageButton
+    private lateinit var audioTimerSeekBar: SeekBar
+    private lateinit var audioTimerValueText: TextView
     private lateinit var chapterControlRow: LinearLayout
     private lateinit var brightnessPanel: View
     private lateinit var brightnessSeekBar: SeekBar
@@ -315,7 +326,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         selectReaderStyle(index)
     }
     private var audioStopAtMs: Long? = null
+    private var audioTimerSelectedMinutes: Int = 0
     private var audioTimerFadeOutEnabled: Boolean = false
+    private var audioCueLoopEnabled: Boolean = false
+    private var audioCueLoopWindow: Pair<Long, Long>? = null
     private var hideStatusBar: Boolean = false
     private var readBodyToLh: Boolean = true
     private var hideNavigationBar: Boolean = false
@@ -368,7 +382,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var m4bChapterLoadJob: Job? = null
     private var keepScreenOn: Boolean = false
     private var noAnimScrollPage: Boolean = false
-    private var previewImageByClick: Boolean = false
     private var disableReturnKey: Boolean = false
     private var readBarStyleFollowPage: Boolean = false
     private var playbackBarPinnedVisible: Boolean = false
@@ -380,6 +393,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var lastImageStopKey: String? = null
     private var imagePauseResumeJob: Job? = null
     private var imagePausePageIndex: Int? = null
+    private var currentChapterImageStops: List<ReaderChapterImageStop> = emptyList()
+    private var currentChapterImageStopIndex: Int = 0
+    private var currentChapterImageStopChapterIndex: Int = -1
     private var showRubyText: Boolean = true
     private var playbackBarHeightPx: Int = 0
     private var pendingRestoreAnchor: ReaderPageAnchor? = null
@@ -811,9 +827,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             onSelectionProcessText = { intent, text -> handleSelectionProcessText(intent, text) }
             onTextSelectionStateChanged = { active -> handleTextSelectionStateChanged(active) }
             onImageClick = { image ->
-                if (previewImageByClick) {
-                    showImagePreviewDialog(image)
-                }
+                showFocusedImagePreview(image)
             }
             onMenu = {
                 when {
@@ -1007,6 +1021,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 playbackBarToggleButton = it
                 it.setOnClickListener { toggleAudioPlayback() }
             }
+            findViewById<ImageButton>(R.id.reader_playback_repeat).also {
+                playbackBarRepeatButton = it
+                it.setOnClickListener { toggleAudioCueLoop() }
+            }
         }
     }
 
@@ -1061,16 +1079,25 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
                 override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
             })
-            findViewById<TextView>(R.id.audio_timer_10).setOnClickListener { setAudioTimer(10) }
-            findViewById<TextView>(R.id.audio_timer_30).setOnClickListener { setAudioTimer(30) }
-            findViewById<TextView>(R.id.audio_timer_off).setOnClickListener {
-                audioStopAtMs = null
-                player?.volume = 1f
-                Toast.makeText(
-                    this@LegadoReaderActivity,
-                    readerString(R.string.reader_timer_closed),
-                    Toast.LENGTH_SHORT
-                ).show()
+            audioTimerSeekBar = findViewById(R.id.audio_timer_seek)
+            audioTimerValueText = findViewById(R.id.audio_timer_value)
+            syncAudioTimerSelectionFromState()
+            audioTimerSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    audioTimerSelectedMinutes = progress.coerceIn(0, AUDIO_TIMER_MAX_MINUTES)
+                    updateAudioTimerValueLabel()
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                    applySelectedAudioTimer(showToast = false)
+                }
+            })
+            findViewById<ImageView>(R.id.audio_timer_apply).setOnClickListener {
+                saveDefaultAudioTimerMinutes()
+            }
+            findViewById<TextView>(R.id.audio_timer_value).setOnClickListener {
+                showAudioTimerPresetDialog()
             }
             findViewById<CheckBox>(R.id.audio_timer_fade_out).also { checkbox ->
                 val options = loadBookReaderSleepOptions(this@LegadoReaderActivity)
@@ -1083,10 +1110,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                         context = this@LegadoReaderActivity,
                         exitControlModeWhenDone = current.exitControlModeWhenDone,
                         disconnectBluetoothWhenDone = current.disconnectBluetoothWhenDone,
-                        fadeOutAudioWhenDone = checked
+                        fadeOutAudioWhenDone = checked,
+                        defaultTimerMinutes = current.defaultTimerMinutes
                     )
                 }
             }
+            updateAudioTimerValueLabel()
         }
     }
 
@@ -1138,10 +1167,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 readView.setNoAnimScrollPage(it)
                 persistReaderSettings()
             }
-            onPreviewImageByClickChanged = {
-                previewImageByClick = it
-                persistReaderSettings()
-            }
             onHideUnreadImagesChanged = {
                 saveEbookImageSpoilerEnabled(this@LegadoReaderActivity, it)
                 bind(currentMoreConfigState())
@@ -1186,7 +1211,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             textFullJustify = textFullJustify,
             textBottomJustify = textBottomJustify,
             noAnimScrollPage = noAnimScrollPage,
-            previewImageByClick = previewImageByClick,
             hideUnreadImages = loadEbookImageSpoilerEnabled(this),
             disableReturnKey = disableReturnKey,
             readBarStyleFollowPage = readBarStyleFollowPage
@@ -1530,33 +1554,167 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         return "bookmark::$stable"
     }
 
-    private fun addCurrentBookmark() {
+    private fun addCurrentBookmark(preferredExcerpt: String? = null) {
         val page = pages.getOrNull(pageIndex) ?: run {
             Toast.makeText(this, R.string.reader_bookmark_unavailable, Toast.LENGTH_SHORT).show()
             return
         }
-        if (bookmarks.any { it.chapterIndex == page.chapterIndex && it.chapterPosition == page.charStart }) {
-            Toast.makeText(this, R.string.reader_bookmark_exists, Toast.LENGTH_SHORT).show()
+        findBookmarkForPage(page)?.let { bookmark ->
+            showBookmarkEditor(bookmark, isNew = false)
             return
         }
-        val preview = page.text
+        val excerpt = preferredExcerpt
+            ?.replace('\n', ' ')
+            ?.trim()
+            ?.take(300)
+            ?.takeIf { it.isNotBlank() }
+            ?: defaultBookmarkExcerpt(page)
+            .ifBlank { page.title.ifBlank { currentReaderTitle() } }
+        showBookmarkEditor(
+            ReaderBookmark(
+                chapterIndex = page.chapterIndex,
+                chapterPosition = page.charStart,
+                chapterTitle = page.title,
+                excerpt = excerpt,
+                note = "",
+                createdAtMs = System.currentTimeMillis()
+            ),
+            isNew = true
+        )
+    }
+
+    private fun findBookmarkForPage(page: TextPage): ReaderBookmark? {
+        return bookmarks.firstOrNull {
+            it.chapterIndex == page.chapterIndex && it.chapterPosition == page.charStart
+        }
+    }
+
+    private fun defaultBookmarkExcerpt(page: TextPage): String {
+        return page.text
             .replace('\n', ' ')
             .trim()
-            .take(60)
-            .ifBlank { page.title.ifBlank { currentReaderTitle() } }
-        bookmarks += ReaderBookmark(
-            chapterIndex = page.chapterIndex,
-            chapterPosition = page.charStart,
-            chapterTitle = page.title,
-            preview = preview,
-            createdAtMs = System.currentTimeMillis()
+            .take(300)
+    }
+
+    private fun showBookmarkEditor(bookmark: ReaderBookmark, isNew: Boolean) {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        container.addView(TextView(this).apply {
+            text = bookmark.chapterTitle.ifBlank { readerString(R.string.reader_unknown_chapter) }
+            textSize = 14f
+            setTextColor(currentMenuTextColor())
+            setPadding(0, 0, 0, dp(8))
+        })
+        val excerptInput = addBookmarkDialogInput(
+            container = container,
+            labelRes = R.string.reader_bookmark_excerpt,
+            value = bookmark.excerpt,
+            minLines = 3
         )
+        val noteInput = addBookmarkDialogInput(
+            container = container,
+            labelRes = R.string.reader_bookmark_note,
+            value = bookmark.note,
+            minLines = 2
+        )
+        val scroll = ScrollView(this).apply {
+            addView(container)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(if (isNew) R.string.reader_bookmark_add_title else R.string.reader_bookmark_edit_title)
+            .setView(scroll)
+            .setPositiveButton(R.string.reader_bookmark_save, null)
+            .setNegativeButton(R.string.common_cancel, null)
+            .apply {
+                if (!isNew) {
+                    setNeutralButton(R.string.common_delete, null)
+                }
+            }
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val excerpt = excerptInput.text?.toString()?.trim().orEmpty()
+                if (excerpt.isBlank()) {
+                    Toast.makeText(this, R.string.reader_bookmark_excerpt_required, Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                upsertBookmark(
+                    bookmark.copy(
+                        excerpt = excerpt,
+                        note = noteInput.text?.toString()?.trim().orEmpty()
+                    )
+                )
+                Toast.makeText(
+                    this,
+                    if (isNew) R.string.reader_bookmark_added else R.string.reader_bookmark_updated,
+                    Toast.LENGTH_SHORT
+                ).show()
+                dialog.dismiss()
+            }
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
+                deleteBookmark(bookmark)
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun addBookmarkDialogInput(
+        container: LinearLayout,
+        labelRes: Int,
+        value: String,
+        minLines: Int
+    ): EditText {
+        container.addView(TextView(this).apply {
+            text = getString(labelRes)
+            textSize = 13f
+            setTextColor(readerTipColor)
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            topMargin = dp(8)
+        })
+        return EditText(this).apply {
+            setText(value)
+            setMinLines(minLines)
+            maxLines = 6
+            gravity = Gravity.TOP or Gravity.START
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        }.also { input ->
+            container.addView(input, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+        }
+    }
+
+    private fun upsertBookmark(bookmark: ReaderBookmark) {
+        bookmarks.removeAll {
+            it.chapterIndex == bookmark.chapterIndex && it.chapterPosition == bookmark.chapterPosition
+        }
+        bookmarks += bookmark
         bookmarks.sortBy { it.chapterIndex * 1_000_000L + it.chapterPosition }
         persistBookmarks()
+        refreshBookmarkCatalogIfVisible()
+    }
+
+    private fun deleteBookmark(bookmark: ReaderBookmark) {
+        val removed = bookmarks.removeAll {
+            it.chapterIndex == bookmark.chapterIndex && it.chapterPosition == bookmark.chapterPosition
+        }
+        if (!removed) return
+        persistBookmarks()
+        refreshBookmarkCatalogIfVisible()
+        Toast.makeText(this, R.string.reader_bookmark_deleted, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun refreshBookmarkCatalogIfVisible() {
         if (::catalogPanel.isInitialized && catalogPanel.visibility == View.VISIBLE && catalogMode == CatalogMode.BOOKMARKS) {
             bindCatalogList()
         }
-        Toast.makeText(this, R.string.reader_bookmark_added, Toast.LENGTH_SHORT).show()
     }
 
     private fun applyBrightnessState() {
@@ -1801,7 +1959,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         chapterSourceMode = defaults.chapterSourceMode
         keepScreenOn = defaults.keepScreenOn
         noAnimScrollPage = defaults.noAnimScrollPage
-        previewImageByClick = defaults.previewImageByClick
         saveEbookImageSpoilerEnabled(this, false)
         disableReturnKey = defaults.disableReturnKey
         readBarStyleFollowPage = defaults.readBarStyleFollowPage
@@ -1971,7 +2128,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 showSearchPanel(text)
                 startSearch(text)
             }
-            ReadView.SelectionAction.ADD_BOOKMARK -> addCurrentBookmark()
+            ReadView.SelectionAction.ADD_BOOKMARK -> addCurrentBookmark(preferredExcerpt = text)
             ReadView.SelectionAction.BROWSER -> {
                 runCatching {
                     startActivity(
@@ -2831,7 +2988,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             isChapterUnlocked(bookmark.chapterIndex) && (
                 query.isBlank() ||
                 bookmark.chapterTitle.contains(query, ignoreCase = true) ||
-                bookmark.preview.contains(query, ignoreCase = true)
+                bookmark.excerpt.contains(query, ignoreCase = true) ||
+                bookmark.note.contains(query, ignoreCase = true)
             )
         }
         catalogListView.adapter = object : ArrayAdapter<ReaderBookmark>(
@@ -2848,7 +3006,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 view.text = buildString {
                     append(item?.chapterTitle ?: readerString(R.string.reader_unknown_chapter))
                     append('\n')
-                    append(item?.preview.orEmpty())
+                    append(bookmarkListPreview(item))
                 }
                 view.setTextColor(currentMenuTextColor())
                 return view
@@ -2864,13 +3022,20 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
         catalogListView.setOnItemLongClickListener { _, _, which, _ ->
             val bookmark = filtered.getOrNull(which) ?: return@setOnItemLongClickListener true
-            bookmarks.removeAll {
-                it.chapterIndex == bookmark.chapterIndex && it.chapterPosition == bookmark.chapterPosition
-            }
-            persistBookmarks()
-            bindCatalogList()
-            Toast.makeText(this, R.string.reader_bookmark_deleted, Toast.LENGTH_SHORT).show()
+            showBookmarkEditor(bookmark, isNew = false)
             true
+        }
+    }
+
+    private fun bookmarkListPreview(bookmark: ReaderBookmark?): String {
+        bookmark ?: return ""
+        return buildString {
+            append(bookmark.excerpt)
+            if (bookmark.note.isNotBlank()) {
+                append('\n')
+                append(readerString(R.string.reader_bookmark_note_prefix))
+                append(bookmark.note)
+            }
         }
     }
 
@@ -3662,36 +3827,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             .show()
     }
 
-    private fun showImagePreviewDialog(image: EbookImageRef) {
-        val maxPreviewSide = maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
-            .coerceAtLeast(1)
-        val bytes = image.readBytes()
-        if (bytes == null) {
-            Toast.makeText(this, R.string.reader_image_preview_unavailable, Toast.LENGTH_SHORT).show()
-            return
-        }
-        val bitmap = decodeSampledBitmap(
-            bytes = bytes,
-            targetWidthPx = maxPreviewSide,
-            targetHeightPx = maxPreviewSide
-        )
-        if (bitmap == null) {
-            Toast.makeText(this, R.string.reader_image_preview_unavailable, Toast.LENGTH_SHORT).show()
-            return
-        }
-        val imageView = ImageView(this).apply {
-            adjustViewBounds = true
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            setImageBitmap(bitmap)
-            setPadding(dp(10), dp(10), dp(10), dp(10))
-        }
-        AlertDialog.Builder(this)
-            .setTitle(image.altText.ifBlank { image.path.substringAfterLast('/') })
-            .setView(imageView)
-            .setPositiveButton(R.string.close, null)
-            .show()
-    }
-
     private fun collectReaderImageGalleryItems(): List<ReaderImageGalleryItem> {
         val seen = mutableSetOf<String>()
         return document?.chapters
@@ -3714,7 +3849,18 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             }
     }
 
-    private fun initialImageGalleryIndex(items: List<ReaderImageGalleryItem>): Int {
+    private fun initialImageGalleryIndex(
+        items: List<ReaderImageGalleryItem>,
+        preferredImage: EbookImageRef? = null
+    ): Int {
+        if (preferredImage != null) {
+            val preferredIdentity = preferredImage.cacheIdentity()
+            val preferredPath = preferredImage.path
+            val preferredIndex = items.indexOfFirst { item ->
+                item.image.cacheIdentity() == preferredIdentity || item.image.path == preferredPath
+            }
+            if (preferredIndex >= 0) return preferredIndex
+        }
         val currentPage = pages.getOrNull(pageIndex) ?: return 0
         val samePage = items.indexOfFirst { item ->
             item.chapterIndex == currentPage.chapterIndex &&
@@ -3737,7 +3883,88 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             (item.chapterIndex == anchor.chapterIndex && item.chapterPosition <= anchor.charPosition)
     }
 
-    private fun showImageGalleryDialog() {
+    private fun showFocusedImagePreview(image: EbookImageRef) {
+        imageGalleryDismiss?.invoke()
+        val focusBgColor = Color.BLACK
+        var focusJob: Job? = null
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(focusBgColor)
+            isClickable = true
+        }
+        val focusImage = ComposeView(this).apply {
+            setBackgroundColor(focusBgColor)
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+        }
+        root.addView(
+            focusImage,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        fun dismissFocusPreview() {
+            focusJob?.cancel()
+            imageGalleryHideFocus = null
+            imageGalleryDismiss = null
+            imageGallerySystemBarMode = null
+            if (imageGalleryOverlay === root) {
+                (root.parent as? ViewGroup)?.removeView(root)
+                imageGalleryOverlay = null
+            }
+            applySystemUiSettings()
+            updateSystemBarSurfaces()
+        }
+
+        imageGalleryOverlay = root
+        imageGalleryHideFocus = {
+            dismissFocusPreview()
+            true
+        }
+        imageGalleryDismiss = { dismissFocusPreview() }
+        imageGallerySystemBarMode = ImageGallerySystemBarMode.FOCUS
+        updateSystemBarSurfaces()
+        (readerRootAsViewGroup() ?: contentContainer).addView(
+            root,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+        root.setOnClickListener { dismissFocusPreview() }
+        focusJob = lifecycleScope.launch {
+            val imageBytes = withContext(Dispatchers.IO) {
+                image.readBytes()
+            }
+            if (imageBytes == null) {
+                Toast.makeText(
+                    this@LegadoReaderActivity,
+                    R.string.reader_image_preview_unavailable,
+                    Toast.LENGTH_SHORT
+                ).show()
+                dismissFocusPreview()
+                return@launch
+            }
+            focusImage.setContent {
+                val zoomableState = rememberZoomableState()
+                val request = remember(imageBytes) {
+                    ImageRequest.Builder(this@LegadoReaderActivity)
+                        .data(imageBytes)
+                        .build()
+                }
+                ZoomableAsyncImage(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(ComposeColor.Black)
+                        .zoomable(state = zoomableState),
+                    model = request,
+                    contentDescription = null
+                )
+            }
+        }
+    }
+
+    private fun showImageGalleryDialog(preferredImage: EbookImageRef? = null) {
         val items = collectReaderImageGalleryItems()
         if (items.isEmpty()) {
             Toast.makeText(this, R.string.reader_image_gallery_empty, Toast.LENGTH_SHORT).show()
@@ -3751,7 +3978,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
         val temporaryUnlockedImageKeys = mutableSetOf<String>()
         imageGalleryDismiss?.invoke()
-        val initialIndex = initialImageGalleryIndex(items).coerceIn(0, items.lastIndex)
+        val initialIndex = initialImageGalleryIndex(items, preferredImage).coerceIn(0, items.lastIndex)
         val displayMetrics = resources.displayMetrics
         val screenWidth = displayMetrics.widthPixels.coerceAtLeast(1)
         val screenHeight = displayMetrics.heightPixels.coerceAtLeast(1)
@@ -4662,6 +4889,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 pageIndex = safeAnchor
                     ?.let { pageIndexForAnchor(previewPages, it) }
                     ?: 0
+                rebuildCurrentChapterImageStops()
                 updateDisplayedBookTitle()
                 val firstRenderStartMs = SystemClock.elapsedRealtime()
                 renderCurrentPage()
@@ -5531,6 +5759,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 "keepLive=$keepLiveSession forceSeek=$forceSeekOnSameAudio"
         )
         audioCueIndex = -1
+        disableAudioCueLoop(updateUi = false)
         player = BookReaderPlaybackSession.prepareAudioIfNeeded(
             context = this,
             audioUri = uri,
@@ -5591,6 +5820,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             if (audioControlPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
         if (audioControlPanel.visibility == View.VISIBLE) {
             updateAudioControlLabels()
+            syncAudioTimerSelectionFromState()
             loadSrtSyncIfNeeded()
         }
         updateSystemBarSurfaces()
@@ -5657,12 +5887,158 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 if (isPlaying) R.drawable.reader_ic_pause_24dp else R.drawable.reader_ic_play_24dp
             )
         }
+        updateAudioCueLoopLabel()
+        updateAudioTimerValueLabel()
     }
 
-    private fun setAudioTimer(minutes: Int) {
+    private fun setAudioTimer(minutes: Int, showToast: Boolean = true) {
         player?.volume = 1f
         audioStopAtMs = System.currentTimeMillis() + minutes * 60_000L
-        Toast.makeText(this, getString(R.string.reader_stop_after_minutes, minutes), Toast.LENGTH_SHORT).show()
+        audioTimerSelectedMinutes = minutes.coerceIn(0, AUDIO_TIMER_MAX_MINUTES)
+        if (showToast) {
+            Toast.makeText(this, getString(R.string.reader_stop_after_minutes, minutes), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun clearAudioTimer(showToast: Boolean = true) {
+        audioStopAtMs = null
+        audioTimerSelectedMinutes = 0
+        player?.volume = 1f
+        if (showToast) {
+            Toast.makeText(this, readerString(R.string.reader_timer_closed), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun applySelectedAudioTimer(showToast: Boolean = true) {
+        val minutes = audioTimerSelectedMinutes.coerceIn(0, AUDIO_TIMER_MAX_MINUTES)
+        if (minutes <= 0) {
+            clearAudioTimer(showToast = showToast)
+        } else {
+            setAudioTimer(minutes, showToast = showToast)
+        }
+        updateAudioTimerValueLabel()
+    }
+
+    private fun syncAudioTimerSelectionFromState() {
+        audioTimerSelectedMinutes = currentAudioTimerRemainingMinutes()
+            .takeIf { it > 0 }
+            ?: loadBookReaderSleepOptions(this).defaultTimerMinutes.coerceIn(0, AUDIO_TIMER_MAX_MINUTES)
+        if (::audioTimerSeekBar.isInitialized) {
+            audioTimerSeekBar.progress = audioTimerSelectedMinutes.coerceIn(0, audioTimerSeekBar.max)
+        }
+        updateAudioTimerValueLabel()
+    }
+
+    private fun saveDefaultAudioTimerMinutes() {
+        val current = loadBookReaderSleepOptions(this)
+        saveBookReaderSleepOptions(
+            context = this,
+            exitControlModeWhenDone = current.exitControlModeWhenDone,
+            disconnectBluetoothWhenDone = current.disconnectBluetoothWhenDone,
+            fadeOutAudioWhenDone = current.fadeOutAudioWhenDone,
+            defaultTimerMinutes = audioTimerSelectedMinutes.coerceIn(0, AUDIO_TIMER_MAX_MINUTES)
+        )
+        Toast.makeText(this, R.string.reader_timer_default_saved, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showAudioTimerPresetDialog() {
+        val presetMinutes = intArrayOf(0, 5, 10, 15, 30, 60, 90, 180)
+        val labels = presetMinutes.map { getString(R.string.reader_timer_minutes_value, it) }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(R.string.bookreader_sleep_timer)
+            .setItems(labels) { _, which ->
+                val minutes = presetMinutes.getOrElse(which) { 0 }.coerceIn(0, AUDIO_TIMER_MAX_MINUTES)
+                audioTimerSelectedMinutes = minutes
+                if (::audioTimerSeekBar.isInitialized) {
+                    audioTimerSeekBar.progress = minutes
+                } else {
+                    applySelectedAudioTimer(showToast = false)
+                }
+            }
+            .show()
+    }
+
+    private fun updateAudioTimerValueLabel() {
+        if (!::audioTimerValueText.isInitialized) return
+        val minutes = audioTimerSelectedMinutes.coerceIn(0, AUDIO_TIMER_MAX_MINUTES)
+        audioTimerValueText.text = getString(R.string.reader_timer_minutes_value, minutes)
+    }
+
+    private fun currentAudioTimerRemainingMinutes(): Int {
+        val stopAt = audioStopAtMs ?: return 0
+        val remainingMs = stopAt - System.currentTimeMillis()
+        if (remainingMs <= 0L) return 0
+        return ((remainingMs + 59_999L) / 60_000L).toInt().coerceIn(0, AUDIO_TIMER_MAX_MINUTES)
+    }
+
+    private fun toggleAudioCueLoop() {
+        if (audioCueLoopEnabled) {
+            disableAudioCueLoop(updateUi = true)
+            return
+        }
+        val currentPlayer = player
+        if (currentPlayer == null) {
+            Toast.makeText(this, R.string.reader_no_audio, Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (cues.isEmpty()) {
+            if (srtUri == null) {
+                Toast.makeText(this, R.string.reader_no_srt, Toast.LENGTH_SHORT).show()
+                return
+            }
+            loadSrtSyncIfNeeded(force = true) { success ->
+                if (success) {
+                    toggleAudioCueLoop()
+                } else {
+                    Toast.makeText(
+                        this,
+                        srtLoadError ?: readerString(R.string.reader_srt_parse_failed),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+            Toast.makeText(this, R.string.reader_srt_loading, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val targetCueIndex = currentCueLoopIndexForPosition(currentPlayer.currentPosition.coerceAtLeast(0L))
+        if (targetCueIndex !in cues.indices || !updateAudioCueLoopWindow(targetCueIndex)) return
+        audioCueLoopEnabled = true
+        updateAudioCueLoopLabel()
+    }
+
+    private fun disableAudioCueLoop(updateUi: Boolean) {
+        audioCueLoopEnabled = false
+        audioCueLoopWindow = null
+        if (updateUi) {
+            updateAudioCueLoopLabel()
+        }
+    }
+
+    private fun updateAudioCueLoopWindow(cueIndex: Int): Boolean {
+        val cue = cues.getOrNull(cueIndex) ?: return false
+        val startMs = cue.startMs.coerceAtLeast(0L)
+        val endMs = cue.endMs.coerceAtLeast(startMs + 1L)
+        audioCueLoopWindow = startMs to endMs
+        audioCueIndex = cueIndex
+        updateAudioCueLoopLabel()
+        return true
+    }
+
+    private fun updateAudioCueLoopLabel() {
+        if (!::playbackBarRepeatButton.isInitialized) return
+        playbackBarRepeatButton.setImageResource(
+            if (audioCueLoopEnabled) R.drawable.reader_ic_repeat_one else R.drawable.reader_ic_repeat
+        )
+        playbackBarRepeatButton.alpha = if (audioCueLoopEnabled) 1f else 0.72f
+        playbackBarRepeatButton.imageTintList = ColorStateList.valueOf(
+            if (audioCueLoopEnabled) NIGHT_ACCENT else MENU_TEXT
+        )
+    }
+
+    private fun currentCueLoopIndexForPosition(positionMs: Long): Int {
+        val exactIndex = findEbookCueIndexAtTime(cues, positionMs)
+        if (exactIndex >= 0) return exactIndex
+        return cues.indexOfLast { it.startMs <= positionMs }
     }
 
     private fun seekToAdjacentCue(delta: Int) {
@@ -5721,6 +6097,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 "playing=${currentPlayer.isPlaying} playWhenReady=${currentPlayer.playWhenReady} state=${currentPlayer.playbackState}"
         )
         audioCueIndex = targetIndex
+        if (audioCueLoopEnabled) {
+            updateAudioCueLoopWindow(targetIndex)
+        }
         activeCueIndex = if (cueMatchesByCueIndex.containsKey(targetIndex)) targetIndex else -1
         BookReaderFloatingBridge.notifyPlaybackPosition(targetMs)
         persistAudioPlaybackSnapshotAt(targetMs)
@@ -5765,6 +6144,132 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun currentAudioPositionMs(): Long? {
         return player?.currentPosition?.coerceAtLeast(0L)
+    }
+
+    private fun clearCurrentChapterImageStops() {
+        currentChapterImageStops = emptyList()
+        currentChapterImageStopIndex = 0
+        currentChapterImageStopChapterIndex = -1
+    }
+
+    private fun rebuildCurrentChapterImageStops() {
+        val loadedDocument = document ?: run {
+            clearCurrentChapterImageStops()
+            return
+        }
+        val chapterIndex = pages.firstOrNull()?.chapterIndex ?: run {
+            clearCurrentChapterImageStops()
+            return
+        }
+        val chapter = loadedDocument.chapters.getOrNull(chapterIndex) ?: run {
+            clearCurrentChapterImageStops()
+            return
+        }
+        if (chapter.images.isEmpty()) {
+            clearCurrentChapterImageStops()
+            currentChapterImageStopChapterIndex = chapterIndex
+            return
+        }
+        val chapterMatches = cueMatchesByCueIndex.values
+            .asSequence()
+            .filter { it.chapterIndex == chapterIndex }
+            .sortedWith(compareBy<EbookCueMatch> { it.rawStart }.thenBy { it.cueIndex })
+            .toList()
+        currentChapterImageStops = chapter.images.keys
+            .sorted()
+            .mapNotNull { imagePosition ->
+                val imagePageIndex = findPageIndexForChapterPosition(chapterIndex, imagePosition)
+                if (imagePageIndex < 0) return@mapNotNull null
+                val nextCue = chapterMatches.firstOrNull { it.rawStart >= imagePosition }
+                val previousCue = chapterMatches.lastOrNull { it.rawEnd <= imagePosition }
+                ReaderChapterImageStop(
+                    target = ReaderImageStopTarget(chapterIndex, imagePosition),
+                    pageIndex = imagePageIndex,
+                    triggerCueIndex = nextCue?.cueIndex,
+                    tailCueIndex = previousCue?.cueIndex?.takeIf { nextCue == null },
+                    tailCueEndMs = previousCue?.cueIndex
+                        ?.let { cues.getOrNull(it)?.endMs }
+                        ?.takeIf { nextCue == null }
+                )
+            }
+        currentChapterImageStopChapterIndex = chapterIndex
+        syncCurrentChapterImageStopIndex()
+    }
+
+    private fun syncCurrentChapterImageStopIndex() {
+        if (currentChapterImageStops.isEmpty()) {
+            currentChapterImageStopIndex = 0
+            return
+        }
+        val currentPage = pages.getOrNull(pageIndex)
+        val currentMatch = currentPage?.let(::currentPageCueMatch)
+        val referencePosition = currentMatch?.rawEnd ?: currentPage?.charStart ?: 0
+        val referencePageIndex = pageIndex
+        val nextIndex = currentChapterImageStops.indexOfFirst { stop ->
+            stop.target.key != lastImageStopKey && (
+                stop.pageIndex > referencePageIndex ||
+                    stop.target.imagePosition > referencePosition
+                )
+        }
+        currentChapterImageStopIndex = if (nextIndex >= 0) nextIndex else currentChapterImageStops.size
+    }
+
+    private fun advanceCurrentChapterImageStopIndex(targetKey: String) {
+        while (
+            currentChapterImageStopIndex < currentChapterImageStops.size &&
+            currentChapterImageStops[currentChapterImageStopIndex].target.key == targetKey
+        ) {
+            currentChapterImageStopIndex += 1
+        }
+    }
+
+    private fun maybePausePlaybackForImage(
+        currentPosition: Long,
+        cueIndex: Int,
+        previousCueIndex: Int,
+        cueChanged: Boolean,
+        match: EbookCueMatch,
+        allowPageJump: Boolean
+    ): Boolean {
+        if (!stopPlaybackOnImage || !allowPageJump || !isAudioPlaying()) return false
+        if (match.chapterIndex != currentChapterImageStopChapterIndex) {
+            val carryOverStop = currentChapterImageStops.getOrNull(currentChapterImageStopIndex)
+            val crossedChapterTail = carryOverStop?.tailCueIndex?.let { tailCueIndex ->
+                previousCueIndex == tailCueIndex &&
+                    currentPosition >= (carryOverStop.tailCueEndMs ?: Long.MAX_VALUE)
+            } == true
+            if (crossedChapterTail) {
+                currentChapterImageStopIndex += 1
+                pausePlaybackAtImage(carryOverStop.target)
+                return true
+            }
+            rebuildCurrentChapterImageStops()
+        }
+        var stopIndex = currentChapterImageStopIndex
+        while (stopIndex < currentChapterImageStops.size) {
+            val stop = currentChapterImageStops[stopIndex]
+            if (stop.target.key == lastImageStopKey) {
+                stopIndex += 1
+                continue
+            }
+            val crossedCueTrigger = stop.triggerCueIndex?.let { triggerCueIndex ->
+                cueIndex >= triggerCueIndex &&
+                    previousCueIndex < triggerCueIndex &&
+                    (cueChanged || previousCueIndex < 0)
+            } == true
+            val reachedTailTrigger = stop.tailCueIndex?.let { tailCueIndex ->
+                cueIndex == tailCueIndex &&
+                    currentPosition >= (stop.tailCueEndMs ?: Long.MAX_VALUE)
+            } == true
+            if (crossedCueTrigger || reachedTailTrigger) {
+                currentChapterImageStopIndex = stopIndex + 1
+                pausePlaybackAtImage(stop.target)
+                return true
+            }
+            break
+        }
+        currentChapterImageStopIndex = stopIndex
+        return false
     }
 
     private fun isAudioPlaying(): Boolean {
@@ -6043,6 +6548,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             }
             pages = loadedPages
             pageIndex = safeAnchor?.let { pageIndexForAnchor(loadedPages, it) } ?: pageIndex.coerceIn(0, pages.lastIndex)
+            rebuildCurrentChapterImageStops()
             renderCurrentPage()
             if (cueMatchesByCueIndex.isNotEmpty()) {
                 syncToAudioPosition(allowPageJump = isAudioPlaying())
@@ -6214,6 +6720,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         )
         audioCueIndex = -1
         activeCueIndex = -1
+        rebuildCurrentChapterImageStops()
         Log.d(
             LEGADO_READER_LOG_TAG,
             "restoreMatch applied=${SystemClock.elapsedRealtime() - restoreStartMs}ms " +
@@ -6349,7 +6856,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         progressByChapter = state.progressByChapter
         keepScreenOn = state.keepScreenOn
         noAnimScrollPage = state.noAnimScrollPage
-        previewImageByClick = state.previewImageByClick
         disableReturnKey = state.disableReturnKey
         readBarStyleFollowPage = state.readBarStyleFollowPage
         playbackBarPinnedVisible = state.playbackBarPinnedVisible
@@ -6490,7 +6996,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 progressByChapter = progressByChapter,
                 keepScreenOn = keepScreenOn,
                 noAnimScrollPage = noAnimScrollPage,
-                previewImageByClick = previewImageByClick,
                 disableReturnKey = disableReturnKey,
                 readBarStyleFollowPage = readBarStyleFollowPage,
                 playbackBarPinnedVisible = playbackBarPinnedVisible,
@@ -6512,6 +7017,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun currentReadingProgressPercent(): Int {
+        val page = pages.getOrNull(pageIndex) ?: return 0
+        if (page.documentCharCount > 0 && page.documentCharEnd > 0) {
+            return ((page.documentCharEnd.toLong() * 100L) / page.documentCharCount.toLong())
+                .toInt()
+                .coerceIn(0, 100)
+        }
         if (pages.isEmpty()) return 0
         return (((pageIndex.coerceIn(0, pages.lastIndex) + 1) * 100L) / pages.size)
             .toInt()
@@ -6804,6 +7315,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                         persistCurrentMatchSnapshot()
                         audioCueIndex = -1
                         activeCueIndex = -1
+                        rebuildCurrentChapterImageStops()
                         syncToAudioPosition(allowPageJump = isAudioPlaying())
                         renderCurrentPage()
                         summaryText.text = matchSummaryText()
@@ -6949,9 +7461,21 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             var timerFadeApplied = false
             while (true) {
                 delay(350L)
+                val currentPlayer = player
+                if (audioCueLoopEnabled) {
+                    val window = audioCueLoopWindow
+                    if (currentPlayer != null && window != null) {
+                        val positionMs = currentPlayer.currentPosition.coerceAtLeast(0L)
+                        val startMs = window.first.coerceAtLeast(0L)
+                        val endMs = window.second.coerceAtLeast(startMs + 1L)
+                        val loopAt = (endMs - 40L).coerceAtLeast(startMs)
+                        if (positionMs >= loopAt || positionMs < startMs) {
+                            currentPlayer.seekTo(startMs)
+                        }
+                    }
+                }
                 audioStopAtMs?.let { stopAt ->
                     val remainingMs = stopAt - System.currentTimeMillis()
-                    val currentPlayer = player
                     if (
                         audioTimerFadeOutEnabled &&
                         remainingMs in 1L until BOOK_READER_SLEEP_FADE_OUT_MS &&
@@ -6972,6 +7496,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                         }
                         BookReaderFloatingBridge.notifyPlaybackState(false)
                         audioStopAtMs = null
+                        audioTimerSelectedMinutes = 0
+                        if (::audioTimerSeekBar.isInitialized) {
+                            audioTimerSeekBar.progress = 0
+                        }
                         timerFadeApplied = false
                     }
                 }
@@ -7056,10 +7584,22 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
         val previousAudioCueIndex = audioCueIndex
         val cueChanged = cueIndex != previousAudioCueIndex
-        if (!cueChanged && !forceReveal) return
-        val previousMatch = cueMatchesByCueIndex[previousAudioCueIndex]
         audioCueIndex = cueIndex
         val match = cueMatchesByCueIndex[cueIndex]
+        if (!cueChanged && !forceReveal) {
+            if (match != null && maybePausePlaybackForImage(
+                    currentPosition = currentPosition,
+                    cueIndex = cueIndex,
+                    previousCueIndex = previousAudioCueIndex,
+                    cueChanged = false,
+                    match = match,
+                    allowPageJump = allowPageJump
+                )
+            ) {
+                return
+            }
+            return
+        }
         if (forceReveal || match == null) {
             Log.d(
                 LEGADO_MATCH_LOG_TAG,
@@ -7082,17 +7622,16 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             updateDisplayedCueHighlightOnly()
             return
         }
-        if (
-            stopPlaybackOnImage &&
-            allowPageJump &&
-            isAudioPlaying() &&
-            cueChanged &&
-            previousMatch != null
+        if (maybePausePlaybackForImage(
+                currentPosition = currentPosition,
+                cueIndex = cueIndex,
+                previousCueIndex = previousAudioCueIndex,
+                cueChanged = cueChanged,
+                match = match,
+                allowPageJump = allowPageJump
+            )
         ) {
-            findCrossedImageStopTarget(previousMatch, match)?.let { target ->
-                pausePlaybackAtImage(target)
-                return
-            }
+            return
         }
         activeCueIndex = cueIndex
         if (!allowPageJump) {
@@ -7149,33 +7688,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         updateChapterTitleSurfaces()
     }
 
-    private fun findCrossedImageStopTarget(
-        previousMatch: EbookCueMatch,
-        currentMatch: EbookCueMatch
-    ): ReaderImageStopTarget? {
-        val loadedDocument = document ?: return null
-        if (currentMatch.chapterIndex < previousMatch.chapterIndex) return null
-        if (
-            currentMatch.chapterIndex == previousMatch.chapterIndex &&
-            currentMatch.rawStart <= previousMatch.rawStart
-        ) {
-            return null
-        }
-        for (chapterIndex in previousMatch.chapterIndex..currentMatch.chapterIndex) {
-            val chapter = loadedDocument.chapters.getOrNull(chapterIndex) ?: continue
-            val start = if (chapterIndex == previousMatch.chapterIndex) previousMatch.rawEnd else 0
-            val end = if (chapterIndex == currentMatch.chapterIndex) currentMatch.rawStart else Int.MAX_VALUE
-            val imagePosition = chapter.images.keys
-                .asSequence()
-                .filter { position -> position >= start && position < end }
-                .minOrNull()
-                ?: continue
-            val target = ReaderImageStopTarget(chapterIndex, imagePosition)
-            if (target.key != lastImageStopKey) return target
-        }
-        return null
-    }
-
     private fun pausePlaybackAtImage(target: ReaderImageStopTarget) {
         Log.d(
             READER_PAUSED_SEEK_LOG_TAG,
@@ -7183,6 +7695,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 "page=$pageIndex actual=${player?.currentPosition} audioCue=$audioCueIndex"
         )
         lastImageStopKey = target.key
+        advanceCurrentChapterImageStopIndex(target.key)
         player?.pause()
         BookReaderFloatingBridge.notifyPlaybackState(false)
         activeCueIndex = -1
@@ -7305,6 +7818,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         private const val AUDIO_SEEK_SYNC_LOCK_AFTER_DISPLAY_MS = 2_000L
         private const val AUDIO_SEEK_DISPLAY_CLEAR_TOLERANCE_MS = 10_000L
         private const val AUDIO_SEEK_STALE_POSITION_TOLERANCE_MS = 30_000L
+        private const val AUDIO_TIMER_MAX_MINUTES = 180
         private const val M4B_CHAPTER_TEXT_SYNC_LOOKAHEAD_MS = 8_000L
         private const val MENU_BG = 0xFFF7F0E2.toInt()
         private const val MENU_TEXT = 0xFF2C241B.toInt()
