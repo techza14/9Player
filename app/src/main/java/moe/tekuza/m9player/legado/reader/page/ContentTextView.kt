@@ -400,6 +400,8 @@ internal class ContentTextView @JvmOverloads constructor(
         }.trim()
     }
 
+    fun selectedSourceRange(): IntRange? = selectionRange
+
     fun selectionBounds(): SelectionBounds? {
         val range = selectionRange ?: return null
         val startSource = selectionStartSource ?: range.first

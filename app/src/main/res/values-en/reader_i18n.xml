@@ -59,7 +59,7 @@
     <string name="reader_style_anim_simulation">Simulation</string>
     <string name="reader_style_anim_scroll">Scroll</string>
     <string name="reader_style_anim_none">None</string>
-    <string name="reader_style_color_background">Color and background (long tap to customize)</string>
+    <string name="reader_style_color_background">Color/background</string>
     <string name="reader_style_config_title">Edit background style</string>
     <string name="reader_style_name">Style name</string>
     <string name="reader_style_restore">Restore preset</string>
@@ -76,8 +76,8 @@
     <string name="reader_style_sample_text">Text</string>
     <string name="reader_keep_light_default">Default</string>
     <string name="reader_keep_light_always">Always</string>
-    <string name="reader_progress_behavior_page">Adjust chapter pages</string>
-    <string name="reader_progress_behavior_book">Adjust chapter index</string>
+    <string name="reader_progress_behavior_page">Chapter pages</string>
+    <string name="reader_progress_behavior_book">Chapter index</string>
     <string name="reader_chapter_jump_confirm_title">Chapter jump confirmation</string>
     <string name="reader_chapter_jump_confirm_message">Jump to this chapter?</string>
     <string name="read_body_to_lh">Extend into cutout</string>
@@ -237,6 +237,14 @@
     <string name="reader_simulated_reading_start_chapter">Starting chapter</string>
     <string name="reader_simulated_reading_daily_chapters">Chapters per day</string>
     <string name="reader_simulated_reading_locked">This chapter is not unlocked yet</string>
+    <string name="reader_repeat_settings_title">Repeat Settings</string>
+    <string name="reader_repeat_pause_follow_cue">Pause by cue length</string>
+    <string name="reader_repeat_pause_fixed">Fixed pause</string>
+    <string name="reader_repeat_fixed_seconds">%1$d s</string>
+    <string name="reader_repeat_playback_count_toggle">By playback count</string>
+    <string name="reader_repeat_playback_count_value">Play %1$d times</string>
+    <string name="reader_repeat_enabled_content_description">Repeat, %1$s</string>
+    <string name="reader_repeat_disabled_content_description">Repeat</string>
 
     <string-array name="reader_screen_direction_titles">
         <item>@string/screen_unspecified</item>

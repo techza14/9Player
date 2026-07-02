@@ -1,11 +1,13 @@
 package moe.tekuza.m9player.legado.reader.config
 
 import android.app.Activity
+import android.graphics.drawable.ColorDrawable
 import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.ViewGroup
+import android.view.Window
 import android.view.WindowManager
 import android.graphics.drawable.GradientDrawable
 import android.widget.LinearLayout
@@ -13,6 +15,8 @@ import android.widget.RadioGroup
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
+import java.util.Locale
+import kotlin.math.abs
 import moe.tekuza.m9player.legado.reader.M9PageAnim
 import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.R
@@ -43,6 +47,12 @@ internal class ReadStyleDialog(
     state: ReadStyleState,
     private val callback: Callback
 ) {
+    companion object {
+        private const val TEXT_SIZE_MIN_SP = 5
+        private const val LETTER_SPACING_MIN = -50
+        private const val LINE_SPACING_PROGRESS_OFFSET = 10
+    }
+
     interface Callback {
         fun onTextSizeChanged(valueSp: Int)
         fun onLetterSpacingChanged(value: Int)
@@ -72,10 +82,14 @@ internal class ReadStyleDialog(
         bindSeekBar(
             view,
             R.id.style_text_size_label,
+            R.id.style_text_size_value,
+            R.id.style_text_size_minus,
             R.id.style_text_size,
+            R.id.style_text_size_plus,
             activity.getString(R.string.reader_style_text_size),
-            14,
+            TEXT_SIZE_MIN_SP,
             currentState.textSizeSp,
+            formatValue = { value -> value.toString() },
             onChanged = { value ->
                 currentState = currentState.copy(textSizeSp = value)
                 callback.onTextSizeChanged(value)
@@ -85,10 +99,14 @@ internal class ReadStyleDialog(
         bindSeekBar(
             view,
             R.id.style_letter_label,
+            R.id.style_letter_value,
+            R.id.style_letter_minus,
             R.id.style_letter_size,
+            R.id.style_letter_plus,
             activity.getString(R.string.reader_style_letter_spacing),
-            -50,
+            LETTER_SPACING_MIN,
             currentState.letterSpacingDp,
+            formatValue = { value -> formatLetterSpacing(value) },
             onChanged = { value ->
                 currentState = currentState.copy(letterSpacingDp = value)
                 callback.onLetterSpacingChanged(value)
@@ -98,10 +116,14 @@ internal class ReadStyleDialog(
         bindSeekBar(
             view,
             R.id.style_line_label,
+            R.id.style_line_value,
+            R.id.style_line_minus,
             R.id.style_line_size,
+            R.id.style_line_plus,
             activity.getString(R.string.reader_style_line_spacing),
             0,
             currentState.lineSpacingDp,
+            formatValue = { value -> formatOneDecimal((value - LINE_SPACING_PROGRESS_OFFSET) / 10f) },
             onChanged = { value ->
                 currentState = currentState.copy(lineSpacingDp = value)
                 callback.onLineSpacingChanged(value)
@@ -111,10 +133,14 @@ internal class ReadStyleDialog(
         bindSeekBar(
             view,
             R.id.style_paragraph_label,
+            R.id.style_paragraph_value,
+            R.id.style_paragraph_minus,
             R.id.style_paragraph_size,
+            R.id.style_paragraph_plus,
             activity.getString(R.string.reader_style_paragraph_spacing),
             0,
             currentState.paragraphSpacingDp,
+            formatValue = { value -> formatOneDecimal(value / 10f) },
             onChanged = { value ->
                 currentState = currentState.copy(paragraphSpacingDp = value)
                 callback.onParagraphSpacingChanged(value)
@@ -147,28 +173,46 @@ internal class ReadStyleDialog(
         bindBackgroundStyles(view)
 
         dialog = AlertDialog.Builder(activity).setView(view).create()
-        dialog?.setOnShowListener {
-            dialog?.window?.run {
-                clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-                setBackgroundDrawableResource(android.R.color.transparent)
-                decorView.setPadding(0, 0, 0, 0)
-                val attr = attributes
-                attr.dimAmount = 0f
-                attr.gravity = Gravity.BOTTOM
-                attributes = attr
-                setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            }
-        }
         dialog?.show()
+        configureWindow(dialog?.window)
     }
 
     private fun bindCurrentStyleState(view: android.view.View) {
-        bindSeekBarValue(view, R.id.style_text_size_label, R.id.style_text_size, activity.getString(R.string.reader_style_text_size), 14, currentState.textSizeSp)
-        bindSeekBarValue(view, R.id.style_letter_label, R.id.style_letter_size, activity.getString(R.string.reader_style_letter_spacing), -50, currentState.letterSpacingDp)
-        bindSeekBarValue(view, R.id.style_line_label, R.id.style_line_size, activity.getString(R.string.reader_style_line_spacing), 0, currentState.lineSpacingDp)
-        bindSeekBarValue(view, R.id.style_paragraph_label, R.id.style_paragraph_size, activity.getString(R.string.reader_style_paragraph_spacing), 0, currentState.paragraphSpacingDp)
+        bindSeekBarValue(
+            view.findViewById(R.id.style_text_size_label),
+            view.findViewById(R.id.style_text_size_value),
+            view.findViewById(R.id.style_text_size),
+            activity.getString(R.string.reader_style_text_size),
+            TEXT_SIZE_MIN_SP,
+            currentState.textSizeSp
+        ) { value -> value.toString() }
+        bindSeekBarValue(
+            view.findViewById(R.id.style_letter_label),
+            view.findViewById(R.id.style_letter_value),
+            view.findViewById(R.id.style_letter_size),
+            activity.getString(R.string.reader_style_letter_spacing),
+            LETTER_SPACING_MIN,
+            currentState.letterSpacingDp
+        ) { value -> formatLetterSpacing(value) }
+        bindSeekBarValue(
+            view.findViewById(R.id.style_line_label),
+            view.findViewById(R.id.style_line_value),
+            view.findViewById(R.id.style_line_size),
+            activity.getString(R.string.reader_style_line_spacing),
+            0,
+            currentState.lineSpacingDp
+        ) { value -> formatOneDecimal((value - LINE_SPACING_PROGRESS_OFFSET) / 10f) }
+        bindSeekBarValue(
+            view.findViewById(R.id.style_paragraph_label),
+            view.findViewById(R.id.style_paragraph_value),
+            view.findViewById(R.id.style_paragraph_size),
+            activity.getString(R.string.reader_style_paragraph_spacing),
+            0,
+            currentState.paragraphSpacingDp
+        ) { value -> formatOneDecimal(value / 10f) }
         view.findViewById<TextView>(R.id.style_weight).text = fontWeightLabel(currentState.textWeight)
         bindBackgroundStyles(view)
+        dialog?.window?.setBackgroundDrawable(ColorDrawable(currentBackgroundColor()))
     }
 
     private fun bindBackgroundStyles(view: android.view.View) {
@@ -261,21 +305,41 @@ internal class ReadStyleDialog(
     private fun bindSeekBar(
         view: android.view.View,
         labelId: Int,
+        valueId: Int,
+        minusId: Int,
         seekId: Int,
+        plusId: Int,
         title: String,
         min: Int,
         value: Int,
+        formatValue: (Int) -> String,
         onChanged: (Int) -> Unit,
         onChangeFinished: (Int) -> Unit
     ) {
         val label = view.findViewById<TextView>(labelId)
+        val valueLabel = view.findViewById<TextView>(valueId)
+        val minus = view.findViewById<TextView>(minusId)
         val seek = view.findViewById<SeekBar>(seekId)
-        bindSeekBarValue(label, seek, title, min, value)
+        val plus = view.findViewById<TextView>(plusId)
+        bindSeekBarValue(label, valueLabel, seek, title, min, value, formatValue)
+        fun applyValue(next: Int, finished: Boolean) {
+            val safe = next.coerceIn(min, min + seek.max)
+            seek.progress = safe - min
+            valueLabel.text = formatValue(safe)
+            onChanged(safe)
+            if (finished) onChangeFinished(safe)
+        }
+        minus.setOnClickListener {
+            applyValue(min + seek.progress - 1, finished = true)
+        }
+        plus.setOnClickListener {
+            applyValue(min + seek.progress + 1, finished = true)
+        }
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
                     val next = min + progress
-                    label.text = "$title：$next"
+                    valueLabel.text = formatValue(next)
                     onChanged(next)
                 }
             }
@@ -288,31 +352,46 @@ internal class ReadStyleDialog(
     }
 
     private fun bindSeekBarValue(
-        view: android.view.View,
-        labelId: Int,
-        seekId: Int,
-        title: String,
-        min: Int,
-        value: Int
-    ) {
-        bindSeekBarValue(
-            view.findViewById(labelId),
-            view.findViewById(seekId),
-            title,
-            min,
-            value
-        )
-    }
-
-    private fun bindSeekBarValue(
         label: TextView,
+        valueLabel: TextView,
         seek: SeekBar,
         title: String,
         min: Int,
-        value: Int
+        value: Int,
+        formatValue: (Int) -> String
     ) {
         seek.progress = (value - min).coerceIn(0, seek.max)
-        label.text = "$title：${min + seek.progress}"
+        label.text = title
+        valueLabel.text = formatValue(min + seek.progress)
+    }
+
+    private fun currentBackgroundColor(): Int {
+        return currentState.backgroundStyles
+            .getOrNull(currentState.backgroundStyleIndex)
+            ?.bgColor
+            ?: 0xFFF8F1E3.toInt()
+    }
+
+    private fun configureWindow(window: Window?) {
+        window?.run {
+            clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            setBackgroundDrawable(ColorDrawable(currentBackgroundColor()))
+            decorView.setPadding(0, 0, 0, 0)
+            val attr = attributes
+            attr.dimAmount = 0f
+            attr.gravity = Gravity.BOTTOM
+            attributes = attr
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+    }
+
+    private fun formatOneDecimal(value: Float): String {
+        val normalized = if (abs(value) < 0.05f) 0f else value
+        return String.format(Locale.US, "%.1f", normalized)
+    }
+
+    private fun formatLetterSpacing(value: Int): String {
+        return (value / 100f).toString()
     }
 
     private fun dp(value: Int): Int = (value * activity.resources.displayMetrics.density).toInt()

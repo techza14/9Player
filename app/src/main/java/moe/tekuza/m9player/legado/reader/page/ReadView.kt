@@ -67,6 +67,12 @@ internal class ReadView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : FrameLayout(context, attrs) {
+    data class SelectionInfo(
+        val text: String,
+        val chapterIndex: Int? = null,
+        val chapterRange: IntRange? = null
+    )
+
     data class SelectionPrimaryActionOption(
         val key: String,
         val label: String
@@ -90,12 +96,18 @@ internal class ReadView @JvmOverloads constructor(
     var onMovePages: ((Int) -> Unit)? = null
     var onMenu: (() -> Unit)? = null
     var onTapAction: ((TapAction) -> Unit)? = null
-    var onSelectionAction: ((SelectionAction, String) -> Unit)? = null
+    var onSelectionAction: ((SelectionAction, SelectionInfo) -> Unit)? = null
     var onSelectionProcessText: ((Intent, String) -> Unit)? = null
     var onTextSelectionStateChanged: ((Boolean) -> Unit)? = null
     var onImageClick: ((EbookImageRef) -> Unit)? = null
     var onPagePreview: ((Int) -> TextPage?)? = null
     var onDisplayedPageCommitted: ((TextPage) -> Unit)? = null
+    var canJumpSelectionToCue: ((SelectionInfo) -> Boolean)? = null
+    var selectionJumpToCueEnabled: Boolean
+        get() = selectionActionMenu.jumpToCueEnabled
+        set(value) {
+            selectionActionMenu.jumpToCueEnabled = value
+        }
     private var layoutMode: M9LayoutMode = M9LayoutMode.HORIZONTAL
     private var pageAnim: M9PageAnim = M9PageAnim.NONE
     private var clickRegionActions: List<TapAction> = defaultClickRegionActions()
@@ -1210,18 +1222,15 @@ internal class ReadView @JvmOverloads constructor(
     }
 
     private fun performSelectionAction(action: SelectionAction) {
+        val selection = currentSelectionInfo() ?: return
         when (action) {
             SelectionAction.COPY -> copySelectedTextAndClear()
             SelectionAction.PROCESS_TEXT -> {
-                val text = pageView.selectedText().trim()
-                if (text.isBlank()) return
                 selectionActionMenu.dismiss()
-                onSelectionAction?.invoke(action, text)
+                onSelectionAction?.invoke(action, selection)
             }
             else -> {
-                val text = pageView.selectedText().trim()
-                if (text.isBlank()) return
-                onSelectionAction?.invoke(action, text)
+                onSelectionAction?.invoke(action, selection)
                 clearTextSelection()
             }
         }
@@ -1232,6 +1241,17 @@ internal class ReadView @JvmOverloads constructor(
         if (text.isBlank()) return
         onSelectionProcessText?.invoke(intent, text)
         clearTextSelection()
+    }
+
+    private fun currentSelectionInfo(): SelectionInfo? {
+        val text = pageView.selectedText().trim()
+        if (text.isBlank()) return null
+        val snapshot = pageView.selectedTextSnapshot()
+        return SelectionInfo(
+            text = text,
+            chapterIndex = snapshot?.chapterIndex,
+            chapterRange = snapshot?.chapterRange
+        )
     }
 
     private fun updateSelectionHandle(x: Float, y: Float) {
@@ -1253,6 +1273,9 @@ internal class ReadView @JvmOverloads constructor(
 
     private fun updateSelectionOverlays(): SelectionOverlayFrames? {
         val bounds = pageView.selectionBounds() ?: return null
+        currentSelectionInfo()?.let { selection ->
+            selectionActionMenu.jumpToCueEnabled = canJumpSelectionToCue?.invoke(selection) == true
+        }
         val startHandleFrame = positionHandle(selectionStartHandle, bounds.startRect, start = true)
         val endHandleFrame = positionHandle(selectionEndHandle, bounds.endRect, start = false)
         selectionStartHandle.visibility = VISIBLE
@@ -1484,6 +1507,7 @@ internal class ReadView @JvmOverloads constructor(
         SHARE,
         SEARCH,
         ADD_BOOKMARK,
+        JUMP_TO_CUE,
         BROWSER
     }
 
@@ -2241,6 +2265,12 @@ internal class ReadView @JvmOverloads constructor(
         private val moreButton: TextView
         private val moreMenuItems: List<MenuActionItem>
         private var primaryActionKey: String = DEFAULT_SELECTION_PRIMARY_ACTION_KEY
+        var jumpToCueEnabled: Boolean = false
+            set(value) {
+                if (field == value) return
+                field = value
+                rebuildMenu(rootView.context)
+            }
         private var moreExpanded = false
         private var lastAnchor: View? = null
         private var lastStartX: Int = 0
@@ -2271,38 +2301,9 @@ internal class ReadView @JvmOverloads constructor(
             moreButton = overflowButton(context) {
                 toggleMoreExpanded()
             }
-            moreMenuItems = buildList {
-                add(
-                    MenuActionItem(
-                        key = "share",
-                        label = context.getString(R.string.reader_selection_share),
-                        action = SelectionAction.SHARE
-                    )
-                )
-                add(
-                    MenuActionItem(
-                        key = "browser",
-                        label = context.getString(R.string.reader_selection_browser_search),
-                        action = SelectionAction.BROWSER
-                    )
-                )
-                processTextIntents(context).forEach { item ->
-                    add(
-                        MenuActionItem(
-                            key = item.intent.component?.flattenToString()?.let { "process:$it" }
-                                ?: "process:${item.label}",
-                            label = item.label,
-                            intent = item.intent
-                        )
-                    )
-                }
-            }
+            moreMenuItems = buildBaseMoreMenuItems(context)
             primaryRow.addView(buildPrimaryActionButton(context))
-            primaryRow.addView(actionButton(context, context.getString(android.R.string.copy)) { onAction(SelectionAction.COPY) })
-            primaryRow.addView(actionButton(context, context.getString(R.string.reader_menu_add_bookmark)) { onAction(SelectionAction.ADD_BOOKMARK) })
-            primaryRow.addView(actionButton(context, context.getString(R.string.search_content)) { onAction(SelectionAction.SEARCH) })
-            primaryRow.addView(moreButton)
-
+            rebuildPrimaryButtons(context)
             moreMenuItems.forEach { item ->
                 moreList.addView(moreActionButton(context, item.label) {
                     when {
@@ -2334,6 +2335,35 @@ internal class ReadView @JvmOverloads constructor(
                 isFocusable = false
                 isOutsideTouchable = false
                 setBackgroundDrawable(null)
+            }
+        }
+
+        private fun buildBaseMoreMenuItems(context: Context): List<MenuActionItem> {
+            return buildList {
+                add(
+                    MenuActionItem(
+                        key = "share",
+                        label = context.getString(R.string.reader_selection_share),
+                        action = SelectionAction.SHARE
+                    )
+                )
+                add(
+                    MenuActionItem(
+                        key = "browser",
+                        label = context.getString(R.string.reader_selection_browser_search),
+                        action = SelectionAction.BROWSER
+                    )
+                )
+                processTextIntents(context).forEach { item ->
+                    add(
+                        MenuActionItem(
+                            key = item.intent.component?.flattenToString()?.let { "process:$it" }
+                                ?: "process:${item.label}",
+                            label = item.label,
+                            intent = item.intent
+                        )
+                    )
+                }
             }
         }
 
@@ -2463,6 +2493,27 @@ internal class ReadView @JvmOverloads constructor(
             primaryRow.addView(buildPrimaryActionButton(context), 0)
         }
 
+        private fun rebuildMenu(context: Context) {
+            rebuildPrimaryButtons(context)
+            rebuildPrimaryActionButton(context)
+            if (moreExpanded) {
+                updateLastPopupPosition()
+            }
+        }
+
+        private fun rebuildPrimaryButtons(context: Context) {
+            while (primaryRow.childCount > 1) {
+                primaryRow.removeViewAt(1)
+            }
+            primaryRow.addView(actionButton(context, context.getString(android.R.string.copy)) { onAction(SelectionAction.COPY) })
+            primaryRow.addView(actionButton(context, context.getString(R.string.reader_menu_add_bookmark)) { onAction(SelectionAction.ADD_BOOKMARK) })
+            if (jumpToCueEnabled) {
+                primaryRow.addView(actionButton(context, context.getString(R.string.bookreader_jump)) { onAction(SelectionAction.JUMP_TO_CUE) })
+            }
+            primaryRow.addView(actionButton(context, context.getString(R.string.search_content)) { onAction(SelectionAction.SEARCH) })
+            primaryRow.addView(moreButton)
+        }
+
         private fun buildPrimaryActionButton(context: Context): View {
             val item = moreMenuItems.firstOrNull { it.key == primaryActionKey }
             if (primaryActionKey == DEFAULT_SELECTION_PRIMARY_ACTION_KEY || item == null) {
@@ -2532,11 +2583,7 @@ internal class ReadView @JvmOverloads constructor(
         private fun primaryActionGlyph(label: String): String {
             val trimmed = label.trim()
             if (trimmed.isEmpty()) return "▽"
-            return when {
-                trimmed == rootView.context.getString(R.string.reader_selection_share) -> "分"
-                trimmed == rootView.context.getString(R.string.reader_selection_browser_search) -> "搜"
-                else -> trimmed.take(1)
-            }
+            return trimmed.take(1)
         }
 
         private fun moreActionButton(context: Context, label: String, onClick: () -> Unit): TextView {

@@ -49,7 +49,7 @@
     <string name="reader_style_indent">縮排</string>
     <string name="reader_style_padding">邊距</string>
     <string name="reader_style_info">資訊</string>
-    <string name="reader_style_text_size">字體大小</string>
+    <string name="reader_style_text_size">字號</string>
     <string name="reader_style_letter_spacing">字距</string>
     <string name="reader_style_line_spacing">行距</string>
     <string name="reader_style_paragraph_spacing">段距</string>
@@ -59,7 +59,7 @@
     <string name="reader_style_anim_simulation">仿真</string>
     <string name="reader_style_anim_scroll">捲動</string>
     <string name="reader_style_anim_none">無</string>
-    <string name="reader_style_color_background">文字顏色和背景(長按自訂)</string>
+    <string name="reader_style_color_background">顏色/背景</string>
     <string name="reader_style_config_title">編輯背景樣式</string>
     <string name="reader_style_name">樣式名稱</string>
     <string name="reader_style_restore">恢復預設</string>
@@ -76,8 +76,8 @@
     <string name="reader_style_sample_text">文字</string>
     <string name="reader_keep_light_default">預設</string>
     <string name="reader_keep_light_always">常亮</string>
-    <string name="reader_progress_behavior_page">調整本章頁數</string>
-    <string name="reader_progress_behavior_book">調整章節位置</string>
+    <string name="reader_progress_behavior_page">本章頁數</string>
+    <string name="reader_progress_behavior_book">章節位置</string>
     <string name="reader_chapter_jump_confirm_title">章節跳轉確認</string>
     <string name="reader_chapter_jump_confirm_message">確定要跳轉章節嗎？</string>
     <string name="read_body_to_lh">擴展到瀏海</string>
@@ -237,6 +237,14 @@
     <string name="reader_simulated_reading_start_chapter">起始章節</string>
     <string name="reader_simulated_reading_daily_chapters">每日章節數</string>
     <string name="reader_simulated_reading_locked">章節尚未解鎖</string>
+    <string name="reader_repeat_settings_title">重複設定</string>
+    <string name="reader_repeat_pause_follow_cue">按句長暫停</string>
+    <string name="reader_repeat_pause_fixed">固定秒數</string>
+    <string name="reader_repeat_fixed_seconds">%1$d 秒</string>
+    <string name="reader_repeat_playback_count_toggle">按播放次數</string>
+    <string name="reader_repeat_playback_count_value">播放 %1$d 次</string>
+    <string name="reader_repeat_enabled_content_description">重複播放，%1$s</string>
+    <string name="reader_repeat_disabled_content_description">重複播放</string>
 
     <string-array name="reader_screen_direction_titles">
         <item>@string/screen_unspecified</item>

@@ -23,7 +23,12 @@ internal data class PersistedReaderBook(
     val ebookUri: String? = null,
     val ebookName: String? = null,
     val ebookFormat: String? = null,
-    val coverFocus: String? = null
+    val coverFocus: String? = null,
+    val bookCoverZoom: Double? = null,
+    val bookCoverAnchorXPx: Int? = null,
+    val bookCoverAnchorYPx: Int? = null,
+    val bookCoverViewportX: Double? = null,
+    val bookCoverViewportY: Double? = null
 )
 
 internal data class PersistedImports(
@@ -116,6 +121,11 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         val ebookName = item.optString("ebookName").trim().ifBlank { null }
         val ebookFormat = item.optString("ebookFormat").trim().ifBlank { null }
         val coverFocus = item.optString("coverFocus").trim().ifBlank { null }
+        val bookCoverZoom = item.optDouble("bookCoverZoom").takeIf { !it.isNaN() }
+        val bookCoverAnchorXPx = item.optInt("bookCoverAnchorXPx").takeIf { it >= 0 }
+        val bookCoverAnchorYPx = item.optInt("bookCoverAnchorYPx").takeIf { it >= 0 }
+        val bookCoverViewportX = item.optDouble("bookCoverViewportX").takeIf { !it.isNaN() }
+        val bookCoverViewportY = item.optDouble("bookCoverViewportY").takeIf { !it.isNaN() }
         val fallbackTitle = audioName
             ?.substringBeforeLast('.')
             ?.trim()
@@ -136,7 +146,12 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
             ebookUri = ebookUri,
             ebookName = ebookName,
             ebookFormat = ebookFormat,
-            coverFocus = coverFocus
+            coverFocus = coverFocus,
+            bookCoverZoom = bookCoverZoom,
+            bookCoverAnchorXPx = bookCoverAnchorXPx,
+            bookCoverAnchorYPx = bookCoverAnchorYPx,
+            bookCoverViewportX = bookCoverViewportX,
+            bookCoverViewportY = bookCoverViewportY
         )
     }
 
@@ -184,6 +199,9 @@ internal fun savePersistedImports(context: Context, state: PersistedImports) {
                         put("ebookName", book.ebookName ?: "")
                         put("ebookFormat", book.ebookFormat ?: "")
                         put("coverFocus", book.coverFocus ?: "")
+                        put("bookCoverZoom", book.bookCoverZoom ?: JSONObject.NULL)
+                        put("bookCoverAnchorXPx", book.bookCoverAnchorXPx ?: JSONObject.NULL)
+                        put("bookCoverAnchorYPx", book.bookCoverAnchorYPx ?: JSONObject.NULL)
                     })
                 }
             }

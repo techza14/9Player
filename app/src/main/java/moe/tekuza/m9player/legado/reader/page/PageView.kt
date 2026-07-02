@@ -25,6 +25,12 @@ import java.util.Date
 import java.util.Locale
 
 internal class PageView(context: Context) : LinearLayout(context) {
+    data class SelectedTextSnapshot(
+        val text: String,
+        val chapterIndex: Int,
+        val chapterRange: IntRange
+    )
+
     private val headerLeftView = ReaderBatteryTextView(context)
     private val headerMiddleView = ReaderBatteryTextView(context)
     private val headerRightView = ReaderBatteryTextView(context)
@@ -184,6 +190,18 @@ internal class PageView(context: Context) : LinearLayout(context) {
     }
 
     fun selectedText(): String = contentView.selectedText()
+
+    fun selectedTextSnapshot(): SelectedTextSnapshot? {
+        val page = currentPage ?: return null
+        val text = contentView.selectedText().trim()
+        if (text.isBlank()) return null
+        val sourceRange = contentView.selectedSourceRange() ?: return null
+        return SelectedTextSnapshot(
+            text = text,
+            chapterIndex = page.chapterIndex,
+            chapterRange = (page.charStart + sourceRange.first)..(page.charStart + sourceRange.last)
+        )
+    }
 
     val selectionBackgroundInsetPx: Float
         get() = contentView.selectionBackgroundInsetPx

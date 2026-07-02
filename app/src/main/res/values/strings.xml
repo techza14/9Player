@@ -106,8 +106,15 @@
     <string name="home_display_menu">显示</string>
     <string name="home_display_bookshelf">书架</string>
     <string name="home_display_list">列表</string>
-    <string name="home_cover_aspect_book">封面比例：5:7</string>
+    <string name="home_cover_aspect_book">封面比例：A4</string>
     <string name="home_cover_aspect_square">封面比例：正方形</string>
+    <string name="home_cover_adjust_title">精调封面</string>
+    <string name="home_cover_adjust_reset">重置</string>
+    <string name="home_cover_adjust_zoom">缩放 %1$sx</string>
+    <string name="home_cover_adjust_anchor">锚点 %1$d, %2$d</string>
+    <string name="home_cover_adjust_magnifier">放大预览</string>
+    <string name="home_cover_focus_center">中</string>
+    <string name="home_cover_focus_start">左</string>
     <string name="home_no_books">还没有书籍。</string>
     <string name="home_no_books_hint">点击 +书籍，先选择有声书文件夹，再选择音频/m4b（SRT可选）。</string>
     <string name="home_subtitle_attached">附字幕</string>

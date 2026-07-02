@@ -112,6 +112,9 @@ private val LEGADO_READER_DEFAULT_PARAGRAPHS = listOf(
 )
 private const val DEFAULT_IMAGE_PAUSE_SECONDS = 0
 private const val MAX_IMAGE_PAUSE_SECONDS = 300
+private const val DEFAULT_AUDIO_CUE_REPEAT_FIXED_PAUSE_SECONDS = 2
+private const val MAX_AUDIO_CUE_REPEAT_FIXED_PAUSE_SECONDS = 30
+private const val MAX_AUDIO_CUE_REPEAT_COUNT = 20
 
 private data class ReaderPageAnchor(
     val chapterIndex: Int,
@@ -330,6 +333,14 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var audioTimerFadeOutEnabled: Boolean = false
     private var audioCueLoopEnabled: Boolean = false
     private var audioCueLoopWindow: Pair<Long, Long>? = null
+    private var audioCueRepeatPauseUsesCueDuration: Boolean = true
+    private var audioCueRepeatFixedPauseSeconds: Int = DEFAULT_AUDIO_CUE_REPEAT_FIXED_PAUSE_SECONDS
+    private var audioCueRepeatFiniteEnabled: Boolean = false
+    private var audioCueRepeatCount: Int = 0
+    private var audioCueRepeatRemainingCount: Int = 0
+    private var audioCueRepeatDelayJob: Job? = null
+    private var audioCueRepeatDelayGeneration: Long = 0L
+    private var audioCueLoopPausedForRepeat: Boolean = false
     private var hideStatusBar: Boolean = false
     private var readBodyToLh: Boolean = true
     private var hideNavigationBar: Boolean = false
@@ -817,13 +828,15 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             setBookTitle(currentReaderTitle())
             applyReaderInfoConfig()
             setSelectionPrimaryActionKey(selectionPrimaryActionKey)
+            selectionJumpToCueEnabled = hasReaderSelectionCueJump()
+            canJumpSelectionToCue = { selection -> hasReaderSelectionCueJump(selection) }
             onPagePreview = { delta -> pagePreviewForDelta(delta) }
             onDisplayedPageCommitted = { page -> updateChapterTitleSurfaces(page) }
             onMovePages = { delta -> movePage(delta) }
             onPrevPage = { movePage(-1) }
             onNextPage = { movePage(1) }
             onTapAction = { handleTapRegionAction(it) }
-            onSelectionAction = { action, text -> handleSelectionAction(action, text) }
+            onSelectionAction = { action, selection -> handleSelectionAction(action, selection) }
             onSelectionProcessText = { intent, text -> handleSelectionProcessText(intent, text) }
             onTextSelectionStateChanged = { active -> handleTextSelectionStateChanged(active) }
             onImageClick = { image ->
@@ -1024,6 +1037,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             findViewById<ImageButton>(R.id.reader_playback_repeat).also {
                 playbackBarRepeatButton = it
                 it.setOnClickListener { toggleAudioCueLoop() }
+                it.setOnLongClickListener {
+                    showAudioCueRepeatConfigDialog()
+                    true
+                }
             }
         }
     }
@@ -2106,7 +2123,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
     }
 
-    private fun handleSelectionAction(action: ReadView.SelectionAction, text: String) {
+    private fun handleSelectionAction(action: ReadView.SelectionAction, selection: ReadView.SelectionInfo) {
+        val text = selection.text
         when (action) {
             ReadView.SelectionAction.PROCESS_TEXT -> startSelectionProcessText(text)
             ReadView.SelectionAction.COPY -> Unit
@@ -2129,6 +2147,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 startSearch(text)
             }
             ReadView.SelectionAction.ADD_BOOKMARK -> addCurrentBookmark(preferredExcerpt = text)
+            ReadView.SelectionAction.JUMP_TO_CUE -> jumpSelectionToCurrentCue(selection)
             ReadView.SelectionAction.BROWSER -> {
                 runCatching {
                     startActivity(
@@ -2158,6 +2177,61 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun handleTextSelectionStateChanged(active: Boolean) {
         textSelectionActive = active
+    }
+
+    private fun hasReaderSelectionCueJump(): Boolean {
+        return audioUri != null
+    }
+
+    private fun hasReaderSelectionCueJump(selection: ReadView.SelectionInfo): Boolean {
+        if (audioUri == null) return false
+        if (cues.isEmpty() || cueMatchesByCueIndex.isEmpty()) return false
+        return findSelectionCueIndex(selection) != null
+    }
+
+    private fun jumpSelectionToCurrentCue(selection: ReadView.SelectionInfo? = null) {
+        if (audioUri == null) {
+            Toast.makeText(this, R.string.reader_no_audio, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val targetIndex = selection?.let(::findSelectionCueIndex) ?: -1
+        if (targetIndex !in cues.indices) {
+            Toast.makeText(this, R.string.reader_no_srt, Toast.LENGTH_SHORT).show()
+            return
+        }
+        seekToCueIndex(targetIndex)
+    }
+
+    private fun findSelectionCueIndex(selection: ReadView.SelectionInfo): Int? {
+        val chapterIndex = selection.chapterIndex ?: return null
+        val chapterRange = selection.chapterRange ?: return null
+        if (cueMatchesByCueIndex.isEmpty()) return null
+        val selectionStart = chapterRange.first
+        val selectionEndExclusive = chapterRange.last + 1
+        val midpoint = selectionStart + (chapterRange.last - selectionStart).coerceAtLeast(0) / 2
+        val chapterMatches = cueMatchesByCueIndex.values.filter { it.chapterIndex == chapterIndex }
+        if (chapterMatches.isEmpty()) return null
+        chapterMatches.firstOrNull { match ->
+            midpoint in match.rawStart until match.rawEnd
+        }?.cueIndex?.let { return it }
+        chapterMatches
+            .asSequence()
+            .mapNotNull { match ->
+                val overlapStart = maxOf(selectionStart, match.rawStart)
+                val overlapEnd = minOf(selectionEndExclusive, match.rawEnd)
+                val overlap = overlapEnd - overlapStart
+                if (overlap > 0) match.cueIndex to overlap else null
+            }
+            .maxByOrNull { it.second }
+            ?.first
+            ?.let { return it }
+        return chapterMatches.minByOrNull { match ->
+            when {
+                midpoint < match.rawStart -> match.rawStart - midpoint
+                midpoint >= match.rawEnd -> midpoint - match.rawEnd
+                else -> 0
+            }
+        }?.cueIndex
     }
 
     private fun launchSelectionProcessText(intent: Intent, text: String, readOnly: Boolean) {
@@ -4308,7 +4382,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private fun showPaddingDialog() {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(18), dp(24), dp(18))
+            setPadding(dp(16), dp(8), dp(16), dp(10))
         }
         addInfoSectionTitle(content, getString(R.string.reader_margin_header))
         addInfoCheckRow(content, getString(R.string.reader_margin_show_divider), showHeaderLine) {
@@ -4374,11 +4448,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             applyPaddingConfigChange(repaginate = true)
         }
         val scroll = ScrollView(this).apply { addView(content) }
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.reader_title_margin)
             .setView(scroll)
             .setPositiveButton(R.string.reader_dialog_done, null)
             .show()
+        configureReaderConfigDialogWindow(dialog, widthFraction = 0.9f)
     }
 
     private fun applyPaddingConfigChange(repaginate: Boolean) {
@@ -4399,7 +4474,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         var dialog: AlertDialog? = null
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(18), dp(24), dp(18))
+            setPadding(dp(16), dp(8), dp(16), dp(10))
         }
         addInfoSectionTitle(content, getString(R.string.reader_margin_body_title))
         addBodyTitleModeGroup(content)
@@ -4501,6 +4576,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             .setView(ScrollView(this).apply { addView(content) })
             .setPositiveButton(R.string.reader_dialog_done, null)
             .show()
+        configureReaderConfigDialogWindow(dialog, widthFraction = 0.95f)
         tipConfigDialog = dialog
         dialog.setOnDismissListener {
             if (tipConfigDialog === dialog) {
@@ -4512,13 +4588,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private fun addInfoSectionTitle(parent: LinearLayout, text: String) {
         parent.addView(TextView(this).apply {
             this.text = text
-            textSize = 20f
+            textSize = 16f
             setTextColor(0xFFE0483F.toInt())
             includeFontPadding = true
         }, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(12) })
+        ).apply { topMargin = dp(8) })
     }
 
     private fun addBodyTitleModeGroup(parent: LinearLayout) {
@@ -4534,7 +4610,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             group.addView(RadioButton(this).apply {
                 id = View.generateViewId()
                 text = label
-                textSize = 16f
+                textSize = 14f
                 setTextColor(readerTextColor)
                 isChecked = bodyTitleMode == mode
                 setOnClickListener {
@@ -4544,7 +4620,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             }, RadioGroup.LayoutParams(
                 RadioGroup.LayoutParams.WRAP_CONTENT,
                 RadioGroup.LayoutParams.WRAP_CONTENT
-            ).apply { marginEnd = dp(14) })
+            ).apply { marginEnd = dp(10) })
         }
         parent.addView(group, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -4563,22 +4639,22 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val row = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(4), 0, dp(4))
+            setPadding(0, dp(2), 0, dp(2))
         }
         val valueView = TextView(this).apply {
             text = initialValue.toString()
-            textSize = 16f
+            textSize = 14f
             gravity = Gravity.END
             setTextColor(readerTextColor)
         }
         row.addView(TextView(this).apply {
             text = label
-            textSize = 16f
+            textSize = 14f
             setTextColor(readerTextColor)
-        }, LinearLayout.LayoutParams(dp(72), LinearLayout.LayoutParams.WRAP_CONTENT))
+        }, LinearLayout.LayoutParams(dp(56), LinearLayout.LayoutParams.WRAP_CONTENT))
         row.addView(TextView(this).apply {
             text = "－"
-            textSize = 30f
+            textSize = 24f
             gravity = Gravity.CENTER
             setTextColor(readerTextColor)
             setOnClickListener {
@@ -4586,7 +4662,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 valueView.text = value.toString()
                 onChange(value)
             }
-        }, LinearLayout.LayoutParams(dp(44), dp(44)))
+        }, LinearLayout.LayoutParams(dp(34), dp(36)))
         row.addView(SeekBar(this).apply {
             this.max = max - min
             progress = (initialValue - min).coerceIn(0, this.max)
@@ -4600,10 +4676,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
                 override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
             })
-        }, LinearLayout.LayoutParams(0, dp(44), 1f))
+        }, LinearLayout.LayoutParams(0, dp(36), 1f))
         row.addView(TextView(this).apply {
             text = "＋"
-            textSize = 34f
+            textSize = 24f
             gravity = Gravity.CENTER
             setTextColor(readerTextColor)
             setOnClickListener {
@@ -4612,8 +4688,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 (row.getChildAt(2) as? SeekBar)?.progress = value - min
                 onChange(value)
             }
-        }, LinearLayout.LayoutParams(dp(44), dp(44)))
-        row.addView(valueView, LinearLayout.LayoutParams(dp(42), LinearLayout.LayoutParams.WRAP_CONTENT))
+        }, LinearLayout.LayoutParams(dp(34), dp(36)))
+        row.addView(valueView, LinearLayout.LayoutParams(dp(34), LinearLayout.LayoutParams.WRAP_CONTENT))
         parent.addView(row, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
@@ -4624,17 +4700,17 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         parent.addView(LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(10), 0, dp(10))
+            setPadding(0, dp(7), 0, dp(7))
             isClickable = true
             setOnClickListener { onClick() }
             addView(TextView(this@LegadoReaderActivity).apply {
                 text = label
-                textSize = 16f
+                textSize = 14f
                 setTextColor(readerTextColor)
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(TextView(this@LegadoReaderActivity).apply {
                 text = value
-                textSize = 16f
+                textSize = 14f
                 gravity = Gravity.END
                 setTextColor(readerTextColor)
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
@@ -4648,10 +4724,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         parent.addView(LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(8), 0, dp(8))
+            setPadding(0, dp(5), 0, dp(5))
             addView(TextView(this@LegadoReaderActivity).apply {
                 text = label
-                textSize = 16f
+                textSize = 14f
                 setTextColor(readerTextColor)
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(CheckBox(this@LegadoReaderActivity).apply {
@@ -4783,6 +4859,19 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 onSelected(entries[which].first)
             }
             .show()
+    }
+
+    private fun configureReaderConfigDialogWindow(dialog: AlertDialog, widthFraction: Float) {
+        dialog.window?.run {
+            clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            val attr = attributes
+            attr.dimAmount = 0f
+            attributes = attr
+            val width = (resources.displayMetrics.widthPixels * widthFraction)
+                .toInt()
+                .coerceAtLeast(dp(280))
+            setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
     }
 
     private fun applyTipConfigChange(repaginate: Boolean) {
@@ -5854,6 +5943,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             return
         }
         if (isAudioPlaybackRequested()) {
+            cancelAudioCueRepeatDelay()
             currentPlayer.pause()
         } else {
             clearImagePauseResume()
@@ -6007,8 +6097,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun disableAudioCueLoop(updateUi: Boolean) {
+        cancelAudioCueRepeatDelay()
         audioCueLoopEnabled = false
         audioCueLoopWindow = null
+        audioCueRepeatRemainingCount = initialAudioCueRepeatRemainingCount()
         if (updateUi) {
             updateAudioCueLoopLabel()
         }
@@ -6016,10 +6108,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun updateAudioCueLoopWindow(cueIndex: Int): Boolean {
         val cue = cues.getOrNull(cueIndex) ?: return false
+        cancelAudioCueRepeatDelay()
         val startMs = cue.startMs.coerceAtLeast(0L)
         val endMs = cue.endMs.coerceAtLeast(startMs + 1L)
         audioCueLoopWindow = startMs to endMs
         audioCueIndex = cueIndex
+        audioCueRepeatRemainingCount = initialAudioCueRepeatRemainingCount()
         updateAudioCueLoopLabel()
         return true
     }
@@ -6033,6 +6127,224 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         playbackBarRepeatButton.imageTintList = ColorStateList.valueOf(
             if (audioCueLoopEnabled) NIGHT_ACCENT else MENU_TEXT
         )
+        val label = if (audioCueLoopEnabled) {
+            getString(R.string.reader_repeat_enabled_content_description, currentAudioCueRepeatPauseLabel())
+        } else {
+            getString(R.string.reader_repeat_disabled_content_description)
+        }
+        playbackBarRepeatButton.contentDescription = label
+    }
+
+    private fun showAudioCueRepeatConfigDialog() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(10), dp(22), dp(4))
+        }
+        var useCueDuration = audioCueRepeatPauseUsesCueDuration
+        var fixedSeconds = audioCueRepeatFixedPauseSeconds
+            .coerceIn(0, MAX_AUDIO_CUE_REPEAT_FIXED_PAUSE_SECONDS)
+        var finiteRepeatEnabled = audioCueRepeatFiniteEnabled
+        var playbackCount = audioCueRepeatCount.coerceIn(1, MAX_AUDIO_CUE_REPEAT_COUNT)
+
+        val modeGroup = RadioGroup(this).apply {
+            orientation = RadioGroup.VERTICAL
+        }
+        val cueDurationButton = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = getString(R.string.reader_repeat_pause_follow_cue)
+            textSize = 15f
+            setTextColor(MENU_TEXT)
+            isChecked = useCueDuration
+        }
+        val fixedButton = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = getString(R.string.reader_repeat_pause_fixed)
+            textSize = 15f
+            setTextColor(MENU_TEXT)
+            isChecked = !useCueDuration
+        }
+        modeGroup.addView(cueDurationButton)
+        modeGroup.addView(fixedButton)
+
+        val fixedLabel = text(
+            getString(R.string.reader_repeat_fixed_seconds, fixedSeconds),
+            14f,
+            MENU_TEXT
+        )
+        val fixedSeek = SeekBar(this).apply {
+            max = MAX_AUDIO_CUE_REPEAT_FIXED_PAUSE_SECONDS
+            progress = fixedSeconds
+        }
+        val finiteSwitch = Switch(this).apply {
+            text = getString(R.string.reader_repeat_playback_count_toggle)
+            textSize = 15f
+            setTextColor(MENU_TEXT)
+            isChecked = finiteRepeatEnabled
+        }
+        val countLabel = text(
+            getString(R.string.reader_repeat_playback_count_value, playbackCount),
+            14f,
+            MENU_TEXT
+        )
+        val countSeek = SeekBar(this).apply {
+            max = MAX_AUDIO_CUE_REPEAT_COUNT
+            progress = playbackCount - 1
+        }
+        fun syncFixedEnabled() {
+            fixedLabel.isEnabled = !useCueDuration
+            fixedSeek.isEnabled = !useCueDuration
+            fixedLabel.alpha = if (useCueDuration) 0.55f else 1f
+            fixedSeek.alpha = if (useCueDuration) 0.55f else 1f
+        }
+        fun syncCountEnabled() {
+            countLabel.isEnabled = finiteRepeatEnabled
+            countSeek.isEnabled = finiteRepeatEnabled
+            countLabel.alpha = if (finiteRepeatEnabled) 1f else 0.55f
+            countSeek.alpha = if (finiteRepeatEnabled) 1f else 0.55f
+        }
+        modeGroup.setOnCheckedChangeListener { _, checkedId ->
+            useCueDuration = checkedId == cueDurationButton.id
+            syncFixedEnabled()
+        }
+        finiteSwitch.setOnCheckedChangeListener { _, isChecked ->
+            finiteRepeatEnabled = isChecked
+            syncCountEnabled()
+        }
+        fixedSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                fixedSeconds = progress.coerceIn(0, MAX_AUDIO_CUE_REPEAT_FIXED_PAUSE_SECONDS)
+                fixedLabel.text = getString(R.string.reader_repeat_fixed_seconds, fixedSeconds)
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
+        countSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                playbackCount = (progress + 1).coerceIn(1, MAX_AUDIO_CUE_REPEAT_COUNT)
+                countLabel.text = getString(R.string.reader_repeat_playback_count_value, playbackCount)
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
+        syncFixedEnabled()
+        syncCountEnabled()
+        content.addView(modeGroup)
+        content.addView(fixedLabel, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(34)
+        ).apply { topMargin = dp(6) })
+        content.addView(fixedSeek, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(44)
+        ))
+        content.addView(finiteSwitch, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(10) })
+        content.addView(countLabel, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(34)
+        ).apply { topMargin = dp(6) })
+        content.addView(countSeek, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(44)
+        ))
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.reader_repeat_settings_title)
+            .setView(content)
+            .setPositiveButton(R.string.reader_dialog_done) { _, _ ->
+                audioCueRepeatPauseUsesCueDuration = useCueDuration
+                audioCueRepeatFixedPauseSeconds = fixedSeconds
+                audioCueRepeatFiniteEnabled = finiteRepeatEnabled
+                audioCueRepeatCount = playbackCount
+                audioCueRepeatRemainingCount = initialAudioCueRepeatRemainingCount()
+                persistReaderSettings(updateAnchor = false)
+                updateAudioCueLoopLabel()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+        dialog.window?.run {
+            clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            val attr = attributes
+            attr.dimAmount = 0f
+            attributes = attr
+        }
+    }
+
+    private fun currentAudioCueRepeatPauseLabel(): String {
+        return if (audioCueRepeatPauseUsesCueDuration) {
+            getString(R.string.reader_repeat_pause_follow_cue)
+        } else {
+            getString(R.string.reader_repeat_fixed_seconds, audioCueRepeatFixedPauseSeconds)
+        }
+    }
+
+    private fun initialAudioCueRepeatRemainingCount(): Int {
+        if (!audioCueRepeatFiniteEnabled) return 0
+        return (audioCueRepeatCount.coerceIn(1, MAX_AUDIO_CUE_REPEAT_COUNT) - 1).coerceAtLeast(0)
+    }
+
+    private fun audioCueRepeatPauseMs(startMs: Long, endMs: Long, currentPlayer: ExoPlayer): Long {
+        return if (audioCueRepeatPauseUsesCueDuration) {
+            val speed = currentPlayer.playbackParameters.speed.takeIf { it > 0f } ?: 1f
+            ((endMs - startMs).coerceAtLeast(0L).toFloat() / speed).toLong()
+        } else {
+            audioCueRepeatFixedPauseSeconds
+                .coerceIn(0, MAX_AUDIO_CUE_REPEAT_FIXED_PAUSE_SECONDS)
+                .toLong() * 1_000L
+        }.coerceIn(0L, MAX_AUDIO_CUE_REPEAT_FIXED_PAUSE_SECONDS * 1_000L)
+    }
+
+    private fun startAudioCueRepeatDelay(currentPlayer: ExoPlayer, startMs: Long, endMs: Long) {
+        if (audioCueRepeatDelayJob?.isActive == true) return
+        if (audioCueRepeatFiniteEnabled) {
+            if (audioCueRepeatRemainingCount <= 0) {
+                disableAudioCueLoop(updateUi = true)
+                return
+            }
+            audioCueRepeatRemainingCount -= 1
+        }
+        val pauseMs = audioCueRepeatPauseMs(startMs, endMs, currentPlayer)
+        if (pauseMs <= 0L) {
+            currentPlayer.seekTo(startMs)
+            return
+        }
+        val generation = ++audioCueRepeatDelayGeneration
+        audioCueLoopPausedForRepeat = true
+        currentPlayer.pause()
+        updateAudioControlLabels()
+        audioCueRepeatDelayJob = lifecycleScope.launch {
+            try {
+                delay(pauseMs)
+                if (!audioCueLoopEnabled || generation != audioCueRepeatDelayGeneration) return@launch
+                val livePlayer = player ?: return@launch
+                if (livePlayer !== currentPlayer) return@launch
+                val window = audioCueLoopWindow ?: return@launch
+                if (window.first != startMs || window.second != endMs) return@launch
+                audioCueLoopPausedForRepeat = false
+                livePlayer.seekTo(startMs)
+                livePlayer.play()
+                BookReaderFloatingBridge.notifyPlaybackPosition(startMs)
+                publishReaderPlaybackBridgeSnapshot(notifyState = true)
+                syncToAudioPositionAt(startMs, allowPageJump = true, forceReveal = false)
+            } finally {
+                if (generation == audioCueRepeatDelayGeneration) {
+                    audioCueLoopPausedForRepeat = false
+                    audioCueRepeatDelayJob = null
+                    updateAudioControlLabels()
+                }
+            }
+        }
+    }
+
+    private fun cancelAudioCueRepeatDelay() {
+        audioCueRepeatDelayGeneration++
+        audioCueRepeatDelayJob?.cancel()
+        audioCueRepeatDelayJob = null
+        audioCueLoopPausedForRepeat = false
     }
 
     private fun currentCueLoopIndexForPosition(positionMs: Long): Int {
@@ -6079,26 +6391,35 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val beforeIndex = cues.indexOfLast { it.startMs <= position }
         val baseIndex = if (exactIndex >= 0) exactIndex else beforeIndex
         val targetIndex = findAdjacentCueIndex(baseIndex, delta)
+        seekToCueIndex(targetIndex)
+    }
+
+    private fun seekToCueIndex(targetIndex: Int) {
+        val currentPlayer = player ?: return
+        if (targetIndex !in cues.indices) return
         val targetMs = cues[targetIndex].startMs.coerceAtLeast(0L)
         val targetCue = cues.getOrNull(targetIndex)
         Log.d(
             READER_PAUSED_SEEK_LOG_TAG,
-            "legado adjacentCue request delta=$delta before=$position exact=$exactIndex beforeIndex=$beforeIndex " +
-                "base=$baseIndex baseMs=${cues.getOrNull(baseIndex)?.startMs} audioCue=$audioCueIndex " +
-                "audioCueMs=${cues.getOrNull(audioCueIndex)?.startMs} targetIndex=$targetIndex targetMs=$targetMs " +
+            "legado cueJump request targetIndex=$targetIndex targetMs=$targetMs " +
+                "audioCue=$audioCueIndex audioCueMs=${cues.getOrNull(audioCueIndex)?.startMs} " +
                 "playing=${currentPlayer.isPlaying} " +
                 "playWhenReady=${currentPlayer.playWhenReady} state=${currentPlayer.playbackState} " +
                 "duration=${currentPlayer.duration} cue=${targetCue?.text.orEmpty().replace('\n', ' ').take(48)}"
         )
         currentPlayer.seekTo(targetMs)
+        val resumeAfterRepeatPause = audioCueLoopPausedForRepeat
         Log.d(
             READER_PAUSED_SEEK_LOG_TAG,
-            "legado adjacentCue after-seek-immediate targetMs=$targetMs actual=${currentPlayer.currentPosition} " +
+            "legado cueJump after-seek-immediate targetMs=$targetMs actual=${currentPlayer.currentPosition} " +
                 "playing=${currentPlayer.isPlaying} playWhenReady=${currentPlayer.playWhenReady} state=${currentPlayer.playbackState}"
         )
         audioCueIndex = targetIndex
         if (audioCueLoopEnabled) {
             updateAudioCueLoopWindow(targetIndex)
+        }
+        if (resumeAfterRepeatPause) {
+            currentPlayer.play()
         }
         activeCueIndex = if (cueMatchesByCueIndex.containsKey(targetIndex)) targetIndex else -1
         BookReaderFloatingBridge.notifyPlaybackPosition(targetMs)
@@ -6113,7 +6434,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             {
                 Log.d(
                     READER_PAUSED_SEEK_LOG_TAG,
-                    "legado adjacentCue verify targetMs=$targetMs actual=${currentPlayer.currentPosition} " +
+                    "legado cueJump verify targetMs=$targetMs actual=${currentPlayer.currentPosition} " +
                         "delta=${currentPlayer.currentPosition - targetMs} playing=${currentPlayer.isPlaying} " +
                         "playWhenReady=${currentPlayer.playWhenReady} state=${currentPlayer.playbackState}"
                 )
@@ -6278,6 +6599,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun isAudioPlaybackRequested(): Boolean {
         val currentPlayer = player ?: return false
+        if (audioCueLoopPausedForRepeat) return true
         return currentPlayer.playWhenReady || currentPlayer.isPlaying
     }
 
@@ -6862,6 +7184,15 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         crossPageCueWindowEnabled = state.crossPageCueWindowEnabled
         stopPlaybackOnImage = state.stopPlaybackOnImage
         imagePauseSeconds = state.imagePauseSeconds
+        audioCueRepeatPauseUsesCueDuration = state.audioCueRepeatPauseUsesCueDuration
+        audioCueRepeatFixedPauseSeconds = state.audioCueRepeatFixedPauseSeconds
+        audioCueRepeatFiniteEnabled = state.audioCueRepeatFiniteEnabled
+        audioCueRepeatCount = state.audioCueRepeatCount
+        audioCueRepeatRemainingCount = initialAudioCueRepeatRemainingCount()
+        if (::readView.isInitialized) {
+            readView.selectionJumpToCueEnabled = hasReaderSelectionCueJump()
+            readView.canJumpSelectionToCue = { selection -> hasReaderSelectionCueJump(selection) }
+        }
         verticalControlDirectionReversed = state.verticalControlDirectionReversed
         verticalProgressDirectionReversed = state.verticalProgressDirectionReversed
         selectionPrimaryActionKey = state.selectionPrimaryActionKey
@@ -7002,6 +7333,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 crossPageCueWindowEnabled = crossPageCueWindowEnabled,
                 stopPlaybackOnImage = stopPlaybackOnImage,
                 imagePauseSeconds = imagePauseSeconds,
+                audioCueRepeatPauseUsesCueDuration = audioCueRepeatPauseUsesCueDuration,
+                audioCueRepeatFixedPauseSeconds = audioCueRepeatFixedPauseSeconds,
+                audioCueRepeatFiniteEnabled = audioCueRepeatFiniteEnabled,
+                audioCueRepeatCount = audioCueRepeatCount,
                 verticalControlDirectionReversed = verticalControlDirectionReversed,
                 verticalProgressDirectionReversed = verticalProgressDirectionReversed,
                 selectionPrimaryActionKey = selectionPrimaryActionKey,
@@ -7469,8 +7804,14 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                         val startMs = window.first.coerceAtLeast(0L)
                         val endMs = window.second.coerceAtLeast(startMs + 1L)
                         val loopAt = (endMs - 40L).coerceAtLeast(startMs)
-                        if (positionMs >= loopAt || positionMs < startMs) {
+                        if (positionMs < startMs && currentPlayer.isPlaying) {
                             currentPlayer.seekTo(startMs)
+                        } else if (
+                            currentPlayer.isPlaying &&
+                            positionMs >= loopAt &&
+                            audioCueRepeatDelayJob?.isActive != true
+                        ) {
+                            startAudioCueRepeatDelay(currentPlayer, startMs, endMs)
                         }
                     }
                 }
@@ -7488,6 +7829,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                         timerFadeApplied = false
                     }
                     if (remainingMs <= 0L) {
+                        cancelAudioCueRepeatDelay()
                         if (currentPlayer != null && audioTimerFadeOutEnabled) {
                             pauseWithSleepFadeRewind(currentPlayer)
                         } else {
@@ -7776,6 +8118,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         chapterPreloadJob?.cancel()
         m4bChapterLoadJob?.cancel()
         syncJob?.cancel()
+        audioCueRepeatDelayJob?.cancel()
         imagePauseResumeJob?.cancel()
         floatingOverlayStartJob?.cancel()
         ReaderPlaybackScreenVisibility.markHidden(this)

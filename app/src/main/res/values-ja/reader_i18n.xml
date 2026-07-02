@@ -59,7 +59,7 @@
     <string name="reader_style_anim_simulation">シミュレーション</string>
     <string name="reader_style_anim_scroll">スクロール</string>
     <string name="reader_style_anim_none">なし</string>
-    <string name="reader_style_color_background">文字色と背景（長押しでカスタム）</string>
+    <string name="reader_style_color_background">色/背景</string>
     <string name="reader_style_config_title">背景スタイルを編集</string>
     <string name="reader_style_name">スタイル名</string>
     <string name="reader_style_restore">プリセットを復元</string>
@@ -76,8 +76,8 @@
     <string name="reader_style_sample_text">文字</string>
     <string name="reader_keep_light_default">デフォルト</string>
     <string name="reader_keep_light_always">常時点灯</string>
-    <string name="reader_progress_behavior_page">現在の章のページ数を調整</string>
-    <string name="reader_progress_behavior_book">章位置を調整</string>
+    <string name="reader_progress_behavior_page">章ページ数</string>
+    <string name="reader_progress_behavior_book">章位置</string>
     <string name="reader_chapter_jump_confirm_title">章ジャンプの確認</string>
     <string name="reader_chapter_jump_confirm_message">この章へ移動しますか？</string>
     <string name="read_body_to_lh">ノッチまで拡張</string>
@@ -237,6 +237,14 @@
     <string name="reader_simulated_reading_start_chapter">開始章</string>
     <string name="reader_simulated_reading_daily_chapters">1日あたりの章数</string>
     <string name="reader_simulated_reading_locked">この章はまだ解放されていません</string>
+    <string name="reader_repeat_settings_title">リピート設定</string>
+    <string name="reader_repeat_pause_follow_cue">文の長さだけ一時停止</string>
+    <string name="reader_repeat_pause_fixed">固定秒数</string>
+    <string name="reader_repeat_fixed_seconds">%1$d 秒</string>
+    <string name="reader_repeat_playback_count_toggle">再生回数で制限</string>
+    <string name="reader_repeat_playback_count_value">%1$d 回再生</string>
+    <string name="reader_repeat_enabled_content_description">リピート、%1$s</string>
+    <string name="reader_repeat_disabled_content_description">リピート</string>
 
     <string-array name="reader_screen_direction_titles">
         <item>@string/screen_unspecified</item>

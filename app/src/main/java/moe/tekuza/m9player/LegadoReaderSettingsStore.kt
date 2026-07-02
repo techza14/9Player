@@ -185,6 +185,10 @@ internal data class LegadoReaderPersistedState(
     val crossPageCueWindowEnabled: Boolean = true,
     val stopPlaybackOnImage: Boolean = false,
     val imagePauseSeconds: Int = 0,
+    val audioCueRepeatPauseUsesCueDuration: Boolean = true,
+    val audioCueRepeatFixedPauseSeconds: Int = 2,
+    val audioCueRepeatFiniteEnabled: Boolean = false,
+    val audioCueRepeatCount: Int = 0,
     val verticalControlDirectionReversed: Boolean = false,
     val verticalProgressDirectionReversed: Boolean = false,
     val selectionPrimaryActionKey: String = "default",
@@ -365,6 +369,10 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         crossPageCueWindowEnabled = json.optBoolean("crossPageCueWindowEnabled", true),
         stopPlaybackOnImage = json.optBoolean("stopPlaybackOnImage", false),
         imagePauseSeconds = json.optInt("imagePauseSeconds", 0).coerceIn(0, 300),
+        audioCueRepeatPauseUsesCueDuration = json.optBoolean("audioCueRepeatPauseUsesCueDuration", true),
+        audioCueRepeatFixedPauseSeconds = json.optInt("audioCueRepeatFixedPauseSeconds", 2).coerceIn(0, 30),
+        audioCueRepeatFiniteEnabled = json.optBoolean("audioCueRepeatFiniteEnabled", false),
+        audioCueRepeatCount = json.optInt("audioCueRepeatCount", 0).coerceIn(0, 20),
         verticalControlDirectionReversed = json.optBoolean("verticalControlDirectionReversed", false),
         verticalProgressDirectionReversed = json.optBoolean("verticalProgressDirectionReversed", false),
         selectionPrimaryActionKey = json.optString("selectionPrimaryActionKey")
@@ -565,6 +573,10 @@ internal fun saveLegadoReaderPersistedState(
         put("crossPageCueWindowEnabled", state.crossPageCueWindowEnabled)
         put("stopPlaybackOnImage", state.stopPlaybackOnImage)
         put("imagePauseSeconds", state.imagePauseSeconds)
+        put("audioCueRepeatPauseUsesCueDuration", state.audioCueRepeatPauseUsesCueDuration)
+        put("audioCueRepeatFixedPauseSeconds", state.audioCueRepeatFixedPauseSeconds)
+        put("audioCueRepeatFiniteEnabled", state.audioCueRepeatFiniteEnabled)
+        put("audioCueRepeatCount", state.audioCueRepeatCount)
         put("verticalControlDirectionReversed", state.verticalControlDirectionReversed)
         put("verticalProgressDirectionReversed", state.verticalProgressDirectionReversed)
         put("selectionPrimaryActionKey", state.selectionPrimaryActionKey)

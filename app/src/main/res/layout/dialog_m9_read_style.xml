@@ -101,68 +101,216 @@
                 android:textSize="14sp" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/style_text_size_label"
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="36dp"
+            android:layout_height="38dp"
             android:gravity="center_vertical"
-            android:textColor="#2C241B"
-            android:textSize="14sp" />
+            android:orientation="horizontal">
 
-        <SeekBar
-            android:id="@+id/style_text_size"
-            android:layout_width="match_parent"
-            android:layout_height="44dp"
-            android:max="30" />
+            <TextView
+                android:id="@+id/style_text_size_label"
+                android:layout_width="52dp"
+                android:layout_height="wrap_content"
+                android:singleLine="true"
+                android:textColor="#2C241B"
+                android:textSize="14sp" />
 
-        <TextView
-            android:id="@+id/style_letter_label"
+            <TextView
+                android:id="@+id/style_text_size_minus"
+                android:layout_width="30dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/reader_menu_touch"
+                android:gravity="center"
+                android:text="－"
+                android:textColor="#2C241B"
+                android:textSize="22sp" />
+
+            <SeekBar
+                android:id="@+id/style_text_size"
+                android:layout_width="0dp"
+                android:layout_height="32dp"
+                android:layout_weight="1"
+                android:max="45" />
+
+            <TextView
+                android:id="@+id/style_text_size_plus"
+                android:layout_width="30dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/reader_menu_touch"
+                android:gravity="center"
+                android:text="＋"
+                android:textColor="#2C241B"
+                android:textSize="22sp" />
+
+            <TextView
+                android:id="@+id/style_text_size_value"
+                android:layout_width="42dp"
+                android:layout_height="wrap_content"
+                android:gravity="end"
+                android:singleLine="true"
+                android:textColor="#2C241B"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="36dp"
+            android:layout_height="38dp"
             android:gravity="center_vertical"
-            android:text="@string/reader_style_letter_spacing"
-            android:textColor="#2C241B"
-            android:textSize="14sp" />
+            android:orientation="horizontal">
 
-        <SeekBar
-            android:id="@+id/style_letter_size"
-            android:layout_width="match_parent"
-            android:layout_height="44dp"
-            android:max="100" />
+            <TextView
+                android:id="@+id/style_letter_label"
+                android:layout_width="52dp"
+                android:layout_height="wrap_content"
+                android:singleLine="true"
+                android:text="@string/reader_style_letter_spacing"
+                android:textColor="#2C241B"
+                android:textSize="14sp" />
 
-        <TextView
-            android:id="@+id/style_line_label"
+            <TextView
+                android:id="@+id/style_letter_minus"
+                android:layout_width="30dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/reader_menu_touch"
+                android:gravity="center"
+                android:text="－"
+                android:textColor="#2C241B"
+                android:textSize="22sp" />
+
+            <SeekBar
+                android:id="@+id/style_letter_size"
+                android:layout_width="0dp"
+                android:layout_height="32dp"
+                android:layout_weight="1"
+                android:max="100" />
+
+            <TextView
+                android:id="@+id/style_letter_plus"
+                android:layout_width="30dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/reader_menu_touch"
+                android:gravity="center"
+                android:text="＋"
+                android:textColor="#2C241B"
+                android:textSize="22sp" />
+
+            <TextView
+                android:id="@+id/style_letter_value"
+                android:layout_width="42dp"
+                android:layout_height="wrap_content"
+                android:gravity="end"
+                android:singleLine="true"
+                android:textColor="#2C241B"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="36dp"
+            android:layout_height="38dp"
             android:gravity="center_vertical"
-            android:text="@string/reader_style_line_spacing"
-            android:textColor="#2C241B"
-            android:textSize="14sp" />
+            android:orientation="horizontal">
 
-        <SeekBar
-            android:id="@+id/style_line_size"
-            android:layout_width="match_parent"
-            android:layout_height="44dp"
-            android:max="28" />
+            <TextView
+                android:id="@+id/style_line_label"
+                android:layout_width="52dp"
+                android:layout_height="wrap_content"
+                android:singleLine="true"
+                android:text="@string/reader_style_line_spacing"
+                android:textColor="#2C241B"
+                android:textSize="14sp" />
 
-        <TextView
-            android:id="@+id/style_paragraph_label"
+            <TextView
+                android:id="@+id/style_line_minus"
+                android:layout_width="30dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/reader_menu_touch"
+                android:gravity="center"
+                android:text="－"
+                android:textColor="#2C241B"
+                android:textSize="22sp" />
+
+            <SeekBar
+                android:id="@+id/style_line_size"
+                android:layout_width="0dp"
+                android:layout_height="32dp"
+                android:layout_weight="1"
+                android:max="20" />
+
+            <TextView
+                android:id="@+id/style_line_plus"
+                android:layout_width="30dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/reader_menu_touch"
+                android:gravity="center"
+                android:text="＋"
+                android:textColor="#2C241B"
+                android:textSize="22sp" />
+
+            <TextView
+                android:id="@+id/style_line_value"
+                android:layout_width="42dp"
+                android:layout_height="wrap_content"
+                android:gravity="end"
+                android:singleLine="true"
+                android:textColor="#2C241B"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="36dp"
+            android:layout_height="38dp"
             android:gravity="center_vertical"
-            android:text="@string/reader_style_paragraph_spacing"
-            android:textColor="#2C241B"
-            android:textSize="14sp" />
+            android:orientation="horizontal">
 
-        <SeekBar
-            android:id="@+id/style_paragraph_size"
-            android:layout_width="match_parent"
-            android:layout_height="44dp"
-            android:max="32" />
+            <TextView
+                android:id="@+id/style_paragraph_label"
+                android:layout_width="52dp"
+                android:layout_height="wrap_content"
+                android:singleLine="true"
+                android:text="@string/reader_style_paragraph_spacing"
+                android:textColor="#2C241B"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/style_paragraph_minus"
+                android:layout_width="30dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/reader_menu_touch"
+                android:gravity="center"
+                android:text="－"
+                android:textColor="#2C241B"
+                android:textSize="22sp" />
+
+            <SeekBar
+                android:id="@+id/style_paragraph_size"
+                android:layout_width="0dp"
+                android:layout_height="32dp"
+                android:layout_weight="1"
+                android:max="20" />
+
+            <TextView
+                android:id="@+id/style_paragraph_plus"
+                android:layout_width="30dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/reader_menu_touch"
+                android:gravity="center"
+                android:text="＋"
+                android:textColor="#2C241B"
+                android:textSize="22sp" />
+
+            <TextView
+                android:id="@+id/style_paragraph_value"
+                android:layout_width="42dp"
+                android:layout_height="wrap_content"
+                android:gravity="end"
+                android:singleLine="true"
+                android:textColor="#2C241B"
+                android:textSize="14sp" />
+        </LinearLayout>
 
         <TextView
             android:layout_width="match_parent"
-            android:layout_height="32dp"
+            android:layout_height="28dp"
             android:gravity="center_vertical"
             android:text="@string/reader_style_page_anim"
             android:textColor="#7D6E5C"

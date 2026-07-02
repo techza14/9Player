@@ -30,14 +30,14 @@
 
     <style name="ReaderMoreRow">
         <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">56dp</item>
+        <item name="android:layout_height">48dp</item>
         <item name="android:background">@drawable/reader_menu_touch</item>
         <item name="android:clickable">true</item>
         <item name="android:focusable">true</item>
         <item name="android:gravity">center_vertical</item>
         <item name="android:orientation">horizontal</item>
-        <item name="android:paddingStart">18dp</item>
-        <item name="android:paddingEnd">18dp</item>
+        <item name="android:paddingStart">14dp</item>
+        <item name="android:paddingEnd">14dp</item>
     </style>
 
     <style name="ReaderMoreLabel">
@@ -46,18 +46,18 @@
         <item name="android:layout_weight">1</item>
         <item name="android:gravity">center_vertical</item>
         <item name="android:textColor">#2C241B</item>
-        <item name="android:textSize">17sp</item>
+        <item name="android:textSize">15sp</item>
     </style>
 
     <style name="ReaderMoreValue">
         <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">36dp</item>
+        <item name="android:layout_height">30dp</item>
         <item name="android:background">@drawable/reader_menu_touch</item>
         <item name="android:gravity">center</item>
-        <item name="android:minWidth">74dp</item>
-        <item name="android:paddingStart">14dp</item>
-        <item name="android:paddingEnd">14dp</item>
+        <item name="android:minWidth">64dp</item>
+        <item name="android:paddingStart">10dp</item>
+        <item name="android:paddingEnd">10dp</item>
         <item name="android:textColor">#4B4035</item>
-        <item name="android:textSize">15sp</item>
+        <item name="android:textSize">14sp</item>
     </style>
 </resources>
