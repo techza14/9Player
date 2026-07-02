@@ -24,6 +24,12 @@ internal data class PersistedReaderBook(
     val ebookName: String? = null,
     val ebookFormat: String? = null,
     val coverFocus: String? = null,
+    val startBookCoverZoom: Double? = null,
+    val startBookCoverAnchorXPx: Int? = null,
+    val startBookCoverAnchorYPx: Int? = null,
+    val centerBookCoverZoom: Double? = null,
+    val centerBookCoverAnchorXPx: Int? = null,
+    val centerBookCoverAnchorYPx: Int? = null,
     val bookCoverZoom: Double? = null,
     val bookCoverAnchorXPx: Int? = null,
     val bookCoverAnchorYPx: Int? = null,
@@ -121,6 +127,12 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         val ebookName = item.optString("ebookName").trim().ifBlank { null }
         val ebookFormat = item.optString("ebookFormat").trim().ifBlank { null }
         val coverFocus = item.optString("coverFocus").trim().ifBlank { null }
+        val startBookCoverZoom = item.optDouble("startBookCoverZoom").takeIf { !it.isNaN() }
+        val startBookCoverAnchorXPx = item.optInt("startBookCoverAnchorXPx").takeIf { it >= 0 }
+        val startBookCoverAnchorYPx = item.optInt("startBookCoverAnchorYPx").takeIf { it >= 0 }
+        val centerBookCoverZoom = item.optDouble("centerBookCoverZoom").takeIf { !it.isNaN() }
+        val centerBookCoverAnchorXPx = item.optInt("centerBookCoverAnchorXPx").takeIf { it >= 0 }
+        val centerBookCoverAnchorYPx = item.optInt("centerBookCoverAnchorYPx").takeIf { it >= 0 }
         val bookCoverZoom = item.optDouble("bookCoverZoom").takeIf { !it.isNaN() }
         val bookCoverAnchorXPx = item.optInt("bookCoverAnchorXPx").takeIf { it >= 0 }
         val bookCoverAnchorYPx = item.optInt("bookCoverAnchorYPx").takeIf { it >= 0 }
@@ -147,6 +159,12 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
             ebookName = ebookName,
             ebookFormat = ebookFormat,
             coverFocus = coverFocus,
+            startBookCoverZoom = startBookCoverZoom,
+            startBookCoverAnchorXPx = startBookCoverAnchorXPx,
+            startBookCoverAnchorYPx = startBookCoverAnchorYPx,
+            centerBookCoverZoom = centerBookCoverZoom,
+            centerBookCoverAnchorXPx = centerBookCoverAnchorXPx,
+            centerBookCoverAnchorYPx = centerBookCoverAnchorYPx,
             bookCoverZoom = bookCoverZoom,
             bookCoverAnchorXPx = bookCoverAnchorXPx,
             bookCoverAnchorYPx = bookCoverAnchorYPx,
@@ -199,6 +217,12 @@ internal fun savePersistedImports(context: Context, state: PersistedImports) {
                         put("ebookName", book.ebookName ?: "")
                         put("ebookFormat", book.ebookFormat ?: "")
                         put("coverFocus", book.coverFocus ?: "")
+                        put("startBookCoverZoom", book.startBookCoverZoom ?: JSONObject.NULL)
+                        put("startBookCoverAnchorXPx", book.startBookCoverAnchorXPx ?: JSONObject.NULL)
+                        put("startBookCoverAnchorYPx", book.startBookCoverAnchorYPx ?: JSONObject.NULL)
+                        put("centerBookCoverZoom", book.centerBookCoverZoom ?: JSONObject.NULL)
+                        put("centerBookCoverAnchorXPx", book.centerBookCoverAnchorXPx ?: JSONObject.NULL)
+                        put("centerBookCoverAnchorYPx", book.centerBookCoverAnchorYPx ?: JSONObject.NULL)
                         put("bookCoverZoom", book.bookCoverZoom ?: JSONObject.NULL)
                         put("bookCoverAnchorXPx", book.bookCoverAnchorXPx ?: JSONObject.NULL)
                         put("bookCoverAnchorYPx", book.bookCoverAnchorYPx ?: JSONObject.NULL)

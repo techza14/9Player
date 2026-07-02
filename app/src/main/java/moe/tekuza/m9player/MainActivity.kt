@@ -50,6 +50,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -78,6 +79,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -133,6 +135,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
@@ -380,10 +384,14 @@ internal data class ReaderBook(
     val audioCoverUri: Uri? = if (coverSource == ReaderBookCoverSource.AUDIO) coverUri else null,
     val ebookCoverUri: Uri? = if (coverSource == ReaderBookCoverSource.EBOOK) coverUri else null,
     val coverFocus: HomeCoverCropFocus = HomeCoverCropFocus.CENTER,
-    val bookCoverAdjustment: BookCoverAdjustment? = null
+    val startBookCoverAdjustment: BookCoverAdjustment? = null,
+    val centerBookCoverAdjustment: BookCoverAdjustment? = null
 ) {
     val isEbookOnly: Boolean
         get() = audioUri == null && ebookUri != null
+
+    val bookCoverAdjustment: BookCoverAdjustment?
+        get() = adjustmentFor(coverFocus)
 }
 
 internal enum class ReaderBookCoverSource {
@@ -476,7 +484,7 @@ private fun normalizeBookCoverAdjustment(
 }
 
 private fun effectiveBookCoverAdjustment(book: ReaderBook): BookCoverAdjustment {
-    return book.bookCoverAdjustment ?: defaultBookCoverAdjustmentForFocus(book.coverFocus)
+    return book.adjustmentFor(book.coverFocus) ?: defaultBookCoverAdjustmentForFocus(book.coverFocus)
 }
 
 private fun isCustomBookCoverAdjustment(
@@ -497,15 +505,78 @@ private fun isCustomBookCoverAdjustment(
         ) > 0.001f
 }
 
-private fun persistedBookCoverAdjustment(book: PersistedReaderBook): BookCoverAdjustment? {
-    val zoom = book.bookCoverZoom?.toFloat() ?: return null
+private fun persistedBookCoverAdjustment(
+    book: PersistedReaderBook,
+    focus: HomeCoverCropFocus
+): BookCoverAdjustment? {
+    val slotZoom = when (focus) {
+        HomeCoverCropFocus.START -> book.startBookCoverZoom
+        HomeCoverCropFocus.CENTER -> book.centerBookCoverZoom
+    }
+    val slotAnchorXPx = when (focus) {
+        HomeCoverCropFocus.START -> book.startBookCoverAnchorXPx
+        HomeCoverCropFocus.CENTER -> book.centerBookCoverAnchorXPx
+    }
+    val slotAnchorYPx = when (focus) {
+        HomeCoverCropFocus.START -> book.startBookCoverAnchorYPx
+        HomeCoverCropFocus.CENTER -> book.centerBookCoverAnchorYPx
+    }
+    val zoom = slotZoom?.toFloat()
+        ?: book.bookCoverZoom?.toFloat()?.takeIf { bookFocusOrDefault(book) == focus }
+        ?: return null
     return normalizeBookCoverAdjustment(
         zoom = zoom,
-        anchorXPx = book.bookCoverAnchorXPx,
-        anchorYPx = book.bookCoverAnchorYPx,
+        anchorXPx = slotAnchorXPx ?: book.bookCoverAnchorXPx?.takeIf { bookFocusOrDefault(book) == focus },
+        anchorYPx = slotAnchorYPx ?: book.bookCoverAnchorYPx?.takeIf { bookFocusOrDefault(book) == focus },
         fallbackViewportX = book.bookCoverViewportX?.toFloat(),
         fallbackViewportY = book.bookCoverViewportY?.toFloat()
     )
+}
+
+private fun bookFocusOrDefault(book: PersistedReaderBook): HomeCoverCropFocus {
+    return when (book.coverFocus?.uppercase(Locale.ROOT)) {
+        HomeCoverCropFocus.START.name -> HomeCoverCropFocus.START
+        else -> HomeCoverCropFocus.CENTER
+    }
+}
+
+private fun ReaderBook.adjustmentFor(focus: HomeCoverCropFocus): BookCoverAdjustment? {
+    return when (focus) {
+        HomeCoverCropFocus.START -> startBookCoverAdjustment
+        HomeCoverCropFocus.CENTER -> centerBookCoverAdjustment
+    }
+}
+
+private fun ReaderBook.withAdjustmentFor(
+    focus: HomeCoverCropFocus,
+    adjustment: BookCoverAdjustment?
+): ReaderBook {
+    return when (focus) {
+        HomeCoverCropFocus.START -> copy(startBookCoverAdjustment = adjustment)
+        HomeCoverCropFocus.CENTER -> copy(centerBookCoverAdjustment = adjustment)
+    }
+}
+
+private fun ReaderBook.persistedAdjustmentFor(
+    focus: HomeCoverCropFocus
+): BookCoverAdjustment? = adjustmentFor(focus)
+
+private fun PersistedReaderBook.withAdjustmentFor(
+    focus: HomeCoverCropFocus,
+    adjustment: BookCoverAdjustment?
+): PersistedReaderBook {
+    return when (focus) {
+        HomeCoverCropFocus.START -> copy(
+            startBookCoverZoom = adjustment?.zoom?.toDouble(),
+            startBookCoverAnchorXPx = adjustment?.anchorXPx,
+            startBookCoverAnchorYPx = adjustment?.anchorYPx
+        )
+        HomeCoverCropFocus.CENTER -> copy(
+            centerBookCoverZoom = adjustment?.zoom?.toDouble(),
+            centerBookCoverAnchorXPx = adjustment?.anchorXPx,
+            centerBookCoverAnchorYPx = adjustment?.anchorYPx
+        )
+    }
 }
 
 private data class ReturnedBookProgress(
@@ -877,9 +948,12 @@ private fun ReaderSyncScreen() {
                                         ebookName = book.ebookName,
                                         ebookFormat = book.ebookFormat,
                                         coverFocus = book.coverFocus.name,
-                                        bookCoverZoom = book.bookCoverAdjustment?.zoom?.toDouble(),
-                                        bookCoverAnchorXPx = book.bookCoverAdjustment?.anchorXPx,
-                                        bookCoverAnchorYPx = book.bookCoverAdjustment?.anchorYPx
+                                        startBookCoverZoom = book.startBookCoverAdjustment?.zoom?.toDouble(),
+                                        startBookCoverAnchorXPx = book.startBookCoverAdjustment?.anchorXPx,
+                                        startBookCoverAnchorYPx = book.startBookCoverAdjustment?.anchorYPx,
+                                        centerBookCoverZoom = book.centerBookCoverAdjustment?.zoom?.toDouble(),
+                                        centerBookCoverAnchorXPx = book.centerBookCoverAdjustment?.anchorXPx,
+                                        centerBookCoverAnchorYPx = book.centerBookCoverAdjustment?.anchorYPx
                                     )
                                 }
                                 savePersistedImports(
@@ -1105,9 +1179,12 @@ private fun ReaderSyncScreen() {
                 ebookName = book.ebookName,
                 ebookFormat = book.ebookFormat,
                 coverFocus = book.coverFocus.name,
-                bookCoverZoom = book.bookCoverAdjustment?.zoom?.toDouble(),
-                bookCoverAnchorXPx = book.bookCoverAdjustment?.anchorXPx,
-                bookCoverAnchorYPx = book.bookCoverAdjustment?.anchorYPx
+                startBookCoverZoom = book.startBookCoverAdjustment?.zoom?.toDouble(),
+                startBookCoverAnchorXPx = book.startBookCoverAdjustment?.anchorXPx,
+                startBookCoverAnchorYPx = book.startBookCoverAdjustment?.anchorYPx,
+                centerBookCoverZoom = book.centerBookCoverAdjustment?.zoom?.toDouble(),
+                centerBookCoverAnchorXPx = book.centerBookCoverAdjustment?.anchorXPx,
+                centerBookCoverAnchorYPx = book.centerBookCoverAdjustment?.anchorYPx
             )
         }
         val previousSelectedSrt = previous.srtUri?.takeIf { it.isNotBlank() }
@@ -1163,7 +1240,7 @@ private fun ReaderSyncScreen() {
         }
         readerBooks = readerBooks.map { current ->
             if (current.id == book.id) {
-                current.copy(coverFocus = nextFocus, bookCoverAdjustment = null)
+                current.copy(coverFocus = nextFocus)
             } else {
                 current
             }
@@ -1175,12 +1252,7 @@ private fun ReaderSyncScreen() {
                 state = previous.copy(
                     books = previous.books.map { persisted ->
                         if (persisted.id == book.id) {
-                            persisted.copy(
-                                coverFocus = nextFocus.name,
-                                bookCoverZoom = null,
-                                bookCoverAnchorXPx = null,
-                                bookCoverAnchorYPx = null
-                            )
+                            persisted.copy(coverFocus = nextFocus.name)
                         } else {
                             persisted
                         }
@@ -1192,7 +1264,7 @@ private fun ReaderSyncScreen() {
 
     fun updateBookCoverAdjustment(bookId: String, adjustment: BookCoverAdjustment?) {
         readerBooks = readerBooks.map { current ->
-            if (current.id == bookId) current.copy(bookCoverAdjustment = adjustment) else current
+            if (current.id == bookId) current.withAdjustmentFor(current.coverFocus, adjustment) else current
         }
         persistImportState()
     }
@@ -1763,15 +1835,26 @@ private fun ReaderSyncScreen() {
                     ?.let { focus -> audio to focus }
             }
             .toMap()
-        val persistedAdjustmentById = persistedState.books
+        val persistedStartAdjustmentById = persistedState.books
             .mapNotNull { book ->
-                persistedBookCoverAdjustment(book)?.let { adjustment -> book.id to adjustment }
+                persistedBookCoverAdjustment(book, HomeCoverCropFocus.START)?.let { adjustment -> book.id to adjustment }
             }
             .toMap()
-        val persistedAdjustmentByAudioUri = persistedState.books
+        val persistedStartAdjustmentByAudioUri = persistedState.books
             .mapNotNull { book ->
                 val audio = book.audioUri ?: return@mapNotNull null
-                persistedBookCoverAdjustment(book)?.let { adjustment -> audio to adjustment }
+                persistedBookCoverAdjustment(book, HomeCoverCropFocus.START)?.let { adjustment -> audio to adjustment }
+            }
+            .toMap()
+        val persistedCenterAdjustmentById = persistedState.books
+            .mapNotNull { book ->
+                persistedBookCoverAdjustment(book, HomeCoverCropFocus.CENTER)?.let { adjustment -> book.id to adjustment }
+            }
+            .toMap()
+        val persistedCenterAdjustmentByAudioUri = persistedState.books
+            .mapNotNull { book ->
+                val audio = book.audioUri ?: return@mapNotNull null
+                persistedBookCoverAdjustment(book, HomeCoverCropFocus.CENTER)?.let { adjustment -> audio to adjustment }
             }
             .toMap()
         val previousSelectedId = selectedBookId
@@ -1803,8 +1886,10 @@ private fun ReaderSyncScreen() {
                             val persistedFocus = persistedFocusById[rebuilt.id]
                                 ?: rebuilt.audioUri?.toString()?.let { persistedFocusByAudioUri[it] }
                                 ?: HomeCoverCropFocus.CENTER
-                            val persistedAdjustment = persistedAdjustmentById[rebuilt.id]
-                                ?: rebuilt.audioUri?.toString()?.let { persistedAdjustmentByAudioUri[it] }
+                            val persistedStartAdjustment = persistedStartAdjustmentById[rebuilt.id]
+                                ?: rebuilt.audioUri?.toString()?.let { persistedStartAdjustmentByAudioUri[it] }
+                            val persistedCenterAdjustment = persistedCenterAdjustmentById[rebuilt.id]
+                                ?: rebuilt.audioUri?.toString()?.let { persistedCenterAdjustmentByAudioUri[it] }
                             val titled = if (!persistedTitle.isNullOrBlank()) {
                                 rebuilt.copy(title = persistedTitle)
                             } else {
@@ -1812,7 +1897,8 @@ private fun ReaderSyncScreen() {
                             }
                             titled.copy(
                                 coverFocus = persistedFocus,
-                                bookCoverAdjustment = persistedAdjustment
+                                startBookCoverAdjustment = persistedStartAdjustment,
+                                centerBookCoverAdjustment = persistedCenterAdjustment
                             )
                         }.onSuccess { refreshedBooks += it }
                     }
@@ -2002,7 +2088,8 @@ private fun ReaderSyncScreen() {
                                 HomeCoverCropFocus.START.name -> HomeCoverCropFocus.START
                                 else -> HomeCoverCropFocus.CENTER
                             }
-                            val persistedAdjustment = persistedBookCoverAdjustment(savedBook)
+                            val persistedStartAdjustment = persistedBookCoverAdjustment(savedBook, HomeCoverCropFocus.START)
+                            val persistedCenterAdjustment = persistedBookCoverAdjustment(savedBook, HomeCoverCropFocus.CENTER)
                             val persistedTitle = savedBook.title.trim()
                             val restored = if (persistedTitle.isNotBlank()) {
                                 rebuilt.copy(title = persistedTitle)
@@ -2011,7 +2098,8 @@ private fun ReaderSyncScreen() {
                             }
                             restored.copy(
                                 coverFocus = coverFocus,
-                                bookCoverAdjustment = persistedAdjustment
+                                startBookCoverAdjustment = persistedStartAdjustment,
+                                centerBookCoverAdjustment = persistedCenterAdjustment
                             )
                         }.onSuccess { restoredBooks += it }
                             .onFailure {
@@ -2790,529 +2878,699 @@ private fun ReaderSyncScreen() {
                     imageSize = decodedBitmap?.let { IntSize(it.width.coerceAtLeast(0), it.height.coerceAtLeast(0)) }
                         ?: IntSize.Zero
                 }
-                AlertDialog(
+                Dialog(
                     onDismissRequest = { adjustingBookCoverId = null },
-                    title = { Text(stringResource(R.string.home_cover_adjust_title)) },
-                    text = {
-                        val previewAdjustment = normalizeBookCoverAdjustment(
-                            zoom = previewZoom,
-                            anchorXPx = previewAnchorXPx,
-                            anchorYPx = previewAnchorYPx,
-                            anchorXExactPx = previewAnchorXExactPx,
-                            anchorYExactPx = previewAnchorYExactPx,
-                            fallbackViewportX = initialAdjustment.fallbackViewportX,
-                            fallbackViewportY = initialAdjustment.fallbackViewportY
-                        )
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            var sampledPoint by remember(adjustingBook.id) { mutableStateOf<Pair<Int, Int>?>(null) }
-                            var isRangeMode by remember(adjustingBook.id) { mutableStateOf(false) }
-                            var rangeStartPoint by remember(adjustingBook.id) { mutableStateOf<Pair<Int, Int>?>(null) }
-                            var isSmoothDragMode by remember(adjustingBook.id) { mutableStateOf(false) }
-                            if (imageSize.width > 0 && imageSize.height > 0) {
-                                var previewSize by remember(adjustingBook.id) { mutableStateOf(IntSize.Zero) }
-                                var magnifierSize by remember(adjustingBook.id) { mutableStateOf(IntSize.Zero) }
-                                val rangeDisplayAdjustment = sampledPoint?.let { sampled ->
-                                    rangeStartPoint?.takeIf { previewSize.width > 0 && previewSize.height > 0 }?.let { start ->
-                                        computeBookCoverAdjustmentForRange(
-                                            drawableWidth = imageSize.width,
-                                            drawableHeight = imageSize.height,
-                                            viewWidth = previewSize.width,
-                                            viewHeight = previewSize.height,
-                                            startXPx = start.first,
-                                            startYPx = start.second,
-                                            endXPx = sampled.first,
-                                            endYPx = sampled.second
-                                        )
-                                    }
+                    properties = DialogProperties(usePlatformDefaultWidth = false)
+                ) {
+                    val previewAdjustment = normalizeBookCoverAdjustment(
+                        zoom = previewZoom,
+                        anchorXPx = previewAnchorXPx,
+                        anchorYPx = previewAnchorYPx,
+                        anchorXExactPx = previewAnchorXExactPx,
+                        anchorYExactPx = previewAnchorYExactPx,
+                        fallbackViewportX = initialAdjustment.fallbackViewportX,
+                        fallbackViewportY = initialAdjustment.fallbackViewportY
+                    )
+                    val controlScrollState = rememberScrollState()
+                    val previewMaxHeight = LocalConfiguration.current.screenHeightDp.dp * 0.46f
+                    var sampledPoint by remember(adjustingBook.id) { mutableStateOf<Pair<Int, Int>?>(null) }
+                    var isRangeMode by remember(adjustingBook.id) { mutableStateOf(false) }
+                    var rangeStartPoint by remember(adjustingBook.id) { mutableStateOf<Pair<Int, Int>?>(null) }
+                    var isSmoothDragMode by remember(adjustingBook.id) { mutableStateOf(true) }
+                    var controlsExpanded by remember(adjustingBook.id) { mutableStateOf(false) }
+                    var showRoundedPreview by remember(adjustingBook.id) { mutableStateOf(false) }
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.home_cover_adjust_title),
+                                    style = MaterialTheme.typography.titleLarge
+                                )
+                                IconButton(onClick = { adjustingBookCoverId = null }) {
+                                    Text(
+                                        text = "×",
+                                        style = MaterialTheme.typography.titleLarge
+                                    )
                                 }
-                                val displayAdjustment = rangeDisplayAdjustment ?: sampledPoint?.let {
-                                    val displayZoom = if (previewSize.width > 0 && previewSize.height > 0) {
-                                        computeZoomToFitBookCoverAnchor(
-                                            drawableWidth = imageSize.width,
-                                            drawableHeight = imageSize.height,
-                                            viewWidth = previewSize.width,
-                                            viewHeight = previewSize.height,
+                            }
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                if (imageSize.width > 0 && imageSize.height > 0) {
+                                    var previewSize by remember(adjustingBook.id) { mutableStateOf(IntSize.Zero) }
+                                    var magnifierSize by remember(adjustingBook.id) { mutableStateOf(IntSize.Zero) }
+                                    val rangeDisplayAdjustment = sampledPoint?.let { sampled ->
+                                        rangeStartPoint?.takeIf { previewSize.width > 0 && previewSize.height > 0 }?.let { start ->
+                                            computeBookCoverAdjustmentForRange(
+                                                drawableWidth = imageSize.width,
+                                                drawableHeight = imageSize.height,
+                                                viewWidth = previewSize.width,
+                                                viewHeight = previewSize.height,
+                                                startXPx = start.first,
+                                                startYPx = start.second,
+                                                endXPx = sampled.first,
+                                                endYPx = sampled.second
+                                            )
+                                        }
+                                    }
+                                    val displayAdjustment = rangeDisplayAdjustment ?: sampledPoint?.let {
+                                        val displayZoom = if (previewSize.width > 0 && previewSize.height > 0) {
+                                            computeZoomToFitBookCoverAnchor(
+                                                drawableWidth = imageSize.width,
+                                                drawableHeight = imageSize.height,
+                                                viewWidth = previewSize.width,
+                                                viewHeight = previewSize.height,
+                                                anchorXPx = it.first,
+                                                anchorYPx = it.second
+                                            )
+                                        } else {
+                                            previewZoom
+                                        }
+                                        normalizeBookCoverAdjustment(
+                                            zoom = displayZoom,
                                             anchorXPx = it.first,
-                                            anchorYPx = it.second
+                                            anchorYPx = it.second,
+                                            fallbackViewportX = initialAdjustment.fallbackViewportX,
+                                            fallbackViewportY = initialAdjustment.fallbackViewportY
                                         )
-                                    } else {
-                                        previewZoom
+                                    } ?: previewAdjustment
+                                    val committedRenderSpec = previewSize.takeIf { it.width > 0 && it.height > 0 }?.let {
+                                        computeBookCoverRenderSpec(
+                                            drawableWidth = imageSize.width,
+                                            drawableHeight = imageSize.height,
+                                            viewWidth = it.width,
+                                            viewHeight = it.height,
+                                            adjustment = previewAdjustment,
+                                            focus = adjustingBook.coverFocus
+                                        )
                                     }
-                                    normalizeBookCoverAdjustment(
-                                        zoom = displayZoom,
-                                        anchorXPx = it.first,
-                                        anchorYPx = it.second,
-                                        fallbackViewportX = initialAdjustment.fallbackViewportX,
-                                        fallbackViewportY = initialAdjustment.fallbackViewportY
-                                    )
-                                } ?: previewAdjustment
-                                val committedRenderSpec = previewSize.takeIf { it.width > 0 && it.height > 0 }?.let {
-                                    computeBookCoverRenderSpec(
-                                        drawableWidth = imageSize.width,
-                                        drawableHeight = imageSize.height,
-                                        viewWidth = it.width,
-                                        viewHeight = it.height,
-                                        adjustment = previewAdjustment,
-                                        focus = adjustingBook.coverFocus
-                                    )
-                                }
-                                val latestPreviewAdjustment by rememberUpdatedState(previewAdjustment)
-                                val latestCommittedRenderSpec by rememberUpdatedState(committedRenderSpec)
-                                val latestPreviewZoom by rememberUpdatedState(previewZoom)
-                                val latestIsSmoothDragMode by rememberUpdatedState(isSmoothDragMode)
-                                val bitmap = previewBitmap
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .aspectRatio(ReaderBookCoverAspectRatio)
-                                ) {
-                                    if (bitmap != null) {
-                                        BookCoverBitmapPreview(
-                                            bitmap = bitmap,
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .onSizeChanged { previewSize = it }
-                                            .pointerInput(
-                                                imageSize,
-                                                previewSize,
-                                                previewZoom,
-                                                previewAnchorXPx,
-                                                previewAnchorYPx,
-                                                isRangeMode,
-                                                rangeStartPoint
-                                            ) {
-                                                awaitEachGesture {
-                                                    val down = awaitFirstDown(requireUnconsumed = false)
-                                                    val longPress = awaitLongPressOrCancellation(down.id)
-                                                    if (longPress == null || committedRenderSpec == null) {
-                                                        sampledPoint = null
-                                                        return@awaitEachGesture
-                                                    }
-                                                    val spec = committedRenderSpec
-                                                    val minSampleX = 0
-                                                    val minSampleY = 0
-                                                    val maxSampleX = (imageSize.width - 1).coerceAtLeast(0)
-                                                    val maxSampleY = (imageSize.height - 1).coerceAtLeast(0)
-                                                    var lastPosition = longPress.position
-                                                    var currentSampleX = ((lastPosition.x - spec.dx) / spec.scale)
-                                                        .roundToInt()
-                                                        .coerceIn(minSampleX, maxSampleX)
-                                                    var currentSampleY = ((lastPosition.y - spec.dy) / spec.scale)
-                                                        .roundToInt()
-                                                        .coerceIn(minSampleY, maxSampleY)
-                                                    sampledPoint = currentSampleX to currentSampleY
-                                                    while (true) {
-                                                        val event = awaitPointerEvent()
-                                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                                        if (!change.pressed) break
-                                                        val delta = change.position - lastPosition
-                                                        currentSampleX = (currentSampleX + delta.x / spec.scale)
-                                                            .roundToInt()
-                                                            .coerceIn(minSampleX, maxSampleX)
-                                                        currentSampleY = (currentSampleY + delta.y / spec.scale)
-                                                            .roundToInt()
-                                                            .coerceIn(minSampleY, maxSampleY)
-                                                        sampledPoint = currentSampleX to currentSampleY
-                                                        lastPosition = change.position
-                                                        change.consume()
-                                                    }
-                                                    sampledPoint?.let { committedPoint ->
-                                                        val clampedX = committedPoint.first.coerceIn(0, imageSize.width - 1)
-                                                        val clampedY = committedPoint.second.coerceIn(0, imageSize.height - 1)
-                                                        if (isRangeMode && previewSize.width > 0 && previewSize.height > 0) {
-                                                            val start = rangeStartPoint
-                                                            if (start == null) {
-                                                                val legalStart = coerceBookCoverRangeStart(
-                                                                    drawableWidth = imageSize.width,
-                                                                    drawableHeight = imageSize.height,
-                                                                    viewWidth = previewSize.width,
-                                                                    viewHeight = previewSize.height,
-                                                                    startXPx = clampedX,
-                                                                    startYPx = clampedY
-                                                                )
-                                                                rangeStartPoint = legalStart
-                                                                previewAnchorXPx = legalStart.first
-                                                                previewAnchorYPx = legalStart.second
-                                                                previewAnchorXExactPx = legalStart.first.toFloat()
-                                                                previewAnchorYExactPx = legalStart.second.toFloat()
-                                                            } else {
-                                                                val rangeAdjustment = computeBookCoverAdjustmentForRange(
-                                                                    drawableWidth = imageSize.width,
-                                                                    drawableHeight = imageSize.height,
-                                                                    viewWidth = previewSize.width,
-                                                                    viewHeight = previewSize.height,
-                                                                    startXPx = start.first,
-                                                                    startYPx = start.second,
-                                                                    endXPx = clampedX,
-                                                                    endYPx = clampedY
-                                                                )
-                                                                previewZoom = rangeAdjustment.zoom
-                                                                previewAnchorXPx = rangeAdjustment.anchorXPx
-                                                                previewAnchorYPx = rangeAdjustment.anchorYPx
-                                                                previewAnchorXExactPx = rangeAdjustment.anchorXPx?.toFloat()
-                                                                previewAnchorYExactPx = rangeAdjustment.anchorYPx?.toFloat()
-                                                                isRangeMode = false
-                                                                rangeStartPoint = null
+                                    val latestPreviewAdjustment by rememberUpdatedState(previewAdjustment)
+                                    val latestCommittedRenderSpec by rememberUpdatedState(committedRenderSpec)
+                                    val latestPreviewZoom by rememberUpdatedState(previewZoom)
+                                    val bitmap = previewBitmap
+                                    fun updatePreviewZoom(nextZoom: Float) {
+                                        val clampedZoom = nextZoom.coerceIn(1f, 3f)
+                                        if (adjustingBook.coverFocus != HomeCoverCropFocus.CENTER) {
+                                            previewZoom = clampedZoom
+                                            return
+                                        }
+                                        val spec = committedRenderSpec
+                                        if (spec == null || previewSize.width <= 0 || previewSize.height <= 0) {
+                                            previewZoom = clampedZoom
+                                            return
+                                        }
+                                        val resolvedAnchor = resolveBookCoverAnchor(previewAdjustment, spec)
+                                        val oldScale = spec.scale
+                                        val nextScale = oldScale * (clampedZoom / previewAdjustment.zoom)
+                                        val pivotX = previewSize.width / 2f
+                                        val pivotY = previewSize.height / 2f
+                                        val nextAnchorX = (
+                                            resolvedAnchor.first +
+                                                pivotX / oldScale -
+                                                pivotX / nextScale
+                                        ).coerceIn(0f, (imageSize.width - 1).coerceAtLeast(0).toFloat())
+                                        val nextAnchorY = (
+                                            resolvedAnchor.second +
+                                                pivotY / oldScale -
+                                                pivotY / nextScale
+                                        ).coerceIn(0f, (imageSize.height - 1).coerceAtLeast(0).toFloat())
+                                        previewZoom = clampedZoom
+                                        previewAnchorXExactPx = nextAnchorX
+                                        previewAnchorYExactPx = nextAnchorY
+                                        previewAnchorXPx = nextAnchorX.roundToInt()
+                                        previewAnchorYPx = nextAnchorY.roundToInt()
+                                    }
+                                    fun computeCenterAnchoredGestureAnchor(
+                                        spec: BookCoverRenderSpec,
+                                        adjustment: BookCoverAdjustment,
+                                        nextZoom: Float
+                                    ): Pair<Float, Float> {
+                                        val resolvedAnchor = resolveBookCoverAnchor(adjustment, spec)
+                                        val oldScale = spec.scale
+                                        val nextScale = oldScale * (nextZoom / adjustment.zoom)
+                                        val pivotX = previewSize.width / 2f
+                                        val pivotY = previewSize.height / 2f
+                                        val nextAnchorX = (
+                                            resolvedAnchor.first +
+                                                pivotX / oldScale -
+                                                pivotX / nextScale
+                                        ).coerceIn(0f, (imageSize.width - 1).coerceAtLeast(0).toFloat())
+                                        val nextAnchorY = (
+                                            resolvedAnchor.second +
+                                                pivotY / oldScale -
+                                                pivotY / nextScale
+                                        ).coerceIn(0f, (imageSize.height - 1).coerceAtLeast(0).toFloat())
+                                        return nextAnchorX to nextAnchorY
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(max = previewMaxHeight),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (bitmap != null) {
+                                            BookCoverBitmapPreview(
+                                                bitmap = bitmap,
+                                                modifier = Modifier
+                                                    .fillMaxHeight()
+                                                    .aspectRatio(ReaderBookCoverAspectRatio)
+                                                    .then(
+                                                        if (showRoundedPreview) {
+                                                            Modifier.clip(RoundedCornerShape(12.dp))
+                                                        } else {
+                                                            Modifier
+                                                        }
+                                                    )
+                                                    .onSizeChanged { previewSize = it }
+                                                    .then(
+                                                        if (controlsExpanded) {
+                                                            Modifier.pointerInput(
+                                                                imageSize,
+                                                                previewSize,
+                                                                previewZoom,
+                                                                previewAnchorXPx,
+                                                                previewAnchorYPx,
+                                                                isRangeMode,
+                                                                rangeStartPoint
+                                                            ) {
+                                                                awaitEachGesture {
+                                                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                                                    val longPress = awaitLongPressOrCancellation(down.id)
+                                                                    if (longPress == null || committedRenderSpec == null) {
+                                                                        sampledPoint = null
+                                                                        return@awaitEachGesture
+                                                                    }
+                                                                    val spec = committedRenderSpec
+                                                                    val minSampleX = 0
+                                                                    val minSampleY = 0
+                                                                    val maxSampleX = (imageSize.width - 1).coerceAtLeast(0)
+                                                                    val maxSampleY = (imageSize.height - 1).coerceAtLeast(0)
+                                                                    var lastPosition = longPress.position
+                                                                    var currentSampleX = ((lastPosition.x - spec.dx) / spec.scale)
+                                                                        .roundToInt()
+                                                                        .coerceIn(minSampleX, maxSampleX)
+                                                                    var currentSampleY = ((lastPosition.y - spec.dy) / spec.scale)
+                                                                        .roundToInt()
+                                                                        .coerceIn(minSampleY, maxSampleY)
+                                                                    sampledPoint = currentSampleX to currentSampleY
+                                                                    while (true) {
+                                                                        val event = awaitPointerEvent()
+                                                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                                                        if (!change.pressed) break
+                                                                        val delta = change.position - lastPosition
+                                                                        currentSampleX = (currentSampleX + delta.x / spec.scale)
+                                                                            .roundToInt()
+                                                                            .coerceIn(minSampleX, maxSampleX)
+                                                                        currentSampleY = (currentSampleY + delta.y / spec.scale)
+                                                                            .roundToInt()
+                                                                            .coerceIn(minSampleY, maxSampleY)
+                                                                        sampledPoint = currentSampleX to currentSampleY
+                                                                        lastPosition = change.position
+                                                                        change.consume()
+                                                                    }
+                                                                    sampledPoint?.let { committedPoint ->
+                                                                        val clampedX = committedPoint.first.coerceIn(0, imageSize.width - 1)
+                                                                        val clampedY = committedPoint.second.coerceIn(0, imageSize.height - 1)
+                                                                        if (isRangeMode && previewSize.width > 0 && previewSize.height > 0) {
+                                                                            val start = rangeStartPoint
+                                                                            if (start == null) {
+                                                                                val legalStart = coerceBookCoverRangeStart(
+                                                                                    drawableWidth = imageSize.width,
+                                                                                    drawableHeight = imageSize.height,
+                                                                                    viewWidth = previewSize.width,
+                                                                                    viewHeight = previewSize.height,
+                                                                                    startXPx = clampedX,
+                                                                                    startYPx = clampedY
+                                                                                )
+                                                                                rangeStartPoint = legalStart
+                                                                                previewAnchorXPx = legalStart.first
+                                                                                previewAnchorYPx = legalStart.second
+                                                                                previewAnchorXExactPx = legalStart.first.toFloat()
+                                                                                previewAnchorYExactPx = legalStart.second.toFloat()
+                                                                            } else {
+                                                                                val rangeAdjustment = computeBookCoverAdjustmentForRange(
+                                                                                    drawableWidth = imageSize.width,
+                                                                                    drawableHeight = imageSize.height,
+                                                                                    viewWidth = previewSize.width,
+                                                                                    viewHeight = previewSize.height,
+                                                                                    startXPx = start.first,
+                                                                                    startYPx = start.second,
+                                                                                    endXPx = clampedX,
+                                                                                    endYPx = clampedY
+                                                                                )
+                                                                                previewZoom = rangeAdjustment.zoom
+                                                                                previewAnchorXPx = rangeAdjustment.anchorXPx
+                                                                                previewAnchorYPx = rangeAdjustment.anchorYPx
+                                                                                previewAnchorXExactPx = rangeAdjustment.anchorXPx?.toFloat()
+                                                                                previewAnchorYExactPx = rangeAdjustment.anchorYPx?.toFloat()
+                                                                                isRangeMode = false
+                                                                                rangeStartPoint = null
+                                                                            }
+                                                                        } else {
+                                                                            val adjustedZoom = if (previewSize.width > 0 && previewSize.height > 0) {
+                                                                                computeZoomToFitBookCoverAnchor(
+                                                                                    drawableWidth = imageSize.width,
+                                                                                    drawableHeight = imageSize.height,
+                                                                                    viewWidth = previewSize.width,
+                                                                                    viewHeight = previewSize.height,
+                                                                                    anchorXPx = clampedX,
+                                                                                    anchorYPx = clampedY
+                                                                                )
+                                                                            } else {
+                                                                                previewZoom
+                                                                            }
+                                                                            previewZoom = adjustedZoom
+                                                                            previewAnchorXPx = clampedX
+                                                                            previewAnchorYPx = clampedY
+                                                                            previewAnchorXExactPx = clampedX.toFloat()
+                                                                            previewAnchorYExactPx = clampedY.toFloat()
+                                                                        }
+                                                                    }
+                                                                    sampledPoint = null
+                                                                }
                                                             }
                                                         } else {
-                                                            val adjustedZoom = if (previewSize.width > 0 && previewSize.height > 0) {
-                                                                computeZoomToFitBookCoverAnchor(
-                                                                    drawableWidth = imageSize.width,
-                                                                    drawableHeight = imageSize.height,
-                                                                    viewWidth = previewSize.width,
-                                                                    viewHeight = previewSize.height,
-                                                                    anchorXPx = clampedX,
-                                                                    anchorYPx = clampedY
-                                                                )
-                                                            } else {
-                                                                previewZoom
-                                                            }
-                                                            previewZoom = adjustedZoom
-                                                            previewAnchorXPx = clampedX
-                                                            previewAnchorYPx = clampedY
-                                                            previewAnchorXExactPx = clampedX.toFloat()
-                                                            previewAnchorYExactPx = clampedY.toFloat()
+                                                            Modifier
                                                         }
+                                                    )
+                                                    .then(
+                                                        if (isSmoothDragMode) {
+                                                            Modifier.pointerInput(imageSize, previewSize) {
+                                                                detectTransformGestures { centroid, pan, zoom, _ ->
+                                                                    if (sampledPoint != null) return@detectTransformGestures
+                                                                    val spec = latestCommittedRenderSpec ?: return@detectTransformGestures
+                                                                    val adjustment = latestPreviewAdjustment
+                                                                    val resolvedAnchor = resolveBookCoverAnchor(
+                                                                        adjustment = adjustment,
+                                                                        renderSpec = spec
+                                                                    )
+                                                                    val oldScale = spec.scale
+                                                                    val nextZoom = (latestPreviewZoom * zoom).coerceIn(1f, 3f)
+                                                                    previewZoom = nextZoom
+                                                                    val nextAnchors = if (adjustingBook.coverFocus == HomeCoverCropFocus.CENTER) {
+                                                                        computeCenterAnchoredGestureAnchor(
+                                                                            spec = spec,
+                                                                            adjustment = adjustment,
+                                                                            nextZoom = nextZoom
+                                                                        )
+                                                                    } else {
+                                                                        val nextScale = oldScale * (nextZoom / adjustment.zoom)
+                                                                        (
+                                                                            resolvedAnchor.first +
+                                                                                centroid.x / oldScale -
+                                                                                centroid.x / nextScale -
+                                                                                pan.x / oldScale
+                                                                            ).coerceIn(0f, (imageSize.width - 1).coerceAtLeast(0).toFloat()) to
+                                                                            (
+                                                                                resolvedAnchor.second +
+                                                                                    centroid.y / oldScale -
+                                                                                    centroid.y / nextScale -
+                                                                                    pan.y / oldScale
+                                                                                ).coerceIn(0f, (imageSize.height - 1).coerceAtLeast(0).toFloat())
+                                                                    }
+                                                                    val nextAnchorX = nextAnchors.first
+                                                                    val nextAnchorY = nextAnchors.second
+                                                                    previewAnchorXExactPx = nextAnchorX
+                                                                    previewAnchorYExactPx = nextAnchorY
+                                                                    previewAnchorXPx = nextAnchorX.roundToInt()
+                                                                    previewAnchorYPx = nextAnchorY.roundToInt()
+                                                                }
+                                                            }
+                                                        } else {
+                                                            Modifier.pointerInput(
+                                                                imageSize,
+                                                                previewSize,
+                                                                previewZoom,
+                                                                previewAnchorXPx,
+                                                                previewAnchorYPx
+                                                            ) {
+                                                                detectTransformGestures { centroid, pan, zoom, _ ->
+                                                                    if (sampledPoint != null) return@detectTransformGestures
+                                                                    val spec = committedRenderSpec ?: return@detectTransformGestures
+                                                                    val resolvedAnchor = resolveBookCoverAnchor(
+                                                                        adjustment = previewAdjustment,
+                                                                        renderSpec = spec
+                                                                    )
+                                                                    val oldScale = spec.scale
+                                                                    val nextZoom = (previewZoom * zoom).coerceIn(1f, 3f)
+                                                                    previewZoom = nextZoom
+                                                                    val nextAnchors = if (adjustingBook.coverFocus == HomeCoverCropFocus.CENTER) {
+                                                                        computeCenterAnchoredGestureAnchor(
+                                                                            spec = spec,
+                                                                            adjustment = previewAdjustment,
+                                                                            nextZoom = nextZoom
+                                                                        )
+                                                                    } else {
+                                                                        val nextScale = oldScale * (nextZoom / previewAdjustment.zoom)
+                                                                        (
+                                                                            resolvedAnchor.first +
+                                                                                centroid.x / oldScale -
+                                                                                centroid.x / nextScale -
+                                                                                pan.x / oldScale
+                                                                            ).coerceIn(0f, (imageSize.width - 1).coerceAtLeast(0).toFloat()) to
+                                                                            (
+                                                                                resolvedAnchor.second +
+                                                                                    centroid.y / oldScale -
+                                                                                    centroid.y / nextScale -
+                                                                                    pan.y / oldScale
+                                                                                ).coerceIn(0f, (imageSize.height - 1).coerceAtLeast(0).toFloat())
+                                                                    }
+                                                                    previewAnchorXPx = nextAnchors.first.roundToInt().coerceIn(0, imageSize.width - 1)
+                                                                    previewAnchorYPx = nextAnchors.second.roundToInt().coerceIn(0, imageSize.height - 1)
+                                                                    previewAnchorXExactPx = previewAnchorXPx?.toFloat()
+                                                                    previewAnchorYExactPx = previewAnchorYPx?.toFloat()
+                                                                }
+                                                            }
+                                                        }
+                                                    ),
+                                                coverFocus = adjustingBook.coverFocus,
+                                                coverAdjustment = displayAdjustment,
+                                                clampToBounds = true
+                                            )
+                                        }
+                                        if (sampledPoint != null) {
+                                            val magnifierAdjustment = sampledPoint?.takeIf {
+                                                magnifierSize.width > 0 && magnifierSize.height > 0
+                                            }?.let {
+                                                buildMagnifierBookCoverAdjustment(
+                                                    drawableWidth = imageSize.width,
+                                                    drawableHeight = imageSize.height,
+                                                    viewWidth = magnifierSize.width,
+                                                    viewHeight = magnifierSize.height,
+                                                    sampleXPx = it.first,
+                                                    sampleYPx = it.second
+                                                )
+                                            }
+                                            Surface(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .padding(10.dp)
+                                                    .size(172.dp),
+                                                shape = RoundedCornerShape(14.dp),
+                                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                                                shadowElevation = 8.dp,
+                                                border = BorderStroke(
+                                                    1.dp,
+                                                    MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+                                                )
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .onSizeChanged { magnifierSize = it }
+                                                ) {
+                                                    if (bitmap != null && magnifierAdjustment != null) {
+                                                        BookCoverBitmapPreview(
+                                                            bitmap = bitmap,
+                                                            modifier = Modifier.fillMaxSize(),
+                                                            coverFocus = HomeCoverCropFocus.CENTER,
+                                                            coverAdjustment = magnifierAdjustment,
+                                                            maxZoom = BookCoverMagnifierZoom,
+                                                            clampToBounds = false,
+                                                            showBlackBackground = true
+                                                        )
+                                                        val crosshairColor = MaterialTheme.colorScheme.primary
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .align(Alignment.Center)
+                                                                .size(40.dp)
+                                                                .drawBehind {
+                                                                    val stroke = 2.dp.toPx()
+                                                                    drawLine(
+                                                                        color = crosshairColor,
+                                                                        start = Offset(size.width / 2f, 0f),
+                                                                        end = Offset(size.width / 2f, size.height),
+                                                                        strokeWidth = stroke
+                                                                    )
+                                                                    drawLine(
+                                                                        color = crosshairColor,
+                                                                        start = Offset(0f, size.height / 2f),
+                                                                        end = Offset(size.width, size.height / 2f),
+                                                                        strokeWidth = stroke
+                                                                    )
+                                                                }
+                                                        )
                                                     }
-                                                    sampledPoint = null
                                                 }
                                             }
-                                            .then(
-                                                if (isSmoothDragMode) {
-                                                    Modifier.pointerInput(imageSize, previewSize) {
-                                                        detectTransformGestures { centroid, pan, zoom, _ ->
-                                                            if (sampledPoint != null) return@detectTransformGestures
-                                                            val spec = latestCommittedRenderSpec ?: return@detectTransformGestures
-                                                            val adjustment = latestPreviewAdjustment
-                                                            val resolvedAnchor = resolveBookCoverAnchor(
-                                                                adjustment = adjustment,
-                                                                renderSpec = spec
-                                                            )
-                                                            val oldScale = spec.scale
-                                                            val nextZoom = (latestPreviewZoom * zoom).coerceIn(1f, 3f)
-                                                            val nextScale = oldScale * (nextZoom / adjustment.zoom)
-                                                            previewZoom = nextZoom
-                                                            val nextAnchorX = (
-                                                                resolvedAnchor.first +
-                                                                    centroid.x / oldScale -
-                                                                    centroid.x / nextScale -
-                                                                    pan.x / oldScale
-                                                            )
-                                                                .coerceIn(0f, (imageSize.width - 1).coerceAtLeast(0).toFloat())
-                                                            val nextAnchorY = (
-                                                                resolvedAnchor.second +
-                                                                    centroid.y / oldScale -
-                                                                    centroid.y / nextScale -
-                                                                    pan.y / oldScale
-                                                            )
-                                                                .coerceIn(0f, (imageSize.height - 1).coerceAtLeast(0).toFloat())
-                                                            previewAnchorXExactPx = nextAnchorX
-                                                            previewAnchorYExactPx = nextAnchorY
-                                                            previewAnchorXPx = nextAnchorX.roundToInt()
-                                                            previewAnchorYPx = nextAnchorY.roundToInt()
-                                                        }
-                                                    }
-                                                } else {
-                                                    Modifier.pointerInput(
-                                                        imageSize,
-                                                        previewSize,
-                                                        previewZoom,
-                                                        previewAnchorXPx,
-                                                        previewAnchorYPx
-                                                    ) {
-                                                        detectTransformGestures { centroid, pan, zoom, _ ->
-                                                            if (sampledPoint != null) return@detectTransformGestures
-                                                            val spec = committedRenderSpec ?: return@detectTransformGestures
-                                                            val resolvedAnchor = resolveBookCoverAnchor(
-                                                                adjustment = previewAdjustment,
-                                                                renderSpec = spec
-                                                            )
-                                                            val oldScale = spec.scale
-                                                            val nextZoom = (previewZoom * zoom).coerceIn(1f, 3f)
-                                                            val nextScale = oldScale * (nextZoom / previewAdjustment.zoom)
-                                                            previewZoom = nextZoom
-                                                            previewAnchorXPx = (
-                                                                resolvedAnchor.first +
-                                                                    centroid.x / oldScale -
-                                                                    centroid.x / nextScale -
-                                                                    pan.x / oldScale
-                                                            )
-                                                                .roundToInt()
-                                                                .coerceIn(0, imageSize.width - 1)
-                                                            previewAnchorYPx = (
-                                                                resolvedAnchor.second +
-                                                                    centroid.y / oldScale -
-                                                                    centroid.y / nextScale -
-                                                                    pan.y / oldScale
-                                                            )
-                                                                .roundToInt()
-                                                                .coerceIn(0, imageSize.height - 1)
-                                                            previewAnchorXExactPx = previewAnchorXPx?.toFloat()
-                                                            previewAnchorYExactPx = previewAnchorYPx?.toFloat()
-                                                        }
-                                                    }
-                                                }
-                                            ),
-                                        coverFocus = adjustingBook.coverFocus,
-                                        coverAdjustment = displayAdjustment,
-                                        clampToBounds = true
-                                    )
+                                        }
                                     }
-                                }
-                                if (sampledPoint != null) {
-                                    val magnifierAnchor = sampledPoint
-                                    val magnifierAdjustment = magnifierAnchor?.takeIf {
-                                        magnifierSize.width > 0 && magnifierSize.height > 0
-                                    }?.let {
-                                        buildMagnifierBookCoverAdjustment(
-                                            drawableWidth = imageSize.width,
-                                            drawableHeight = imageSize.height,
-                                            viewWidth = magnifierSize.width,
-                                            viewHeight = magnifierSize.height,
-                                            sampleXPx = it.first,
-                                            sampleYPx = it.second
-                                        )
-                                    }
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors = CardDefaults.cardColors(
-                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
-                                        )
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(max = previewMaxHeight),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
                                     ) {
-                                        Column(
-                                            modifier = Modifier.padding(8.dp),
-                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        Surface(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { controlsExpanded = !controlsExpanded },
+                                            shape = RoundedCornerShape(999.dp),
+                                            color = Color.Transparent
                                         ) {
-                                            Text(
-                                                text = stringResource(R.string.home_cover_adjust_magnifier),
-                                                style = MaterialTheme.typography.labelMedium
-                                            )
                                             Box(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .aspectRatio(ReaderBookCoverAspectRatio)
-                                                    .onSizeChanged { magnifierSize = it }
+                                                    .padding(vertical = 10.dp),
+                                                contentAlignment = Alignment.Center
                                             ) {
-                                                if (bitmap != null && magnifierAdjustment != null) {
-                                                    BookCoverBitmapPreview(
-                                                        bitmap = bitmap,
-                                                        modifier = Modifier.fillMaxSize(),
-                                                        coverFocus = HomeCoverCropFocus.CENTER,
-                                                        coverAdjustment = magnifierAdjustment,
-                                                        maxZoom = BookCoverMagnifierZoom,
-                                                        clampToBounds = false,
-                                                        showBlackBackground = true
-                                                    )
-                                                    val crosshairColor = MaterialTheme.colorScheme.primary
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .align(Alignment.Center)
-                                                            .size(44.dp)
-                                                            .drawBehind {
-                                                                val stroke = 2.dp.toPx()
-                                                                drawLine(
-                                                                    color = crosshairColor,
-                                                                    start = Offset(size.width / 2f, 0f),
-                                                                    end = Offset(size.width / 2f, size.height),
-                                                                    strokeWidth = stroke
-                                                                )
-                                                                drawLine(
-                                                                    color = crosshairColor,
-                                                                    start = Offset(0f, size.height / 2f),
-                                                                    end = Offset(size.width, size.height / 2f),
-                                                                    strokeWidth = stroke
+                                                Surface(
+                                                    modifier = Modifier.size(width = 44.dp, height = 6.dp),
+                                                    shape = RoundedCornerShape(999.dp),
+                                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                                                ) {}
+                                            }
+                                        }
+                                        if (controlsExpanded) {
+                                            Column(
+                                                modifier = Modifier.verticalScroll(controlScrollState),
+                                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                                            ) {
+                                                CoverAdjustSection(title = "缩放") {
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        OutlinedButton(onClick = { updatePreviewZoom(previewZoom - 0.01f) }) {
+                                                            Text("-")
+                                                        }
+                                                        Box(
+                                                            modifier = Modifier.weight(1f),
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Slider(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                value = previewZoom,
+                                                                onValueChange = { updatePreviewZoom(it) },
+                                                                valueRange = 1f..3f
+                                                            )
+                                                            Surface(
+                                                                shape = RoundedCornerShape(999.dp),
+                                                                color = MaterialTheme.colorScheme.primaryContainer
+                                                            ) {
+                                                                Text(
+                                                                    text = String.format(Locale.US, "%.2fx", previewZoom),
+                                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                                                    style = MaterialTheme.typography.labelLarge,
+                                                                    color = MaterialTheme.colorScheme.onPrimaryContainer
                                                                 )
                                                             }
-                                                    )
+                                                        }
+                                                        OutlinedButton(onClick = { updatePreviewZoom(previewZoom + 0.01f) }) {
+                                                            Text("+")
+                                                        }
+                                                    }
+                                                }
+                                                CoverAdjustSection(title = "预览") {
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Text("圆角")
+                                                        Switch(
+                                                            checked = showRoundedPreview,
+                                                            onCheckedChange = { showRoundedPreview = it }
+                                                        )
+                                                    }
+                                                }
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                                    verticalAlignment = Alignment.Top
+                                                ) {
+                                                    Column(
+                                                        modifier = Modifier.weight(1f),
+                                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                                    ) {
+                                                        CoverAdjustSection(title = "模式") {
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                            ) {
+                                                                CoverAdjustChoicePill(
+                                                                    text = "连续",
+                                                                    selected = isSmoothDragMode,
+                                                                    onClick = { isSmoothDragMode = true },
+                                                                    modifier = Modifier.weight(1f)
+                                                                )
+                                                                CoverAdjustChoicePill(
+                                                                    text = "步进",
+                                                                    selected = !isSmoothDragMode,
+                                                                    onClick = { isSmoothDragMode = false },
+                                                                    modifier = Modifier.weight(1f)
+                                                                )
+                                                            }
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                            ) {
+                                                                CoverAdjustChoicePill(
+                                                                    text = if (isRangeMode) {
+                                                                        if (rangeStartPoint == null) "选左上" else "选右下"
+                                                                    } else {
+                                                                        "两点范围"
+                                                                    },
+                                                                    selected = isRangeMode,
+                                                                    onClick = {
+                                                                        isRangeMode = !isRangeMode
+                                                                        rangeStartPoint = null
+                                                                        sampledPoint = null
+                                                                    },
+                                                                    modifier = Modifier.weight(1f)
+                                                                )
+                                                                sampledPoint?.takeIf { isRangeMode || sampledPoint != null }?.let { point ->
+                                                                    CoverAdjustChoicePill(
+                                                                        text = "${point.first}, ${point.second}",
+                                                                        selected = false,
+                                                                        onClick = {},
+                                                                        modifier = Modifier.weight(1f)
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    Column(
+                                                        modifier = Modifier.weight(1f),
+                                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                                    ) {
+                                                        CoverAdjustSection(title = "像素微调") {
+                                                            Column(
+                                                                modifier = Modifier
+                                                                    .fillMaxWidth()
+                                                                    .width(176.dp),
+                                                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                                                horizontalAlignment = Alignment.CenterHorizontally
+                                                            ) {
+                                                                CoverAdjustDirectionButton(
+                                                                    text = "↑",
+                                                                    onClick = {
+                                                                        previewAnchorYPx = ((previewAnchorYPx ?: (imageSize.height / 2)) - 1).coerceAtLeast(0)
+                                                                        previewAnchorYExactPx = previewAnchorYPx?.toFloat()
+                                                                    }
+                                                                )
+                                                                Row(
+                                                                    modifier = Modifier.fillMaxWidth(),
+                                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                                    verticalAlignment = Alignment.CenterVertically
+                                                                ) {
+                                                                    CoverAdjustDirectionButton(
+                                                                        text = "←",
+                                                                        onClick = {
+                                                                            previewAnchorXPx = ((previewAnchorXPx ?: (imageSize.width / 2)) - 1).coerceAtLeast(0)
+                                                                            previewAnchorXExactPx = previewAnchorXPx?.toFloat()
+                                                                        }
+                                                                    )
+                                                                    Box(
+                                                                        modifier = Modifier.weight(1f),
+                                                                        contentAlignment = Alignment.Center
+                                                                    ) {
+                                                                        Text("1px", style = MaterialTheme.typography.labelLarge)
+                                                                    }
+                                                                    CoverAdjustDirectionButton(
+                                                                        text = "→",
+                                                                        onClick = {
+                                                                            previewAnchorXPx = ((previewAnchorXPx ?: (imageSize.width / 2)) + 1)
+                                                                                .coerceAtMost((imageSize.width - 1).coerceAtLeast(0))
+                                                                            previewAnchorXExactPx = previewAnchorXPx?.toFloat()
+                                                                        }
+                                                                    )
+                                                                }
+                                                                CoverAdjustDirectionButton(
+                                                                    text = "↓",
+                                                                    onClick = {
+                                                                        previewAnchorYPx = ((previewAnchorYPx ?: (imageSize.height / 2)) + 1)
+                                                                            .coerceAtMost((imageSize.height - 1).coerceAtLeast(0))
+                                                                        previewAnchorYExactPx = previewAnchorYPx?.toFloat()
+                                                                    }
+                                                                )
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                                if (sampledPoint != null) {
-                                    val anchorPreview = sampledPoint
-                                    Text(
-                                        text = stringResource(
-                                            R.string.home_cover_adjust_anchor,
-                                            anchorPreview?.first ?: 0,
-                                            anchorPreview?.second ?: 0
-                                        ),
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                }
                             }
-                            Text(
-                                text = stringResource(
-                                    R.string.home_cover_adjust_zoom,
-                                    String.format(Locale.US, "%.2f", previewZoom)
-                                ),
-                                style = MaterialTheme.typography.bodyMedium
-                            )
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                OutlinedButton(
-                                    modifier = Modifier.weight(1f),
+                                TextButton(
                                     onClick = {
-                                        isRangeMode = !isRangeMode
-                                        rangeStartPoint = null
-                                        sampledPoint = null
+                                        val baseline = defaultBookCoverAdjustmentForFocus(adjustingBook.coverFocus)
+                                        previewZoom = baseline.zoom
+                                        previewAnchorXPx = null
+                                        previewAnchorYPx = null
+                                        previewAnchorXExactPx = null
+                                        previewAnchorYExactPx = null
                                     }
                                 ) {
-                                    Text(
-                                        when {
-                                            !isRangeMode -> "两点范围"
-                                            rangeStartPoint == null -> "选左上"
-                                            else -> "选右下"
+                                    Text(stringResource(R.string.home_cover_adjust_reset))
+                                }
+                                Spacer(modifier = Modifier.weight(1f))
+                                Button(
+                                    onClick = {
+                                        val normalized = normalizeBookCoverAdjustment(
+                                            zoom = previewZoom,
+                                            anchorXPx = previewAnchorXPx,
+                                            anchorYPx = previewAnchorYPx,
+                                            fallbackViewportX = initialAdjustment.fallbackViewportX,
+                                            fallbackViewportY = initialAdjustment.fallbackViewportY
+                                        )
+                                        val savedAdjustment = if (
+                                            isCustomBookCoverAdjustment(normalized, adjustingBook.coverFocus)
+                                        ) {
+                                            normalized
+                                        } else {
+                                            null
                                         }
-                                    )
-                                }
-                                if (isRangeMode) {
-                                    Text(
-                                        text = rangeStartPoint?.let { "左上 ${it.first}, ${it.second}" } ?: "长按选左上",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                OutlinedButton(
-                                    modifier = Modifier.weight(1f),
-                                    onClick = { isSmoothDragMode = false }
-                                ) {
-                                    Text(if (isSmoothDragMode) "原本拖动" else "原本拖动 ✓")
-                                }
-                                OutlinedButton(
-                                    modifier = Modifier.weight(1f),
-                                    onClick = { isSmoothDragMode = true }
-                                ) {
-                                    Text(if (isSmoothDragMode) "顺滑拖动 ✓" else "顺滑拖动")
-                                }
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                OutlinedButton(
-                                    onClick = { previewZoom = (previewZoom - 0.01f).coerceIn(1f, 3f) }
-                                ) {
-                                    Text("-")
-                                }
-                                Slider(
-                                    modifier = Modifier.weight(1f),
-                                    value = previewZoom,
-                                    onValueChange = { previewZoom = it },
-                                    valueRange = 1f..3f
-                                )
-                                OutlinedButton(
-                                    onClick = { previewZoom = (previewZoom + 0.01f).coerceIn(1f, 3f) }
-                                ) {
-                                    Text("+")
-                                }
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedButton(
-                                    modifier = Modifier.weight(1f),
-                                    onClick = {
-                                        previewAnchorXPx = ((previewAnchorXPx ?: (imageSize.width / 2)) - 1)
-                                            .coerceAtLeast(0)
-                                        previewAnchorXExactPx = previewAnchorXPx?.toFloat()
+                                        updateBookCoverAdjustment(adjustingBook.id, savedAdjustment)
+                                        adjustingBookCoverId = null
                                     }
                                 ) {
-                                    Text("← 1px")
+                                    Text(stringResource(android.R.string.ok))
                                 }
-                                OutlinedButton(
-                                    modifier = Modifier.weight(1f),
-                                    onClick = {
-                                        previewAnchorXPx = ((previewAnchorXPx ?: (imageSize.width / 2)) + 1)
-                                            .coerceAtMost((imageSize.width - 1).coerceAtLeast(0))
-                                        previewAnchorXExactPx = previewAnchorXPx?.toFloat()
-                                    }
-                                ) {
-                                    Text("1px →")
-                                }
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedButton(
-                                    modifier = Modifier.weight(1f),
-                                    onClick = {
-                                        previewAnchorYPx = ((previewAnchorYPx ?: (imageSize.height / 2)) - 1)
-                                            .coerceAtLeast(0)
-                                        previewAnchorYExactPx = previewAnchorYPx?.toFloat()
-                                    }
-                                ) {
-                                    Text("↑ 1px")
-                                }
-                                OutlinedButton(
-                                    modifier = Modifier.weight(1f),
-                                    onClick = {
-                                        previewAnchorYPx = ((previewAnchorYPx ?: (imageSize.height / 2)) + 1)
-                                            .coerceAtMost((imageSize.height - 1).coerceAtLeast(0))
-                                        previewAnchorYExactPx = previewAnchorYPx?.toFloat()
-                                    }
-                                ) {
-                                    Text("1px ↓")
-                                }
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                val normalized = normalizeBookCoverAdjustment(
-                                    zoom = previewZoom,
-                                    anchorXPx = previewAnchorXPx,
-                                    anchorYPx = previewAnchorYPx,
-                                    fallbackViewportX = initialAdjustment.fallbackViewportX,
-                                    fallbackViewportY = initialAdjustment.fallbackViewportY
-                                )
-                                val savedAdjustment = if (
-                                    isCustomBookCoverAdjustment(normalized, adjustingBook.coverFocus)
-                                ) {
-                                    normalized
-                                } else {
-                                    null
-                                }
-                                updateBookCoverAdjustment(adjustingBook.id, savedAdjustment)
-                                adjustingBookCoverId = null
-                            }
-                        ) {
-                            Text(stringResource(android.R.string.ok))
-                        }
-                    },
-                    dismissButton = {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(
-                                onClick = {
-                                    val baseline = defaultBookCoverAdjustmentForFocus(adjustingBook.coverFocus)
-                                    previewZoom = baseline.zoom
-                                    previewAnchorXPx = null
-                                    previewAnchorYPx = null
-                                    previewAnchorXExactPx = null
-                                    previewAnchorYExactPx = null
-                                }
-                            ) {
-                                Text(stringResource(R.string.home_cover_adjust_reset))
-                            }
-                            TextButton(onClick = { adjustingBookCoverId = null }) {
-                                Text(stringResource(android.R.string.cancel))
                             }
                         }
                     }
-                )
+                }
             }
 
             if (activeSection == MiningSection.MAIN) {
@@ -4708,11 +4966,9 @@ private fun PersistedReaderBook.toReaderBookOrNull(): ReaderBook? {
         ebookFormat = ebookFormat,
         coverUri = null,
         coverSource = if (parsedAudioUri == null && parsedEbookUri != null) ReaderBookCoverSource.EBOOK else null,
-        coverFocus = when (coverFocus?.uppercase(Locale.ROOT)) {
-            HomeCoverCropFocus.START.name -> HomeCoverCropFocus.START
-            else -> HomeCoverCropFocus.CENTER
-        },
-        bookCoverAdjustment = persistedBookCoverAdjustment(this)
+        coverFocus = bookFocusOrDefault(this),
+        startBookCoverAdjustment = persistedBookCoverAdjustment(this, HomeCoverCropFocus.START),
+        centerBookCoverAdjustment = persistedBookCoverAdjustment(this, HomeCoverCropFocus.CENTER)
     )
 }
 
@@ -4915,6 +5171,91 @@ private fun BookCoverBitmapPreview(
         drawIntoCanvas { canvas ->
             canvas.nativeCanvas.drawBitmap(bitmap, null, destRect, null)
         }
+    }
+}
+
+@Composable
+private fun CoverAdjustSection(
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.14f))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            content()
+        }
+    }
+}
+
+@Composable
+private fun CoverAdjustChoicePill(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(999.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        border = BorderStroke(
+            1.dp,
+            if (selected) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+            } else {
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)
+            }
+        )
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = if (selected) {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
+        )
+    }
+}
+
+@Composable
+private fun CoverAdjustDirectionButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .size(56.dp)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
     }
 }
 
