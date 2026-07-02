@@ -557,10 +557,6 @@ private fun ReaderBook.withAdjustmentFor(
     }
 }
 
-private fun ReaderBook.persistedAdjustmentFor(
-    focus: HomeCoverCropFocus
-): BookCoverAdjustment? = adjustmentFor(focus)
-
 private fun PersistedReaderBook.withAdjustmentFor(
     focus: HomeCoverCropFocus,
     adjustment: BookCoverAdjustment?
@@ -2981,38 +2977,6 @@ private fun ReaderSyncScreen() {
                                     val latestCommittedRenderSpec by rememberUpdatedState(committedRenderSpec)
                                     val latestPreviewZoom by rememberUpdatedState(previewZoom)
                                     val bitmap = previewBitmap
-                                    fun updatePreviewZoom(nextZoom: Float) {
-                                        val clampedZoom = nextZoom.coerceIn(1f, 3f)
-                                        if (adjustingBook.coverFocus != HomeCoverCropFocus.CENTER) {
-                                            previewZoom = clampedZoom
-                                            return
-                                        }
-                                        val spec = committedRenderSpec
-                                        if (spec == null || previewSize.width <= 0 || previewSize.height <= 0) {
-                                            previewZoom = clampedZoom
-                                            return
-                                        }
-                                        val resolvedAnchor = resolveBookCoverAnchor(previewAdjustment, spec)
-                                        val oldScale = spec.scale
-                                        val nextScale = oldScale * (clampedZoom / previewAdjustment.zoom)
-                                        val pivotX = previewSize.width / 2f
-                                        val pivotY = previewSize.height / 2f
-                                        val nextAnchorX = (
-                                            resolvedAnchor.first +
-                                                pivotX / oldScale -
-                                                pivotX / nextScale
-                                        ).coerceIn(0f, (imageSize.width - 1).coerceAtLeast(0).toFloat())
-                                        val nextAnchorY = (
-                                            resolvedAnchor.second +
-                                                pivotY / oldScale -
-                                                pivotY / nextScale
-                                        ).coerceIn(0f, (imageSize.height - 1).coerceAtLeast(0).toFloat())
-                                        previewZoom = clampedZoom
-                                        previewAnchorXExactPx = nextAnchorX
-                                        previewAnchorYExactPx = nextAnchorY
-                                        previewAnchorXPx = nextAnchorX.roundToInt()
-                                        previewAnchorYPx = nextAnchorY.roundToInt()
-                                    }
                                     fun computeCenterAnchoredGestureAnchor(
                                         spec: BookCoverRenderSpec,
                                         adjustment: BookCoverAdjustment,
@@ -3034,6 +2998,28 @@ private fun ReaderSyncScreen() {
                                                 pivotY / nextScale
                                         ).coerceIn(0f, (imageSize.height - 1).coerceAtLeast(0).toFloat())
                                         return nextAnchorX to nextAnchorY
+                                    }
+                                    fun updatePreviewZoom(nextZoom: Float) {
+                                        val clampedZoom = nextZoom.coerceIn(1f, 3f)
+                                        if (adjustingBook.coverFocus != HomeCoverCropFocus.CENTER) {
+                                            previewZoom = clampedZoom
+                                            return
+                                        }
+                                        val spec = committedRenderSpec
+                                        if (spec == null || previewSize.width <= 0 || previewSize.height <= 0) {
+                                            previewZoom = clampedZoom
+                                            return
+                                        }
+                                        val (nextAnchorX, nextAnchorY) = computeCenterAnchoredGestureAnchor(
+                                            spec = spec,
+                                            adjustment = previewAdjustment,
+                                            nextZoom = clampedZoom
+                                        )
+                                        previewZoom = clampedZoom
+                                        previewAnchorXExactPx = nextAnchorX
+                                        previewAnchorYExactPx = nextAnchorY
+                                        previewAnchorXPx = nextAnchorX.roundToInt()
+                                        previewAnchorYPx = nextAnchorY.roundToInt()
                                     }
                                     Box(
                                         modifier = Modifier
@@ -3453,7 +3439,7 @@ private fun ReaderSyncScreen() {
                                                                     },
                                                                     modifier = Modifier.weight(1f)
                                                                 )
-                                                                sampledPoint?.takeIf { isRangeMode || sampledPoint != null }?.let { point ->
+                                                                sampledPoint?.let { point ->
                                                                     CoverAdjustChoicePill(
                                                                         text = "${point.first}, ${point.second}",
                                                                         selected = false,
