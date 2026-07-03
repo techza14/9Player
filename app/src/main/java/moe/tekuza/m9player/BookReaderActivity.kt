@@ -2213,9 +2213,11 @@ private fun BookReaderScreen(
                         settings = audiobookSettings
                     )
                     try {
-                        addLookupDefinitionToAnki(
+                        addLookupDefinitionToAnkiShared(
                             context = context,
-                            cue = cue,
+                            cueText = cue.text,
+                            cueStartMs = cue.startMs,
+                            cueEndMs = cue.endMs,
                             audioUri = audioUri,
                             lookupAudioUri = preparedLookupAudio?.uri,
                             bookTitle = title,
@@ -2232,7 +2234,8 @@ private fun BookReaderScreen(
                             dictionaryCss = dictionaryCssByName[primaryDictionaryName],
                             groupedDictionaries = emptyList(),
                             popupSelectionText = popupSelectionText,
-                            sentenceOverride = cue.text
+                            sentenceOverride = cue.text,
+                            lookupTermOverride = expression
                         )
                     } finally {
                         preparedLookupAudio?.cleanup?.invoke()
@@ -5904,38 +5907,6 @@ internal fun createHoshiReaderSelectionFromCueTap(
         ),
         normalizedOffset = 0,
         sentenceOffset = scanSelection?.range?.first ?: scanStart
-    )
-}
-
-private fun addLookupDefinitionToAnki(
-    context: Context,
-    cue: ReaderSubtitleCue,
-    audioUri: Uri?,
-    lookupAudioUri: Uri?,
-    bookTitle: String?,
-    entry: DictionaryEntry,
-    definition: String,
-    glossaryFirstHtml: String? = null,
-    dictionaryCss: String?,
-    groupedDictionaries: List<GroupedLookupDictionary> = emptyList(),
-    popupSelectionText: String? = null,
-    sentenceOverride: String? = null
-): AnkiExportResult {
-    return addLookupDefinitionToAnkiShared(
-        context = context,
-        cueText = cue.text,
-        cueStartMs = cue.startMs,
-        cueEndMs = cue.endMs,
-        audioUri = audioUri,
-        lookupAudioUri = lookupAudioUri,
-        bookTitle = bookTitle,
-        entry = entry,
-        definition = definition,
-        glossaryFirstHtml = glossaryFirstHtml,
-        dictionaryCss = dictionaryCss,
-        groupedDictionaries = groupedDictionaries,
-        popupSelectionText = popupSelectionText,
-        sentenceOverride = sentenceOverride
     )
 }
 

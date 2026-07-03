@@ -8,14 +8,6 @@ internal fun ReaderLookupSession.closeLayerOrClear(layerIndex: Int): CloseLookup
     }
 }
 
-internal fun ReaderLookupSession.afterAddToAnki(layerIndex: Int): CloseLookupAction {
-    return if (layerIndex <= 0) {
-        CloseLookupAction.ClearAll
-    } else {
-        CloseLookupAction.ShowLayer(layerIndex - 1)
-    }
-}
-
 internal fun ReaderLookupSession.toggleCollapsedSection(layerIndex: Int, sectionKey: String, currentlyExpanded: Boolean) {
     replaceAt(layerIndex) { current ->
         current.copy(

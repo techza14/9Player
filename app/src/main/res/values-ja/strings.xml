@@ -110,8 +110,6 @@
     <string name="home_cover_adjust_zoom">拡大 %1$sx</string>
     <string name="home_cover_adjust_anchor">アンカー %1$d, %2$d</string>
     <string name="home_cover_adjust_magnifier">拡大プレビュー</string>
-    <string name="home_cover_focus_center">中</string>
-    <string name="home_cover_focus_start">左</string>
     <string name="home_rename_book">名前を変更</string>
     <string name="home_book_name">名前</string>
     <string name="home_no_books">まだ書籍がありません。</string>

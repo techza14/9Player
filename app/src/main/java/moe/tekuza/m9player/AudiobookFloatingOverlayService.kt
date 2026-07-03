@@ -4712,7 +4712,7 @@ companion object {
         val dictionaryGroup = grouped.dictionaries.firstOrNull() ?: return
         val cueSnapshot = BookReaderFloatingBridge.currentCue() ?: return
         val settings = loadAudiobookSettingsConfig(this)
-        val closeAction = floatingLookupSession.afterAddToAnki(layerIndex)
+        val closeAction = floatingLookupSession.closeLayerOrClear(layerIndex)
         applyCloseLookupAction(closeAction)
         val audioUri = cueSnapshot.audioUri
             ?.takeIf { layer.sourceTerm == null }

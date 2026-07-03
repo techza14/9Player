@@ -6198,19 +6198,18 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             max = MAX_AUDIO_CUE_REPEAT_COUNT
             progress = playbackCount - 1
         }
+        fun setEnabledAlpha(view: View, enabled: Boolean) {
+            view.isEnabled = enabled
+            view.alpha = if (enabled) 1f else 0.55f
+        }
         fun syncFixedEnabled() {
-            fixedLabel.isEnabled = !useCueDuration
-            fixedSeek.isEnabled = !useCueDuration
-            fixedLabel.alpha = if (useCueDuration) 0.55f else 1f
-            fixedSeek.alpha = if (useCueDuration) 0.55f else 1f
+            setEnabledAlpha(fixedLabel, !useCueDuration)
+            setEnabledAlpha(fixedSeek, !useCueDuration)
         }
         fun syncCountEnabled() {
-            tailPauseSwitch.isEnabled = finiteRepeatEnabled
-            tailPauseSwitch.alpha = if (finiteRepeatEnabled) 1f else 0.55f
-            countLabel.isEnabled = finiteRepeatEnabled
-            countSeek.isEnabled = finiteRepeatEnabled
-            countLabel.alpha = if (finiteRepeatEnabled) 1f else 0.55f
-            countSeek.alpha = if (finiteRepeatEnabled) 1f else 0.55f
+            setEnabledAlpha(tailPauseSwitch, finiteRepeatEnabled)
+            setEnabledAlpha(countLabel, finiteRepeatEnabled)
+            setEnabledAlpha(countSeek, finiteRepeatEnabled)
         }
         modeGroup.setOnCheckedChangeListener { _, checkedId ->
             useCueDuration = checkedId == cueDurationButton.id
@@ -6318,6 +6317,27 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun startAudioCueRepeatDelay(currentPlayer: ExoPlayer, startMs: Long, endMs: Long) {
         if (audioCueRepeatDelayJob?.isActive == true) return
+        fun launchRepeatDelay(pauseMs: Long, block: suspend (ExoPlayer) -> Unit) {
+            val generation = ++audioCueRepeatDelayGeneration
+            audioCueLoopPausedForRepeat = true
+            currentPlayer.pause()
+            updateAudioControlLabels()
+            audioCueRepeatDelayJob = lifecycleScope.launch {
+                try {
+                    delay(pauseMs)
+                    if (!audioCueLoopEnabled || generation != audioCueRepeatDelayGeneration) return@launch
+                    val livePlayer = player ?: return@launch
+                    if (livePlayer !== currentPlayer) return@launch
+                    block(livePlayer)
+                } finally {
+                    if (generation == audioCueRepeatDelayGeneration) {
+                        audioCueLoopPausedForRepeat = false
+                        audioCueRepeatDelayJob = null
+                        updateAudioControlLabels()
+                    }
+                }
+            }
+        }
         if (audioCueRepeatFiniteEnabled) {
             if (audioCueRepeatRemainingCount <= 0) {
                 val pauseMs = audioCueRepeatPauseMs(startMs, endMs, currentPlayer)
@@ -6325,34 +6345,18 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                     disableAudioCueLoop(updateUi = true)
                     return
                 }
-                val generation = ++audioCueRepeatDelayGeneration
-                audioCueLoopPausedForRepeat = true
-                currentPlayer.pause()
-                updateAudioControlLabels()
-                audioCueRepeatDelayJob = lifecycleScope.launch {
-                    try {
-                        delay(pauseMs)
-                        if (!audioCueLoopEnabled || generation != audioCueRepeatDelayGeneration) return@launch
-                        val livePlayer = player ?: return@launch
-                        if (livePlayer !== currentPlayer) return@launch
-                        val resumeMs = livePlayer.currentPosition.coerceAtLeast(endMs)
-                        audioCueLoopEnabled = false
-                        audioCueLoopWindow = null
-                        audioCueRepeatRemainingCount = initialAudioCueRepeatRemainingCount()
-                        audioCueLoopPausedForRepeat = false
-                        updateAudioCueLoopLabel()
-                        livePlayer.seekTo(resumeMs)
-                        livePlayer.play()
-                        BookReaderFloatingBridge.notifyPlaybackPosition(resumeMs)
-                        publishReaderPlaybackBridgeSnapshot(notifyState = true)
-                        syncToAudioPositionAt(resumeMs, allowPageJump = true, forceReveal = false)
-                    } finally {
-                        if (generation == audioCueRepeatDelayGeneration) {
-                            audioCueLoopPausedForRepeat = false
-                            audioCueRepeatDelayJob = null
-                            updateAudioControlLabels()
-                        }
-                    }
+                launchRepeatDelay(pauseMs) { livePlayer ->
+                    val resumeMs = livePlayer.currentPosition.coerceAtLeast(endMs)
+                    audioCueLoopEnabled = false
+                    audioCueLoopWindow = null
+                    audioCueRepeatRemainingCount = initialAudioCueRepeatRemainingCount()
+                    audioCueLoopPausedForRepeat = false
+                    updateAudioCueLoopLabel()
+                    livePlayer.seekTo(resumeMs)
+                    livePlayer.play()
+                    BookReaderFloatingBridge.notifyPlaybackPosition(resumeMs)
+                    publishReaderPlaybackBridgeSnapshot(notifyState = true)
+                    syncToAudioPositionAt(resumeMs, allowPageJump = true, forceReveal = false)
                 }
                 return
             }
@@ -6363,31 +6367,15 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             currentPlayer.seekTo(startMs)
             return
         }
-        val generation = ++audioCueRepeatDelayGeneration
-        audioCueLoopPausedForRepeat = true
-        currentPlayer.pause()
-        updateAudioControlLabels()
-        audioCueRepeatDelayJob = lifecycleScope.launch {
-            try {
-                delay(pauseMs)
-                if (!audioCueLoopEnabled || generation != audioCueRepeatDelayGeneration) return@launch
-                val livePlayer = player ?: return@launch
-                if (livePlayer !== currentPlayer) return@launch
-                val window = audioCueLoopWindow ?: return@launch
-                if (window.first != startMs || window.second != endMs) return@launch
-                audioCueLoopPausedForRepeat = false
-                livePlayer.seekTo(startMs)
-                livePlayer.play()
-                BookReaderFloatingBridge.notifyPlaybackPosition(startMs)
-                publishReaderPlaybackBridgeSnapshot(notifyState = true)
-                syncToAudioPositionAt(startMs, allowPageJump = true, forceReveal = false)
-            } finally {
-                if (generation == audioCueRepeatDelayGeneration) {
-                    audioCueLoopPausedForRepeat = false
-                    audioCueRepeatDelayJob = null
-                    updateAudioControlLabels()
-                }
-            }
+        launchRepeatDelay(pauseMs) { livePlayer ->
+            val window = audioCueLoopWindow ?: return@launchRepeatDelay
+            if (window.first != startMs || window.second != endMs) return@launchRepeatDelay
+            audioCueLoopPausedForRepeat = false
+            livePlayer.seekTo(startMs)
+            livePlayer.play()
+            BookReaderFloatingBridge.notifyPlaybackPosition(startMs)
+            publishReaderPlaybackBridgeSnapshot(notifyState = true)
+            syncToAudioPositionAt(startMs, allowPageJump = true, forceReveal = false)
         }
     }
 

@@ -38,9 +38,11 @@ internal fun addLookupDefinitionToAnkiShared(
         return classifyAnkiExportFailure(context, error)
     }
 
-    val exportWord = popupSelectionText?.trim()?.takeIf { it.isNotBlank() }
-        ?: lookupTermOverride?.trim()?.takeIf { it.isNotBlank() }
-        ?: entry.term
+    val exportWord = resolveLookupExportWord(
+        popupSelectionText = popupSelectionText,
+        lookupTermOverride = lookupTermOverride,
+        entryTerm = entry.term
+    )
     val card = MinedCard(
         word = exportWord,
         popupSelectionText = popupSelectionText,
@@ -77,4 +79,14 @@ internal fun addLookupDefinitionToAnkiShared(
     return withAnkiStep("export-note") {
         exportToAnkiDroidApiResult(context, card, preparedExport.config)
     }
+}
+
+internal fun resolveLookupExportWord(
+    popupSelectionText: String?,
+    lookupTermOverride: String?,
+    entryTerm: String
+): String {
+    return lookupTermOverride?.trim()?.takeIf { it.isNotBlank() }
+        ?: popupSelectionText?.trim()?.takeIf { it.isNotBlank() }
+        ?: entryTerm
 }

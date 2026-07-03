@@ -3021,6 +3021,18 @@ private fun ReaderSyncScreen() {
                                         previewAnchorXPx = nextAnchorX.roundToInt()
                                         previewAnchorYPx = nextAnchorY.roundToInt()
                                     }
+                                    fun nudgeAnchor(dx: Int = 0, dy: Int = 0) {
+                                        if (dx != 0) {
+                                            previewAnchorXPx = ((previewAnchorXPx ?: (imageSize.width / 2)) + dx)
+                                                .coerceIn(0, (imageSize.width - 1).coerceAtLeast(0))
+                                            previewAnchorXExactPx = previewAnchorXPx?.toFloat()
+                                        }
+                                        if (dy != 0) {
+                                            previewAnchorYPx = ((previewAnchorYPx ?: (imageSize.height / 2)) + dy)
+                                                .coerceIn(0, (imageSize.height - 1).coerceAtLeast(0))
+                                            previewAnchorYExactPx = previewAnchorYPx?.toFloat()
+                                        }
+                                    }
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -3380,8 +3392,6 @@ private fun ReaderSyncScreen() {
                                                             Text("+")
                                                         }
                                                     }
-                                                }
-                                                CoverAdjustSection(title = "预览") {
                                                     Row(
                                                         modifier = Modifier.fillMaxWidth(),
                                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -3440,12 +3450,29 @@ private fun ReaderSyncScreen() {
                                                                     modifier = Modifier.weight(1f)
                                                                 )
                                                                 sampledPoint?.let { point ->
-                                                                    CoverAdjustChoicePill(
-                                                                        text = "${point.first}, ${point.second}",
-                                                                        selected = false,
-                                                                        onClick = {},
-                                                                        modifier = Modifier.weight(1f)
+                                                                    Surface(
+                                                                        modifier = Modifier.weight(1f),
+                                                                        shape = RoundedCornerShape(999.dp),
+                                                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                                                        border = BorderStroke(
+                                                                            1.dp,
+                                                                            MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+                                                                        )
                                                                     )
+                                                                    {
+                                                                        Box(
+                                                                            modifier = Modifier
+                                                                                .fillMaxWidth()
+                                                                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                                                                            contentAlignment = Alignment.Center
+                                                                        ) {
+                                                                            Text(
+                                                                                text = "${point.first}, ${point.second}",
+                                                                                style = MaterialTheme.typography.labelLarge,
+                                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                                            )
+                                                                        }
+                                                                    }
                                                                 }
                                                             }
                                                         }
@@ -3464,10 +3491,7 @@ private fun ReaderSyncScreen() {
                                                             ) {
                                                                 CoverAdjustDirectionButton(
                                                                     text = "↑",
-                                                                    onClick = {
-                                                                        previewAnchorYPx = ((previewAnchorYPx ?: (imageSize.height / 2)) - 1).coerceAtLeast(0)
-                                                                        previewAnchorYExactPx = previewAnchorYPx?.toFloat()
-                                                                    }
+                                                                    onClick = { nudgeAnchor(dy = -1) }
                                                                 )
                                                                 Row(
                                                                     modifier = Modifier.fillMaxWidth(),
@@ -3476,10 +3500,7 @@ private fun ReaderSyncScreen() {
                                                                 ) {
                                                                     CoverAdjustDirectionButton(
                                                                         text = "←",
-                                                                        onClick = {
-                                                                            previewAnchorXPx = ((previewAnchorXPx ?: (imageSize.width / 2)) - 1).coerceAtLeast(0)
-                                                                            previewAnchorXExactPx = previewAnchorXPx?.toFloat()
-                                                                        }
+                                                                        onClick = { nudgeAnchor(dx = -1) }
                                                                     )
                                                                     Box(
                                                                         modifier = Modifier.weight(1f),
@@ -3489,20 +3510,12 @@ private fun ReaderSyncScreen() {
                                                                     }
                                                                     CoverAdjustDirectionButton(
                                                                         text = "→",
-                                                                        onClick = {
-                                                                            previewAnchorXPx = ((previewAnchorXPx ?: (imageSize.width / 2)) + 1)
-                                                                                .coerceAtMost((imageSize.width - 1).coerceAtLeast(0))
-                                                                            previewAnchorXExactPx = previewAnchorXPx?.toFloat()
-                                                                        }
+                                                                        onClick = { nudgeAnchor(dx = 1) }
                                                                     )
                                                                 }
                                                                 CoverAdjustDirectionButton(
                                                                     text = "↓",
-                                                                    onClick = {
-                                                                        previewAnchorYPx = ((previewAnchorYPx ?: (imageSize.height / 2)) + 1)
-                                                                            .coerceAtMost((imageSize.height - 1).coerceAtLeast(0))
-                                                                        previewAnchorYExactPx = previewAnchorYPx?.toFloat()
-                                                                    }
+                                                                    onClick = { nudgeAnchor(dy = 1) }
                                                                 )
                                                             }
                                                         }
@@ -3793,9 +3806,9 @@ private fun ReaderSyncScreen() {
                                                         ) {
                                                             Text(
                                                                 text = if (book.coverFocus == HomeCoverCropFocus.START) {
-                                                                    stringResource(R.string.home_cover_focus_start)
+                                                                    "左"
                                                                 } else {
-                                                                    stringResource(R.string.home_cover_focus_center)
+                                                                    "中"
                                                                 },
                                                                 style = MaterialTheme.typography.labelSmall,
                                                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -3979,9 +3992,9 @@ private fun ReaderSyncScreen() {
                                                 ) {
                                                     Text(
                                                         text = if (book.coverFocus == HomeCoverCropFocus.START) {
-                                                            stringResource(R.string.home_cover_focus_start)
+                                                            "左"
                                                         } else {
-                                                            stringResource(R.string.home_cover_focus_center)
+                                                            "中"
                                                         },
                                                         style = MaterialTheme.typography.labelSmall,
                                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -6392,9 +6405,11 @@ private fun addLookupDefinitionToAnkiMain(
         lookupAudioUri = lookupAudioUri
     )
 
-    val exportWord = popupSelectionText?.trim()?.takeIf { it.isNotBlank() }
-        ?: lookupTermOverride?.trim()?.takeIf { it.isNotBlank() }
-        ?: entry.term
+    val exportWord = resolveLookupExportWord(
+        popupSelectionText = popupSelectionText,
+        lookupTermOverride = lookupTermOverride,
+        entryTerm = entry.term
+    )
     val card = MinedCard(
         word = exportWord,
         popupSelectionText = popupSelectionText,
