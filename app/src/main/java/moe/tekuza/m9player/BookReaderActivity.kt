@@ -35,6 +35,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
@@ -195,6 +199,7 @@ private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
 private const val BOOK_LOOKUP_SELECTION_LOG_TAG = "BookLookupSelection"
 private const val BOOK_READER_BACK_LOG_TAG = "BookReaderBack"
 private const val BOOK_READER_SEEK_LOG_TAG = "BookReaderSeek"
+private const val BOOK_READER_SLEEP_LOG_TAG = "BookReaderSleep"
 private const val BOOK_UI_MODE_LOG_TAG = "BookUiMode"
 private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
 private const val BOOK_VERTICAL_TAP_DEBUG_OVERLAY = false
@@ -609,6 +614,7 @@ private fun BookReaderScreen(
     var speedMenuExpanded by remember { mutableStateOf(false) }
     var sleepTimerDeadlineMs by remember { mutableStateOf<Long?>(null) }
     var sleepTimerOptionsVisible by remember { mutableStateOf(false) }
+    var sleepTimerAdvancedOptionsExpanded by remember { mutableStateOf(false) }
     var sleepCustomMinutesInput by remember { mutableStateOf("") }
     var sleepExitControlModeWhenDone by remember { mutableStateOf(false) }
     var sleepDisconnectControllerBluetoothWhenDone by remember { mutableStateOf(false) }
@@ -1511,6 +1517,14 @@ private fun BookReaderScreen(
                     fadeApplied = false
                 }
                 if (remainingMs <= 0L) {
+                    Log.d(
+                        BOOK_READER_SLEEP_LOG_TAG,
+                        "timer finishing exitControl=$sleepExitControlModeWhenDone " +
+                            "controlModeBefore=$controlModeEnabled " +
+                            "disconnectBt=$sleepDisconnectControllerBluetoothWhenDone " +
+                            "fadeOut=$sleepFadeOutAudioWhenDone " +
+                            "playbackRequested=${isReaderPlaybackRequested()}"
+                    )
                     if (sleepFadeOutAudioWhenDone && !uiTestMode) {
                         pauseWithSleepFadeRewind(player)
                     } else {
@@ -1518,6 +1532,15 @@ private fun BookReaderScreen(
                     }
                     sleepTimerDeadlineMs = null
                     val statusParts = mutableListOf<String>()
+                    if (sleepExitControlModeWhenDone) {
+                        controlModeEnabled = false
+                        view.keepScreenOn = false
+                        statusParts += context.getString(R.string.status_control_mode_exited)
+                        Log.d(
+                            BOOK_READER_SLEEP_LOG_TAG,
+                            "timer exited control mode before bluetooth action controlModeAfterExit=$controlModeEnabled"
+                        )
+                    }
                     if (sleepDisconnectControllerBluetoothWhenDone) {
                         val address = latestControllerAddressProvider()
                         val behavior = loadControllerBluetoothBehaviorConfig(context)
@@ -1540,11 +1563,12 @@ private fun BookReaderScreen(
                             }
                         }
                     }
-                    if (sleepExitControlModeWhenDone) {
-                        controlModeEnabled = false
-                        view.keepScreenOn = false
-                        statusParts += context.getString(R.string.status_control_mode_exited)
-                    }
+                    Log.d(
+                        BOOK_READER_SLEEP_LOG_TAG,
+                        "timer finished exitControl=$sleepExitControlModeWhenDone " +
+                            "controlModeAfter=$controlModeEnabled " +
+                            "statusParts=${statusParts.joinToString(separator = "|")}"
+                    )
                     if (statusParts.isEmpty()) {
                         controlModeStatus = context.getString(R.string.status_timer_finished)
                     } else {
@@ -3838,7 +3862,10 @@ private fun BookReaderScreen(
             Popup(
                 alignment = Alignment.TopEnd,
                 offset = IntOffset(-16, 84),
-                onDismissRequest = { sleepTimerOptionsVisible = false },
+                onDismissRequest = {
+                    sleepTimerOptionsVisible = false
+                    sleepTimerAdvancedOptionsExpanded = false
+                },
                 properties = PopupProperties(
                     focusable = true,
                     dismissOnBackPress = true,
@@ -3881,64 +3908,94 @@ private fun BookReaderScreen(
                                 Text(stringResource(R.string.bookreader_set))
                             }
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    sleepTimerAdvancedOptionsExpanded = !sleepTimerAdvancedOptionsExpanded
+                                },
+                            shape = RoundedCornerShape(999.dp),
+                            color = Color.Transparent
                         ) {
-                            Text(
-                                text = stringResource(R.string.bookreader_sleep_fade_out_audio),
-                                modifier = Modifier.weight(1f).padding(end = 12.dp)
-                            )
-                            Switch(
-                                checked = sleepFadeOutAudioWhenDone,
-                                onCheckedChange = { checked ->
-                                    sleepFadeOutAudioWhenDone = checked
-                                }
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Surface(
+                                    modifier = Modifier.size(width = 44.dp, height = 6.dp),
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                                ) {}
+                            }
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                        AnimatedVisibility(
+                            visible = sleepTimerAdvancedOptionsExpanded,
+                            enter = fadeIn(animationSpec = tween(180)),
+                            exit = fadeOut(animationSpec = tween(140))
                         ) {
-                            Text(
-                                text = stringResource(R.string.bookreader_sleep_exit_control),
-                                modifier = Modifier.weight(1f).padding(end = 12.dp)
-                            )
-                            Switch(
-                                checked = sleepExitControlModeWhenDone,
-                                onCheckedChange = { checked ->
-                                    sleepExitControlModeWhenDone = checked
-                                }
-                            )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = stringResource(R.string.bookreader_sleep_disconnect_bluetooth),
-                                modifier = Modifier.weight(1f).padding(end = 12.dp)
-                            )
-                            Switch(
-                                checked = sleepDisconnectControllerBluetoothWhenDone,
-                                onCheckedChange = { checked ->
-                                    sleepDisconnectControllerBluetoothWhenDone = checked
-                                }
-                            )
-                        }
-                        TextButton(
-                            onClick = {
-                                context.startActivity(
-                                    Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.bookreader_sleep_fade_out_audio),
+                                    modifier = Modifier.weight(1f).padding(end = 12.dp)
+                                )
+                                Switch(
+                                    checked = sleepFadeOutAudioWhenDone,
+                                    onCheckedChange = { checked ->
+                                        sleepFadeOutAudioWhenDone = checked
                                     }
                                 )
                             }
-                        ) {
-                            Text(stringResource(R.string.bookreader_open_bluetooth))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.bookreader_sleep_exit_control),
+                                    modifier = Modifier.weight(1f).padding(end = 12.dp)
+                                )
+                                Switch(
+                                    checked = sleepExitControlModeWhenDone,
+                                    onCheckedChange = { checked ->
+                                        sleepExitControlModeWhenDone = checked
+                                    }
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.bookreader_sleep_disconnect_bluetooth),
+                                    modifier = Modifier.weight(1f).padding(end = 12.dp)
+                                )
+                                Switch(
+                                    checked = sleepDisconnectControllerBluetoothWhenDone,
+                                    onCheckedChange = { checked ->
+                                        sleepDisconnectControllerBluetoothWhenDone = checked
+                                    }
+                                )
+                            }
+                            TextButton(
+                                onClick = {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                    )
+                                }
+                            ) {
+                                Text(stringResource(R.string.bookreader_open_bluetooth))
+                            }
+                            }
                         }
                     }
                 }

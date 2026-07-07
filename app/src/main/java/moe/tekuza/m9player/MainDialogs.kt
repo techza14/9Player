@@ -188,8 +188,6 @@ internal fun AddBookDialog(
     ebookName: String?,
     ebookUri: Uri?,
     autoMoveToAudiobookFolder: Boolean,
-    deleteSourceFilesWhenAutoMove: Boolean,
-    onDeleteSourceFilesWhenAutoMoveChange: (Boolean) -> Unit,
     srtLoading: Boolean,
     onPickFolder: () -> Unit,
     onClearFolderSelection: () -> Unit,
@@ -266,18 +264,6 @@ internal fun AddBookDialog(
                         Text(stringResource(R.string.add_book_ebook_only_enabled_hint))
                     } else if (audioUri == null || srtName == null) {
                         Text(stringResource(R.string.add_book_ebook_requires_audio_srt))
-                    }
-                }
-                if (autoMoveToAudiobookFolder) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Checkbox(
-                            checked = deleteSourceFilesWhenAutoMove,
-                            onCheckedChange = onDeleteSourceFilesWhenAutoMoveChange
-                        )
-                        Text(stringResource(R.string.delete_books_delete_source_files))
                     }
                 }
             }

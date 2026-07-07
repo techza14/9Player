@@ -244,6 +244,7 @@
     <string name="reader_repeat_playback_count_toggle">By playback count</string>
     <string name="reader_repeat_playback_count_value">Play %1$d times</string>
     <string name="reader_repeat_tail_pause">Pause at end</string>
+    <string name="reader_repeat_follow_cue">Repeat each cue</string>
     <string name="reader_repeat_enabled_content_description">Repeat, %1$s</string>
     <string name="reader_repeat_disabled_content_description">Repeat</string>
 

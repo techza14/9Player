@@ -30,6 +30,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -1714,7 +1718,7 @@ private fun ReaderSyncScreen() {
         val pickedSrtName = addBookSrtName
         val pickedEbookName = addBookEbookName
         val pickedEbookFormat = addBookEbookFormat
-        val deleteSourceFilesForAutoMove = !keepSourceFilesWhenAutoMove
+        val deleteSourceFilesForAutoMove = shouldAutoMove
         Log.d(
             BOOK_IMPORT_MOVE_LOG_TAG,
             "confirm autoMove=$shouldAutoMove deleteSourceFiles=$deleteSourceFilesForAutoMove " +
@@ -1782,7 +1786,7 @@ private fun ReaderSyncScreen() {
                     if (!folderName.isNullOrBlank()) {
                         append(' ')
                         append(context.getString(R.string.status_book_saved_to, folderName))
-                        if (keepSourceFilesWhenAutoMove) {
+                        if (!deleteSourceFilesForAutoMove) {
                             append(' ')
                             append(context.getString(R.string.status_book_keep_original))
                         }
@@ -3352,7 +3356,11 @@ private fun ReaderSyncScreen() {
                                                 ) {}
                                             }
                                         }
-                                        if (controlsExpanded) {
+                                        AnimatedVisibility(
+                                            visible = controlsExpanded,
+                                            enter = fadeIn(animationSpec = tween(180)),
+                                            exit = fadeOut(animationSpec = tween(140))
+                                        ) {
                                             Column(
                                                 modifier = Modifier.verticalScroll(controlScrollState),
                                                 verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -4528,11 +4536,6 @@ private fun ReaderSyncScreen() {
                 ebookName = addBookEbookName,
                 ebookUri = addBookEbookUri,
                 autoMoveToAudiobookFolder = autoMoveToAudiobookFolder,
-                deleteSourceFilesWhenAutoMove = !keepSourceFilesWhenAutoMove,
-                onDeleteSourceFilesWhenAutoMoveChange = { checked ->
-                    keepSourceFilesWhenAutoMove = !checked
-                    persistImportState()
-                },
                 srtLoading = srtLoading,
                 onPickFolder = { pickBookFolderLauncher.launch(null) },
                 onClearFolderSelection = {

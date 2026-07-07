@@ -244,6 +244,7 @@
     <string name="reader_repeat_playback_count_toggle">按播放次數</string>
     <string name="reader_repeat_playback_count_value">播放 %1$d 次</string>
     <string name="reader_repeat_tail_pause">收尾暫停</string>
+    <string name="reader_repeat_follow_cue">逐句重複</string>
     <string name="reader_repeat_enabled_content_description">重複播放，%1$s</string>
     <string name="reader_repeat_disabled_content_description">重複播放</string>
 

@@ -190,6 +190,7 @@ internal data class LegadoReaderPersistedState(
     val audioCueRepeatFiniteEnabled: Boolean = false,
     val audioCueRepeatCount: Int = 0,
     val audioCueRepeatTailPauseEnabled: Boolean = false,
+    val audioCueRepeatFollowCueEnabled: Boolean = false,
     val verticalControlDirectionReversed: Boolean = false,
     val verticalProgressDirectionReversed: Boolean = false,
     val selectionPrimaryActionKey: String = "default",
@@ -375,6 +376,7 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         audioCueRepeatFiniteEnabled = json.optBoolean("audioCueRepeatFiniteEnabled", false),
         audioCueRepeatCount = json.optInt("audioCueRepeatCount", 0).coerceIn(0, 20),
         audioCueRepeatTailPauseEnabled = json.optBoolean("audioCueRepeatTailPauseEnabled", false),
+        audioCueRepeatFollowCueEnabled = json.optBoolean("audioCueRepeatFollowCueEnabled", false),
         verticalControlDirectionReversed = json.optBoolean("verticalControlDirectionReversed", false),
         verticalProgressDirectionReversed = json.optBoolean("verticalProgressDirectionReversed", false),
         selectionPrimaryActionKey = json.optString("selectionPrimaryActionKey")
@@ -580,6 +582,7 @@ internal fun saveLegadoReaderPersistedState(
         put("audioCueRepeatFiniteEnabled", state.audioCueRepeatFiniteEnabled)
         put("audioCueRepeatCount", state.audioCueRepeatCount)
         put("audioCueRepeatTailPauseEnabled", state.audioCueRepeatTailPauseEnabled)
+        put("audioCueRepeatFollowCueEnabled", state.audioCueRepeatFollowCueEnabled)
         put("verticalControlDirectionReversed", state.verticalControlDirectionReversed)
         put("verticalProgressDirectionReversed", state.verticalProgressDirectionReversed)
         put("selectionPrimaryActionKey", state.selectionPrimaryActionKey)

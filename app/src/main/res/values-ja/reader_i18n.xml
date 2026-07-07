@@ -244,6 +244,7 @@
     <string name="reader_repeat_playback_count_toggle">再生回数で制限</string>
     <string name="reader_repeat_playback_count_value">%1$d 回再生</string>
     <string name="reader_repeat_tail_pause">最後も一時停止</string>
+    <string name="reader_repeat_follow_cue">文ごとに繰り返す</string>
     <string name="reader_repeat_enabled_content_description">リピート、%1$s</string>
     <string name="reader_repeat_disabled_content_description">リピート</string>
 

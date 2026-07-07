@@ -338,6 +338,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private var audioCueRepeatFiniteEnabled: Boolean = false
     private var audioCueRepeatCount: Int = 0
     private var audioCueRepeatTailPauseEnabled: Boolean = false
+    private var audioCueRepeatFollowCueEnabled: Boolean = false
     private var audioCueRepeatRemainingCount: Int = 0
     private var audioCueRepeatDelayJob: Job? = null
     private var audioCueRepeatDelayGeneration: Long = 0L
@@ -6147,6 +6148,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         var finiteRepeatEnabled = audioCueRepeatFiniteEnabled
         var playbackCount = audioCueRepeatCount.coerceIn(1, MAX_AUDIO_CUE_REPEAT_COUNT)
         var tailPauseEnabled = audioCueRepeatTailPauseEnabled
+        var followCueEnabled = audioCueRepeatFollowCueEnabled
 
         val modeGroup = RadioGroup(this).apply {
             orientation = RadioGroup.VERTICAL
@@ -6189,6 +6191,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             setTextColor(MENU_TEXT)
             isChecked = tailPauseEnabled
         }
+        val followCueSwitch = Switch(this).apply {
+            text = getString(R.string.reader_repeat_follow_cue)
+            textSize = 15f
+            setTextColor(MENU_TEXT)
+            isChecked = followCueEnabled
+        }
         val countLabel = text(
             getString(R.string.reader_repeat_playback_count_value, playbackCount),
             14f,
@@ -6221,6 +6229,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
         tailPauseSwitch.setOnCheckedChangeListener { _, isChecked ->
             tailPauseEnabled = isChecked
+        }
+        followCueSwitch.setOnCheckedChangeListener { _, isChecked ->
+            followCueEnabled = isChecked
         }
         fixedSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -6259,6 +6270,10 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
+        content.addView(followCueSwitch, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
         content.addView(countLabel, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             dp(34)
@@ -6277,6 +6292,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 audioCueRepeatFiniteEnabled = finiteRepeatEnabled
                 audioCueRepeatCount = playbackCount
                 audioCueRepeatTailPauseEnabled = tailPauseEnabled
+                audioCueRepeatFollowCueEnabled = followCueEnabled
                 audioCueRepeatRemainingCount = initialAudioCueRepeatRemainingCount()
                 persistReaderSettings(updateAnchor = false)
                 updateAudioCueLoopLabel()
@@ -7228,6 +7244,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         audioCueRepeatFiniteEnabled = state.audioCueRepeatFiniteEnabled
         audioCueRepeatCount = state.audioCueRepeatCount
         audioCueRepeatTailPauseEnabled = state.audioCueRepeatTailPauseEnabled
+        audioCueRepeatFollowCueEnabled = state.audioCueRepeatFollowCueEnabled
         audioCueRepeatRemainingCount = initialAudioCueRepeatRemainingCount()
         if (::readView.isInitialized) {
             readView.selectionJumpToCueEnabled = hasReaderSelectionCueJump()
@@ -7378,6 +7395,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 audioCueRepeatFiniteEnabled = audioCueRepeatFiniteEnabled,
                 audioCueRepeatCount = audioCueRepeatCount,
                 audioCueRepeatTailPauseEnabled = audioCueRepeatTailPauseEnabled,
+                audioCueRepeatFollowCueEnabled = audioCueRepeatFollowCueEnabled,
                 verticalControlDirectionReversed = verticalControlDirectionReversed,
                 verticalProgressDirectionReversed = verticalProgressDirectionReversed,
                 selectionPrimaryActionKey = selectionPrimaryActionKey,
@@ -7968,6 +7986,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val previousAudioCueIndex = audioCueIndex
         val cueChanged = cueIndex != previousAudioCueIndex
         audioCueIndex = cueIndex
+        if (cueChanged && audioCueLoopEnabled && audioCueRepeatFollowCueEnabled && isAudioPlaybackRequested()) {
+            updateAudioCueLoopWindow(cueIndex)
+        }
         val match = cueMatchesByCueIndex[cueIndex]
         if (!cueChanged && !forceReveal) {
             if (match != null && maybePausePlaybackForImage(
