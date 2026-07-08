@@ -264,7 +264,7 @@ internal fun findEbookCueIndexAtTime(cues: List<EbookSrtCue>, timeMs: Long): Int
         val cue = cues[mid]
         when {
             timeMs < cue.startMs -> high = mid - 1
-            timeMs > cue.endMs -> low = mid + 1
+            timeMs >= cue.endMs -> low = mid + 1
             else -> return mid
         }
     }

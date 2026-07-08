@@ -5635,7 +5635,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         if (!::readView.isInitialized) return
         if (
             !crossPageCueWindowEnabled ||
-            !isAudioPlaying() ||
+            !isAudioPlaybackRequested() ||
             page == null ||
             match == null ||
             match.chapterIndex != page.chapterIndex
@@ -6111,13 +6111,18 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     private fun updateAudioCueLoopWindow(cueIndex: Int): Boolean {
         val cue = cues.getOrNull(cueIndex) ?: return false
         cancelAudioCueRepeatDelay()
+        applyAudioCueLoopWindow(cueIndex, cue)
+        return true
+    }
+
+    private fun applyAudioCueLoopWindow(cueIndex: Int, cue: EbookSrtCue?) {
+        cue ?: return
         val startMs = cue.startMs.coerceAtLeast(0L)
         val endMs = cue.endMs.coerceAtLeast(startMs + 1L)
         audioCueLoopWindow = startMs to endMs
         audioCueIndex = cueIndex
         audioCueRepeatRemainingCount = initialAudioCueRepeatRemainingCount()
         updateAudioCueLoopLabel()
-        return true
     }
 
     private fun updateAudioCueLoopLabel() {
@@ -6331,6 +6336,11 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }.coerceIn(0L, MAX_AUDIO_CUE_REPEAT_FIXED_PAUSE_SECONDS * 1_000L)
     }
 
+    private fun nextCueRepeatTarget(currentCueIndex: Int): Int? {
+        val nextCueIndex = currentCueIndex + 1
+        return nextCueIndex.takeIf { it in cues.indices }
+    }
+
     private fun startAudioCueRepeatDelay(currentPlayer: ExoPlayer, startMs: Long, endMs: Long) {
         if (audioCueRepeatDelayJob?.isActive == true) return
         fun launchRepeatDelay(pauseMs: Long, block: suspend (ExoPlayer) -> Unit) {
@@ -6356,7 +6366,25 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
         if (audioCueRepeatFiniteEnabled) {
             if (audioCueRepeatRemainingCount <= 0) {
+                val currentCueIndex = currentCueLoopIndexForPosition(startMs)
                 val pauseMs = audioCueRepeatPauseMs(startMs, endMs, currentPlayer)
+                val nextCueTarget = if (audioCueRepeatFollowCueEnabled) {
+                    nextCueRepeatTarget(currentCueIndex)
+                } else {
+                    null
+                }
+                if (nextCueTarget != null) {
+                    val nextCueIndex = nextCueTarget
+                    if (pauseMs <= 0L) {
+                        seekToCueIndex(nextCueIndex, cancelRepeatDelay = false)
+                        return
+                    }
+                    launchRepeatDelay(pauseMs) { livePlayer ->
+                        if (player !== livePlayer) return@launchRepeatDelay
+                        seekToCueIndex(nextCueIndex, cancelRepeatDelay = false)
+                    }
+                    return
+                }
                 if (!audioCueRepeatTailPauseEnabled || pauseMs <= 0L) {
                     disableAudioCueLoop(updateUi = true)
                     return
@@ -6449,7 +6477,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         seekToCueIndex(targetIndex)
     }
 
-    private fun seekToCueIndex(targetIndex: Int) {
+    private fun seekToCueIndex(targetIndex: Int, cancelRepeatDelay: Boolean = true) {
         val currentPlayer = player ?: return
         if (targetIndex !in cues.indices) return
         val targetMs = cues[targetIndex].startMs.coerceAtLeast(0L)
@@ -6469,9 +6497,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             "legado cueJump after-seek-immediate targetMs=$targetMs actual=${currentPlayer.currentPosition} " +
                 "playing=${currentPlayer.isPlaying} playWhenReady=${currentPlayer.playWhenReady} state=${currentPlayer.playbackState}"
         )
-        audioCueIndex = targetIndex
         if (audioCueLoopEnabled) {
-            updateAudioCueLoopWindow(targetIndex)
+            if (cancelRepeatDelay) {
+                updateAudioCueLoopWindow(targetIndex)
+            } else {
+                applyAudioCueLoopWindow(targetIndex, targetCue)
+            }
         }
         if (resumeAfterRepeatPause) {
             currentPlayer.play()

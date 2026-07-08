@@ -199,7 +199,6 @@ private const val BOOK_LOOKUP_ANCHOR_LOG_TAG = "BookLookupAnchor"
 private const val BOOK_LOOKUP_SELECTION_LOG_TAG = "BookLookupSelection"
 private const val BOOK_READER_BACK_LOG_TAG = "BookReaderBack"
 private const val BOOK_READER_SEEK_LOG_TAG = "BookReaderSeek"
-private const val BOOK_READER_SLEEP_LOG_TAG = "BookReaderSleep"
 private const val BOOK_UI_MODE_LOG_TAG = "BookUiMode"
 private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
 private const val BOOK_VERTICAL_TAP_DEBUG_OVERLAY = false
@@ -1517,14 +1516,6 @@ private fun BookReaderScreen(
                     fadeApplied = false
                 }
                 if (remainingMs <= 0L) {
-                    Log.d(
-                        BOOK_READER_SLEEP_LOG_TAG,
-                        "timer finishing exitControl=$sleepExitControlModeWhenDone " +
-                            "controlModeBefore=$controlModeEnabled " +
-                            "disconnectBt=$sleepDisconnectControllerBluetoothWhenDone " +
-                            "fadeOut=$sleepFadeOutAudioWhenDone " +
-                            "playbackRequested=${isReaderPlaybackRequested()}"
-                    )
                     if (sleepFadeOutAudioWhenDone && !uiTestMode) {
                         pauseWithSleepFadeRewind(player)
                     } else {
@@ -1536,10 +1527,6 @@ private fun BookReaderScreen(
                         controlModeEnabled = false
                         view.keepScreenOn = false
                         statusParts += context.getString(R.string.status_control_mode_exited)
-                        Log.d(
-                            BOOK_READER_SLEEP_LOG_TAG,
-                            "timer exited control mode before bluetooth action controlModeAfterExit=$controlModeEnabled"
-                        )
                     }
                     if (sleepDisconnectControllerBluetoothWhenDone) {
                         val address = latestControllerAddressProvider()
@@ -1563,12 +1550,6 @@ private fun BookReaderScreen(
                             }
                         }
                     }
-                    Log.d(
-                        BOOK_READER_SLEEP_LOG_TAG,
-                        "timer finished exitControl=$sleepExitControlModeWhenDone " +
-                            "controlModeAfter=$controlModeEnabled " +
-                            "statusParts=${statusParts.joinToString(separator = "|")}"
-                    )
                     if (statusParts.isEmpty()) {
                         controlModeStatus = context.getString(R.string.status_timer_finished)
                     } else {

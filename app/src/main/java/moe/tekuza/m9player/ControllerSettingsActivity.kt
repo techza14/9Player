@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -27,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import moe.tekuza.m9player.ui.theme.TsetTheme
 
 private enum class CaptureAction {
@@ -44,6 +47,11 @@ private enum class CaptureAction {
     NEXT,
     COLLECT
 }
+
+private data class GamepadHint(
+    val keyCode: Int,
+    val token: Long = System.currentTimeMillis()
+)
 
 class ControllerSettingsActivity : AppCompatActivity() {
     private var captureKeyHandler: ((KeyEvent) -> Boolean)? = null
@@ -76,6 +84,7 @@ private fun ControllerSettingsScreen(
     var config by remember { mutableStateOf(loadGamepadControlConfig(context)) }
     var captureAction by remember { mutableStateOf<CaptureAction?>(null) }
     var capturedKeyCode by remember { mutableStateOf<Int?>(null) }
+    var gamepadHint by remember { mutableStateOf<GamepadHint?>(null) }
 
     fun reloadConfig() {
         config = loadGamepadControlConfig(context)
@@ -124,22 +133,30 @@ private fun ControllerSettingsScreen(
     }
 
     DisposableEffect(captureAction) {
-        if (captureAction == null) {
-            registerCaptureKeyHandler(null)
-            onDispose { registerCaptureKeyHandler(null) }
-        } else {
-            registerCaptureKeyHandler { event ->
-                if (event.action != KeyEvent.ACTION_DOWN) return@registerCaptureKeyHandler true
-                if (event.repeatCount > 0) return@registerCaptureKeyHandler true
+        registerCaptureKeyHandler { event ->
+            if (event.action != KeyEvent.ACTION_DOWN) return@registerCaptureKeyHandler captureAction != null
+            if (event.repeatCount > 0) return@registerCaptureKeyHandler captureAction != null
+            if (captureAction != null) {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK) {
                     closeCaptureDialog()
                     return@registerCaptureKeyHandler true
                 }
                 capturedKeyCode = event.keyCode
-                true
+                return@registerCaptureKeyHandler true
             }
-            onDispose { registerCaptureKeyHandler(null) }
+            if (isPreviewableGamepadKey(event.keyCode)) {
+                gamepadHint = GamepadHint(event.keyCode)
+                return@registerCaptureKeyHandler true
+            }
+            false
         }
+        onDispose { registerCaptureKeyHandler(null) }
+    }
+
+    LaunchedEffect(gamepadHint?.token) {
+        if (gamepadHint == null) return@LaunchedEffect
+        delay(1000)
+        gamepadHint = null
     }
 
     SettingsScaffold(
@@ -175,6 +192,7 @@ private fun ControllerSettingsScreen(
                         Text(stringResource(R.string.controller_scheme_1_title), style = MaterialTheme.typography.titleMedium)
                         Text(stringResource(R.string.controller_scheme_1_desc_1))
                         Text(stringResource(R.string.controller_scheme_1_desc_2))
+                        Text(stringResource(R.string.controller_scheme_1_desc_3))
                     }
                     RadioButton(
                         selected = config.scheme == GamepadControlScheme.SCHEME_1,
@@ -200,6 +218,7 @@ private fun ControllerSettingsScreen(
                         Text(stringResource(R.string.controller_scheme_2_title), style = MaterialTheme.typography.titleMedium)
                         Text(stringResource(R.string.controller_scheme_2_desc_1))
                         Text(stringResource(R.string.controller_scheme_2_desc_2))
+                        Text(stringResource(R.string.controller_scheme_2_desc_3))
                     }
                     RadioButton(
                         selected = config.scheme == GamepadControlScheme.SCHEME_2,
@@ -279,6 +298,27 @@ private fun ControllerSettingsScreen(
             }
 
                     ControllerBluetoothSection()
+        }
+
+        gamepadHint?.let { hint ->
+            Card(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(stringResource(R.string.controller_preview_key_name_value, formatGamepadKeyLabel(context, hint.keyCode)))
+                    Text(stringResource(R.string.controller_preview_current_mapping_value, describeGamepadMapping(context, config, hint.keyCode)))
+                    Text(stringResource(R.string.controller_preview_special_behavior_value, describeGamepadSpecialBehavior(context, config, hint.keyCode)))
+                }
+            }
         }
 
         val action = captureAction
@@ -380,6 +420,56 @@ private fun formatGamepadKeyLabel(context: android.content.Context, keyCode: Int
                 .replace('_', ' ')
                 .ifBlank { keyCode.toString() }
         }
+    }
+}
+
+private fun describeGamepadMapping(
+    context: android.content.Context,
+    config: GamepadControlConfig,
+    keyCode: Int
+): String {
+    val labels = buildList {
+        if (config.previousKeyCode == keyCode) add(context.getString(R.string.controller_previous))
+        if (config.nextKeyCode == keyCode) add(context.getString(R.string.controller_next))
+        if (config.collectKeyCode == keyCode) add(context.getString(R.string.controller_collect))
+    }
+    return labels.joinToString(" / ").ifBlank {
+        context.getString(R.string.controller_preview_unassigned)
+    }
+}
+
+private fun describeGamepadSpecialBehavior(
+    context: android.content.Context,
+    config: GamepadControlConfig,
+    keyCode: Int
+): String {
+    return if (config.collectKeyCode == keyCode && config.doubleTapCollectPrevious) {
+        context.getString(R.string.controller_preview_special_double_tap_previous)
+    } else {
+        context.getString(R.string.controller_preview_none)
+    }
+}
+
+private fun isPreviewableGamepadKey(keyCode: Int): Boolean {
+    return when (keyCode) {
+        KeyEvent.KEYCODE_DPAD_LEFT,
+        KeyEvent.KEYCODE_DPAD_RIGHT,
+        KeyEvent.KEYCODE_DPAD_UP,
+        KeyEvent.KEYCODE_DPAD_DOWN,
+        KeyEvent.KEYCODE_BUTTON_A,
+        KeyEvent.KEYCODE_BUTTON_B,
+        KeyEvent.KEYCODE_BUTTON_X,
+        KeyEvent.KEYCODE_BUTTON_Y,
+        KeyEvent.KEYCODE_BUTTON_L1,
+        KeyEvent.KEYCODE_BUTTON_R1,
+        KeyEvent.KEYCODE_BUTTON_L2,
+        KeyEvent.KEYCODE_BUTTON_R2,
+        KeyEvent.KEYCODE_BUTTON_SELECT,
+        KeyEvent.KEYCODE_BUTTON_START,
+        KeyEvent.KEYCODE_BUTTON_MODE,
+        KeyEvent.KEYCODE_BUTTON_THUMBL,
+        KeyEvent.KEYCODE_BUTTON_THUMBR -> true
+        else -> false
     }
 }
 

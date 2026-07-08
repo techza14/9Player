@@ -6,6 +6,17 @@ import org.junit.Test
 
 class EbookCueMatchingTest {
     @Test
+    fun findEbookCueIndexAtTime_treatsCueEndAsExclusive() {
+        val cues = listOf(
+            EbookSrtCue(startMs = 0L, endMs = 1000L, text = "a"),
+            EbookSrtCue(startMs = 1000L, endMs = 2000L, text = "b")
+        )
+
+        assertEquals(0, findEbookCueIndexAtTime(cues, 999L))
+        assertEquals(1, findEbookCueIndexAtTime(cues, 1000L))
+    }
+
+    @Test
     fun matchEbookCuesData_skipsShortStageCue() {
         val document = EbookDocument(
             title = "book",
