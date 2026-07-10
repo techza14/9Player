@@ -121,11 +121,6 @@ private data class ReaderPageAnchor(
     val charPosition: Int
 )
 
-private data class ReaderAudioSnapshotCandidate(
-    val source: String,
-    val snapshot: BookReaderPlaybackSnapshot
-)
-
 private data class ReaderChapterPageCacheKey(
     val chapterIndex: Int,
     val contentWidthPx: Int,
@@ -144,7 +139,6 @@ private enum class CatalogMode {
     CHAPTERS,
     BOOKMARKS
 }
-
 private enum class ReaderOverflowAction(val menuId: Int) {
     PLAYER(1),
     ADD_BOOKMARK(2),
@@ -3252,7 +3246,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 }
 
                 override fun onBackgroundAddClicked() {
-                    readerStyleConfigs.add(defaultReaderStyleConfig().copy(name = "文字"))
+                    readerStyleConfigs.add(defaultReaderStyleConfig().copy(name = "Text"))
                     val index = readerStyleConfigs.lastIndex
                     selectReaderStyle(index)
                     showReaderStyleConfigDialog(index)
@@ -4992,7 +4986,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                     "readerStartup firstRender=${SystemClock.elapsedRealtime() - firstRenderStartMs}ms " +
                         "firstText=${SystemClock.elapsedRealtime() - startupStartMs}ms pageIndex=$pageIndex"
                 )
-                migrateLegacyAudioPlaybackSnapshotIfNeeded(reason = "documentLoaded")
                 if (cueMatchesByCueIndex.isNotEmpty()) {
                     Log.d(LEGADO_READER_LOG_TAG, "readerStartup syncToAudioPosition begin")
                     syncToAudioPosition(
@@ -5832,8 +5825,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun initAudioPlayerIfNeeded() {
         val uri = audioUri ?: return
-        val restoredCandidate = latestPlaybackSnapshotCandidate()
-        val restoredSnapshot = restoredCandidate?.snapshot
+        val restoredSnapshot = currentSharedReaderPlaybackKey()?.let { key ->
+            loadBookReaderPlaybackSnapshotOrNull(this, key)
+        }
         val restoredPositionMs = when {
             pendingAudioRestorePositionMs > 0L -> pendingAudioRestorePositionMs
             restoredSnapshot != null -> restoredSnapshot.positionMs
@@ -5844,7 +5838,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         val forceSeekOnSameAudio = sameSharedAudio && !keepLiveSession && restoredPositionMs > 0L
         Log.d(
             LEGADO_AUDIO_PROGRESS_LOG_TAG,
-            "restore source=${if (pendingAudioRestorePositionMs > 0L) "pending" else restoredCandidate?.source ?: "none"} " +
+            "restore source=${if (pendingAudioRestorePositionMs > 0L) "pending" else "shared"} " +
                 "positionMs=$restoredPositionMs durationMs=${restoredSnapshot?.durationMs ?: pendingAudioRestoreDurationMs} " +
                 "updatedAt=${restoredSnapshot?.updatedAtMs ?: 0L} sameAudio=$sameSharedAudio " +
                 "keepLive=$keepLiveSession forceSeek=$forceSeekOnSameAudio"
@@ -5860,49 +5854,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         publishReaderPlaybackBridgeSnapshot(notifyState = true)
         updateAudioControlLabels()
         startSyncLoop()
-    }
-
-    private fun migrateLegacyAudioPlaybackSnapshotIfNeeded(reason: String) {
-        if (pendingAudioRestorePositionMs > 0L) return
-        val currentPlayer = player ?: return
-        val stableKey = currentReaderPlaybackKey() ?: return
-        val best = latestPlaybackSnapshotCandidate() ?: return
-        val bestSnapshot = best.snapshot
-        var migrated = false
-        if (best.source != "legado") {
-            saveBookReaderPlaybackPosition(
-                context = this,
-                bookKey = stableKey,
-                positionMs = bestSnapshot.positionMs,
-                durationMs = bestSnapshot.durationMs
-            )
-            migrated = true
-        }
-        if (best.source != "shared") {
-            saveSharedAudioPlaybackSnapshot(
-                positionMs = bestSnapshot.positionMs,
-                durationMs = bestSnapshot.durationMs
-            )
-            migrated = true
-        }
-        if (migrated) {
-            Log.d(
-                LEGADO_AUDIO_PROGRESS_LOG_TAG,
-                "migrateKeys reason=$reason source=${best.source} positionMs=${bestSnapshot.positionMs} " +
-                    "durationMs=${bestSnapshot.durationMs} updatedAt=${bestSnapshot.updatedAtMs}"
-            )
-        }
-        val currentPosition = currentPlayer.currentPosition.coerceAtLeast(0L)
-        val shouldSeekForward = bestSnapshot.positionMs > currentPosition + 800L
-        if (!shouldSeekForward) return
-        Log.d(
-            LEGADO_AUDIO_PROGRESS_LOG_TAG,
-            "migrate reason=$reason source=${best.source} positionMs=${bestSnapshot.positionMs} " +
-                "current=$currentPosition updatedAt=${bestSnapshot.updatedAtMs}"
-        )
-        currentPlayer.seekTo(bestSnapshot.positionMs)
-        lastSavedPlaybackPositionMs = Long.MIN_VALUE
-        publishReaderPlaybackBridgeSnapshot(notifyState = false)
     }
 
     private fun toggleAudioControlPanel() {
@@ -6699,89 +6650,12 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         BookReaderFloatingBridge.notifyPlaybackSpeed(normalized)
     }
 
-    private fun currentReaderPlaybackKey(): String? {
-        val uri = audioUri ?: return null
-        return buildLegadoReaderPlaybackKey(
-            title = currentReaderTitle(),
-            audioUri = uri,
-            srtUri = srtUri,
-            bookUri = currentBookUriText()
-        )
-    }
-
     private fun currentSharedReaderPlaybackKey(): String? {
         val uri = audioUri ?: return null
         return buildReaderAudioPlaybackKey(
             title = currentReaderTitle(),
             audioUri = uri,
             srtUri = srtUri
-        )
-    }
-
-    private fun currentLegacyReaderPlaybackKeys(): List<String> {
-        val uri = audioUri ?: return emptyList()
-        val stableKey = currentReaderPlaybackKey()
-        return listOfNotNull(
-            currentReaderTitle(),
-            importedBook?.title,
-            document?.title
-        )
-            .map { it.ifBlank { LEGADO_READER_DEFAULT_TITLE } }
-            .distinct()
-            .map { title ->
-                buildLegacyLegadoReaderPlaybackKey(
-                    title = title,
-                    audioUri = uri,
-                    srtUri = srtUri
-                )
-            }
-            .distinct()
-            .filter { it != stableKey }
-    }
-
-    private fun currentPlaybackSnapshotCandidates(): List<ReaderAudioSnapshotCandidate> {
-        val uri = audioUri ?: return emptyList()
-        val seenKeys = mutableSetOf<String>()
-        return buildList {
-            fun addCandidate(source: String, key: String) {
-                if (!seenKeys.add(key)) return
-                loadBookReaderPlaybackSnapshotOrNull(this@LegadoReaderActivity, key)?.let { snapshot ->
-                    add(ReaderAudioSnapshotCandidate(source, snapshot))
-                }
-            }
-            currentReaderPlaybackKey()?.let { key ->
-                addCandidate("legado", key)
-            }
-            currentSharedReaderPlaybackKey()?.let { key ->
-                addCandidate("shared", key)
-            }
-            listOfNotNull(
-                currentReaderTitle(),
-                importedBook?.title,
-                document?.title
-            )
-                .map { it.ifBlank { LEGADO_READER_DEFAULT_TITLE } }
-                .distinct()
-                .forEach { title ->
-                    addCandidate(
-                        "sharedLegacy",
-                        buildLegacyReaderAudioPlaybackKey(
-                            title = title,
-                            audioUri = uri,
-                            srtUri = srtUri
-                        )
-                    )
-                }
-            currentLegacyReaderPlaybackKeys().forEach { legacyKey ->
-                addCandidate("legadoLegacy", legacyKey)
-            }
-        }
-    }
-
-    private fun latestPlaybackSnapshotCandidate(): ReaderAudioSnapshotCandidate? {
-        return currentPlaybackSnapshotCandidates().maxWithOrNull(
-            compareBy<ReaderAudioSnapshotCandidate> { it.snapshot.updatedAtMs }
-                .thenBy { if (it.source == "shared") 1 else 0 }
         )
     }
 
@@ -6799,7 +6673,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         allowZeroPositionWrite: Boolean = false
     ) {
         val currentPlayer = player ?: return
-        val playbackKey = currentReaderPlaybackKey() ?: return
+        if (currentSharedReaderPlaybackKey() == null) return
         val durationMs = if (currentPlayer.duration > 0L) currentPlayer.duration else pendingAudioRestoreDurationMs
         if (durationMs <= 0L) {
             return
@@ -6809,16 +6683,13 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             return
         }
         lastSavedPlaybackPositionMs = safePositionMs
-        saveBookReaderPlaybackPosition(
+        saveReaderAudioPlaybackProgress(
             context = this,
-            bookKey = playbackKey,
+            title = currentReaderTitle(),
+            audioUri = audioUri,
+            srtUri = srtUri,
             positionMs = safePositionMs,
             durationMs = durationMs.coerceAtLeast(0L),
-            allowZeroPositionWrite = allowZeroPositionWrite
-        )
-        saveSharedAudioPlaybackSnapshot(
-            positionMs = safePositionMs,
-            durationMs = durationMs,
             allowZeroPositionWrite = allowZeroPositionWrite
         )
     }
@@ -8267,34 +8138,4 @@ private fun isLegadoAppProcessInForeground(): Boolean {
     ActivityManager.getMyMemoryState(processInfo)
     return processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
         processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
-}
-
-internal fun buildLegadoReaderPlaybackKey(
-    title: String,
-    audioUri: Uri?,
-    srtUri: Uri?,
-    bookUri: String?
-): String {
-    val audioUriText = audioUri?.toString().orEmpty()
-    val stableSource = buildString {
-        append("audio=").append(audioUriText)
-        append("|srt=").append(srtUri?.toString().orEmpty())
-        append("|book=").append(bookUri.orEmpty())
-    }
-    val stableName = bookUri
-        ?.trim()
-        ?.takeIf { it.isNotBlank() }
-        ?: audioUriText.ifBlank { title.ifBlank { "book" } }
-    return buildDictionaryCacheKey(stableSource, stableName)
-}
-
-private fun buildLegacyLegadoReaderPlaybackKey(
-    title: String,
-    audioUri: Uri,
-    srtUri: Uri?
-): String {
-    val stableSource = audioUri.toString().ifBlank {
-        "title=$title|srt=${srtUri?.toString().orEmpty()}"
-    }
-    return buildDictionaryCacheKey(stableSource, title.ifBlank { "book" })
 }

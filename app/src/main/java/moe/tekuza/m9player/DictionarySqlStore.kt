@@ -28,7 +28,6 @@ private const val DICTIONARY_HOSHI_BLOBS_FILE = "blobs.bin"
 private const val DICTIONARY_HOSHI_OFFSETS_FILE = "offsets.bin"
 private const val DICTIONARY_HOSHI_HASH_FILE = "hash.mph"
 private const val DICTIONARY_HOSHI_STYLES_FILE = "styles.css"
-private const val MDICT_MEDIA_LOG_TAG = "MdictMedia"
 private const val HOSHI_LOOKUP_PERF_LOG_TAG = "HoshiLookupPerf"
 private const val HOSHI_META_TYPE_SCAN_LIMIT_ROWS = 2048
 private const val HOSHI_META_TYPE_SCAN_MAX_BYTES = 8L * 1024L * 1024L
@@ -78,8 +77,6 @@ private val DANGEROUS_INLINE_STYLE_TOKENS = listOf(
 private var hoshiLookupPreparedKey: String? = null
 private val hoshiLookupPreparedLock = Any()
 
-private var mountedMdxPrewarmStateKey: String? = null
-private val mountedMdxPrewarmLock = Any()
 
 private fun dictionaryStorageRootDir(context: Context): File {
     val dir = File(context.filesDir, DICTIONARY_ENTRY_STORE_DIR)
@@ -426,9 +423,7 @@ private fun clearHoshiLookupPreparation() {
 
 internal fun invalidateDictionaryLookupCaches() {
     clearHoshiLookupPreparation()
-    clearMountedMdxRuntimeCaches()
     HoshiNativeBridge.clearLookupCache()
-    MdictNativeBridge.clearLookupCache()
 }
 
 private data class HoshiDictionaryBinding(
@@ -583,7 +578,6 @@ internal fun deleteDictionaryStorage(context: Context, cacheKey: String): Boolea
     if (storageDeleted) {
         clearHoshiLookupPreparation()
         HoshiNativeBridge.clearLookupCache()
-        MdictNativeBridge.clearLookupCache()
     }
     return storageDeleted
 }
@@ -597,7 +591,7 @@ internal fun importDictionaryFromZip(
     onProgress: ((DictionaryImportProgress) -> Unit)? = null
 ): LoadedDictionary {
     require(displayName.trim().lowercase(Locale.US).endsWith(".zip")) {
-        "仅支持 ZIP 辞典"
+        "Only ZIP dictionaries are supported"
     }
     val imported = importDictionaryZipWithHoshi(
         context = context,
@@ -609,113 +603,7 @@ internal fun importDictionaryFromZip(
     )
     clearHoshiLookupPreparation()
     HoshiNativeBridge.clearLookupCache()
-    MdictNativeBridge.clearLookupCache()
     return imported
-}
-
-internal fun mountedMdxDictionariesFromState(context: Context): List<LoadedDictionary> {
-    val mountedState = loadMdxMountState(context)
-    if (!mountedState.enabled) return emptyList()
-    return mountedState.entries
-        .asSequence()
-        .filter { it.enabled && it.cacheKey.isNotBlank() && it.mdxUri.isNotBlank() }
-        .map { entry ->
-            val displayName = entry.displayName.ifBlank { "MDX" }
-            LoadedDictionary(
-                cacheKey = entry.cacheKey,
-                name = displayName.substringBeforeLast('.').ifBlank { displayName },
-                format = "MDX (mounted)",
-                entries = emptyList(),
-                stylesCss = null,
-                entryCount = 0
-            )
-        }
-        .toList()
-}
-
-private fun materializeMountedMdxTempFile(context: Context, uri: Uri, cacheKey: String): File? {
-    val dir = File(dictionaryStorageDir(context, cacheKey), "mdictnative_mounted").apply { mkdirs() }
-    val out = File(dir, "mounted.mdx")
-    if (out.isFile && out.length() > 0L) {
-        return out
-    }
-    val tmp = File(dir, "mounted.tmp")
-    return runCatching {
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            FileOutputStream(tmp).use { output -> input.copyTo(output) }
-        } ?: return null
-        if (out.exists()) runCatching { out.delete() }
-        if (!tmp.renameTo(out)) {
-            runCatching { tmp.delete() }
-            return null
-        }
-        out
-    }.getOrNull()
-}
-
-internal fun prebuildMountedMdxIndexesAsync(
-    context: Context,
-    state: MdxMountState = loadMdxMountState(context)
-) {
-    if (!state.enabled) return
-    val targets = state.entries
-        .filter { it.enabled && it.cacheKey.isNotBlank() && it.mdxUri.isNotBlank() }
-    if (targets.isEmpty()) return
-    val stateKey = buildString {
-        append(state.enabled)
-        targets.forEach { entry ->
-            append('|')
-            append(entry.cacheKey)
-            append('@')
-            append(entry.mdxUri)
-            append('#')
-            append(entry.enabled)
-        }
-    }
-    synchronized(mountedMdxPrewarmLock) {
-        if (mountedMdxPrewarmStateKey == stateKey) return
-        mountedMdxPrewarmStateKey = stateKey
-    }
-
-    Thread {
-        val startedAt = System.currentTimeMillis()
-        var warmedCount = 0
-        targets.forEach { entry ->
-            runCatching {
-                val uri = Uri.parse(entry.mdxUri)
-                materializeMountedMdxTempFile(
-                    context = context.applicationContext,
-                    uri = uri,
-                    cacheKey = entry.cacheKey
-                )?.let { file ->
-                    // Warm native in-memory index to avoid first-query stall after app restart.
-                    MdictNativeBridge.lookupMdx(
-                        mdxPath = file.absolutePath,
-                        cacheKey = entry.cacheKey,
-                        query = "あ",
-                        maxResults = 1,
-                        scanLength = 1
-                    )
-                    warmedCount += 1
-                }
-            }
-        }
-        val elapsed = (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
-        Log.d(
-            MDICT_MEDIA_LOG_TAG,
-            "mounted prewarm done total=${targets.size} warmed=$warmedCount elapsedMs=$elapsed"
-        )
-    }.apply {
-        name = "mdx-prewarm"
-        isDaemon = true
-        start()
-    }
-}
-
-private fun clearMountedMdxRuntimeCaches() {
-    synchronized(mountedMdxPrewarmLock) {
-        mountedMdxPrewarmStateKey = null
-    }
 }
 
 private fun importDictionaryZipWithHoshi(
@@ -1231,7 +1119,7 @@ private fun isSafeDictionaryHtmlUrlSql(raw: String): Boolean {
     if (lower.startsWith("data:")) return lower.startsWith("data:image/")
     val scheme = value.substringBefore(':', missingDelimiterValue = "")
     if (scheme == value) return true
-    return scheme.lowercase(Locale.ROOT) in setOf("http", "https", "dictres", "mdictres", "image", "mailto", "tel")
+    return scheme.lowercase(Locale.ROOT) in setOf("http", "https", "dictres", "image", "mailto", "tel")
 }
 
 private fun isLikelyDefinitionSql(text: String): Boolean {

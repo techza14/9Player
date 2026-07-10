@@ -27,7 +27,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.FolderCopy
 import androidx.compose.material.icons.outlined.PlayLesson
 import androidx.compose.ui.graphics.vector.ImageVector
 import moe.tekuza.m9player.ui.theme.TsetTheme
@@ -38,8 +37,7 @@ class OtherSettingsActivity : ComponentActivity() {
         setContent {
             TsetTheme {
                 OtherSettingsScreen(
-                    onBack = { finish() },
-                    onOpenMdx = { startActivity(Intent(this, MdxMountSettingsActivity::class.java)) }
+                    onBack = { finish() }
                 )
             }
         }
@@ -48,14 +46,12 @@ class OtherSettingsActivity : ComponentActivity() {
 
 @Composable
 private fun OtherSettingsScreen(
-    onBack: () -> Unit,
-    onOpenMdx: () -> Unit
+    onBack: () -> Unit
 ) {
     val context = LocalContext.current
     var ebookEnabled by remember { mutableStateOf(loadEbookFeatureEnabled(context)) }
     var ebookDefaultToReader by remember { mutableStateOf(loadEbookDefaultToReader(context)) }
     var ebookOnlyImportEnabled by remember { mutableStateOf(loadEbookOnlyImportEnabled(context)) }
-    val mdxUnlocked = remember { loadMdxExperimentalUnlocked(context) }
     var showEbookSettings by remember { mutableStateOf(false) }
     SettingsScaffold(
         title = if (showEbookSettings) "" else stringResource(R.string.settings_other_title),
@@ -116,16 +112,8 @@ private fun OtherSettingsScreen(
                     icon = Icons.Outlined.PlayLesson,
                     title = stringResource(R.string.settings_ebook_title),
                     onClick = { showEbookSettings = true },
-                    showDivider = mdxUnlocked
+                    showDivider = false
                 )
-                if (mdxUnlocked) {
-                    SettingsLikeItem(
-                        icon = Icons.Outlined.FolderCopy,
-                        title = stringResource(R.string.settings_mdx_title),
-                        onClick = onOpenMdx,
-                        showDivider = false
-                    )
-                }
             }
         }
     }

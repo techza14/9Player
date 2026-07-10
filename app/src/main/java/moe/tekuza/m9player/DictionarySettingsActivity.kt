@@ -1,6 +1,5 @@
 package moe.tekuza.m9player
 
-import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -82,18 +81,12 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
     val dictionaryProgressText = dictionaryController.dictionaryProgressText
     val dictionaryProgressValue = dictionaryController.dictionaryProgressValue
     val dictionaryError = dictionaryController.dictionaryError
-    val dictionaryOrderIds = dictionaryController.dictionaryOrderIds
-    val mdxMountState = dictionaryController.mdxMountState
 
     var showDictionaryManager by remember { mutableStateOf(true) }
     var showDictionaryDeleteActions by remember { mutableStateOf(false) }
     var uiConfig by remember { mutableStateOf(loadDictionaryUiConfig(context)) }
     var dictionarySettings by remember { mutableStateOf(loadDictionarySettings(context)) }
     var destination by remember { mutableStateOf(DictionarySettingsDestination.Home) }
-    val mdxExperimentalUnlocked = remember { loadMdxExperimentalUnlocked(context) }
-    val visibleMdxMountState = remember(mdxExperimentalUnlocked, mdxMountState) {
-        if (mdxExperimentalUnlocked) mdxMountState else MdxMountState()
-    }
 
     fun persistDictionarySettings(next: DictionarySettings) {
         val normalized = next.normalized()
@@ -130,10 +123,9 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
         dictionaryController.setPersistedDictionaryRefs(loadPersistedImports(context).dictionaries)
     }
 
-    val termDictionaryNames = remember(dictionaryRefs, visibleMdxMountState) {
+    val termDictionaryNames = remember(dictionaryRefs) {
         termDictionaryNames(
-            dictionaryRefs = dictionaryRefs,
-            mdxMountState = visibleMdxMountState
+            dictionaryRefs = dictionaryRefs
         )
     }
     val visibleCollapsedDictionaries = remember(dictionarySettings.collapsedDictionaries, termDictionaryNames) {
@@ -246,7 +238,7 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
 
             DictionaryManagementCard(
                 context = context,
-                dictionaryCount = dictionaryRefs.size + visibleMdxMountState.entries.count { it.enabled },
+                dictionaryCount = dictionaryRefs.count { it.enabled },
                 showHeader = false,
                 containerColor = hoshiPanelBackgroundColor(),
                 itemContainerColor = hoshiCardBackgroundColor(),
@@ -257,26 +249,19 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
                 showDictionaryManager = showDictionaryManager,
                 showDictionaryDeleteActions = showDictionaryDeleteActions,
                 dictionaryRefs = dictionaryRefs,
-                dictionaryOrderIds = dictionaryOrderIds,
-                mdxMountState = visibleMdxMountState,
                 onImportClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) },
                 onShowDictionaryManagerToggle = { showDictionaryManager = !showDictionaryManager },
                 onShowDictionaryDeleteActionsToggle = { showDictionaryDeleteActions = !showDictionaryDeleteActions },
-                onOpenMdxClick = if (mdxExperimentalUnlocked) {
-                    {
-                        context.startActivity(Intent(context, MdxMountSettingsActivity::class.java))
-                    }
-                } else {
-                    null
-                },
-                onMoveCombinedDictionary = { fromIndex, toIndex ->
-                    dictionaryController.moveCombinedDictionary(fromIndex, toIndex, ::refreshLookupData)
+                onMoveImportedDictionary = { dictionaryId, toIndex ->
+                    dictionaryController.moveImportedDictionary(
+                        dictionaryId = dictionaryId,
+                        toIndex = toIndex,
+                        onPersistDictionaryRefs = ::persistDictionaryRefs,
+                        onLookupDataChanged = ::refreshLookupData
+                    )
                 },
                 onRemoveImportedDictionary = { index ->
                     dictionaryController.removeImportedDictionary(index, ::persistDictionaryRefs, ::refreshLookupData)
-                },
-                onRemoveMountedDictionary = { cacheKey ->
-                    dictionaryController.removeMountedDictionary(cacheKey, ::refreshLookupData)
                 },
                 onSetImportedDictionaryEnabled = { dictionaryId, enabled ->
                     dictionaryController.setImportedDictionaryEnabled(
@@ -285,9 +270,6 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
                         onPersistDictionaryRefs = ::persistDictionaryRefs,
                         onLookupDataChanged = ::refreshLookupData
                     )
-                },
-                onSetMountedDictionaryEnabled = { cacheKey, enabled ->
-                    dictionaryController.setMountedDictionaryEnabled(cacheKey, enabled, ::refreshLookupData)
                 }
             )
         }
@@ -542,25 +524,13 @@ private fun String.cssDoubleQuotedContent(): String =
     }
 
 private fun termDictionaryNames(
-    dictionaryRefs: List<PersistedDictionaryRef>,
-    mdxMountState: MdxMountState,
+    dictionaryRefs: List<PersistedDictionaryRef>
 ): List<String> {
-    val imported = dictionaryRefs
+    return dictionaryRefs
         .asSequence()
         .filter { it.dictionaryType.equals("Term", ignoreCase = true) }
         .map { it.name.trim() }
         .filter { it.isNotBlank() }
-    val mounted = if (mdxMountState.enabled) {
-        mdxMountState.entries
-            .asSequence()
-            .filter { it.enabled }
-            .map { entry ->
-                val displayName = entry.displayName.ifBlank { "MDX" }
-                displayName.substringBeforeLast('.').ifBlank { displayName }.trim()
-            }
-            .filter { it.isNotBlank() }
-    } else {
-        emptySequence()
-    }
-    return (imported + mounted).distinct().toList()
+        .distinct()
+        .toList()
 }

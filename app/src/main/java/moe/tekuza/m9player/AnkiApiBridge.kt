@@ -912,7 +912,7 @@ private fun buildPreferredImageMediaName(
         .replace(ANKI_MEDIA_SAFE_LABEL_REGEX, "-")
         .trim('-')
         .ifBlank { "glossary" }
-    return "mdict-$safeLabel-${System.currentTimeMillis()}-$imageIndex.$ext"
+    return "$safeLabel-${System.currentTimeMillis()}-$imageIndex.$ext"
 }
 
 private fun resolveImageExtension(
@@ -1472,7 +1472,7 @@ private fun buildPreferredAudioMediaName(preferredName: String, uri: Uri): Strin
 
 private fun openInputStreamForUri(context: Context, uri: Uri): InputStream? {
     return when (uri.scheme?.lowercase(Locale.ROOT)) {
-        "dictres", "mdictres" -> runCatching {
+        "dictres" -> runCatching {
             loadDictionaryMediaPayload(context, uri)?.let { payload ->
                 java.io.ByteArrayInputStream(payload.bytes)
             }

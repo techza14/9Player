@@ -533,7 +533,7 @@ private fun buildEpubChapterFromHtml(
 
 private fun fallbackEpubChapterTitle(html: String, isFirstSpineItem: Boolean): String {
     val title = extractHtmlTitle(html)
-    return if (title.isBlank() && isFirstSpineItem) "封面" else title
+    return if (title.isBlank() && isFirstSpineItem) "Cover" else title
 }
 
 private fun htmlEntries(entries: Map<String, ByteArray>): List<Pair<String, ByteArray>> {
@@ -791,7 +791,7 @@ private fun splitTxtChapters(text: String): List<EbookChapter> {
     )
     val matches = chapterRegex.findAll(normalized).toList()
     if (matches.size < 2) {
-        return listOf(EbookChapter("正文", normalized))
+        return listOf(EbookChapter("Body", normalized))
     }
     val chapters = mutableListOf<EbookChapter>()
     matches.forEachIndexed { index, match ->

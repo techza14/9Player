@@ -150,6 +150,7 @@ import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ClosedCaption
 import androidx.compose.material.icons.outlined.Crop
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.FileProvider
@@ -193,7 +194,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         applySavedAppLanguage(this)
         super.onCreate(savedInstanceState)
-        prebuildMountedMdxIndexesAsync(applicationContext)
         enableEdgeToEdge()
         setContent {
             TsetTheme {
@@ -657,8 +657,6 @@ private fun ReaderSyncScreen() {
     val dictionaryProgressText = dictionaryController.dictionaryProgressText
     val dictionaryProgressValue = dictionaryController.dictionaryProgressValue
     val dictionaryError = dictionaryController.dictionaryError
-    val dictionaryOrderIds = dictionaryController.dictionaryOrderIds
-    val mdxMountState = dictionaryController.mdxMountState
     var dictionaryUiConfig by remember { mutableStateOf(loadDictionaryUiConfig(context)) }
 
     var lookupQuery by remember { mutableStateOf("") }
@@ -672,7 +670,7 @@ private fun ReaderSyncScreen() {
     var ankiPermissionGranted by remember { mutableStateOf(hasAnkiReadWritePermission(context)) }
     var ankiDeckName by remember { mutableStateOf("Default") }
     var ankiModelName by remember { mutableStateOf("") }
-    var ankiTagsInput by remember { mutableStateOf("") }
+    var ankiTagsInput by remember { mutableStateOf(DEFAULT_ANKI_TAG) }
     var ankiDecks by remember { mutableStateOf<List<String>>(emptyList()) }
     var ankiModels by remember { mutableStateOf<List<AnkiModelTemplate>>(emptyList()) }
     var ankiModelFields by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -711,7 +709,6 @@ private fun ReaderSyncScreen() {
     var audiobookSettings by remember { mutableStateOf(loadAudiobookSettingsConfig(context)) }
     var versionTapCount by remember { mutableStateOf(0) }
     var showVersionEasterGif by remember { mutableStateOf(false) }
-    var mdxExperimentalUnlocked by remember { mutableStateOf(loadMdxExperimentalUnlocked(context)) }
 
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
@@ -727,36 +724,11 @@ private fun ReaderSyncScreen() {
             importedDictionaryId(ref) to loaded
         }.toMap(LinkedHashMap())
     }
-    val mountedLookupById = remember(mdxMountState.enabled, mdxMountState.entries) {
-        if (!mdxMountState.enabled) {
-            emptyMap()
-        } else {
-            mdxMountState.entries
-                .asSequence()
-                .filter { it.enabled && it.cacheKey.isNotBlank() && it.mdxUri.isNotBlank() }
-                .associate { entry ->
-                    val displayName = entry.displayName.ifBlank { "MDX" }
-                    "mnt:${entry.cacheKey}" to LoadedDictionary(
-                        cacheKey = entry.cacheKey,
-                        name = displayName.substringBeforeLast('.').ifBlank { displayName },
-                        format = "MDX (mounted)",
-                        entries = emptyList(),
-                        stylesCss = null,
-                        entryCount = 0
-                    )
-                }
+    val effectiveLookupDictionaries = remember(importedLookupById) {
+        if (importedLookupById.isEmpty()) return@remember emptyList()
+        buildList {
+            addAll(importedLookupById.values)
         }
-    }
-    val effectiveLookupDictionaries = remember(importedLookupById, mountedLookupById, dictionaryOrderIds) {
-        val all = LinkedHashMap<String, LoadedDictionary>()
-        all.putAll(importedLookupById)
-        all.putAll(mountedLookupById)
-        if (all.isEmpty()) return@remember emptyList()
-        val orderedIds = buildList {
-            dictionaryOrderIds.forEach { id -> if (all.containsKey(id)) add(id) }
-            all.keys.forEach { id -> if (!contains(id)) add(id) }
-        }
-        orderedIds.mapNotNull { all[it] }
     }
     val dictionaryCssByName = remember(effectiveLookupDictionaries) {
         effectiveLookupDictionaries.associate { it.name to it.stylesCss }
@@ -821,10 +793,6 @@ private fun ReaderSyncScreen() {
             context = context,
             books = readerBooks
         )
-    }
-
-    LaunchedEffect(dictionaryRefs, mdxMountState.entries) {
-        dictionaryController.normalizeOrderForCurrentDictionaries()
     }
 
     LaunchedEffect(persistedImportsLoaded, importGuideVisible) {
@@ -1062,17 +1030,15 @@ private fun ReaderSyncScreen() {
                 loadEbookFeatureEnabled(context) &&
                 loadEbookDefaultToReader(context)
         if (shouldPrewarmLegadoReader) {
-            val restoredCandidate = migrateBestReaderBookPlaybackSnapshotIfNeeded(
-                context = context,
-                book = selectedReaderBook,
-                reason = "mainPrewarm"
+            val restoredSnapshot = loadBookReaderPlaybackSnapshotOrNull(
+                context,
+                buildReaderBookPlaybackKey(selectedReaderBook)
             )
-            val restoredSnapshot = restoredCandidate?.snapshot
             val restorePositionMs = restoredSnapshot?.positionMs?.coerceAtLeast(0L) ?: 0L
             val alreadyPreparedForAudio = BookReaderPlaybackSession.currentAudioUri() == selectedAudio.toString()
             Log.d(
                 MAIN_READER_RESTORE_LOG_TAG,
-                "prewarm source=${restoredCandidate?.source ?: "none"} positionMs=$restorePositionMs " +
+                "prewarm positionMs=$restorePositionMs " +
                     "durationMs=${restoredSnapshot?.durationMs ?: 0L} updatedAt=${restoredSnapshot?.updatedAtMs ?: 0L} " +
                     "sameAudio=$alreadyPreparedForAudio"
             )
@@ -1084,18 +1050,16 @@ private fun ReaderSyncScreen() {
             )
             return@LaunchedEffect
         }
-        val restoredCandidate = selectedReaderBook?.let { book ->
-            migrateBestReaderBookPlaybackSnapshotIfNeeded(
-                context = context,
-                book = book,
-                reason = "mainPlayerPrepare"
+        val restoredSnapshot = selectedReaderBook?.let { book ->
+            loadBookReaderPlaybackSnapshotOrNull(
+                context,
+                buildReaderBookPlaybackKey(book)
             )
         }
-        val restoredSnapshot = restoredCandidate?.snapshot
         val restorePositionMs = restoredSnapshot?.positionMs?.coerceAtLeast(0L) ?: 0L
         Log.d(
             MAIN_READER_RESTORE_LOG_TAG,
-            "mainPlayerPrepare source=${restoredCandidate?.source ?: "none"} positionMs=$restorePositionMs " +
+            "mainPlayerPrepare positionMs=$restorePositionMs " +
                 "durationMs=${restoredSnapshot?.durationMs ?: 0L} updatedAt=${restoredSnapshot?.updatedAtMs ?: 0L}"
         )
         player.setMediaItem(MediaItem.fromUri(selectedAudio))
@@ -2528,6 +2492,33 @@ private fun ReaderSyncScreen() {
         collectionFirstLayerClearSelectionSignal += 1
     }
 
+    fun openTemporaryLookupPlayer(item: BookReaderCollectedCue) {
+        if (effectiveLookupDictionaries.isEmpty()) {
+            exportStatus = context.getString(R.string.bookreader_lookup_no_dict)
+            return
+        }
+        val book = readerBooks.firstOrNull { it.title == item.bookTitle }
+        val audio = book?.audioUri
+        if (audio == null) {
+            exportStatus = context.getString(R.string.collection_play_missing_book)
+            return
+        }
+        context.startActivity(
+            Intent(context, BookReaderActivity::class.java).apply {
+                putExtra(BookReaderActivity.EXTRA_BOOK_TITLE, item.bookTitle)
+                putExtra(BookReaderActivity.EXTRA_AUDIO_URI, audio.toString())
+                book.srtUri?.let { putExtra(BookReaderActivity.EXTRA_SRT_URI, it.toString()) }
+                putExtra(BookReaderActivity.EXTRA_TEMPORARY_LOOKUP_MODE, true)
+                putExtra(BookReaderActivity.EXTRA_TEMPORARY_LOOKUP_START_MS, item.startMs.coerceAtLeast(0L))
+                putExtra(
+                    BookReaderActivity.EXTRA_TEMPORARY_LOOKUP_END_MS,
+                    item.endMs.coerceAtLeast(item.startMs + 1L)
+                )
+                book.coverUri?.let { putExtra(BookReaderActivity.EXTRA_COVER_URI, it.toString()) }
+            }
+        )
+    }
+
     fun exportMainHoshiLookupEntryToAnkiAsync(content: String, onComplete: (Boolean) -> Unit) {
         scope.launch {
             android.util.Log.d(
@@ -2586,9 +2577,11 @@ private fun ReaderSyncScreen() {
                         settings = audiobookSettings
                     )
                     try {
-                        addLookupDefinitionToAnkiMain(
+                        addLookupDefinitionToAnkiShared(
                             context = context,
-                            cue = cue,
+                            cueText = cue.text,
+                            cueStartMs = cue.startMs,
+                            cueEndMs = cue.endMs,
                             audioUri = exportAudioUri,
                             lookupAudioUri = preparedLookupAudio?.uri,
                             bookTitle = readerBooks.firstOrNull { it.audioUri == exportAudioUri }?.title,
@@ -2605,6 +2598,7 @@ private fun ReaderSyncScreen() {
                             dictionaryCss = dictionaryCssByName[primaryDictionaryName],
                             groupedDictionaries = emptyList(),
                             popupSelectionText = popupSelectionText,
+                            sentenceOverride = cue.text,
                             lookupTermOverride = expression
                         )
                     } finally {
@@ -2729,11 +2723,7 @@ private fun ReaderSyncScreen() {
         else -> (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     }
 
-    val visibleMdxMountState = remember(mdxExperimentalUnlocked, mdxMountState) {
-        if (mdxExperimentalUnlocked) mdxMountState else MdxMountState()
-    }
-    val mountedDictionaryCount = visibleMdxMountState.entries.count { it.enabled }
-    val dictionaryCount = loadedDictionaries.size + mountedDictionaryCount
+    val dictionaryCount = loadedDictionaries.size
     val cueLookupTokens = remember(activeCue?.text) {
         activeCue?.let { tokenizeLookupTerms(it.text).take(12) } ?: emptyList()
     }
@@ -3365,7 +3355,7 @@ private fun ReaderSyncScreen() {
                                                 modifier = Modifier.verticalScroll(controlScrollState),
                                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                                             ) {
-                                                CoverAdjustSection(title = "缩放") {
+                                                CoverAdjustSection(title = stringResource(R.string.home_cover_adjust_scale)) {
                                                     Row(
                                                         modifier = Modifier.fillMaxWidth(),
                                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -3405,7 +3395,7 @@ private fun ReaderSyncScreen() {
                                                         horizontalArrangement = Arrangement.SpaceBetween,
                                                         verticalAlignment = Alignment.CenterVertically
                                                     ) {
-                                                        Text("圆角")
+                                                        Text(stringResource(R.string.home_cover_adjust_rounded))
                                                         Switch(
                                                             checked = showRoundedPreview,
                                                             onCheckedChange = { showRoundedPreview = it }
@@ -3421,19 +3411,19 @@ private fun ReaderSyncScreen() {
                                                         modifier = Modifier.weight(1f),
                                                         verticalArrangement = Arrangement.spacedBy(10.dp)
                                                     ) {
-                                                        CoverAdjustSection(title = "模式") {
+                                                        CoverAdjustSection(title = stringResource(R.string.home_cover_adjust_mode)) {
                                                             Row(
                                                                 modifier = Modifier.fillMaxWidth(),
                                                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                                                             ) {
                                                                 CoverAdjustChoicePill(
-                                                                    text = "连续",
+                                                                    text = stringResource(R.string.home_cover_adjust_continuous),
                                                                     selected = isSmoothDragMode,
                                                                     onClick = { isSmoothDragMode = true },
                                                                     modifier = Modifier.weight(1f)
                                                                 )
                                                                 CoverAdjustChoicePill(
-                                                                    text = "步进",
+                                                                    text = stringResource(R.string.home_cover_adjust_step),
                                                                     selected = !isSmoothDragMode,
                                                                     onClick = { isSmoothDragMode = false },
                                                                     modifier = Modifier.weight(1f)
@@ -3445,9 +3435,13 @@ private fun ReaderSyncScreen() {
                                                             ) {
                                                                 CoverAdjustChoicePill(
                                                                     text = if (isRangeMode) {
-                                                                        if (rangeStartPoint == null) "选左上" else "选右下"
+                                                                        if (rangeStartPoint == null) {
+                                                                            stringResource(R.string.home_cover_adjust_select_top_left)
+                                                                        } else {
+                                                                            stringResource(R.string.home_cover_adjust_select_bottom_right)
+                                                                        }
                                                                     } else {
-                                                                        "两点范围"
+                                                                        stringResource(R.string.home_cover_adjust_two_point_range)
                                                                     },
                                                                     selected = isRangeMode,
                                                                     onClick = {
@@ -3489,7 +3483,7 @@ private fun ReaderSyncScreen() {
                                                         modifier = Modifier.weight(1f),
                                                         verticalArrangement = Arrangement.spacedBy(10.dp)
                                                     ) {
-                                                        CoverAdjustSection(title = "像素微调") {
+                                                        CoverAdjustSection(title = stringResource(R.string.home_cover_adjust_pixel_nudge)) {
                                                             Column(
                                                                 modifier = Modifier
                                                                     .fillMaxWidth()
@@ -4119,8 +4113,6 @@ private fun ReaderSyncScreen() {
                             showDictionaryManager = showDictionaryManager,
                             showDictionaryDeleteActions = showDictionaryDeleteActions,
                             dictionaryRefs = dictionaryRefs,
-                            dictionaryOrderIds = dictionaryOrderIds,
-                            mdxMountState = visibleMdxMountState,
                             onImportClick = { pickDictionaryLauncher.launch(arrayOf("application/zip", "*/*")) },
                             onShowDictionaryManagerToggle = {
                                 val nextShowDictionaryManager = !showDictionaryManager
@@ -4136,17 +4128,11 @@ private fun ReaderSyncScreen() {
                                 }
                             },
                             onShowDictionaryDeleteActionsToggle = { showDictionaryDeleteActions = !showDictionaryDeleteActions },
-                            onOpenMdxClick = if (mdxExperimentalUnlocked) {
-                                {
-                                    context.startActivity(Intent(context, MdxMountSettingsActivity::class.java))
-                                }
-                            } else {
-                                null
-                            },
-                            onMoveCombinedDictionary = { fromIndex, toIndex ->
-                                dictionaryController.moveCombinedDictionary(
-                                    fromIndex = fromIndex,
+                            onMoveImportedDictionary = { dictionaryId, toIndex ->
+                                dictionaryController.moveImportedDictionary(
+                                    dictionaryId = dictionaryId,
                                     toIndex = toIndex,
+                                    onPersistDictionaryRefs = ::persistImportState,
                                     onLookupDataChanged = ::refreshLookupIfNeeded
                                 )
                             },
@@ -4157,24 +4143,11 @@ private fun ReaderSyncScreen() {
                                     onLookupDataChanged = ::refreshLookupIfNeeded
                                 )
                             },
-                            onRemoveMountedDictionary = { cacheKey ->
-                                dictionaryController.removeMountedDictionary(
-                                    cacheKey = cacheKey,
-                                    onLookupDataChanged = ::refreshLookupIfNeeded
-                                )
-                            },
                             onSetImportedDictionaryEnabled = { dictionaryId, enabled ->
                                 dictionaryController.setImportedDictionaryEnabled(
                                     dictionaryId = dictionaryId,
                                     enabled = enabled,
                                     onPersistDictionaryRefs = ::persistImportState,
-                                    onLookupDataChanged = ::refreshLookupIfNeeded
-                                )
-                            },
-                            onSetMountedDictionaryEnabled = { cacheKey, enabled ->
-                                dictionaryController.setMountedDictionaryEnabled(
-                                    cacheKey = cacheKey,
-                                    enabled = enabled,
                                     onLookupDataChanged = ::refreshLookupIfNeeded
                                 )
                             }
@@ -4331,12 +4304,22 @@ private fun ReaderSyncScreen() {
                                                 Text(stringResource(R.string.common_lookup))
                                             }
                                             OutlinedButton(
+                                                onClick = { openTemporaryLookupPlayer(item) },
+                                                enabled = effectiveLookupDictionaries.isNotEmpty()
+                                            ) {
+                                                Text(stringResource(R.string.common_temporary_lookup))
+                                            }
+                                            IconButton(
                                                 onClick = {
                                                     removeBookReaderCollectedCue(context, item.id)
                                                     refreshCollectedCues()
-                                                }
+                                                },
+                                                modifier = Modifier.size(48.dp)
                                             ) {
-                                                Text(stringResource(R.string.common_delete))
+                                                Icon(
+                                                    imageVector = Icons.Outlined.Delete,
+                                                    contentDescription = stringResource(R.string.common_delete)
+                                                )
                                             }
                                         }
                                     }
@@ -4384,10 +4367,6 @@ private fun ReaderSyncScreen() {
                             versionTapCount += 1
                             if (versionTapCount >= 5) {
                                 versionTapCount = 0
-                                if (!mdxExperimentalUnlocked) {
-                                    saveMdxExperimentalUnlocked(context, true)
-                                    mdxExperimentalUnlocked = true
-                                }
                                 showVersionEasterGif = true
                             }
                         }
@@ -4934,17 +4913,15 @@ private fun buildReaderPlaybackDiagnostics(
         if (readerBook == null) {
             "Book=${persistedBook.title.ifBlank { persistedBook.audioName }} source=invalid-audio-uri"
         } else {
-            val candidates = loadReaderBookPlaybackSnapshotCandidates(context, readerBook)
-            val best = selectBestReaderBookPlaybackSnapshotCandidate(candidates)
-            val suspiciousZeroShared = hasSuspiciousZeroSharedPlaybackCandidate(candidates, best)
-            val candidateSummary = formatReaderBookPlaybackCandidates(candidates)
+            val snapshot = readerBook.audioUri?.let {
+                loadBookReaderPlaybackSnapshotOrNull(context, buildReaderBookPlaybackKey(readerBook))
+            }
             "Book=${readerBook.title.ifBlank { readerBook.audioName ?: readerBook.ebookName.orEmpty() }.take(48)} " +
-                "bestSource=${best?.source ?: "none"} " +
-                "bestPositionMs=${best?.snapshot?.positionMs ?: 0L} " +
-                "bestDurationMs=${best?.snapshot?.durationMs ?: 0L} " +
-                "suspiciousZeroShared=$suspiciousZeroShared " +
-                "candidates=$candidateSummary"
+                "positionMs=${snapshot?.positionMs ?: 0L} " +
+                "durationMs=${snapshot?.durationMs ?: 0L} " +
+                "updatedAt=${snapshot?.updatedAtMs ?: 0L}"
         }
+
     }
 }
 
@@ -5009,7 +4986,6 @@ private fun extractRecentReaderLogs(recentLogs: String): String {
         "BookDelete",
         "BookImportMove",
         "MainReaderRestore",
-        "ReaderPlaybackDiagnostic",
         "LegadoAudioProgress",
         "LegadoMatch",
         "ReaderPausedSeek",
@@ -6380,72 +6356,6 @@ private fun findCueAtTime(cues: List<SubtitleCue>, timeMs: Long): SubtitleCue? {
     }
     if (candidateIndex < 0) return null
     return cues[candidateIndex]
-}
-
-private fun addLookupDefinitionToAnkiMain(
-    context: Context,
-    cue: SubtitleCue,
-    audioUri: Uri?,
-    lookupAudioUri: Uri?,
-    bookTitle: String?,
-    entry: DictionaryEntry,
-    definition: String,
-    glossaryFirstHtml: String? = null,
-    dictionaryCss: String?,
-    groupedDictionaries: List<GroupedLookupDictionary> = emptyList(),
-    popupSelectionText: String? = null,
-    lookupTermOverride: String? = null
-): AnkiExportResult {
-    android.util.Log.d(
-        "AnkiExportDebug",
-        "mainExport start term=${entry.term} dict=${entry.dictionary} groupedCount=${groupedDictionaries.size} grouped=${groupedDictionaries.joinToString("|") { it.dictionary }}"
-    )
-    val persistedConfig = loadPersistedAnkiConfig(context)
-    val preparedExport = prepareAnkiExport(
-        context = context,
-        persistedConfig = persistedConfig,
-        audioUri = audioUri,
-        lookupAudioUri = lookupAudioUri
-    )
-
-    val exportWord = resolveLookupExportWord(
-        popupSelectionText = popupSelectionText,
-        lookupTermOverride = lookupTermOverride,
-        entryTerm = entry.term
-    )
-    val card = MinedCard(
-        word = exportWord,
-        popupSelectionText = popupSelectionText,
-        sentence = cue.text,
-        bookTitle = bookTitle,
-        reading = entry.reading,
-        definitions = listOf(definition),
-        dictionaryName = entry.dictionary,
-        dictionaryCss = dictionaryCss,
-        glossaryByDictionary = groupedDictionaries
-            .map { dictionaryGroup ->
-                MinedDictionaryGlossary(
-                    dictionaryName = dictionaryGroup.dictionary,
-                    definitions = dictionaryGroup.definitions,
-                    dictionaryCss = dictionaryGroup.css
-                )
-            }
-            .filter { it.dictionaryName.isNotBlank() && it.definitions.isNotEmpty() },
-        pitch = entry.pitch,
-        frequency = entry.frequency,
-        cueStartMs = cue.startMs,
-        cueEndMs = cue.endMs,
-        audioUri = audioUri,
-        lookupAudioUri = lookupAudioUri,
-        audioTagOnly = true,
-        requireCueAudioClip = audioUri != null
-    )
-    android.util.Log.d(
-        "AnkiExportDebug",
-        "mainExport card word=${card.word} primaryDict=${card.dictionaryName.orEmpty()} glossaryByDict=${card.glossaryByDictionary.joinToString("|") { "${it.dictionaryName}:${it.definitions.size}" }}"
-    )
-
-    return exportToAnkiDroidApiResult(context, card, preparedExport.config)
 }
 
 internal fun buildMainHighlightedText(text: String, selectedRange: IntRange?): AnnotatedString {

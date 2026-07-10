@@ -41,26 +41,21 @@ internal fun DictionaryManagementCard(
     showDictionaryManager: Boolean,
     showDictionaryDeleteActions: Boolean,
     dictionaryRefs: List<PersistedDictionaryRef>,
-    dictionaryOrderIds: List<String>,
-    mdxMountState: MdxMountState,
     onImportClick: () -> Unit,
     onShowDictionaryManagerToggle: () -> Unit,
     onShowDictionaryDeleteActionsToggle: () -> Unit,
-    onOpenMdxClick: (() -> Unit)?,
-    onMoveCombinedDictionary: (fromIndex: Int, toIndex: Int) -> Unit,
+    onMoveImportedDictionary: (dictionaryId: String, toIndex: Int) -> Unit,
     onRemoveImportedDictionary: (index: Int) -> Unit,
-    onRemoveMountedDictionary: (cacheKey: String) -> Unit,
-    onSetImportedDictionaryEnabled: (dictionaryId: String, enabled: Boolean) -> Unit,
-    onSetMountedDictionaryEnabled: (cacheKey: String, enabled: Boolean) -> Unit
+    onSetImportedDictionaryEnabled: (dictionaryId: String, enabled: Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = containerColor)
     ) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = containerColor)
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
             if (showHeader) {
                 Text(stringResource(R.string.dictionary_title))
                 Text(stringResource(R.string.dictionary_summary, dictionaryCount))
@@ -102,11 +97,6 @@ internal fun DictionaryManagementCard(
                 ) {
                     Text(stringResource(R.string.dictionary_import))
                 }
-                if (onOpenMdxClick != null && mdxMountState.enabled) {
-                    OutlinedButton(onClick = onOpenMdxClick) {
-                        Text(stringResource(R.string.settings_mdx_title))
-                    }
-                }
                 OutlinedButton(onClick = onShowDictionaryManagerToggle) {
                     Text(
                         if (showDictionaryManager) {
@@ -128,15 +118,14 @@ internal fun DictionaryManagementCard(
             if (showDictionaryManager) {
                 val combinedItems = buildCombinedDictionaryItems(
                     context = context,
-                    dictionaryRefs = dictionaryRefs,
-                    dictionaryOrderIds = dictionaryOrderIds,
-                    mdxMountState = mdxMountState
+                    dictionaryRefs = dictionaryRefs
                 )
 
                 if (combinedItems.isEmpty()) {
                     Text(stringResource(R.string.dictionary_empty))
                 } else {
-                    combinedItems.forEachIndexed { index, item ->
+                    combinedItems.forEach { item ->
+                        val importedIndex = combinedItems.indexOfFirst { it.id == item.id }
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = itemContainerColor)
@@ -159,16 +148,6 @@ internal fun DictionaryManagementCard(
                                             maxLines = 2,
                                             overflow = TextOverflow.Ellipsis
                                         )
-                                        item.detailText?.let { detailText ->
-                                            Text(
-                                                if (item.type == CombinedDictionaryType.MOUNTED) {
-                                                    stringResource(R.string.mdx_dict_prefix, detailText)
-                                                } else {
-                                                    detailText
-                                                },
-                                                style = androidx.compose.material3.MaterialTheme.typography.bodySmall
-                                            )
-                                        }
                                     }
                                     Row(
                                         modifier = Modifier.width(72.dp),
@@ -176,12 +155,7 @@ internal fun DictionaryManagementCard(
                                     ) {
                                         Switch(
                                             checked = item.enabled,
-                                            onCheckedChange = { checked ->
-                                                when (item.type) {
-                                                    CombinedDictionaryType.IMPORTED -> onSetImportedDictionaryEnabled(item.id, checked)
-                                                    CombinedDictionaryType.MOUNTED -> onSetMountedDictionaryEnabled(item.id.removePrefix("mnt:"), checked)
-                                                }
-                                            },
+                                            onCheckedChange = { checked -> onSetImportedDictionaryEnabled(item.id, checked) },
                                             enabled = !dictionaryLoading
                                         )
                                     }
@@ -191,28 +165,25 @@ internal fun DictionaryManagementCard(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     OutlinedButton(
-                                        onClick = { onMoveCombinedDictionary(index, index - 1) },
-                                        enabled = !dictionaryLoading && index > 0
+                                        onClick = { onMoveImportedDictionary(item.id, importedIndex - 1) },
+                                        enabled = !dictionaryLoading && importedIndex > 0
                                     ) {
                                         Text("↑")
                                     }
                                     OutlinedButton(
-                                        onClick = { onMoveCombinedDictionary(index, index + 1) },
-                                        enabled = !dictionaryLoading && index < combinedItems.lastIndex
+                                        onClick = { onMoveImportedDictionary(item.id, importedIndex + 1) },
+                                        enabled = !dictionaryLoading &&
+                                            importedIndex >= 0 &&
+                                            importedIndex < combinedItems.lastIndex
                                     ) {
                                         Text("↓")
                                     }
                                     if (showDictionaryDeleteActions) {
                                         OutlinedButton(
                                             onClick = {
-                                                when (item.type) {
-                                                    CombinedDictionaryType.IMPORTED -> {
-                                                        val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == item.id }
-                                                        if (targetIndex >= 0) onRemoveImportedDictionary(targetIndex)
-                                                    }
-                                                    CombinedDictionaryType.MOUNTED -> {
-                                                        onRemoveMountedDictionary(item.id.removePrefix("mnt:"))
-                                                    }
+                                                val targetIndex = dictionaryRefs.indexOfFirst { importedDictionaryId(it) == item.id }
+                                                if (targetIndex >= 0) {
+                                                    onRemoveImportedDictionary(targetIndex)
                                                 }
                                             },
                                             enabled = !dictionaryLoading,

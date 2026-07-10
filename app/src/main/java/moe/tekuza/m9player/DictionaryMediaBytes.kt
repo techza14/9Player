@@ -122,18 +122,7 @@ internal fun loadDictionaryMediaPayload(
                 )
             }
         }
-        val mounted = openMountedMdictResource(context, mappedUri) ?: return@getOrLoad null
-        mounted.inputStream.use { input ->
-            val bytes = input.readDictionaryMediaBytesLimited(mounted.sizeBytes)
-                ?: return@getOrLoad null
-            logDebug("BookLookupTap") {
-                "media load mounted hit uri=$mappedUri mime=${mounted.mimeType} bytes=${bytes.size}"
-            }
-            DictionaryMediaPayload(
-                mimeType = DictionaryMediaByteCache.normalizeMime(mounted.mimeType),
-                bytes = bytes
-            )
-        }
+        null
     }
 }
 
@@ -154,7 +143,7 @@ private fun InputStream.readDictionaryMediaBytesLimited(knownSize: Long): ByteAr
 
 private fun mapDictionaryMediaRequestUri(requestUri: Uri): Uri? {
     val scheme = requestUri.scheme?.lowercase(Locale.ROOT).orEmpty()
-    if (scheme == "dictres" || scheme == "mdictres") return requestUri
+    if (scheme == "dictres") return requestUri
     if (scheme != "https" && scheme != "http") return null
     if (requestUri.host != "hoshi.local") return null
     if (requestUri.path != "/image") return null

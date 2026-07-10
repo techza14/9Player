@@ -32,31 +32,13 @@ internal class DictionaryManagementController(
         private set
     var dictionaryError by mutableStateOf<String?>(null)
         private set
-    var dictionaryOrderIds by mutableStateOf(loadDictionaryOrderIds(context))
-        private set
-    var mdxMountState by mutableStateOf(loadMdxMountState(context))
-        private set
 
-    fun reloadExternalState() {
-        mdxMountState = loadMdxMountState(context)
-        dictionaryOrderIds = loadDictionaryOrderIds(context)
-    }
+    fun reloadExternalState() = Unit
 
     fun setPersistedDictionaryRefs(persistedRefs: List<PersistedDictionaryRef>) {
         dictionaryError = null
         dictionaryRefs = persistedRefs.distinctBy { it.uri }
         loadedDictionaries = emptyList()
-        normalizeOrderForCurrentDictionaries()
-    }
-
-    fun normalizeOrderForCurrentDictionaries() {
-        val importedIds = dictionaryRefs.map(::importedDictionaryId)
-        val mountedIds = mdxMountState.entries.map { "mnt:${it.cacheKey}" }
-        val normalized = normalizeDictionaryOrderIds(dictionaryOrderIds, (importedIds + mountedIds).distinct())
-        if (normalized != dictionaryOrderIds) {
-            dictionaryOrderIds = normalized
-            saveDictionaryOrderIds(context, normalized)
-        }
     }
 
     suspend fun syncPersistedDictionaries(persistedRefs: List<PersistedDictionaryRef>) {
@@ -84,10 +66,9 @@ internal class DictionaryManagementController(
                         )
                     }
                 }
-            }
+        }
         dictionaryRefs = restoredPairs.map { it.first }
         loadedDictionaries = restoredPairs.map { it.second }
-        normalizeOrderForCurrentDictionaries()
     }
 
     suspend fun restorePersistedDictionaries(
@@ -100,13 +81,11 @@ internal class DictionaryManagementController(
             dictionaryRefs = emptyList()
             dictionaryLoading = false
             clearDictionaryProgress()
-            normalizeOrderForCurrentDictionaries()
             return
         }
 
         val distinctRefs = persistedRefs.distinctBy { it.uri }
         dictionaryRefs = distinctRefs
-        normalizeOrderForCurrentDictionaries()
         val restoredDictionaryList = mutableListOf<LoadedDictionary>()
         val restoredRefs = mutableListOf<PersistedDictionaryRef>()
         val missingNames = mutableListOf<String>()
@@ -130,7 +109,6 @@ internal class DictionaryManagementController(
 
         loadedDictionaries = restoredDictionaryList
         dictionaryRefs = restoredRefs
-        normalizeOrderForCurrentDictionaries()
         if (missingNames.isNotEmpty()) {
             dictionaryError = context.getString(
                 R.string.dictionary_error_missing_local_files,
@@ -147,7 +125,6 @@ internal class DictionaryManagementController(
         onLookupDataChanged: () -> Unit
     ) {
         val ref = dictionaryRefs.getOrNull(index) ?: return
-        val removedId = importedDictionaryId(ref)
         val removedName = loadedDictionaries.getOrNull(index)?.name ?: ref.name
 
         dictionaryRefs = dictionaryRefs.filterIndexed { i, _ -> i != index }
@@ -158,28 +135,7 @@ internal class DictionaryManagementController(
                 deleteDictionaryStorage(context, cacheKey)
             }
         }
-        dictionaryOrderIds = removeDictionaryOrderId(dictionaryOrderIds, removedId)
-        saveDictionaryOrderIds(context, dictionaryOrderIds)
         onPersistDictionaryRefs(dictionaryRefs)
-        onLookupDataChanged()
-    }
-
-    fun removeMountedDictionary(
-        cacheKey: String,
-        onLookupDataChanged: () -> Unit
-    ) {
-        if (cacheKey.isBlank()) return
-        val removedName = mdxMountState.entries
-            .firstOrNull { it.cacheKey == cacheKey }
-            ?.displayName
-            ?.ifBlank { "MDX" }
-            ?.substringBeforeLast('.')
-            .orEmpty()
-        mdxMountState = mdxMountState.copy(entries = mdxMountState.entries.filterNot { it.cacheKey == cacheKey })
-        saveMdxMountState(context, mdxMountState)
-        removeCollapsedDictionaryName(context, removedName)
-        dictionaryOrderIds = removeDictionaryOrderId(dictionaryOrderIds, "mnt:$cacheKey")
-        saveDictionaryOrderIds(context, dictionaryOrderIds)
         onLookupDataChanged()
     }
 
@@ -196,38 +152,20 @@ internal class DictionaryManagementController(
         onLookupDataChanged()
     }
 
-    fun setMountedDictionaryEnabled(
-        cacheKey: String,
-        enabled: Boolean,
-        onLookupDataChanged: () -> Unit
-    ) {
-        val nextState = setMountedDictionaryEnabled(mdxMountState, cacheKey, enabled)
-        if (nextState == mdxMountState) return
-        mdxMountState = nextState
-        saveMdxMountState(context, mdxMountState)
-        onLookupDataChanged()
-    }
-
-    fun moveCombinedDictionary(
-        fromIndex: Int,
+    fun moveImportedDictionary(
+        dictionaryId: String,
         toIndex: Int,
+        onPersistDictionaryRefs: (List<PersistedDictionaryRef>) -> Unit,
         onLookupDataChanged: () -> Unit
     ) {
-        val combinedItems = buildCombinedDictionaryItems(
-            context = context,
+        val nextRefs = moveImportedDictionaryRefs(
             dictionaryRefs = dictionaryRefs,
-            dictionaryOrderIds = dictionaryOrderIds,
-            mdxMountState = mdxMountState
-        )
-        val ids = moveDictionaryOrder(
-            orderIds = dictionaryOrderIds,
-            currentIds = combinedItems.map { it.id },
-            fromIndex = fromIndex,
+            dictionaryId = dictionaryId,
             toIndex = toIndex
         )
-        if (ids == dictionaryOrderIds) return
-        dictionaryOrderIds = ids
-        saveDictionaryOrderIds(context, dictionaryOrderIds)
+        if (nextRefs === dictionaryRefs || nextRefs == dictionaryRefs) return
+        dictionaryRefs = nextRefs
+        onPersistDictionaryRefs(dictionaryRefs)
         onLookupDataChanged()
     }
 
@@ -333,7 +271,6 @@ internal class DictionaryManagementController(
             val hadDictionaryListChange = nextDictionaryRefs != dictionaryRefs
             loadedDictionaries = nextLoadedDictionaries
             dictionaryRefs = nextDictionaryRefs
-            normalizeOrderForCurrentDictionaries()
             if (hadDictionaryListChange) {
                 onLookupDataChanged()
             }

@@ -141,7 +141,7 @@ private fun AnkiSettingsScreen(onBack: () -> Unit) {
     var ankiPermissionGranted by remember { mutableStateOf(hasAnkiReadWritePermission(context)) }
     var ankiDeckName by remember { mutableStateOf("Default") }
     var ankiModelName by remember { mutableStateOf("") }
-    var ankiTagsInput by remember { mutableStateOf("") }
+    var ankiTagsInput by remember { mutableStateOf(DEFAULT_ANKI_TAG) }
     var ankiDecks by remember { mutableStateOf<List<String>>(emptyList()) }
     var ankiModels by remember { mutableStateOf<List<AnkiModelTemplate>>(emptyList()) }
     var ankiModelFields by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -750,7 +750,6 @@ private fun resolveImportedDictionaryNamesForAnki(context: Context): List<String
         val fallback = ref.name
             .trim()
             .removeSuffix(".zip")
-            .removeSuffix(".mdx")
             .removeSuffix(".mdd")
             .takeIf { it.isNotBlank() }
         fromMeta ?: fallback

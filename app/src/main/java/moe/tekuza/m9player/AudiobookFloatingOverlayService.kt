@@ -3678,7 +3678,7 @@ companion object {
                     addView(createActionIconButton(R.drawable.ic_search) {
                         openAnkiDuplicateNotesInBrowser(this@AudiobookFloatingOverlayService, duplicateNoteIds)
                     }.apply {
-                        contentDescription = "View duplicate / 查看重复"
+                        contentDescription = getString(R.string.floating_lookup_view_duplicate)
                         alpha = 1f
                     })
                 }

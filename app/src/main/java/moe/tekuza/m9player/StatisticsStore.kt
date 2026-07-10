@@ -119,13 +119,8 @@ internal fun loadStatisticsReport(context: Context): StatisticsReport {
             coverSource = null
         )
         val bookKey = buildReaderBookPlaybackKey(readerBook)
-        val legacyBookKey = buildLegacyReaderAudioPlaybackKey(
-            title = readerBook.title,
-            audioUri = readerBook.audioUri,
-            srtUri = readerBook.srtUri
-        )
-        val statisticsKeys = listOf(bookKey, legacyBookKey).distinct()
-        val playback = loadBestReaderBookPlaybackSnapshotCandidate(context, readerBook)?.snapshot
+        val statisticsKeys = listOf(bookKey)
+        val playback = loadBookReaderPlaybackSnapshotOrNull(context, bookKey)
         val durationMs = playback?.durationMs ?: 0L
         val positionMs = playback?.positionMs ?: 0L
         val totalChars = srtUri?.let { countSrtTextChars(context, it) } ?: 0

@@ -436,7 +436,7 @@ internal fun buildDefinitionHtml(
                 return /^entry:/i.test(String(href || '').trim());
             }
             function isDictresHref(href) {
-                return /^(dictres|mdictres):/i.test(String(href || '').trim());
+                return /^dictres:/i.test(String(href || '').trim());
             }
             function isQueryLookupHref(href) {
                 const text = String(href || '').trim();
@@ -1181,7 +1181,7 @@ internal fun parseCustomLookupUrlTarget(rawUrl: String): CustomLookupUrlTarget? 
         return CustomLookupUrlTarget(scheme = scheme, target = target)
     }
 
-    if (scheme == "dictres" || scheme == "mdictres") {
+    if (scheme == "dictres") {
         val dictionaryCacheKey = normalizeCandidate(uri.host)
         arrayOf("query", "term", "word", "q", "target", "entry")
             .firstNotNullOfOrNull { key -> normalizeCandidate(uri.getQueryParameter(key)) }

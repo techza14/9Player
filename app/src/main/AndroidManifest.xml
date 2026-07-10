@@ -100,12 +100,6 @@
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
         <activity
-            android:name=".MdxMountSettingsActivity"
-            android:exported="false"
-            android:label="@string/settings_mdx_title"
-            android:screenOrientation="portrait"
-            android:theme="@style/Theme.Tset" />
-        <activity
             android:name=".OtherSettingsActivity"
             android:exported="false"
             android:label="@string/settings_other_title"

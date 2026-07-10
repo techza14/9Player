@@ -318,7 +318,7 @@ private fun buildShizukuNotRunningMessage(context: android.content.Context): Str
             Bundle()
         )
         null
-    }.exceptionOrNull()?.let { "${it::class.java.simpleName}: ${it.message ?: "未知"}" } ?: "无"
+    }.exceptionOrNull()?.let { "${it::class.java.simpleName}: ${it.message ?: "Unknown"}" } ?: "None"
     return context.getString(
         R.string.controller_bluetooth_status_diagnostic,
         providerRegistered.toString(),

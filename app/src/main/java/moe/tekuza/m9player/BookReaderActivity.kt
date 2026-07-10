@@ -159,8 +159,10 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.PlaybackParameters
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
 import moe.tekuza.m9player.ui.theme.TsetTheme
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupItem
@@ -228,14 +230,19 @@ class BookReaderActivity : AppCompatActivity() {
         val ebookFormat = intent.getStringExtra(EXTRA_EBOOK_FORMAT)?.trim()?.ifBlank { null }
         val coverUri = intent.getStringExtra(EXTRA_COVER_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
         val uiTestMode = intent.getBooleanExtra(EXTRA_UI_TEST_MODE, false)
+        val temporaryLookupMode = intent.getBooleanExtra(EXTRA_TEMPORARY_LOOKUP_MODE, false)
+        val temporaryLookupStartMs = intent.getLongExtra(EXTRA_TEMPORARY_LOOKUP_START_MS, 0L)
+        val temporaryLookupEndMs = intent.getLongExtra(EXTRA_TEMPORARY_LOOKUP_END_MS, 0L)
         val uiLayoutEditMode = intent.getBooleanExtra(EXTRA_UI_LAYOUT_EDIT_MODE, false)
         isUiTestMode = uiTestMode
         BookReaderFloatingBridge.setUiTestModeActive(uiTestMode)
         val title = intent.getStringExtra(EXTRA_BOOK_TITLE).orEmpty()
         currentAudioUriForBridge = audioUri?.toString()
-        if (!uiTestMode) {
+        if (!uiTestMode && !temporaryLookupMode) {
             activeReaderRef = WeakReference(this)
             BookReaderFloatingBridge.setCurrentAudioUri(currentAudioUriForBridge)
+        } else if (temporaryLookupMode) {
+            currentAudioUriForBridge = null
         }
 
         setContent {
@@ -249,6 +256,9 @@ class BookReaderActivity : AppCompatActivity() {
                     ebookFormat = ebookFormat,
                     coverUri = coverUri,
                     uiTestMode = uiTestMode,
+                    temporaryLookupMode = temporaryLookupMode,
+                    temporaryLookupStartMs = temporaryLookupStartMs,
+                    temporaryLookupEndMs = temporaryLookupEndMs,
                     uiLayoutEditMode = uiLayoutEditMode,
                     contentResolver = contentResolver,
                     registerGamepadKeyHandler = { handler -> gamepadKeyHandler = handler },
@@ -258,7 +268,7 @@ class BookReaderActivity : AppCompatActivity() {
                             ?: detectConnectedControllerInfo(this)?.address
                     },
                     onBack = { currentPositionMs, currentDurationMs ->
-                        if (uiTestMode) {
+                        if (uiTestMode || temporaryLookupMode) {
                             finish()
                         } else {
                             val playbackKey = buildReaderAudioPlaybackKey(title, audioUri, srtUri)
@@ -299,7 +309,7 @@ class BookReaderActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         ReaderPlaybackScreenVisibility.markHidden(this)
-        if (isUiTestMode) return
+        if (isUiTestMode || intent.getBooleanExtra(EXTRA_TEMPORARY_LOOKUP_MODE, false)) return
         val settings = loadAudiobookSettingsConfig(this)
         floatingOverlayStartJob?.cancel()
         val overlayEnabled = settings.floatingOverlayEnabled || settings.floatingOverlaySubtitleEnabled
@@ -339,10 +349,10 @@ class BookReaderActivity : AppCompatActivity() {
         floatingOverlayStartJob?.cancel()
         floatingOverlayStartJob = null
         ReaderPlaybackScreenVisibility.markHidden(this)
-        if (isUiTestMode) {
+        if (isUiTestMode || intent.getBooleanExtra(EXTRA_TEMPORARY_LOOKUP_MODE, false)) {
             BookReaderFloatingBridge.setUiTestModeActive(false)
         }
-        if (!isUiTestMode) {
+        if (!isUiTestMode && !intent.getBooleanExtra(EXTRA_TEMPORARY_LOOKUP_MODE, false)) {
             if (activeReaderRef?.get() === this) {
                 activeReaderRef = null
             }
@@ -504,6 +514,9 @@ class BookReaderActivity : AppCompatActivity() {
         const val EXTRA_EBOOK_FORMAT = "extra_ebook_format"
         const val EXTRA_COVER_URI = "extra_cover_uri"
         const val EXTRA_UI_TEST_MODE = "extra_ui_test_mode"
+        const val EXTRA_TEMPORARY_LOOKUP_MODE = "extra_temporary_lookup_mode"
+        const val EXTRA_TEMPORARY_LOOKUP_START_MS = "extra_temporary_lookup_start_ms"
+        const val EXTRA_TEMPORARY_LOOKUP_END_MS = "extra_temporary_lookup_end_ms"
         const val EXTRA_UI_LAYOUT_EDIT_MODE = "extra_ui_layout_edit_mode"
         const val EXTRA_RETURN_AUDIO_URI = "extra_return_audio_uri"
         const val EXTRA_RETURN_SRT_URI = "extra_return_srt_uri"
@@ -571,6 +584,9 @@ private fun BookReaderScreen(
     ebookFormat: String?,
     coverUri: Uri?,
     uiTestMode: Boolean,
+    temporaryLookupMode: Boolean,
+    temporaryLookupStartMs: Long,
+    temporaryLookupEndMs: Long,
     uiLayoutEditMode: Boolean,
     contentResolver: ContentResolver,
     registerGamepadKeyHandler: (((KeyEvent) -> Boolean)?) -> Unit,
@@ -753,8 +769,20 @@ private fun BookReaderScreen(
     var playbackRestoreCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
     var playbackCompleted by remember(playbackPositionKey) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val player = remember(context) {
-        BookReaderPlaybackSession.acquirePlayer(context)
+    val player = remember(context, temporaryLookupMode) {
+        if (temporaryLookupMode) {
+            ExoPlayer.Builder(context.applicationContext)
+                .setSeekBackIncrementMs(10_000L)
+                .setSeekForwardIncrementMs(10_000L)
+                .build()
+        } else {
+            BookReaderPlaybackSession.acquirePlayer(context)
+        }
+    }
+    DisposableEffect(player, temporaryLookupMode) {
+        onDispose {
+            if (temporaryLookupMode) player.release()
+        }
     }
     fun isReaderPlaybackRequested(): Boolean = player.playWhenReady || player.isPlaying
     fun setLookupPlaybackState(play: Boolean) {
@@ -766,17 +794,17 @@ private fun BookReaderScreen(
         }
     }
     fun setReaderPlaybackState(play: Boolean) {
-        if (!uiTestMode) {
+        if (!uiTestMode || temporaryLookupMode) {
             setLookupPlaybackState(play)
         }
         isPlaying = play
     }
     fun toggleReaderPlaybackState() {
-        val currentlyPlaying = if (uiTestMode) isPlaying else isReaderPlaybackRequested()
+        val currentlyPlaying = if (uiTestMode && !temporaryLookupMode) isPlaying else isReaderPlaybackRequested()
         setReaderPlaybackState(!currentlyPlaying)
     }
-    val notificationController = remember(context, player, title, audioUri, srtUri, coverUri, uiTestMode) {
-        if (uiTestMode) {
+    val notificationController = remember(context, player, title, audioUri, srtUri, coverUri, uiTestMode, temporaryLookupMode) {
+        if (uiTestMode || temporaryLookupMode) {
             null
         } else {
             PlaybackNotificationController(
@@ -813,7 +841,7 @@ private fun BookReaderScreen(
                     writingMode = readerUiWritingMode,
                     fallback = defaultBookReaderUiLayoutConfig(useSideRail = legacyUseSideRailLayout)
                 )
-                if (!uiTestMode && playbackRestoreCompleted && playbackPositionKey.isNotBlank()) {
+                if (!uiTestMode && !temporaryLookupMode && playbackRestoreCompleted && playbackPositionKey.isNotBlank()) {
                     val currentAudioUriText = audioUri?.toString()
                     val sharedAudioUri = BookReaderFloatingBridge.currentAudioUri()
                     if (
@@ -826,11 +854,10 @@ private fun BookReaderScreen(
                         return
                     }
                     val snapshot = currentReaderBook?.let { book ->
-                        migrateBestReaderBookPlaybackSnapshotIfNeeded(
-                            context = context,
-                            book = book,
-                            reason = "bookReaderResume"
-                        )?.snapshot
+                        loadBookReaderPlaybackSnapshotOrNull(
+                            context,
+                            buildReaderBookPlaybackKey(book)
+                        )
                     }
                     val targetPosition = snapshot?.positionMs?.coerceAtLeast(0L) ?: 0L
                     val currentPosition = player.currentPosition.coerceAtLeast(0L)
@@ -927,7 +954,7 @@ private fun BookReaderScreen(
         }
     }
 
-    if (!uiTestMode) DisposableEffect(player) {
+    if (!uiTestMode || temporaryLookupMode) DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = isReaderPlaybackRequested()
@@ -945,7 +972,7 @@ private fun BookReaderScreen(
                 isPlaying = isReaderPlaybackRequested()
                 positionMs = player.currentPosition.coerceAtLeast(0L)
                 durationMs = if (player.duration > 0L) player.duration else 0L
-                if (playbackState == Player.STATE_ENDED) {
+                if (playbackState == Player.STATE_ENDED && !temporaryLookupMode) {
                     playbackCompleted = true
                     val endedDurationMs = if (player.duration > 0L) player.duration else 0L
                     scope.launch(Dispatchers.IO) {
@@ -978,18 +1005,31 @@ private fun BookReaderScreen(
         onDispose { player.removeListener(listener) }
     }
 
-    if (!uiTestMode) LaunchedEffect(
+    if (!uiTestMode || temporaryLookupMode) LaunchedEffect(
         player,
         isPlaying,
         cueLoopEnabled,
         cueLoopWindow,
         audiobookSettings.readerPlaybackMode,
         cues,
-        dragPreviewPositionMs
+        dragPreviewPositionMs,
+        temporaryLookupMode,
+        temporaryLookupStartMs,
+        temporaryLookupEndMs
     ) {
         if (!isPlaying) {
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = if (player.duration > 0L) player.duration else 0L
+            if (
+                temporaryLookupMode &&
+                temporaryLookupEndMs > temporaryLookupStartMs &&
+                positionMs >= temporaryLookupEndMs
+            ) {
+                player.pause()
+                player.seekTo(temporaryLookupStartMs.coerceAtLeast(0L))
+                isPlaying = false
+                return@LaunchedEffect
+            }
             return@LaunchedEffect
         }
         var lastCueIndex = findBookCueIndexAtTime(cues, player.currentPosition.coerceAtLeast(0L))
@@ -998,7 +1038,7 @@ private fun BookReaderScreen(
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = if (player.duration > 0L) player.duration else 0L
             val currentCueIndex = findBookCueIndexAtTime(cues, positionMs)
-            if (cueLoopEnabled) {
+            if (!temporaryLookupMode && cueLoopEnabled) {
                 val window = cueLoopWindow
                 if (window != null) {
                     val startMs = window.first.coerceAtLeast(0L)
@@ -1008,7 +1048,7 @@ private fun BookReaderScreen(
                         player.seekTo(startMs)
                     }
                 }
-            } else if (audiobookSettings.readerPlaybackMode == ReaderPlaybackMode.CONDENSED) {
+            } else if (!temporaryLookupMode && audiobookSettings.readerPlaybackMode == ReaderPlaybackMode.CONDENSED) {
                 val nowMs = SystemClock.elapsedRealtime()
                 val target = findCondensedPlaybackSeekTarget(
                     cues = cues,
@@ -1031,10 +1071,27 @@ private fun BookReaderScreen(
         }
     }
 
-    if (!uiTestMode) LaunchedEffect(audioUri, playbackPositionKey) {
+    if (!uiTestMode) LaunchedEffect(
+        audioUri,
+        playbackPositionKey,
+        temporaryLookupMode,
+        temporaryLookupStartMs,
+        temporaryLookupEndMs
+    ) {
         playbackRestoreCompleted = false
         playbackCompleted = false
         val selectedAudio = audioUri ?: run {
+            playbackRestoreCompleted = true
+            return@LaunchedEffect
+        }
+        if (temporaryLookupMode) {
+            player.setMediaItem(MediaItem.fromUri(selectedAudio))
+            player.prepare()
+            player.seekTo(temporaryLookupStartMs.coerceAtLeast(0L))
+            player.pause()
+            positionMs = temporaryLookupStartMs.coerceAtLeast(0L)
+            durationMs = if (player.duration > 0L) player.duration else 0L
+            isPlaying = false
             playbackRestoreCompleted = true
             return@LaunchedEffect
         }
@@ -1045,11 +1102,10 @@ private fun BookReaderScreen(
         } else {
             currentReaderBook?.let { book ->
                 withContext(Dispatchers.IO) {
-                    migrateBestReaderBookPlaybackSnapshotIfNeeded(
-                        context = context,
-                        book = book,
-                        reason = "bookReaderRestore"
-                    )?.snapshot?.positionMs
+                    loadBookReaderPlaybackSnapshotOrNull(
+                        context,
+                        buildReaderBookPlaybackKey(book)
+                    )?.positionMs
                 }
             }?.coerceAtLeast(0L)
         }
@@ -1289,30 +1345,30 @@ private fun BookReaderScreen(
         )
     }
 
-    LaunchedEffect(playbackSpeed, uiTestMode) {
+    LaunchedEffect(playbackSpeed, uiTestMode, temporaryLookupMode) {
         if (!uiTestMode) {
             player.playbackParameters = PlaybackParameters(playbackSpeed)
-            BookReaderFloatingBridge.notifyPlaybackSpeed(playbackSpeed)
+            if (!temporaryLookupMode) BookReaderFloatingBridge.notifyPlaybackSpeed(playbackSpeed)
         }
     }
 
-    LaunchedEffect(isPlaying, uiTestMode, playbackRestoreCompleted) {
-        if (!uiTestMode && playbackRestoreCompleted) {
+    LaunchedEffect(isPlaying, uiTestMode, temporaryLookupMode, playbackRestoreCompleted) {
+        if (!uiTestMode && !temporaryLookupMode && playbackRestoreCompleted) {
             BookReaderFloatingBridge.notifyPlaybackState(isPlaying)
         }
     }
-    LaunchedEffect(context, playbackPositionKey, uiTestMode) {
-        if (!uiTestMode) {
+    LaunchedEffect(context, playbackPositionKey, uiTestMode, temporaryLookupMode) {
+        if (!uiTestMode && !temporaryLookupMode) {
             BookReaderFloatingBridge.setCurrentBookKey(context, playbackPositionKey)
         }
     }
-    LaunchedEffect(positionMs, uiTestMode) {
-        if (!uiTestMode) {
+    LaunchedEffect(positionMs, uiTestMode, temporaryLookupMode) {
+        if (!uiTestMode && !temporaryLookupMode) {
             BookReaderFloatingBridge.notifyPlaybackPosition(positionMs)
         }
     }
-    LaunchedEffect(cues, title, audioUri, uiTestMode) {
-        if (!uiTestMode) {
+    LaunchedEffect(cues, title, audioUri, uiTestMode, temporaryLookupMode) {
+        if (!uiTestMode && !temporaryLookupMode) {
             BookReaderFloatingBridge.setSubtitleTimeline(
                 bookTitle = title,
                 audioUri = audioUri?.toString(),
@@ -1435,8 +1491,8 @@ private fun BookReaderScreen(
         }
     }
 
-    LaunchedEffect(playbackPositionKey, player, isPlaying, playbackRestoreCompleted) {
-        if (uiTestMode) return@LaunchedEffect
+    LaunchedEffect(playbackPositionKey, player, isPlaying, playbackRestoreCompleted, temporaryLookupMode) {
+        if (uiTestMode || temporaryLookupMode) return@LaunchedEffect
         if (playbackPositionKey.isBlank()) return@LaunchedEffect
         if (!playbackRestoreCompleted) return@LaunchedEffect
         var lastSavedPosition = Long.MIN_VALUE
@@ -1467,7 +1523,7 @@ private fun BookReaderScreen(
 
     DisposableEffect(playbackPositionKey, player, playbackRestoreCompleted) {
         onDispose {
-            if (uiTestMode) return@onDispose
+            if (uiTestMode || temporaryLookupMode) return@onDispose
             if (!playbackRestoreCompleted) return@onDispose
             val current = player.currentPosition.coerceAtLeast(0L)
             val total = if (player.duration > 0L) player.duration else 0L
@@ -2027,7 +2083,7 @@ private fun BookReaderScreen(
     }
 
     fun triggerHoshiPopupLookup(selection: ReaderSelectionData, cue: ReaderSubtitleCue?) {
-        if (uiTestMode) return
+        if (uiTestMode && !temporaryLookupMode) return
         val resolvedCue = cue ?: return
         val resolvedCueIndex = cues.indexOf(resolvedCue).takeIf { it >= 0 }
         val selectionStart = selection.sentenceOffset
@@ -2125,7 +2181,7 @@ private fun BookReaderScreen(
     }
 
     fun triggerPopupLookup(cue: ReaderSubtitleCue, offset: Int, anchor: ReaderLookupAnchor?) {
-        if (uiTestMode) return
+        if (uiTestMode && !temporaryLookupMode) return
         val cueIndex = cues.indexOf(cue).takeIf { it >= 0 }
         val anchorBounds = anchor.boundingRectOrNull()
         logDebug(BOOK_LOOKUP_SELECTION_LOG_TAG) {
@@ -2197,19 +2253,54 @@ private fun BookReaderScreen(
                 val sourceCue = cueIndex.takeIf { it in cues.indices }?.let { cues[it] }
                 val cueText = sourceCue?.text?.trim()?.takeIf { it.isNotBlank() }
                     ?: title.trim().ifBlank { expression }
-                val cue = sourceCue ?: ReaderSubtitleCue(startMs = 0L, endMs = 0L, text = cueText)
+                val baseCue = sourceCue ?: ReaderSubtitleCue(startMs = 0L, endMs = 0L, text = cueText)
                 val popupSelectionText = payload.optString("popupSelectionText").trim().takeIf { it.isNotBlank() }
                     ?: hoshiLookupSelectionRange?.let { range ->
-                        val start = range.first.coerceIn(0, cue.text.length)
-                        val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
-                        if (endExclusive > start) cue.text.substring(start, endExclusive) else null
+                        val start = range.first.coerceIn(0, baseCue.text.length)
+                        val endExclusive = (range.last + 1).coerceIn(start, baseCue.text.length)
+                        if (endExclusive > start) baseCue.text.substring(start, endExclusive) else null
                     }?.trim()?.takeIf { it.isNotBlank() }
+                val selectedRange = selectedCueIndexRange?.takeIf { range ->
+                    range.first in cues.indices && range.last in cues.indices
+                }
+                val sentenceSelection = when {
+                    selectedRange != null -> ReaderSentenceSelection(
+                        text = cues.slice(selectedRange).joinToString("\n") { it.text },
+                        cueRange = selectedRange
+                    )
+                    audiobookSettings.lookupExportFullSentence && cueIndex in cues.indices -> {
+                        extractFullSentenceLikeHoshiFromCues(
+                            cues = cues,
+                            cueIndex = cueIndex,
+                            anchorText = popupSelectionText ?: expression,
+                            selectedRangeInCue = hoshiLookupSelectionRange,
+                            rawAnchorOffsetInCue = hoshiLookupSelectionRange?.first
+                        )
+                    }
+                    else -> ReaderSentenceSelection(
+                        text = baseCue.text,
+                        cueRange = cueIndex.takeIf { it in cues.indices }?.let { it..it } ?: 0..0
+                    )
+                }
+                val exportCue = sentenceSelection.cueRange
+                    .takeIf { range -> range.first in cues.indices && range.last in cues.indices }
+                    ?.let { range ->
+                        ReaderSubtitleCue(
+                            startMs = cues[range.first].startMs,
+                            endMs = cues[range.last].endMs,
+                            text = sentenceSelection.text
+                        )
+                    }
+                    ?: baseCue
                 Log.d(
                     "AnkiExportDebug",
                     "bookHoshiExport payload expression=$expression reading=${reading.orEmpty()} dict=$primaryDictionaryName " +
                         "glossaryLen=${glossary.length} frequencyLen=${frequency.length} pitchLen=${pitch.length} " +
-                        "popupSelectionLen=${popupSelectionText.orEmpty().length} cue=${cue.text.take(48)}"
+                        "popupSelectionLen=${popupSelectionText.orEmpty().length} " +
+                        "sentenceLen=${sentenceSelection.text.length} cueRange=${sentenceSelection.cueRange} " +
+                        "cue=${exportCue.text.take(48)}"
                 )
+                consumeCueRangeSelection()
                 val exportResult = withContext(Dispatchers.IO) {
                     val preparedLookupAudio = prepareLookupAudioForAnkiExport(
                         context = context,
@@ -2220,9 +2311,9 @@ private fun BookReaderScreen(
                     try {
                         addLookupDefinitionToAnkiShared(
                             context = context,
-                            cueText = cue.text,
-                            cueStartMs = cue.startMs,
-                            cueEndMs = cue.endMs,
+                            cueText = exportCue.text,
+                            cueStartMs = exportCue.startMs,
+                            cueEndMs = exportCue.endMs,
                             audioUri = audioUri,
                             lookupAudioUri = preparedLookupAudio?.uri,
                             bookTitle = title,
@@ -2239,7 +2330,7 @@ private fun BookReaderScreen(
                             dictionaryCss = dictionaryCssByName[primaryDictionaryName],
                             groupedDictionaries = emptyList(),
                             popupSelectionText = popupSelectionText,
-                            sentenceOverride = cue.text,
+                            sentenceOverride = sentenceSelection.text,
                             lookupTermOverride = expression
                         )
                     } finally {
@@ -2819,6 +2910,7 @@ private fun BookReaderScreen(
                         Text(stringResource(R.string.bookreader_back))
                     }
                     Spacer(modifier = Modifier.weight(1f))
+                    if (!temporaryLookupMode) {
                     TextButton(
                         onClick = { if (favoriteCue != null) toggleFavoriteCue() },
                         enabled = favoriteCue != null && !uiTestMode
@@ -3141,7 +3233,8 @@ private fun BookReaderScreen(
                         }
                     }
                 }
-                if (topModules.isNotEmpty()) {
+                    }
+                if (!temporaryLookupMode && topModules.isNotEmpty()) {
                     Surface(
                         tonalElevation = 1.dp,
                         shape = RoundedCornerShape(14.dp),
@@ -5816,6 +5909,24 @@ private fun ReaderLookupAnchor?.expandForSelectionText(
 }
 
 private val HOSHI_SENTENCE_DELIMITERS = setOf('\u3002', '\uFF01', '\uFF1F', '.', '!', '?', '\n', '\r')
+private val HOSHI_TRAILING_SENTENCE_CHARS = setOf(
+    '\u3002', '、', '\uFF01', '\uFF1F', '…', '‥',
+    '」', '』', '）', ')', '】', '〉', '》', '〕', '｝', '}', '］', ']'
+)
+private val HOSHI_BRACKET_PAIRS = mapOf(
+    '「' to '」',
+    '『' to '』',
+    '（' to '）',
+    '(' to ')',
+    '【' to '】',
+    '〈' to '〉',
+    '《' to '》',
+    '〔' to '〕',
+    '｛' to '｝',
+    '{' to '}',
+    '［' to '］',
+    '[' to ']'
+)
 private data class SentenceBounds(val start: Int, val endExclusive: Int)
 
 private fun findSentenceBoundsLikeHoshi(
@@ -5841,7 +5952,7 @@ private fun findSentenceBoundsLikeHoshi(
                 if (next.isLetterOrDigit() || Character.getType(next) == Character.OTHER_LETTER.toInt()) {
                     break
                 }
-                if (next !in setOf('\u300D', '\u300F', '\uFF09', '\u3011', '!', '?', '\uFF01', '\uFF1F')) {
+                if (next !in HOSHI_TRAILING_SENTENCE_CHARS) {
                     break
                 }
                 endExclusive += 1
@@ -5849,7 +5960,53 @@ private fun findSentenceBoundsLikeHoshi(
             break
         }
     }
-    return SentenceBounds(start, endExclusive)
+    val rawSentence = text.substring(start, endExclusive)
+    val leadingTrim = rawSentence.length - rawSentence.trimStart().length
+    val sentence = rawSentence.trim()
+    if (sentence.isEmpty()) {
+        val emptyStart = start + leadingTrim
+        return SentenceBounds(emptyStart, emptyStart)
+    }
+
+    val closeBrackets = HOSHI_BRACKET_PAIRS.values.toSet()
+    val openBrackets = HOSHI_BRACKET_PAIRS.keys
+    val unmatchedOpen = mutableListOf<Char>()
+    val unmatchedClose = mutableListOf<Char>()
+    sentence.forEach { char ->
+        when {
+            char in openBrackets -> unmatchedOpen += char
+            char in closeBrackets -> {
+                if (unmatchedOpen.isNotEmpty() && HOSHI_BRACKET_PAIRS[unmatchedOpen.last()] == char) {
+                    unmatchedOpen.removeAt(unmatchedOpen.lastIndex)
+                } else {
+                    unmatchedClose += char
+                }
+            }
+        }
+    }
+
+    var startSlice = 0
+    while (unmatchedOpen.isNotEmpty() && startSlice < sentence.length - 1) {
+        if (unmatchedOpen.first() != sentence[startSlice]) break
+        unmatchedOpen.removeAt(0)
+        startSlice += 1
+    }
+
+    var endSlice = sentence.length - 1
+    var endIndex = sentence.length - 1
+    while (unmatchedClose.isNotEmpty() && endIndex > startSlice) {
+        if (unmatchedClose.last() == sentence[endIndex]) {
+            unmatchedClose.removeAt(unmatchedClose.lastIndex)
+            endSlice = endIndex - 1
+        } else if (sentence[endIndex] !in HOSHI_SENTENCE_DELIMITERS) {
+            break
+        }
+        endIndex -= 1
+    }
+
+    val sentenceStart = start + leadingTrim + startSlice
+    val sentenceEnd = start + leadingTrim + (endSlice + 1).coerceAtLeast(startSlice)
+    return SentenceBounds(sentenceStart, sentenceEnd)
 }
 
 private fun extractFullSentenceLikeHoshiFromCues(
@@ -5866,7 +6023,7 @@ private fun extractFullSentenceLikeHoshiFromCues(
             cueStarts[index] = length
             append(cue.text)
         }
-    }.trim()
+    }
     if (combined.isBlank()) return ReaderSentenceSelection("", cueIndex..cueIndex)
 
     val localCueText = cues[cueIndex].text

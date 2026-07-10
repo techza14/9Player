@@ -31,20 +31,21 @@ internal sealed interface AnkiCatalogLoadResult {
 private const val ANKI_PREFS_NAME = "anki_export_config"
 private const val ANKI_KEY_STATE = "anki_state_json"
 private const val ANKI_CONFIG_LOG_TAG = "AnkiConfig"
+internal const val DEFAULT_ANKI_TAG = "⑨"
 
 internal fun loadPersistedAnkiConfig(context: Context): PersistedAnkiConfig {
     val prefs = context.getSharedPreferences(ANKI_PREFS_NAME, Context.MODE_PRIVATE)
     val raw = prefs.getString(ANKI_KEY_STATE, null) ?: return PersistedAnkiConfig(
         deckName = "Default",
         modelName = "",
-        tags = "",
+        tags = DEFAULT_ANKI_TAG,
         fieldTemplates = emptyMap()
     )
 
     val obj = runCatching { JSONObject(raw) }.getOrNull() ?: return PersistedAnkiConfig(
         deckName = "Default",
         modelName = "",
-        tags = "",
+        tags = DEFAULT_ANKI_TAG,
         fieldTemplates = emptyMap()
     )
 
@@ -60,7 +61,11 @@ internal fun loadPersistedAnkiConfig(context: Context): PersistedAnkiConfig {
     val config = PersistedAnkiConfig(
         deckName = obj.optString("deckName").trim().ifBlank { "Default" },
         modelName = obj.optString("modelName").trim(),
-        tags = obj.optString("tags").trim(),
+        tags = if (obj.has("tags")) {
+            obj.optString("tags").trim()
+        } else {
+            DEFAULT_ANKI_TAG
+        },
         fieldTemplates = templates
     )
     Log.d(
