@@ -42,6 +42,7 @@ object BookReaderPlaybackSession {
                 sharedPlayer.addListener(object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         BookReaderFloatingBridge.notifyPlaybackState(isPlaying)
+                        if (loadWearableFeatureEnabled(context)) startWearableBridgeService(context)
                     }
 
                     override fun onPositionDiscontinuity(
@@ -72,6 +73,8 @@ object BookReaderPlaybackSession {
     fun isPlaybackRequested(): Boolean = player?.let { it.playWhenReady || it.isPlaying } == true
 
     fun currentPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
+
+    fun currentDurationMs(): Long = player?.duration?.takeIf { it > 0L } ?: 0L
 
     fun currentPlaybackSpeed(): Float = player?.playbackParameters?.speed ?: 1f
 

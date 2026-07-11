@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -81,6 +83,11 @@
             android:name=".AudiobookFloatingOverlayService"
             android:enabled="true"
             android:exported="false" />
+        <service
+            android:name=".WearableBridgeService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
         <activity
             android:name=".ControllerSettingsActivity"
             android:exported="false"

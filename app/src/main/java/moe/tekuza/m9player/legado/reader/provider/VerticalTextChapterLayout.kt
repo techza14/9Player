@@ -115,7 +115,7 @@ internal class VerticalTextChapterLayout(
                         0f
                     }
                 }
-                val firstToken = nextToken(text, lineStart, paragraphEnd, splitLatinWords = true)
+                val firstToken = nextToken(text, lineStart, paragraphEnd)
                 if (y + tokenHeight(firstToken) > visibleHeight && y > 0f) {
                     x -= columnWidth
                     y = 0f
@@ -232,7 +232,7 @@ internal class VerticalTextChapterLayout(
         var local = 0
         while (local < text.length) {
             val sourceStart = chapterPosition + local
-            val token = nextToken(text, local, text.length, splitLatinWords = true)
+            val token = nextToken(text, local, text.length)
             val tokenText = token.text
             val sourceEnd = sourceStart + token.length
             if (tokenText.length == 1 && tokenText.first().code == EBOOK_IMAGE_MARKER.code) {
@@ -334,68 +334,19 @@ internal class VerticalTextChapterLayout(
         return ImageBlockSize(width = width, height = height)
     }
 
-    private fun nextToken(text: String, start: Int, end: Int, splitLatinWords: Boolean): VerticalToken {
-        if (start >= end) return VerticalToken("", 0, 0, 0f, false)
-        val first = text[start]
-        if (first.isDigit()) {
-            var index = start + 1
-            while (index < end && text[index].isDigit()) {
-                index += 1
-            }
-            val isRunStart = start == 0 || !text[start - 1].isDigit()
-            val tokenLength = if (isRunStart && index - start == 2) 2 else 1
-            return VerticalToken(
-                text = text.substring(start, start + tokenLength),
-                length = tokenLength,
-                heightUnits = 1,
-                heightPx = glyphHeight,
-                isLatinRun = false
-            )
-        }
-        if (VerticalTextGlyphEngine.isAsciiWordChar(first)) {
-            var index = start + 1
-            while (index < end) {
-                val char = text[index]
-                when {
-                    VerticalTextGlyphEngine.isAsciiWordChar(char) -> index += 1
-                    splitLatinWords && VerticalTextGlyphEngine.isAsciiRunSpace(char) -> {
-                        index += 1
-                        while (index < end && VerticalTextGlyphEngine.isAsciiRunSpace(text[index])) {
-                            index += 1
-                        }
-                        break
-                    }
-                    VerticalTextGlyphEngine.isAsciiRunSpace(char) -> {
-                        var next = index + 1
-                        while (next < end && VerticalTextGlyphEngine.isAsciiRunSpace(text[next])) {
-                            next += 1
-                        }
-                        if (next < end && VerticalTextGlyphEngine.isAsciiWordChar(text[next])) {
-                            index = next + 1
-                        } else {
-                            break
-                        }
-                    }
-                    else -> break
-                }
-            }
-            val tokenText = text.substring(start, index)
-            val heightPx = latinRunHeight(tokenText)
-            val measuredUnits = ceil((heightPx / glyphHeight).coerceAtLeast(1f).toDouble()).toInt()
-            return VerticalToken(
-                text = tokenText,
-                length = index - start,
-                heightUnits = measuredUnits.coerceAtLeast(1),
-                heightPx = heightPx,
-                isLatinRun = true
-            )
-        }
+    private fun nextToken(text: String, start: Int, end: Int): VerticalToken {
+        val shared = VerticalTextGlyphEngine.nextVerticalTextToken(text, start, end)
+        if (shared.sourceEndExclusive <= start) return VerticalToken("", 0, 0, 0f, false)
+        val isLatinRun = VerticalTextGlyphEngine.isSidewaysAsciiToken(shared.text) &&
+            !VerticalTextGlyphEngine.isTateChuYokoToken(shared.text)
+        val heightPx = if (isLatinRun) latinRunHeight(shared.text) else glyphHeight
+        val measuredUnits = ceil((heightPx / glyphHeight).coerceAtLeast(1f).toDouble()).toInt()
         return VerticalToken(
-            text = first.toString(),
-            length = 1,
-            heightUnits = 1,
-            heightPx = glyphHeight,
-            isLatinRun = false
+            text = shared.text,
+            length = shared.sourceEndExclusive - shared.sourceOffset,
+            heightUnits = if (isLatinRun) measuredUnits.coerceAtLeast(1) else 1,
+            heightPx = heightPx,
+            isLatinRun = isLatinRun
         )
     }
 
@@ -418,7 +369,7 @@ internal class VerticalTextChapterLayout(
         var usedHeight = 0f
         var lastEnd = start
         while (cursor < paragraphEnd) {
-            val token = nextToken(text, cursor, paragraphEnd, splitLatinWords = true)
+            val token = nextToken(text, cursor, paragraphEnd)
             if (token.length <= 0) break
             val height = tokenHeight(token)
             if (usedHeight > 0f && usedHeight + height > maxHeight) {

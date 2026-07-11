@@ -44,6 +44,7 @@
     <string name="settings_ebook_only_import_title">允許只匯入書</string>
     <string name="settings_ebook_image_spoiler_title">隱藏未讀插圖</string>
     <string name="settings_other_title">實驗性功能</string>
+    <string name="settings_wearable_enabled_title">小米手環連動</string>
     <string name="settings_statistics_title">統計</string>
     <string name="settings_update_title">更新</string>
     <string name="settings_font_title">字體</string>

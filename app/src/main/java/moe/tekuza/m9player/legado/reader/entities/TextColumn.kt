@@ -52,7 +52,7 @@ internal data class TextColumn(
                     if (isFirstVerticalDashInRun(line)) {
                         drawVerticalDashRun(canvas, line, glyphRight, paint)
                     }
-                } else if (VerticalTextGlyphEngine.isTwoDigitToken(charData)) {
+                } else if (VerticalTextGlyphEngine.isTateChuYokoToken(charData)) {
                     VerticalTextGlyphEngine.drawTateChuYoko(
                         canvas = canvas,
                         sourcePaint = paint,

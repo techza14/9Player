@@ -44,6 +44,7 @@
     <string name="settings_ebook_only_import_title">Allow ebook-only import</string>
     <string name="settings_ebook_image_spoiler_title">Hide unread illustrations</string>
     <string name="settings_other_title">Experimental features</string>
+    <string name="settings_wearable_enabled_title">Xiaomi band integration</string>
     <string name="settings_statistics_title">Statistics</string>
     <string name="settings_update_title">Updates</string>
     <string name="settings_font_title">Font</string>

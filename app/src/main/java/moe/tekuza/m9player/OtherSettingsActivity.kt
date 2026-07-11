@@ -1,8 +1,12 @@
 package moe.tekuza.m9player
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Build
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,30 +32,55 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PlayLesson
+import androidx.compose.material.icons.outlined.Watch
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.core.content.ContextCompat
 import moe.tekuza.m9player.ui.theme.TsetTheme
 
 class OtherSettingsActivity : ComponentActivity() {
+    private val wearablePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && loadWearableFeatureEnabled(this) && BookReaderPlaybackSession.currentAudioUri() != null) {
+            startWearableBridgeService(this)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             TsetTheme {
                 OtherSettingsScreen(
-                    onBack = { finish() }
+                    onBack = { finish() },
+                    onWearableEnabled = ::startWearableBridgeWhenPermitted
                 )
             }
+        }
+    }
+
+    private fun startWearableBridgeWhenPermitted() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            wearablePermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+        } else if (BookReaderPlaybackSession.currentAudioUri() != null) {
+            startWearableBridgeService(this)
         }
     }
 }
 
 @Composable
 private fun OtherSettingsScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onWearableEnabled: () -> Unit
 ) {
     val context = LocalContext.current
     var ebookEnabled by remember { mutableStateOf(loadEbookFeatureEnabled(context)) }
     var ebookDefaultToReader by remember { mutableStateOf(loadEbookDefaultToReader(context)) }
     var ebookOnlyImportEnabled by remember { mutableStateOf(loadEbookOnlyImportEnabled(context)) }
+    var wearableEnabled by remember { mutableStateOf(loadWearableFeatureEnabled(context)) }
     var showEbookSettings by remember { mutableStateOf(false) }
     SettingsScaffold(
         title = if (showEbookSettings) "" else stringResource(R.string.settings_other_title),
@@ -108,6 +137,17 @@ private fun OtherSettingsScreen(
                     showDivider = false
                 )
             } else {
+                SettingsSwitchItem(
+                    title = stringResource(R.string.settings_wearable_enabled_title),
+                    checked = wearableEnabled,
+                    icon = Icons.Outlined.Watch,
+                    onCheckedChange = { enabled ->
+                        wearableEnabled = enabled
+                        saveWearableFeatureEnabled(context, enabled)
+                        if (enabled) onWearableEnabled()
+                    },
+                    showDivider = true
+                )
                 SettingsLikeItem(
                     icon = Icons.Outlined.PlayLesson,
                     title = stringResource(R.string.settings_ebook_title),

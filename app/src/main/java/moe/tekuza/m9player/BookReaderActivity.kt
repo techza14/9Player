@@ -220,7 +220,7 @@ class BookReaderActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        maybeRequestPostNotificationsPermission()
+        maybeRequestReaderPermissions()
         enableEdgeToEdge()
 
         val audioUri = intent.getStringExtra(EXTRA_AUDIO_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
@@ -306,6 +306,10 @@ class BookReaderActivity : AppCompatActivity() {
         stopAudiobookFloatingOverlayService(this)
     }
 
+    override fun onResume() {
+        super.onResume()
+    }
+
     override fun onStop() {
         super.onStop()
         ReaderPlaybackScreenVisibility.markHidden(this)
@@ -360,16 +364,28 @@ class BookReaderActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private fun maybeRequestPostNotificationsPermission() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        val hasPermission = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.POST_NOTIFICATIONS
-        ) == PackageManager.PERMISSION_GRANTED
-        if (hasPermission) return
+    private fun maybeRequestReaderPermissions() {
+        val missing = buildList {
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(
+                    this@BookReaderActivity,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) add(Manifest.permission.POST_NOTIFICATIONS)
+            if (
+                loadWearableFeatureEnabled(this@BookReaderActivity) &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                ContextCompat.checkSelfPermission(
+                    this@BookReaderActivity,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) add(Manifest.permission.BLUETOOTH_CONNECT)
+        }
+        if (missing.isEmpty()) return
         ActivityCompat.requestPermissions(
             this,
-            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+            missing.toTypedArray(),
             BOOK_READER_PERMISSION_REQUEST_CODE
         )
     }
@@ -3370,17 +3386,6 @@ private fun BookReaderScreen(
                                         ) { index, cue ->
                                             val isActive = index == activeCueIndex
                                             val inSelectedRange = selectedCueIndexRange?.contains(index) == true
-                                            val cueDisplay = remember(
-                                                cue.text,
-                                                readerUiWritingMode,
-                                                verticalRowsPerColumn
-                                            ) {
-                                                transformSubtitleForWritingMode(
-                                                    cue.text,
-                                                    readerUiWritingMode,
-                                                    verticalRowsPerColumn
-                                                )
-                                            }
                                             Box(
                                                 modifier = Modifier
                                                     .fillParentMaxHeight()
@@ -3490,21 +3495,15 @@ private fun BookReaderScreen(
                                                 } else {
                                                     ReaderLookupClickableSubtitle(
                                                         text = buildHighlightedText(
-                                                            cueDisplay.text,
+                                                            cue.text,
                                                             if (isActive) {
-                                                                mapSourceRangeToDisplayRange(
-                                                                    visibleSelectedRange,
-                                                                    cueDisplay.sourceToDisplay
-                                                                )
+                                                                visibleSelectedRange
                                                             } else {
                                                                 null
                                                             }
                                                         ),
                                                         selectedRange = if (isActive) {
-                                                            mapSourceRangeToDisplayRange(
-                                                                visibleSelectedRange,
-                                                                cueDisplay.sourceToDisplay
-                                                            )
+                                                            visibleSelectedRange
                                                         } else {
                                                             null
                                                         },
@@ -3518,10 +3517,7 @@ private fun BookReaderScreen(
                                                             if (cueRangeSelectionMode) {
                                                                 handleCueRangeTap(index)
                                                             } else if (isActive) {
-                                                                val sourceOffset = cueDisplay.displayToSource
-                                                                    .getOrElse(offset) { 0 }
-                                                                    .coerceIn(0, cue.text.length.coerceAtLeast(1) - 1)
-                                                                triggerPopupLookup(cue, sourceOffset, anchor)
+                                                                triggerPopupLookup(cue, offset, anchor)
                                                             } else {
                                                                 jumpToCue(index)
                                                             }
@@ -3594,17 +3590,6 @@ private fun BookReaderScreen(
                             }
                                 activeCue == null -> Text(stringResource(R.string.bookreader_waiting_for_subtitle))
                             else -> {
-                                val activeCueDisplay = remember(
-                                    activeCue.text,
-                                    readerUiWritingMode,
-                                    verticalRowsPerColumn
-                                ) {
-                                    transformSubtitleForWritingMode(
-                                        activeCue.text,
-                                        readerUiWritingMode,
-                                        verticalRowsPerColumn
-                                    )
-                                }
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -4705,147 +4690,7 @@ private fun buildHighlightedText(text: String, selectedRange: IntRange?): Annota
     }
 }
 
-private data class SubtitleDisplayTransform(
-    val text: String,
-    val sourceToDisplay: IntArray,
-    val displayToSource: IntArray
-)
-
 private const val BOOK_VERTICAL_ROWS_PER_COLUMN = 12
-
-private fun transformSubtitleForWritingMode(
-    sourceText: String,
-    mode: FloatingSubtitleWritingMode,
-    rowsPerColumnHint: Int = BOOK_VERTICAL_ROWS_PER_COLUMN
-): SubtitleDisplayTransform {
-    if (sourceText.isEmpty()) {
-        return SubtitleDisplayTransform(
-            text = "",
-            sourceToDisplay = IntArray(0),
-            displayToSource = IntArray(0)
-        )
-    }
-    if (mode == FloatingSubtitleWritingMode.HORIZONTAL) {
-        val identity = IntArray(sourceText.length) { it }
-        return SubtitleDisplayTransform(
-            text = sourceText,
-            sourceToDisplay = identity,
-            displayToSource = identity.copyOf()
-        )
-    }
-
-    val rowsPerColumn = rowsPerColumnHint.coerceAtLeast(2)
-    val display = StringBuilder(sourceText.length * 2)
-    val sourceToDisplay = IntArray(sourceText.length)
-    val displayToSource = ArrayList<Int>(sourceText.length * 2)
-
-    val paragraphs = ArrayList<List<Int>>()
-    val newlineSourceIndices = ArrayList<Int>()
-    var current = ArrayList<Int>()
-    for (index in sourceText.indices) {
-        val ch = sourceText[index]
-        if (ch == '\n') {
-            paragraphs.add(current)
-            newlineSourceIndices.add(index)
-            current = ArrayList()
-        } else {
-            current.add(index)
-        }
-    }
-    paragraphs.add(current)
-
-    var fallbackSource = 0
-    paragraphs.forEachIndexed { paragraphIndex, indices ->
-        if (indices.isEmpty()) {
-            if (display.isNotEmpty()) {
-                display.append('\n')
-                displayToSource.add(fallbackSource)
-            }
-            return@forEachIndexed
-        }
-
-        val columns = ArrayList<List<Int>>()
-        var start = 0
-        while (start < indices.size) {
-            val end = (start + rowsPerColumn).coerceAtMost(indices.size)
-            columns.add(indices.subList(start, end))
-            start = end
-        }
-
-        for (row in 0 until rowsPerColumn) {
-            var rowHasGlyph = false
-            val rowStart = display.length
-
-            for (columnIndex in columns.lastIndex downTo 0) {
-                val column = columns[columnIndex]
-                if (row < column.size) {
-                    val sourceIndex = column[row]
-                    val normalized = when (sourceText[sourceIndex]) {
-                        ' ', '\t' -> '\u3000'
-                        else -> sourceText[sourceIndex]
-                    }
-                    sourceToDisplay[sourceIndex] = display.length
-                    display.append(normalized)
-                    displayToSource.add(sourceIndex)
-                    fallbackSource = sourceIndex
-                    rowHasGlyph = true
-                } else {
-                    display.append('\u3000')
-                    displayToSource.add(fallbackSource)
-                }
-            }
-
-            if (rowHasGlyph) {
-                display.append('\n')
-                displayToSource.add(fallbackSource)
-            } else {
-                display.setLength(rowStart)
-                while (displayToSource.size > rowStart) {
-                    displayToSource.removeAt(displayToSource.lastIndex)
-                }
-                break
-            }
-        }
-
-        if (display.isNotEmpty() && display.last() == '\n') {
-            display.setLength(display.length - 1)
-            displayToSource.removeAt(displayToSource.lastIndex)
-        }
-
-        if (paragraphIndex < paragraphs.lastIndex) {
-            val sourceNewlineIndex = newlineSourceIndices.getOrNull(paragraphIndex)
-            if (sourceNewlineIndex != null) {
-                sourceToDisplay[sourceNewlineIndex] = display.length
-            }
-            display.append('\n')
-            displayToSource.add(fallbackSource)
-        }
-    }
-
-    return SubtitleDisplayTransform(
-        text = display.toString(),
-        sourceToDisplay = sourceToDisplay,
-        displayToSource = displayToSource.toIntArray()
-    )
-}
-
-private fun mapSourceRangeToDisplayRange(
-    sourceRange: IntRange?,
-    sourceToDisplay: IntArray
-): IntRange? {
-    val range = sourceRange ?: return null
-    if (sourceToDisplay.isEmpty()) return null
-    val maxIndex = sourceToDisplay.size - 1
-    val start = range.first.coerceIn(0, maxIndex)
-    val end = range.last.coerceIn(start, maxIndex)
-    val displayStart = sourceToDisplay[start]
-    val displayEnd = sourceToDisplay[end]
-    return if (displayStart <= displayEnd) {
-        displayStart..displayEnd
-    } else {
-        displayEnd..displayStart
-    }
-}
 
 @Composable
 private fun BookReaderTypographyPanel(

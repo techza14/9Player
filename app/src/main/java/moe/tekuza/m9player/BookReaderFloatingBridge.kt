@@ -172,6 +172,8 @@ object BookReaderFloatingBridge {
     fun hasSubtitleTrack(): Boolean = subtitleTrackAvailableSnapshot
     fun currentPlaybackPositionMs(): Long =
         if (BookReaderPlaybackSession.currentAudioUri() != null) BookReaderPlaybackSession.currentPositionMs() else playbackPositionSnapshot
+    fun currentPlaybackDurationMs(): Long =
+        if (BookReaderPlaybackSession.currentAudioUri() != null) BookReaderPlaybackSession.currentDurationMs() else 0L
     fun currentPlaybackSpeed(): Float =
         if (BookReaderPlaybackSession.currentAudioUri() != null) BookReaderPlaybackSession.currentPlaybackSpeed() else playbackSpeedSnapshot
     fun currentBookKey(): String? = currentBookKeySnapshot

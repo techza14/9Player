@@ -7,6 +7,12 @@ import android.graphics.RectF
 import android.text.TextPaint
 import kotlin.math.ceil
 
+internal data class VerticalTextToken(
+    val sourceOffset: Int,
+    val sourceEndExclusive: Int,
+    val text: String
+)
+
 internal object VerticalTextGlyphEngine {
     private data class RotationStyle(
         val degrees: Float,
@@ -54,18 +60,22 @@ internal object VerticalTextGlyphEngine {
 
     private val noColumnStartChars: Set<Char> = setOf(
         '、', '。', '，', '．', '.', ',', '：', '；', ':', ';',
-        '！', '？', '）', ')', ']', '】', '}', '』', '」', '》', '〉',
+        '！', '？', '）', ')', ']', '】', '}', '』', '」', '”', '’', '》', '〉',
         '…', '—', '―', '─', '−', '～', '〜',
         '︑', '︒', '︐', '︓', '︔', '︕', '︖', '︶', '︺', '︸', '﹀',
-        '︙', '︰', '﹡'
+        '︙', '︰', '﹂', '﹄', '﹡'
     )
 
     private val noColumnEndChars: Set<Char> = setOf(
-        '「', '『', '（', '(', '[', '{', '【', '〔', '〈', '《', '＜',
-        '︵', '︹', '︷', '︿'
+        '「', '『', '“', '‘', '（', '(', '[', '{', '【', '〔', '〈', '《', '＜',
+        '︵', '︹', '︷', '︿', '﹁', '﹃'
     )
 
     private fun presentationChar(ch: Char): Char = when (ch) {
+        '「', '“' -> '﹁'
+        '」', '”' -> '﹂'
+        '『', '‘' -> '﹃'
+        '』', '’' -> '﹄'
         '\u3001' -> '\uFE11'
         '\u3002' -> '\uFE12'
         ',' -> '\uFE10'
@@ -120,25 +130,44 @@ internal object VerticalTextGlyphEngine {
         return ch == ' ' || ch == '\u00A0'
     }
 
-    fun isAsciiAssistToken(text: String): Boolean {
-        val trimmed = text.trim()
-        return trimmed.isNotEmpty() &&
-            trimmed.any { it.isLetterOrDigit() } &&
-            trimmed.all { isAsciiWordChar(it) || isAsciiRunSpace(it) }
-    }
-
     fun isSidewaysAsciiToken(text: String): Boolean {
         val trimmed = text.trim()
         if (trimmed.length <= 1) return false
-        if (trimmed.all { it.isDigit() }) return false
         val compact = trimmed.filterNot(::isAsciiRunSpace)
-        if (compact.length <= 3 && compact.all { it.isLetterOrDigit() }) return false
         return trimmed.any { it.isLetterOrDigit() } &&
             trimmed.all { isAsciiWordChar(it) || isAsciiRunSpace(it) }
     }
 
-    fun isTwoDigitToken(text: String): Boolean {
-        return text.length == 2 && text.all { it.isDigit() }
+    fun nextVerticalTextToken(
+        text: String,
+        start: Int,
+        endExclusive: Int = text.length
+    ): VerticalTextToken {
+        val endLimit = endExclusive.coerceIn(0, text.length)
+        if (start >= endLimit) return VerticalTextToken(start, start, "")
+        val first = text[start]
+        if (first.isDigit()) {
+            var end = start + 1
+            while (end < endLimit && text[end].isDigit()) end += 1
+            return VerticalTextToken(start, end, text.substring(start, end))
+        }
+        if (isAsciiWordChar(first)) {
+            var end = start + 1
+            while (end < endLimit && isAsciiWordChar(text[end])) end += 1
+            while (end < endLimit && isAsciiRunSpace(text[end])) {
+                end += 1
+                while (end < endLimit && isAsciiRunSpace(text[end])) end += 1
+                break
+            }
+            return VerticalTextToken(start, end, text.substring(start, end))
+        }
+        return VerticalTextToken(start, start + 1, text.substring(start, start + 1))
+    }
+
+    fun isTateChuYokoToken(text: String): Boolean {
+        val compact = text.trim().filterNot(::isAsciiRunSpace)
+        if (compact.length !in 2..4 || !compact.all { it.isLetterOrDigit() }) return false
+        return compact.all { it.isDigit() } || compact.length <= 3
     }
 
     fun estimateCellWidth(paint: TextPaint): Float {
@@ -216,6 +245,7 @@ internal object VerticalTextGlyphEngine {
         val ch = text.firstOrNull()?.let(::presentationChar) ?: return 0f
         return when {
             ch in vjapDashRotation -> vjapDashRotation.getValue(ch).degrees
+            text.trim().length == 1 && (ch in 'A'..'Z' || ch in 'a'..'z') -> 0f
             ch in 'A'..'Z' || ch in 'a'..'z' -> 90f
             ch in '0'..'9' -> 0f
             ch in verticalPresentationForms -> 0f

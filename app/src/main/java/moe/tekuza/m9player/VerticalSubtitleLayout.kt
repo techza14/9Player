@@ -3,6 +3,7 @@ package moe.tekuza.m9player
 import android.graphics.Canvas
 import android.graphics.RectF
 import android.text.TextPaint
+import kotlin.math.ceil
 import kotlin.math.floor
 
 internal data class VerticalSubtitleTapResult(
@@ -15,10 +16,12 @@ internal data class VerticalSubtitleTapResult(
 
 internal data class VerticalSubtitleCell(
     val sourceOffset: Int,
+    val sourceEndExclusive: Int,
     val logical: Int,
     val row: Int,
     val column: Int,
-    val char: String
+    val char: String,
+    val rowSpan: Int = 1
 )
 
 internal data class VerticalSubtitleLayout(
@@ -57,31 +60,89 @@ internal object VerticalSubtitleLayoutEngine {
         var maxColumn = 0
         var maxRow = 0
 
-        text.forEachIndexed { index, ch ->
-            if (ch == '\r') return@forEachIndexed
-            if (ch == '\n') {
-                if (singleColumn) {
-                    if (cells.isNotEmpty()) row += 1
-                } else if (row > 0 || cells.isNotEmpty()) {
-                    column += 1
-                    row = 0
-                }
-                return@forEachIndexed
+        fun moveToNextColumn() {
+            column += 1
+            row = 0
+        }
+
+        fun rowSpanFor(tokenText: String): Int {
+            if (!VerticalTextGlyphEngine.isSidewaysAsciiToken(tokenText) ||
+                VerticalTextGlyphEngine.isTateChuYokoToken(tokenText)
+            ) {
+                return 1
             }
-            if (row >= rows) {
-                column += 1
-                row = 0
+            return ceil(
+                (paint.measureText(tokenText.trim()) + paint.textSize * 0.22f) / cellHeight
+            ).toInt().coerceAtLeast(1)
+        }
+
+        fun addToken(token: VerticalTextToken) {
+            val rowSpan = rowSpanFor(token.text)
+            val startsWithForbidden = token.text.firstOrNull()
+                ?.let(VerticalTextGlyphEngine::isNoColumnStart) == true
+            val previous = cells.lastOrNull()
+            val overflowing = row > 0 && row + rowSpan > rows
+            val previousNeedsCarry = previous != null && (
+                VerticalTextGlyphEngine.isNoColumnEnd(previous.char.lastOrNull() ?: '\u0000') ||
+                    startsWithForbidden
+                )
+
+            if ((overflowing || (row == 0 && startsWithForbidden && previous != null)) && previousNeedsCarry) {
+                cells.removeAt(cells.lastIndex)
+                moveToNextColumn()
+                val carried = previous.copy(row = 0, column = column)
+                cells += carried
+                row = carried.row + carried.rowSpan
+                maxColumn = maxOf(maxColumn, column)
+                maxRow = maxOf(maxRow, carried.row + carried.rowSpan - 1)
+            } else if (overflowing || (row == 0 && startsWithForbidden && previous != null)) {
+                moveToNextColumn()
+            }
+
+            if (row > 0 && row + rowSpan > rows) {
+                moveToNextColumn()
             }
             maxColumn = maxOf(maxColumn, column)
-            maxRow = maxOf(maxRow, row)
+            maxRow = maxOf(maxRow, row + rowSpan - 1)
             cells += VerticalSubtitleCell(
-                sourceOffset = index,
+                sourceOffset = token.sourceOffset,
+                sourceEndExclusive = token.sourceEndExclusive,
                 logical = logical++,
                 row = row,
                 column = column,
-                char = ch.toString()
+                char = token.text,
+                rowSpan = rowSpan
             )
-            row += 1
+            row += rowSpan
+        }
+
+        var index = 0
+        while (index < text.length) {
+            val ch = text[index]
+            if (ch == '\r') {
+                index += 1
+                continue
+            }
+            if (ch == '\n') {
+                if (singleColumn) {
+                    row += 1
+                } else if (row > 0 || cells.isNotEmpty()) {
+                    moveToNextColumn()
+                }
+                index += 1
+                continue
+            }
+            if (VerticalTextGlyphEngine.isAsciiRunSpace(ch)) {
+                index += 1
+                continue
+            }
+            val token = VerticalTextGlyphEngine.nextVerticalTextToken(text, index)
+            if (token.sourceEndExclusive <= index) {
+                index += 1
+            } else {
+                addToken(token)
+                index = token.sourceEndExclusive
+            }
         }
 
         if (cells.isEmpty()) return null
@@ -115,7 +176,7 @@ internal object VerticalSubtitleLayoutEngine {
             left,
             top,
             left + layout.cellWidth,
-            top + layout.cellHeight
+            top + layout.cellHeight * cell.rowSpan
         )
     }
 
@@ -181,7 +242,7 @@ internal object VerticalSubtitleLayoutEngine {
         val selectedRectsByColumn = linkedMapOf<Int, MutableList<Pair<Int, RectF>>>()
         val rightEdge = layoutRightEdge(viewWidth, layout)
         for (cell in layout.cells) {
-            if (cell.sourceOffset !in start..end) continue
+            if (cell.sourceEndExclusive <= start || cell.sourceOffset > end) continue
             val cellRect = cellRectUnclipped(layout, cell, rightEdge, scrollY)
             if (cellRect.right <= 0f || cellRect.left >= viewWidth.toFloat()) continue
             if (cellRect.bottom <= 0f || cellRect.top >= viewHeight.toFloat()) continue
@@ -242,7 +303,15 @@ internal object VerticalSubtitleLayoutEngine {
             val rect = cellRectUnclipped(layout, cell, rightEdge, scrollY)
             if (rect.right <= 0f || rect.left >= viewWidth.toFloat()) continue
             if (rect.bottom <= 0f || rect.top >= viewHeight.toFloat()) continue
-            VerticalTextGlyphEngine.draw(canvas, textPaint, cell.char, rect)
+            when {
+                VerticalTextGlyphEngine.isTateChuYokoToken(cell.char) -> {
+                    VerticalTextGlyphEngine.drawTateChuYoko(canvas, textPaint, cell.char, rect)
+                }
+                VerticalTextGlyphEngine.isSidewaysAsciiToken(cell.char) -> {
+                    VerticalTextGlyphEngine.drawLatinRun(canvas, textPaint, cell.char, rect)
+                }
+                else -> VerticalTextGlyphEngine.draw(canvas, textPaint, cell.char, rect)
+            }
         }
     }
 
