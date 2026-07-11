@@ -24,9 +24,11 @@ import java.util.zip.ZipInputStream
 private const val DICTIONARY_ENTRY_STORE_DIR = "dictionary_entry_store"
 private const val DICTIONARY_HOSHI_ROOT_DIR = "hoshidicts"
 private const val DICTIONARY_HOSHI_INFO_FILE = "info.json"
+private const val DICTIONARY_HOSHI_INDEX_FILE = "index.json"
 private const val DICTIONARY_HOSHI_BLOBS_FILE = "blobs.bin"
 private const val DICTIONARY_HOSHI_OFFSETS_FILE = "offsets.bin"
 private const val DICTIONARY_HOSHI_HASH_FILE = "hash.mph"
+private const val DICTIONARY_HOSHI_HASH_TABLE_FILE = "hash.table"
 private const val DICTIONARY_HOSHI_STYLES_FILE = "styles.css"
 private const val HOSHI_LOOKUP_PERF_LOG_TAG = "HoshiLookupPerf"
 private const val HOSHI_META_TYPE_SCAN_LIMIT_ROWS = 2048
@@ -112,10 +114,13 @@ private fun dictionaryHoshiTypeRootDir(
 
 private fun isValidHoshiDictionaryDir(dir: File): Boolean {
     if (!dir.isDirectory) return false
-    return File(dir, DICTIONARY_HOSHI_INFO_FILE).isFile &&
-        File(dir, DICTIONARY_HOSHI_BLOBS_FILE).isFile &&
+    if (!File(dir, DICTIONARY_HOSHI_BLOBS_FILE).isFile) return false
+    val legacy = File(dir, DICTIONARY_HOSHI_INFO_FILE).isFile &&
         File(dir, DICTIONARY_HOSHI_OFFSETS_FILE).isFile &&
         File(dir, DICTIONARY_HOSHI_HASH_FILE).isFile
+    val current = File(dir, DICTIONARY_HOSHI_INDEX_FILE).isFile &&
+        File(dir, DICTIONARY_HOSHI_HASH_TABLE_FILE).isFile
+    return legacy || current
 }
 
 private fun normalizeHoshiZipPath(path: String): String {
@@ -520,9 +525,12 @@ internal fun loadDictionaryFromStorage(
         val dictionaryDir = requestedDir
             ?: locateHoshiDictionaryDir(context, cacheKey, null)
             ?: return null
-        val infoFile = File(dictionaryDir, DICTIONARY_HOSHI_INFO_FILE)
+        val infoFile = listOf(
+            File(dictionaryDir, DICTIONARY_HOSHI_INDEX_FILE),
+            File(dictionaryDir, DICTIONARY_HOSHI_INFO_FILE),
+        ).firstOrNull(File::isFile)
         val infoJson = runCatching {
-            if (infoFile.isFile) JSONObject(infoFile.readText(Charsets.UTF_8)) else null
+            infoFile?.let { JSONObject(it.readText(Charsets.UTF_8)) }
         }.getOrNull()
         val resolvedName = infoJson?.optString("title")
             ?.trim()

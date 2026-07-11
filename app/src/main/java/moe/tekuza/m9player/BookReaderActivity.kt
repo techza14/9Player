@@ -2432,6 +2432,18 @@ private fun BookReaderScreen(
         onDispose { registerGamepadKeyHandler(null) }
     }
 
+    DisposableEffect(Unit) {
+        val listener = object : BookReaderFloatingBridge.ControlCollectListener {
+            override fun onControlCollectRequested(): Boolean {
+                if (playbackCueIndex !in cues.indices) return false
+                handleControlOverlayTap()
+                return true
+            }
+        }
+        BookReaderFloatingBridge.setControlCollectListener(listener)
+        onDispose { BookReaderFloatingBridge.setControlCollectListener(null) }
+    }
+
         BackHandler {
             when {
                 hoshiLookupPopupVisible -> {
@@ -4087,6 +4099,23 @@ private fun BookReaderScreen(
 
     }
 
+    val bookHoshiPopupOptions = LookupPopupOptions(
+        isVertical = false,
+        isFullWidth = false,
+        width = 320,
+        height = 250,
+        swipeToDismiss = true,
+        swipeThreshold = 40,
+        topInset = 0.0,
+        bottomInset = navigationBarBottomInsetDp,
+        dictionarySettings = loadDictionarySettings(context),
+        darkMode = isDarkTheme,
+        eInkMode = false,
+        audioSettings = audiobookSettings,
+        showRangeSelection = false,
+        showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
+        popupActionBar = true,
+    )
     if (!hoshiLookupPopupTemporarilyHidden) LookupPopupStackView(
         popups = hoshiLookupPopups,
         onPopupsChange = { next ->
@@ -4106,23 +4135,7 @@ private fun BookReaderScreen(
             )
             val popup = bookHoshiLookupSession.createPopup(
                 selection = selection,
-                options = LookupPopupOptions(
-                    isVertical = false,
-                    isFullWidth = false,
-                    width = 320,
-                    height = 250,
-                    swipeToDismiss = true,
-                    swipeThreshold = 40,
-                    topInset = 0.0,
-                    bottomInset = navigationBarBottomInsetDp,
-                    dictionarySettings = loadDictionarySettings(context),
-                    darkMode = isDarkTheme,
-                    eInkMode = false,
-                    audioSettings = audiobookSettings,
-                    showRangeSelection = false,
-                    showPlayAudio = audiobookSettings.lookupPlaybackAudioEnabled,
-                    popupActionBar = true,
-                ),
+                options = bookHoshiPopupOptions,
             )
             if (popup == null) {
                 Log.d(
@@ -4178,6 +4191,7 @@ private fun BookReaderScreen(
             reopenHoshiLookupPopupAfterCueRangeSelection = false
             clearCueRangeSelection()
         },
+        warmRootOptions = bookHoshiPopupOptions,
     )
 
     if (controlModeEnabled && cues.isNotEmpty()) {

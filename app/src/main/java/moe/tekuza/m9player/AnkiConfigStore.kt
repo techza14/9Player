@@ -76,6 +76,7 @@ internal fun loadPersistedAnkiConfig(context: Context): PersistedAnkiConfig {
 }
 
 internal fun savePersistedAnkiConfig(context: Context, config: PersistedAnkiConfig) {
+    clearPreparedAnkiExportCache()
     Log.d(
         ANKI_CONFIG_LOG_TAG,
         "save persisted deck='${config.deckName}' model='${config.modelName}' tagsLen=${config.tags.length} fieldCount=${config.fieldTemplates.size}"
@@ -234,7 +235,8 @@ internal fun buildCurrentAnkiExportConfigOrNull(
         deckName = deckName.ifBlank { defaultDeckName },
         modelName = model.name,
         fieldTemplates = templates,
-        tags = parseAnkiTags(tags)
+        tags = parseAnkiTags(tags),
+        model = model
     )
 }
 

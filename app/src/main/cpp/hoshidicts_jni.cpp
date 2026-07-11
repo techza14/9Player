@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cctype>
 #include <exception>
 #include <fstream>
 #include <filesystem>
@@ -34,7 +35,7 @@ struct MediaIndexEntry {
 
 struct LookupContext {
   explicit LookupContext(std::vector<std::string> dictionary_paths)
-      : dictionary_paths(std::move(dictionary_paths)), lookup(query, deconjugator) {
+      : dictionary_paths(std::move(dictionary_paths)), lookup(query, deinflector) {
     for (const auto& path : this->dictionary_paths) {
       query.add_term_dict(path);
       query.add_freq_dict(path);
@@ -44,7 +45,7 @@ struct LookupContext {
 
   std::vector<std::string> dictionary_paths;
   DictionaryQuery query;
-  Deconjugator deconjugator;
+  Deinflector deinflector;
   Lookup lookup;
   std::unordered_map<std::string, std::unordered_map<std::string, MediaIndexEntry>> media_indexes;
   std::mutex mutex;
@@ -378,7 +379,7 @@ std::string build_lookup_json(const std::vector<LookupResult>& lookup_results, i
     const auto& item = lookup_results[rank];
     const int matched_length = utf8_length(item.matched);
     const int base_score =
-        matched_length * 1000 - item.preprocessor_steps * 20 - static_cast<int>(item.process.size()) * 5 -
+        matched_length * 1000 - item.preprocessor_steps * 20 - static_cast<int>(item.trace.size()) * 5 -
         static_cast<int>(rank);
 
     for (const auto& glossary : item.term.glossaries) {
@@ -423,10 +424,27 @@ std::string build_import_json(const ImportResult& result, const std::string& out
   out << ",\"metaCount\":" << result.meta_count;
   out << ",\"mediaCount\":" << result.media_count;
 
-  std::string dict_path;
-  if (result.success && !result.dict_path.empty()) {
-    dict_path = result.dict_path;
+  std::string safe_title;
+  safe_title.reserve(result.title.size());
+  for (unsigned char ch : result.title) {
+    if (ch < 0x20 || ch == '/' || ch == '\\' || ch == ':' || ch == '*' || ch == '?' ||
+        ch == '"' || ch == '<' || ch == '>' || ch == '|') {
+      if (safe_title.empty() || safe_title.back() != '_') safe_title.push_back('_');
+    } else {
+      safe_title.push_back(static_cast<char>(ch));
+    }
   }
+  while (!safe_title.empty() && (safe_title.front() == '.' || safe_title.front() == ' ' || safe_title.front() == '_')) {
+    safe_title.erase(safe_title.begin());
+  }
+  while (!safe_title.empty() && (safe_title.back() == '.' || safe_title.back() == ' ' || safe_title.back() == '_')) {
+    safe_title.pop_back();
+  }
+  if (safe_title.empty() || safe_title == "." || safe_title == "..") safe_title = "Dictionary";
+  if (safe_title.size() > 120) safe_title.resize(120);
+  const std::string dict_path = result.success
+      ? (std::filesystem::path(output_dir) / safe_title).string()
+      : std::string{};
   out << ",\"dictPath\":";
   append_json_string(out, dict_path);
 
@@ -571,9 +589,9 @@ jobject new_lookup_result(JNIEnv* env, const LookupResult& result) {
   jstring matched = new_string(env, result.matched);
   jstring deinflected = new_string(env, result.deinflected);
   jclass stringClass = env->FindClass("java/lang/String");
-  jobjectArray process = env->NewObjectArray(static_cast<jsize>(result.process.size()), stringClass, nullptr);
-  for (size_t i = 0; i < result.process.size(); ++i) {
-    jstring step = new_string(env, result.process[i]);
+  jobjectArray process = env->NewObjectArray(static_cast<jsize>(result.trace.size()), stringClass, nullptr);
+  for (size_t i = 0; i < result.trace.size(); ++i) {
+    jstring step = new_string(env, result.trace[i].name);
     env->SetObjectArrayElement(process, static_cast<jsize>(i), step);
     env->DeleteLocalRef(step);
   }

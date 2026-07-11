@@ -23,7 +23,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 
@@ -155,7 +154,6 @@ class WearableBridgeService : Service() {
 
     private fun handle(nodeId: String, request: WearableCommand) {
         scope.launch {
-            val cue = BookReaderFloatingBridge.currentCue()
             when (request.command) {
                 "GET_STATE" -> send(nodeId, currentStateResponse(request, "已同步"))
                 "PLAY_PAUSE" -> {
@@ -189,27 +187,11 @@ class WearableBridgeService : Service() {
                     }
                 }
                 "COLLECT_CURRENT" -> {
-                    if (cue == null) {
-                        send(nodeId, response(request, false, "当前没有字幕句"))
-                    } else {
-                        val added = withContext(Dispatchers.IO) {
-                            appendBookReaderCollectedCue(
-                                applicationContext,
-                                BookReaderCollectedCue(
-                                    id = "wear-${System.currentTimeMillis()}-${cue.startMs}",
-                                    bookTitle = cue.bookTitle.orEmpty(),
-                                    text = cue.text,
-                                    startMs = cue.startMs,
-                                    endMs = cue.endMs,
-                                    savedAtMs = System.currentTimeMillis()
-                                )
-                            )
-                        }
-                        send(
-                            nodeId,
-                            response(request, true, if (added) "已收藏当前句" else "该句已收藏", cue.text)
-                        )
-                    }
+                    val accepted = BookReaderFloatingBridge.requestControlCollect()
+                    send(
+                        nodeId,
+                        response(request, accepted, if (accepted) "已按控制模式处理" else "当前没有可控制的字幕句")
+                    )
                 }
             }
         }

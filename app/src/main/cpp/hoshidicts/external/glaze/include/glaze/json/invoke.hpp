@@ -9,7 +9,7 @@
 
 namespace glz
 {
-   // invoker_t is intended to cause a funtion invocation when read
+   // invoker_t is intended to cause a function invocation when read
    template <class T>
    struct invoke_t;
 
@@ -153,7 +153,6 @@ namespace glz
       std::function<Signature> func{};
       std::string prev{};
       bool initialized = false;
-      static constexpr auto glaze = true;
    };
 
    template <class T>
@@ -161,8 +160,12 @@ namespace glz
       T::func;
       T::prev;
       T::initialized;
-      T::glaze;
    };
+
+   // Register invoke_update as having specified Glaze serialization
+   template <class Signature>
+   struct specified<invoke_update<Signature>> : std::true_type
+   {};
 
    template <is_invoke_update T>
    struct from<JSON, T>

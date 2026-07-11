@@ -1,5 +1,6 @@
 package moe.tekuza.m9player.hoshi.features.dictionary
 
+import android.os.SystemClock
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -11,6 +12,7 @@ import androidx.compose.ui.Modifier
 import de.manhhao.hoshi.LookupResult
 import moe.tekuza.m9player.hoshi.dictionary.LookupEngine
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
+import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
 import moe.tekuza.m9player.AnkiDuplicateCheckResult
 import moe.tekuza.m9player.logDebug
 import java.util.UUID
@@ -37,6 +39,7 @@ internal data class LookupPopupItem(
     val id: String = UUID.randomUUID().toString(),
     val state: LookupPopupState,
     val clearSelectionSignal: Int = 0,
+    val lookupStartedAtNanos: Long = SystemClock.elapsedRealtimeNanos(),
 )
 
 internal fun createLookupPopupItem(
@@ -45,6 +48,7 @@ internal fun createLookupPopupItem(
     dictionaryStyles: Map<String, String>? = null,
     lookup: (String, Int, Int) -> List<de.manhhao.hoshi.LookupResult> = LookupEngine::lookup,
 ): Pair<LookupPopupItem, Int>? {
+    val lookupStartedAtNanos = SystemClock.elapsedRealtimeNanos()
     val settings = options.dictionarySettings.normalized()
     val styles = dictionaryStyles ?: currentDictionaryStyles()
     logDebug("HoshiLookupPopup") {
@@ -66,28 +70,49 @@ internal fun createLookupPopupItem(
         "createLookupPopupItem result selection='${selection.text.take(32)}' firstTerm='${first.matched.take(32)}' results=${results.size} matchedLength=${first.matched.codePointCount(0, first.matched.length)}"
     }
     return LookupPopupItem(
-        state = LookupPopupState(
-            selection = selection,
-            results = results,
-            dictionaryStyles = styles,
-            dictionarySettings = settings,
-            isVertical = options.isVertical,
-            isFullWidth = options.isFullWidth,
-            width = options.width,
-            height = options.height,
-            swipeToDismiss = options.swipeToDismiss,
-            swipeThreshold = options.swipeThreshold,
-            topInset = options.topInset,
-            bottomInset = options.bottomInset,
-            darkMode = options.darkMode,
-            eInkMode = options.eInkMode,
-            audioSettings = options.audioSettings,
-            showRangeSelection = options.showRangeSelection,
-            showPlayAudio = options.showPlayAudio,
-            popupActionBar = options.popupActionBar,
-        ),
+        lookupStartedAtNanos = lookupStartedAtNanos,
+        state = options.toPopupState(selection, results, styles, settings),
     ) to first.matched.codePointCount(0, first.matched.length)
 }
+
+private fun LookupPopupOptions.toPopupState(
+    selection: ReaderSelectionData,
+    results: List<LookupResult>,
+    dictionaryStyles: Map<String, String>,
+    settings: DictionarySettings = dictionarySettings.normalized(),
+) = LookupPopupState(
+    selection = selection,
+    results = results,
+    dictionaryStyles = dictionaryStyles,
+    dictionarySettings = settings,
+    isVertical = isVertical,
+    isFullWidth = isFullWidth,
+    width = width,
+    height = height,
+    swipeToDismiss = swipeToDismiss,
+    swipeThreshold = swipeThreshold,
+    topInset = topInset,
+    bottomInset = bottomInset,
+    darkMode = darkMode,
+    eInkMode = eInkMode,
+    audioSettings = audioSettings,
+    showRangeSelection = showRangeSelection,
+    showPlayAudio = showPlayAudio,
+    popupActionBar = popupActionBar,
+)
+
+private fun createWarmLookupPopupItem(options: LookupPopupOptions) = LookupPopupItem(
+    state = options.toPopupState(
+        selection = ReaderSelectionData(
+            text = "",
+            sentence = "",
+            rect = ReaderSelectionRect(0.0, 0.0, 1.0, 1.0),
+            normalizedOffset = null,
+        ),
+        results = emptyList(),
+        dictionaryStyles = currentDictionaryStyles(),
+    ),
+)
 
 internal fun currentDictionaryStyles(): Map<String, String> =
     runCatching {
@@ -132,8 +157,11 @@ internal fun LookupPopupStackView(
     modifier: Modifier = Modifier,
     onRootPopupDismissed: () -> Unit = {},
     warmRootShell: Boolean = true,
+    warmRootOptions: LookupPopupOptions? = null,
 ) {
-    var warmRootPopup by remember { mutableStateOf<LookupPopupItem?>(null) }
+    var warmRootPopup by remember(warmRootOptions) {
+        mutableStateOf(warmRootOptions?.let(::createWarmLookupPopupItem))
+    }
     popups.firstOrNull()?.let { warmRootPopup = it }
     val displayPopups = if (popups.isNotEmpty()) {
         popups
@@ -162,6 +190,7 @@ internal fun LookupPopupStackView(
             }
             LookupPopupView(
                 state = popup.state,
+                lookupStartedAtNanos = popup.lookupStartedAtNanos,
                 clearSelectionSignal = popup.clearSelectionSignal,
                 onTapOutside = {},
                 onSwipeDismiss = {

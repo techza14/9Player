@@ -1,42 +1,32 @@
 #include "hoshidicts/importer.hpp"
 
-#include <zip.h>
+#include <ankerl/unordered_dense.h>
+#include <xxh3.h>
 #include <zstd.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <future>
-#include <limits>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
+#include "hash/bloom.hpp"
 #include "hash/hash.hpp"
 #include "json/yomitan_parser.hpp"
+#include "zip/zip.hpp"
 
 namespace {
-constexpr ssize_t kMaxZipEntries = 20000;
-constexpr size_t kMaxIndexBytes = 8u * 1024u * 1024u;
-constexpr size_t kMaxStyleBytes = 4u * 1024u * 1024u;
-constexpr size_t kMaxBankBytes = 64u * 1024u * 1024u;
-constexpr size_t kMaxMediaEntryBytes = 32u * 1024u * 1024u;
-constexpr uint64_t kMaxTotalMediaBytes = 256ull * 1024ull * 1024ull;
-constexpr size_t kMaxMediaFiles = 10000;
-constexpr size_t kMaxZipPathBytes = 512;
-constexpr size_t kLowRamWorkerThreads = 3;
-
 struct Files {
   std::vector<int> term_banks;
   std::vector<int> meta_banks;
@@ -46,19 +36,20 @@ struct Files {
 
 struct ProcessedFile {
   std::vector<char> data;
-  std::unordered_map<std::string, std::vector<uint64_t>> offsets;
+  std::vector<std::pair<uint64_t, uint64_t>> offsets;
+  ankerl::unordered_dense::map<uint64_t, std::vector<char>> glossaries;
+  std::vector<std::pair<uint64_t, uint64_t>> glossary_offsets;
   size_t count = 0;
+  size_t pitch_count = 0;
+  size_t freq_count = 0;
 };
 
-struct MediaFile {
-  std::string path;
-  std::vector<char> blob;
-};
+void setup_stream_exceptions(std::ofstream& stream) { stream.exceptions(std::ios::failbit | std::ios::badbit); }
 
-std::string safe_dictionary_dir_name(std::string_view raw_title) {
+std::string safe_dictionary_dir_name(std::string_view title) {
   std::string out;
-  out.reserve(raw_title.size());
-  for (unsigned char ch : raw_title) {
+  out.reserve(title.size());
+  for (unsigned char ch : title) {
     if (ch < 0x20 || ch == '/' || ch == '\\' || ch == ':' || ch == '*' || ch == '?' ||
         ch == '"' || ch == '<' || ch == '>' || ch == '|') {
       if (out.empty() || out.back() != '_') out.push_back('_');
@@ -66,206 +57,46 @@ std::string safe_dictionary_dir_name(std::string_view raw_title) {
       out.push_back(static_cast<char>(ch));
     }
   }
-
-  while (!out.empty() && (out.front() == '.' || out.front() == ' ' || out.front() == '_')) {
-    out.erase(out.begin());
-  }
-  while (!out.empty() && (out.back() == '.' || out.back() == ' ' || out.back() == '_')) {
-    out.pop_back();
-  }
+  while (!out.empty() && (out.front() == '.' || out.front() == ' ' || out.front() == '_')) out.erase(out.begin());
+  while (!out.empty() && (out.back() == '.' || out.back() == ' ' || out.back() == '_')) out.pop_back();
   if (out.empty() || out == "." || out == "..") return "Dictionary";
   if (out.size() > 120) out.resize(120);
   return out;
 }
 
-bool path_starts_with(const std::filesystem::path& root, const std::filesystem::path& child) {
-  auto root_it = root.begin();
-  auto child_it = child.begin();
-  for (; root_it != root.end(); ++root_it, ++child_it) {
-    if (child_it == child.end() || *root_it != *child_it) return false;
-  }
-  return true;
-}
-
-std::filesystem::path safe_dictionary_output_path(const std::string& output_dir,
-                                                  std::string_view raw_title) {
-  const auto root = std::filesystem::absolute(output_dir).lexically_normal();
-  const auto target = (root / safe_dictionary_dir_name(raw_title)).lexically_normal();
-  if (!path_starts_with(root, target)) {
-    throw std::runtime_error("unsafe dictionary output path");
-  }
-  return target;
-}
-
-void setup_stream_exceptions(std::ofstream& stream) { stream.exceptions(std::ios::failbit | std::ios::badbit); }
-
-bool is_safe_zip_entry_name(std::string_view raw_name) {
-  if (raw_name.empty() || raw_name.size() > kMaxZipPathBytes || raw_name.front() == '/') return false;
-  if (raw_name.size() >= 2 && std::isalpha(static_cast<unsigned char>(raw_name[0])) && raw_name[1] == ':') {
-    return false;
-  }
-  std::string normalized(raw_name);
-  std::replace(normalized.begin(), normalized.end(), '\\', '/');
-  for (const auto& component : std::filesystem::path(normalized)) {
-    if (component == ".." || component.has_root_path()) return false;
-  }
-  return true;
-}
-
-std::string read_current_entry(zip_t* archive, size_t max_bytes) {
-  const ssize_t entry_size = zip_entry_size(archive);
-  if (entry_size < 0 || static_cast<size_t>(entry_size) > max_bytes) {
-    throw std::runtime_error("zip entry too large");
-  }
-  void* raw = nullptr;
-  size_t size = 0;
-  ssize_t bytes_read = zip_entry_read(archive, &raw, &size);
-  if (bytes_read < 0 || !raw) {
-    if (raw) {
-      free(raw);
-    }
-    return "";
-  }
-  if (size > max_bytes) {
-    free(raw);
-    throw std::runtime_error("zip entry exceeded size limit");
-  }
-
-  std::unique_ptr<void, decltype(&std::free)> buf(raw, &std::free);
-  std::string buffer(static_cast<char*>(buf.get()), size);
-  return buffer;
-}
-
-std::string read_file_by_index(zip_t* archive, int index, size_t max_bytes = kMaxBankBytes) {
-  if (zip_entry_openbyindex(archive, index) != 0) {
-    return "";
-  }
-  try {
-    std::string buffer = read_current_entry(archive, max_bytes);
-    zip_entry_close(archive);
-    return buffer;
-  } catch (...) {
-    zip_entry_close(archive);
-    throw;
-  }
-}
-
-std::string read_file_by_name(zip_t* archive, const char* name, size_t max_bytes = kMaxBankBytes) {
-  if (zip_entry_open(archive, name) != 0) {
-    return "";
-  }
-  try {
-    std::string buffer = read_current_entry(archive, max_bytes);
-    zip_entry_close(archive);
-    return buffer;
-  } catch (...) {
-    zip_entry_close(archive);
-    throw;
-  }
-}
-
-std::optional<MediaFile> read_media_by_index(zip_t* archive, int index) {
-  if (zip_entry_openbyindex(archive, index) != 0) {
-    return std::nullopt;
-  }
-  MediaFile out;
-  const char* raw_name = zip_entry_name(archive);
-  if (raw_name == nullptr || !is_safe_zip_entry_name(raw_name)) {
-    zip_entry_close(archive);
-    throw std::runtime_error("unsafe media entry path");
-  }
-  const ssize_t entry_size = zip_entry_size(archive);
-  if (entry_size < 0 || static_cast<size_t>(entry_size) > kMaxMediaEntryBytes) {
-    zip_entry_close(archive);
-    throw std::runtime_error("media entry too large");
-  }
-  out.path = raw_name;
-
-  void* raw = nullptr;
-  size_t size = 0;
-  ssize_t bytes_read = zip_entry_read(archive, &raw, &size);
-  zip_entry_close(archive);
-  if (bytes_read < 0 || !raw) {
-    if (raw) {
-      free(raw);
-    }
-    return std::nullopt;
-  }
-  if (size > kMaxMediaEntryBytes) {
-    free(raw);
-    throw std::runtime_error("media entry exceeded size limit");
-  }
-  std::unique_ptr<void, decltype(&free)> buf(raw, free);
-  auto* p = static_cast<std::uint8_t*>(buf.get());
-  out.blob.assign(p, p + size);
-  return out;
-}
-
-Files get_files(zip_t* archive) {
+Files get_files(const Zip& zip) {
   Files files;
-  const ssize_t num_entries = zip_entries_total(archive);
-  if (num_entries < 0) {
-    return files;
-  }
-  if (num_entries > kMaxZipEntries) {
-    throw std::runtime_error("dictionary zip has too many entries");
-  }
-
-  for (int i = 0; i < num_entries; ++i) {
-    if (zip_entry_openbyindex(archive, i) != 0) {
+  uint64_t total_media_bytes = 0;
+  for (int i = 0; i < static_cast<int>(zip.entries.size()); i++) {
+    const auto& name = zip.entries[i].name;
+    if (name.empty() || name.back() == '/') {
       continue;
     }
 
-    if (zip_entry_isdir(archive) == 1) {
-      zip_entry_close(archive);
-      continue;
-    }
-
-    const char* raw_name = zip_entry_name(archive);
-    if (raw_name != nullptr) {
-      const std::string_view name(raw_name);
-      if (!is_safe_zip_entry_name(name)) {
-        zip_entry_close(archive);
-        throw std::runtime_error("unsafe zip entry path");
+    if (name.starts_with("term_bank_")) {
+      files.term_banks.push_back(i);
+    } else if (name.starts_with("term_meta_bank_")) {
+      files.meta_banks.push_back(i);
+    } else if (name.starts_with("tag_bank_")) {
+      files.tag_banks.push_back(i);
+    } else if (!(name == "styles.css" || name == "index.json")) {
+      const uint64_t media_size = zip.entries[i].uncompressed_size;
+      if (files.media_files.size() >= Zip::kMaxMediaFiles || media_size > Zip::kMaxMediaEntryBytes ||
+          total_media_bytes > Zip::kMaxTotalMediaBytes - media_size) {
+        throw std::runtime_error("dictionary media limits exceeded");
       }
-      if (name.starts_with("term_bank_")) {
-        files.term_banks.push_back(i);
-      } else if (name.starts_with("term_meta_bank_")) {
-        files.meta_banks.push_back(i);
-      } else if (name.starts_with("tag_bank_")) {
-        files.tag_banks.push_back(i);
-      } else if (!(name == "styles.css" || name == "index.json")) {
-        if (files.media_files.size() >= kMaxMediaFiles) {
-          zip_entry_close(archive);
-          throw std::runtime_error("dictionary zip has too many media files");
-        }
-        files.media_files.push_back(i);
-      }
+      total_media_bytes += media_size;
+      files.media_files.push_back(i);
     }
-    zip_entry_close(archive);
   }
-
   return files;
 }
 
-void write_u8(std::vector<char>& out, uint8_t value) { out.push_back(static_cast<char>(value)); }
-
-void write_u16(std::vector<char>& out, uint16_t value) {
+template <typename T>
+void write_val(std::vector<char>& out, T value) {
   const size_t old_size = out.size();
-  out.resize(old_size + sizeof(uint16_t));
-  std::memcpy(out.data() + old_size, &value, sizeof(uint16_t));
-}
-
-void write_u32(std::vector<char>& out, uint32_t value) {
-  const size_t old_size = out.size();
-  out.resize(old_size + sizeof(uint32_t));
-  std::memcpy(out.data() + old_size, &value, sizeof(uint32_t));
-}
-
-void write_u64(std::vector<char>& out, uint64_t value) {
-  const size_t old_size = out.size();
-  out.resize(old_size + sizeof(uint64_t));
-  std::memcpy(out.data() + old_size, &value, sizeof(uint64_t));
+  out.resize(old_size + sizeof(T));
+  std::memcpy(out.data() + old_size, &value, sizeof(T));
 }
 
 void write_str(std::vector<char>& out, std::string_view value) {
@@ -283,20 +114,81 @@ void write_bytes(std::vector<char>& out, const void* data, size_t n) {
   std::memcpy(out.data() + old_size, data, n);
 }
 
-void merge_offsets(std::unordered_map<std::string, std::vector<uint64_t>>& a,
-                   std::unordered_map<std::string, std::vector<uint64_t>>& b, uint64_t write_offset) {
-  for (auto& [key, b_offsets] : b) {
-    for (auto& offset : b_offsets) {
-      offset += write_offset;
+void radix_sort(std::vector<std::pair<uint64_t, uint64_t>>& offsets) {
+  if (offsets.size() < 2) {
+    return;
+  }
+
+  const size_t n = offsets.size();
+  const size_t num_threads = std::max<size_t>(1, std::thread::hardware_concurrency());
+  std::vector<std::pair<uint64_t, uint64_t>> temp(n);
+  auto* src = &offsets;
+  auto* dst = &temp;
+
+  std::vector<std::array<size_t, 65536>> local_counts(num_threads);
+  auto global_count = std::make_unique<std::array<size_t, 65536>>();
+  auto global_pos = std::make_unique<std::array<size_t, 65536>>();
+
+  for (uint32_t shift = 0; shift < 64; shift += 16) {
+    const size_t chunk = (n + num_threads - 1) / num_threads;
+    std::vector<std::future<void>> futures;
+    for (size_t t = 0; t < num_threads; t++) {
+      const size_t begin = t * chunk;
+      const size_t end = std::min(begin + chunk, n);
+      if (begin >= n) {
+        break;
+      }
+
+      local_counts[t].fill(0);
+      futures.push_back(std::async(std::launch::async, [src, shift, begin, end, &local_counts, t]() {
+        for (size_t i = begin; i < end; i++) {
+          local_counts[t][((*src)[i].first >> shift) & 0xffff]++;
+        }
+      }));
+    }
+    for (auto& future : futures) {
+      future.get();
     }
 
-    auto it = a.find(key);
-    if (it == a.end()) {
-      a.emplace(key, std::move(b_offsets));
-    } else {
-      auto& values = it->second;
-      values.insert(values.end(), b_offsets.begin(), b_offsets.end());
+    global_count->fill(0);
+    for (size_t t = 0; t < futures.size(); t++) {
+      for (size_t bucket = 0; bucket < 65536; bucket++) {
+        (*global_count)[bucket] += local_counts[t][bucket];
+      }
     }
+
+    global_pos->fill(0);
+    size_t total = 0;
+    for (size_t bucket = 0; bucket < 65536; bucket++) {
+      (*global_pos)[bucket] = total;
+      total += (*global_count)[bucket];
+    }
+
+    std::vector<std::array<size_t, 65536>> thread_pos(futures.size());
+    for (size_t bucket = 0; bucket < 65536; bucket++) {
+      size_t pos = (*global_pos)[bucket];
+      for (size_t t = 0; t < futures.size(); t++) {
+        thread_pos[t][bucket] = pos;
+        pos += local_counts[t][bucket];
+      }
+    }
+
+    std::vector<std::future<void>> scatter_futures;
+    for (size_t t = 0; t < futures.size(); t++) {
+      const size_t begin = t * chunk;
+      const size_t end = std::min(begin + chunk, n);
+      scatter_futures.push_back(std::async(std::launch::async, [src, dst, shift, begin, end, &thread_pos, t]() {
+        for (size_t i = begin; i < end; i++) {
+          const size_t bucket = ((*src)[i].first >> shift) & 0xffff;
+          (*dst)[thread_pos[t][bucket]++] = (*src)[i];
+        }
+      }));
+    }
+    for (auto& future : scatter_futures) {
+      future.get();
+    }
+
+    std::swap(src, dst);
   }
 }
 
@@ -319,38 +211,50 @@ ProcessedFile process_term_bank(const std::string& content) {
 
   for (auto& term : out) {
     const std::string_view glossary = term.glossary.str;
-    const size_t bound = ZSTD_compressBound(glossary.size());
-    compressed.resize(bound);
-    const size_t compressed_size =
-        ZSTD_compressCCtx(cctx, compressed.data(), bound, glossary.data(), glossary.size(), 0);
-    if (ZSTD_isError(compressed_size)) {
-      ZSTD_freeCCtx(cctx);
-      throw std::runtime_error("failed to compress glossary");
+    uint64_t glossary_hash = XXH3_64bits(glossary.data(), glossary.size());
+    auto it = processed.glossaries.find(glossary_hash);
+    if (it == processed.glossaries.end()) {
+      const size_t bound = ZSTD_compressBound(glossary.size());
+      compressed.resize(bound);
+      const size_t compressed_size =
+          ZSTD_compressCCtx(cctx, compressed.data(), bound, glossary.data(), glossary.size(), 0);
+      if (ZSTD_isError(compressed_size)) {
+        ZSTD_freeCCtx(cctx);
+        throw std::runtime_error("failed to compress glossary");
+      }
+      compressed.resize(compressed_size);
+      processed.glossaries.emplace(glossary_hash, compressed);
     }
 
     uint64_t offset = processed.data.size();
+    uint32_t blob_size = processed.glossaries[glossary_hash].size();
     std::string_view expr = term.expression;
     std::string_view reading = term.reading.empty() ? expr : term.reading;
-    std::string_view blob{compressed.data(), compressed_size};
     std::string_view definition_tags = term.definition_tags.value_or("");
 
-    write_u8(processed.data, 0);
-    write_u16(processed.data, expr.size());
+    write_val<uint8_t>(processed.data, 0);
+    write_val<uint16_t>(processed.data, expr.size());
     write_str(processed.data, expr);
-    write_u16(processed.data, reading.size());
+    write_val<uint16_t>(processed.data, reading.size());
     write_str(processed.data, reading);
-    write_u32(processed.data, blob.size());
-    write_str(processed.data, blob);
-    write_u8(processed.data, definition_tags.size());
-    write_str(processed.data, definition_tags);
-    write_u8(processed.data, term.rules.size());
-    write_str(processed.data, term.rules);
-    write_u8(processed.data, term.term_tags.size());
-    write_str(processed.data, term.term_tags);
 
-    processed.offsets[std::string(expr)].push_back(offset);
+    uint64_t glossary_offset = processed.data.size();
+    write_val<uint64_t>(processed.data, 0);
+    write_val<uint32_t>(processed.data, blob_size);
+    processed.glossary_offsets.emplace_back(glossary_hash, glossary_offset);
+
+    write_val<uint8_t>(processed.data, definition_tags.size());
+    write_str(processed.data, definition_tags);
+    write_val<uint8_t>(processed.data, term.rules.size());
+    write_str(processed.data, term.rules);
+    write_val<uint8_t>(processed.data, term.term_tags.size());
+    write_str(processed.data, term.term_tags);
+    write_val<uint32_t>(processed.data, 0);
+    write_val<int32_t>(processed.data, static_cast<int32_t>(term.score));
+
+    processed.offsets.emplace_back(XXH3_64bits(expr.data(), expr.size()), offset);
     if (reading != expr) {
-      processed.offsets[std::string(reading)].push_back(offset);
+      processed.offsets.emplace_back(XXH3_64bits(reading.data(), reading.size()), offset);
     }
     processed.count++;
   }
@@ -376,43 +280,72 @@ ProcessedFile process_meta_bank(const std::string& content) {
     std::string_view mode = meta.mode;
     std::string_view data = meta.data.str;
 
-    write_u8(processed.data, 1);
-    write_u16(processed.data, expr.size());
+    write_val<uint8_t>(processed.data, 1);
+    write_val<uint16_t>(processed.data, expr.size());
     write_str(processed.data, expr);
-    write_u8(processed.data, mode.size());
+    write_val<uint8_t>(processed.data, mode.size());
     write_str(processed.data, mode);
-    write_u32(processed.data, data.size());
+    write_val<uint32_t>(processed.data, data.size());
     write_str(processed.data, data);
 
-    processed.offsets[std::string(expr)].push_back(offset);
+    processed.offsets.emplace_back(XXH3_64bits(expr.data(), expr.size()), offset);
     processed.count++;
+    if (mode == "freq") {
+      processed.freq_count++;
+    } else if (mode == "pitch" || mode == "ipa") {
+      processed.pitch_count++;
+    }
   }
 
   return processed;
 }
 
-void write_terms(std::ofstream& file, std::unordered_map<std::string, std::vector<uint64_t>>& offsets, zip_t* archive,
+void write_terms(std::ofstream& file, std::vector<std::pair<uint64_t, uint64_t>>& offsets, const Zip& zip,
                  const std::vector<int>& files, uint64_t& write_offset, ImportResult& result, bool low_ram) {
   if (files.empty()) {
     return;
   }
 
-  size_t max_threads = low_ram ? kLowRamWorkerThreads : std::max<size_t>(2, static_cast<const unsigned long>(std::thread::hardware_concurrency() * 2));
+  size_t max_threads =
+      low_ram ? 2 : std::max<size_t>(4, static_cast<const unsigned long>(std::thread::hardware_concurrency()) + 4);
   std::deque<std::future<ProcessedFile>> threads;
+
+  ankerl::unordered_dense::map<uint64_t, uint64_t> glossaries;
   auto write_processed = [&](ProcessedFile&& processed) {
     if (processed.data.empty()) {
       return;
     }
+
+    std::vector<char> glossary_buf;
+    for (auto& [hash, compressed] : processed.glossaries) {
+      auto [it, inserted] = glossaries.try_emplace(hash, write_offset);
+      if (inserted) {
+        write_bytes(glossary_buf, compressed.data(), compressed.size());
+        write_offset += compressed.size();
+      }
+    }
+    if (!glossary_buf.empty()) {
+      file.write(glossary_buf.data(), static_cast<std::streamsize>(glossary_buf.size()));
+    }
+
+    for (auto& [hash, pos] : processed.glossary_offsets) {
+      uint64_t glossary_offset = glossaries[hash];
+      std::memcpy(processed.data.data() + pos, &glossary_offset, sizeof(uint64_t));
+    }
+
     file.write(processed.data.data(), static_cast<std::streamsize>(processed.data.size()));
-    merge_offsets(offsets, processed.offsets, write_offset);
+
+    for (auto& [hash, offset] : processed.offsets) {
+      offsets.emplace_back(hash, offset + write_offset);
+    }
+
     write_offset += processed.data.size();
     result.term_count += processed.count;
   };
 
   for (int file_index : files) {
-    std::string content = read_file_by_index(archive, file_index);
     threads.push_back(
-        std::async(std::launch::async, [content = std::move(content)]() { return process_term_bank(content); }));
+        std::async(std::launch::async, [&zip, file_index]() { return process_term_bank(zip.read(file_index)); }));
 
     if (threads.size() == max_threads) {
       write_processed(threads.front().get());
@@ -426,28 +359,34 @@ void write_terms(std::ofstream& file, std::unordered_map<std::string, std::vecto
   }
 }
 
-void write_meta(std::ofstream& file, std::unordered_map<std::string, std::vector<uint64_t>>& offsets, zip_t* archive,
+void write_meta(std::ofstream& file, std::vector<std::pair<uint64_t, uint64_t>>& offsets, const Zip& zip,
                 const std::vector<int>& files, uint64_t& write_offset, ImportResult& result, bool low_ram) {
   if (files.empty()) {
     return;
   }
 
-  size_t max_threads = low_ram ? kLowRamWorkerThreads : std::max<size_t>(2, static_cast<const unsigned long>(std::thread::hardware_concurrency() * 2));
+  size_t max_threads =
+      low_ram ? 2 : std::max<size_t>(4, static_cast<const unsigned long>(std::thread::hardware_concurrency()) + 4);
   std::deque<std::future<ProcessedFile>> threads;
   auto write_processed = [&](ProcessedFile&& processed) {
     if (processed.data.empty()) {
       return;
     }
     file.write(processed.data.data(), static_cast<std::streamsize>(processed.data.size()));
-    merge_offsets(offsets, processed.offsets, write_offset);
+
+    for (auto& [hash, offset] : processed.offsets) {
+      offsets.emplace_back(hash, offset + write_offset);
+    }
+
     write_offset += processed.data.size();
     result.meta_count += processed.count;
+    result.freq_count += processed.freq_count;
+    result.pitch_count += processed.pitch_count;
   };
 
   for (int file_index : files) {
-    std::string content = read_file_by_index(archive, file_index);
     threads.push_back(
-        std::async(std::launch::async, [content = std::move(content)]() { return process_meta_bank(content); }));
+        std::async(std::launch::async, [&zip, file_index]() { return process_meta_bank(zip.read(file_index)); }));
 
     if (threads.size() == max_threads) {
       write_processed(threads.front().get());
@@ -461,76 +400,90 @@ void write_meta(std::ofstream& file, std::unordered_map<std::string, std::vector
   }
 }
 
-void write_offset_index(std::ostream& file, std::unordered_map<std::string, std::vector<uint64_t>>& offsets,
-                        uint64_t& write_offset, std::vector<std::string_view>& keys,
-                        std::vector<uint64_t>& key_offsets) {
+std::vector<char> build_offset_index(std::vector<std::pair<uint64_t, uint64_t>>& offsets, uint64_t& write_offset,
+                                     std::vector<std::pair<uint64_t, uint64_t>>& hash_entries) {
   std::vector<char> offset_buf;
-  for (auto& [key, offs] : offsets) {
-    keys.push_back(key);
-    key_offsets.push_back(write_offset);
+  radix_sort(offsets);
+  for (size_t i = 0; i < offsets.size();) {
+    size_t j = i + 1;
+    while (j < offsets.size() && offsets[j].first == offsets[i].first) {
+      j++;
+    }
 
-    write_u32(offset_buf, offs.size());
-    write_bytes(offset_buf, offs.data(), offs.size() * sizeof(uint64_t));
+    hash_entries.emplace_back(offsets[i].first, write_offset);
 
-    write_offset += sizeof(uint32_t) + offs.size() * sizeof(uint64_t);
+    auto count = static_cast<uint32_t>(j - i);
+    write_val<uint32_t>(offset_buf, count);
+    for (size_t k = i; k < j; ++k) {
+      write_val<uint64_t>(offset_buf, offsets[k].second);
+    }
+
+    write_offset += sizeof(uint32_t) + count * sizeof(uint64_t);
+    i = j;
   }
-  file.write(offset_buf.data(), static_cast<std::streamsize>(offset_buf.size()));
+  return offset_buf;
 }
 
-void write_media(const std::string& path, zip_t* archive, const std::vector<int>& files, ImportResult& result) {
+size_t write_media(const std::string& path, const Zip& zip, const std::vector<int>& files) {
   if (files.empty()) {
-    return;
+    return 0;
   }
 
-  std::ofstream blobs(path + "/media.bin", std::ios::binary);
-  std::ofstream index(path + "/media_index.bin", std::ios::binary);
-  setup_stream_exceptions(blobs);
-  setup_stream_exceptions(index);
+  std::ofstream media(path + "/media.bin", std::ios::binary);
+  std::ofstream media_idx(path + "/media.idx", std::ios::binary);
+  setup_stream_exceptions(media);
+  setup_stream_exceptions(media_idx);
 
-  uint64_t write_offset = 0;
-  std::vector<char> index_buf;
+  size_t media_count = 0;
+  uint32_t write_pos = 0;
+  std::vector<char> buf;
+  std::vector<std::pair<std::string, uint32_t>> index_entries;
   for (int file_index : files) {
-    auto media = read_media_by_index(archive, file_index);
-    if (!media.has_value()) {
+    auto media_file = zip.read_media(file_index);
+    if (!media_file.has_value()) {
       continue;
     }
 
-    const auto blob_size = media->blob.size();
-    if (media->path.size() > std::numeric_limits<uint16_t>::max()) {
-      throw std::runtime_error("media path too long");
-    }
-    if (blob_size > std::numeric_limits<uint32_t>::max()) {
-      throw std::runtime_error("media entry too large");
-    }
-    if (write_offset > kMaxTotalMediaBytes || blob_size > kMaxTotalMediaBytes - write_offset) {
-      throw std::runtime_error("dictionary media total size exceeded");
-    }
-    blobs.write(media->blob.data(), static_cast<std::streamsize>(blob_size));
+    uint32_t record_start = write_pos;
+    buf.clear();
+    write_val<uint16_t>(buf, media_file->path.size());
+    write_str(buf, media_file->path);
+    write_val<uint32_t>(buf, media_file->blob.size());
+    write_bytes(buf, media_file->blob.data(), media_file->blob.size());
+    media.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+    write_pos += buf.size();
 
-    write_u16(index_buf, static_cast<uint16_t>(media->path.size()));
-    write_str(index_buf, media->path);
-    write_u64(index_buf, write_offset);
-    write_u32(index_buf, static_cast<uint32_t>(blob_size));
-
-    write_offset += blob_size;
-    result.media_count++;
+    index_entries.emplace_back(std::move(media_file->path), record_start);
+    media_count++;
   }
-  index.write(index_buf.data(), static_cast<std::streamsize>(index_buf.size()));
+
+  std::ranges::sort(index_entries);
+  std::vector<char> index_buf;
+  write_val<uint32_t>(index_buf, index_entries.size());
+  for (const auto& [name, offset] : index_entries) {
+    write_val<uint64_t>(index_buf, offset);
+  }
+
+  media_idx.write(index_buf.data(), static_cast<std::streamsize>(index_buf.size()));
+  return media_count;
 }
 }
 
 ImportResult dictionary_importer::import(const std::string& zip_path, const std::string& output_dir, bool low_ram) {
   ImportResult result;
-  zip_t* archive = nullptr;
   try {
-    archive = zip_open(zip_path.c_str(), 0, 'r');
-    if (!archive) {
+    Zip zip;
+    if (!zip.open(zip_path)) {
       throw std::runtime_error("failed to open zip");
     }
 
-    std::string index_content = read_file_by_name(archive, "index.json", kMaxIndexBytes);
+    int index_idx = zip.find("index.json");
+    if (index_idx < 0) {
+      throw std::runtime_error("could not find index.json");
+    }
+    std::string index_content = zip.read(index_idx, Zip::kMaxIndexBytes);
     if (index_content.empty()) {
-      throw std::runtime_error("could not find or read index.json");
+      throw std::runtime_error("could not read index.json");
     }
 
     Index index;
@@ -540,69 +493,63 @@ ImportResult dictionary_importer::import(const std::string& zip_path, const std:
 
     result.title = index.title;
 
-    std::filesystem::path dict_path = safe_dictionary_output_path(output_dir, result.title);
-    result.dict_path = dict_path.string();
+    std::filesystem::path dict_path = std::filesystem::path(output_dir) / safe_dictionary_dir_name(result.title);
     std::string path = dict_path.string();
     std::filesystem::create_directories(dict_path);
 
-    if (glz::write_file_json(index, path + "/info.json", std::string{})) {
-      throw std::runtime_error("failed to write info.json");
+    if (glz::write_file_json(index, path + "/index.json", std::string{})) {
+      throw std::runtime_error("failed to write index.json");
     }
 
-    std::string styles = read_file_by_name(archive, "styles.css", kMaxStyleBytes);
-    if (!styles.empty()) {
-      std::ofstream styles_file(path + "/styles.css", std::ios::binary);
-      setup_stream_exceptions(styles_file);
-      styles_file.write(styles.data(), static_cast<std::streamsize>(styles.size()));
+    int styles_idx = zip.find("styles.css");
+    if (styles_idx >= 0) {
+      std::string styles = zip.read(styles_idx, Zip::kMaxStyleBytes);
+      if (!styles.empty()) {
+        std::ofstream styles_file(path + "/styles.css", std::ios::binary);
+        setup_stream_exceptions(styles_file);
+        styles_file.write(styles.data(), static_cast<std::streamsize>(styles.size()));
+      }
     }
 
-    const Files files = get_files(archive);
+    const Files files = get_files(zip);
+    std::future<size_t> media_thread =
+        std::async(std::launch::async, [&path, &zip, &files]() { return write_media(path, zip, files.media_files); });
+
     std::ofstream blobs(path + "/blobs.bin", std::ios::binary);
     setup_stream_exceptions(blobs);
-    std::unordered_map<std::string, std::vector<uint64_t>> offsets;
+    std::vector<std::pair<uint64_t, uint64_t>> offsets;
     uint64_t write_offset = 0;
-    write_terms(blobs, offsets, archive, files.term_banks, write_offset, result, low_ram);
-    write_meta(blobs, offsets, archive, files.meta_banks, write_offset, result, low_ram);
+    write_terms(blobs, offsets, zip, files.term_banks, write_offset, result, low_ram);
+    write_meta(blobs, offsets, zip, files.meta_banks, write_offset, result, low_ram);
     if (offsets.empty()) {
       throw std::runtime_error("empty dictionary");
     }
 
-    std::vector<std::string_view> keys;
-    std::vector<uint64_t> key_offsets;
-    write_offset_index(blobs, offsets, write_offset, keys, key_offsets);
+    std::vector<std::pair<uint64_t, uint64_t>> hash_entries;
+    auto offset_buf = build_offset_index(offsets, write_offset, hash_entries);
+    std::vector<std::pair<uint64_t, uint64_t>>().swap(offsets);
 
-    hash::mphf phf;
-    phf.build(keys);
-    phf.save(path + "/hash.mph");
+    auto hash_thread = std::async(std::launch::async, [&hash_entries, &path]() {
+      hash::linear table;
+      table.build_to_file(hash_entries, path + "/hash.table");
+      auto hashes = hash_entries | std::views::keys | std::ranges::to<std::vector>();
+      hash::bloom::build_to_file(hashes, path + "/bloom.filter");
+    });
 
-    std::vector<uint64_t> offset_hash_table(keys.size());
-    for (size_t i = 0; i < keys.size(); i++) {
-      auto& key = keys[i];
-      offset_hash_table[phf(key)] = key_offsets[i];
-    }
-    std::ofstream offs(path + "/offsets.bin", std::ios::binary);
-    setup_stream_exceptions(offs);
-    offs.write(reinterpret_cast<const char*>(offset_hash_table.data()),
-               static_cast<std::streamsize>(offset_hash_table.size() * sizeof(uint64_t)));
+    blobs.write(offset_buf.data(), static_cast<std::streamsize>(offset_buf.size()));
+    hash_thread.get();
 
-    write_media(path, archive, files.media_files, result);
+    result.media_count = media_thread.get();
 
+    std::ofstream sui(path + "/.hoshidicts_3", std::ios::binary);
     result.success = true;
   } catch (const std::exception& e) {
     result.success = false;
     result.errors.emplace_back(e.what());
   }
 
-  if (archive) {
-    zip_close(archive);
-  }
-
-  if (!result.success && !result.dict_path.empty()) {
-    const auto root = std::filesystem::absolute(output_dir).lexically_normal();
-    const auto failed_path = std::filesystem::absolute(result.dict_path).lexically_normal();
-    if (path_starts_with(root, failed_path)) {
-      std::filesystem::remove_all(failed_path);
-    }
+  if (!result.success && !result.title.empty()) {
+    std::filesystem::remove_all(std::filesystem::path(output_dir) / result.title);
   }
 
   return result;

@@ -670,6 +670,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
             val top = if (hideStatusBar && readBodyToLh) 0 else safeInsets.top
             val bottom = if (hideNavigationBar) 0 else bars.bottom
             contentContainer.setPadding(0, top, 0, bottom)
+            fitMoreSettingsPanelToAvailableHeight()
             applyReadMenuTopInset(safeInsets.top)
             (statusBarScrim.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
                 params.height =
@@ -732,6 +733,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 Gravity.BOTTOM
             )
         )
+        contentContainer.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+            fitMoreSettingsPanelToAvailableHeight()
+        }
 
         audioControlPanel = buildAudioControlPanel().apply {
             visibility = View.GONE
@@ -1007,6 +1011,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 audioControlPanel.visibility = View.GONE
                 moreSettingsPanel.visibility =
                     if (moreSettingsPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                fitMoreSettingsPanelToAvailableHeight()
                 updateSystemBarSurfaces()
             }
         }
@@ -1758,6 +1763,18 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 Gravity.START or Gravity.CENTER_VERTICAL
             }
             brightnessPanel.layoutParams = params
+        }
+    }
+
+    private fun fitMoreSettingsPanelToAvailableHeight() {
+        if (!::contentContainer.isInitialized || !::moreSettingsPanel.isInitialized) return
+        val availableHeight = (contentContainer.height - contentContainer.paddingTop - contentContainer.paddingBottom)
+            .coerceAtLeast(0)
+        val params = moreSettingsPanel.layoutParams as? FrameLayout.LayoutParams ?: return
+        val targetHeight = minOf(dp(500), availableHeight)
+        if (params.height != targetHeight) {
+            params.height = targetHeight
+            moreSettingsPanel.layoutParams = params
         }
     }
 

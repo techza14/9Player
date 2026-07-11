@@ -9,9 +9,9 @@ struct Index {
   std::string_view title;
   int format = 3;
   std::string_view revision;
-  bool updatable;
-  std::string_view index_url;
-  std::string_view download_url;
+  bool isUpdatable;
+  std::string_view indexUrl;
+  std::string_view downloadUrl;
 };
 
 struct Term {
@@ -19,7 +19,7 @@ struct Term {
   std::string_view reading;
   std::optional<std::string_view> definition_tags;
   std::string_view rules;
-  int score = 0;
+  double score = 0;
   glz::raw_json_view glossary;
   int64_t sequence = 0;
   std::string_view term_tags;
@@ -48,6 +48,7 @@ struct ParsedFrequency {
 struct ParsedPitch {
   std::string_view reading;
   std::vector<int> pitches;
+  std::vector<std::string_view> transcriptions;
 };
 
 namespace yomitan_parser {
@@ -57,4 +58,5 @@ bool parse_meta_bank(std::string_view content, std::vector<Meta>& out);
 bool parse_tag_bank(std::string_view content, std::vector<Tag>& out);
 bool parse_frequency(std::string_view content, ParsedFrequency& out);
 bool parse_pitch(std::string_view content, ParsedPitch& out);
+bool parse_ipa(std::string_view content, ParsedPitch& out);
 };

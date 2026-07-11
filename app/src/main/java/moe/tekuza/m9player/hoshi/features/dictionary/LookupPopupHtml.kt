@@ -308,12 +308,8 @@ internal object LookupPopupHtml {
                         function postReady() {
                             if (posted) return;
                             posted = true;
-                            requestAnimationFrame(function() {
-                                requestAnimationFrame(function() {
-                                    document.documentElement.setAttribute('data-hoshi-content-ready', 'true');
-                                    webkit.messageHandlers.contentReadyToDraw.postMessage(null);
-                                });
-                            });
+                            document.documentElement.setAttribute('data-hoshi-content-ready', 'true');
+                            webkit.messageHandlers.contentReadyToDraw.postMessage(null);
                         }
                         window.hoshiPopupObserveContentReady = function() {
                             posted = false;

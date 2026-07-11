@@ -316,10 +316,9 @@ namespace glz
                   }
                }
                else {
-                  static thread_local auto key =
-                     typename std::decay_t<T>::key_type(key_value); // TODO handle numeric keys
-                  serialize<BEVE>::no_header<Opts>(key, ctx, b, ix);
-                  auto it = value.find(key);
+                  auto k = typename std::decay_t<T>::key_type(key_value); // TODO handle numeric keys
+                  serialize<BEVE>::no_header<Opts>(k, ctx, b, ix);
+                  auto it = value.find(k);
                   if (it != value.end()) {
                      serialize_partial<BEVE>::op<sub_partial, Opts>(it->second, ctx, b, ix);
                   }
@@ -722,7 +721,7 @@ namespace glz
                constexpr auto num_bytes = (N + 7) / 8;
                std::array<uint8_t, num_bytes> bytes{};
                for (size_t byte_i{}, i{}; byte_i < num_bytes; ++byte_i) {
-                  for (size_t bit_i = 7; bit_i < 8 && i < N; --bit_i, ++i) {
+                  for (size_t bit_i = 0; bit_i < 8 && i < N; ++bit_i, ++i) {
                      bytes[byte_i] |= uint8_t(value[i]) << uint8_t(bit_i);
                   }
                }
@@ -738,7 +737,7 @@ namespace glz
                }
                for (size_t byte_i{}, i{}; byte_i < num_bytes; ++byte_i) {
                   uint8_t byte{};
-                  for (size_t bit_i = 7; bit_i < 8 && i < value.size(); --bit_i, ++i) {
+                  for (size_t bit_i = 0; bit_i < 8 && i < value.size(); ++bit_i, ++i) {
                      byte |= uint8_t(value[i]) << uint8_t(bit_i);
                   }
                   dump_type(ctx, byte, b, ix);
@@ -750,14 +749,45 @@ namespace glz
          }
          else if constexpr (num_t<V>) {
             constexpr uint8_t type = std::floating_point<V> ? 0 : (std::is_signed_v<V> ? 0b000'01'000 : 0b000'10'000);
-            constexpr uint8_t tag = tag::typed_array | type | (byte_count<V> << 5);
-            dump_type(ctx, tag, b, ix);
-            if (bool(ctx.error)) [[unlikely]] {
-               return;
+            constexpr uint8_t numeric_header = tag::typed_array | type | (byte_count<V> << 5);
+
+            if constexpr (check_aligned_arrays(Opts) && sizeof(V) > 1) {
+               // Aligned typed array: ALIGNED_HEADER | NUMERIC_HEADER | SIZE | PADDING_LENGTH | PADDING | DATA
+               dump_type(ctx, tag::aligned_typed_array, b, ix);
+               if (bool(ctx.error)) [[unlikely]] {
+                  return;
+               }
+               dump_type(ctx, numeric_header, b, ix);
+               if (bool(ctx.error)) [[unlikely]] {
+                  return;
+               }
+               dump_compressed_int(ctx, value.size(), b, ix);
+               if (bool(ctx.error)) [[unlikely]] {
+                  return;
+               }
+
+               // Write padding length byte and padding
+               constexpr size_t alignment = sizeof(V);
+               const uint8_t padding = uint8_t((alignment - ((ix + 1) % alignment)) % alignment);
+               const auto n = value.size() * sizeof(V);
+               if (!ensure_space(ctx, b, ix + 1 + padding + n + write_padding_bytes)) [[unlikely]] {
+                  return;
+               }
+               dump_type(ctx, padding, b, ix);
+               if (padding) {
+                  std::memset(&b[ix], 0, padding);
+                  ix += padding;
+               }
             }
-            dump_compressed_int(ctx, value.size(), b, ix);
-            if (bool(ctx.error)) [[unlikely]] {
-               return;
+            else {
+               dump_type(ctx, numeric_header, b, ix);
+               if (bool(ctx.error)) [[unlikely]] {
+                  return;
+               }
+               dump_compressed_int(ctx, value.size(), b, ix);
+               if (bool(ctx.error)) [[unlikely]] {
+                  return;
+               }
             }
 
             if constexpr (contiguous<T>) {
@@ -765,8 +795,10 @@ namespace glz
                   std::is_volatile_v<std::remove_reference_t<std::remove_pointer_t<decltype(value.data())>>>;
 
                const auto n = value.size() * sizeof(V);
-               if (!ensure_space(ctx, b, ix + n + write_padding_bytes)) [[unlikely]] {
-                  return;
+               if constexpr (!(check_aligned_arrays(Opts) && sizeof(V) > 1)) {
+                  if (!ensure_space(ctx, b, ix + n + write_padding_bytes)) [[unlikely]] {
+                     return;
+                  }
                }
 
                if constexpr (is_volatile) {
@@ -982,6 +1014,8 @@ namespace glz
       static auto op(auto&& value, is_context auto&& ctx, B&& b, auto& ix)
       {
          using Key = typename T::key_type;
+         using val_t = std::remove_cvref_t<detail::iterator_second_type<T>>;
+         constexpr bool may_skip = null_t<val_t> && Opts.skip_null_members;
 
          constexpr uint8_t tag = beve_key_traits<Key>::header;
          dump_type(ctx, tag, b, ix);
@@ -989,11 +1023,23 @@ namespace glz
             return;
          }
 
-         dump_compressed_int(ctx, value.size(), b, ix);
+         size_t count = value.size();
+         if constexpr (may_skip) {
+            count = 0;
+            for (auto&& [k, v] : value) {
+               (void)k;
+               if (!skip_member<Opts>(v)) ++count;
+            }
+         }
+
+         dump_compressed_int(ctx, count, b, ix);
          if (bool(ctx.error)) [[unlikely]] {
             return;
          }
          for (auto&& [k, v] : value) {
+            if constexpr (may_skip) {
+               if (skip_member<Opts>(v)) continue;
+            }
             serialize<BEVE>::no_header<Opts>(k, ctx, b, ix);
             if (bool(ctx.error)) [[unlikely]] {
                return;
@@ -1047,8 +1093,7 @@ namespace glz
       }
    };
 
-   template <nullable_t T>
-      requires(!std::is_array_v<T> && not is_expected<T>)
+   template <nullable_like T>
    struct to<BEVE, T> final
    {
       template <auto Opts, class B>
@@ -1320,6 +1365,30 @@ namespace glz
                         }
                      }
                   }
+                  else if constexpr (is_specialization_v<val_t, custom_t> && Options.skip_null_members &&
+                                     custom_getter_returns_nullable<val_t>()) {
+                     if (!is_custom_field_null<T, I>(value, t, ctx)) {
+                        ++member_count;
+                     }
+                  }
+                  else if constexpr (Options.skip_null_members && glaze_value_is_nullable<val_t>()) {
+                     if (!is_glaze_value_field_null<T, I>(value, t)) {
+                        ++member_count;
+                     }
+                  }
+                  else if constexpr (check_skip_default_members(Options) && has_skippable_default<val_t>) {
+                     decltype(auto) member = [&]() -> decltype(auto) {
+                        if constexpr (reflectable<T>) {
+                           return get_member(value, get<I>(t));
+                        }
+                        else {
+                           return get_member(value, get<I>(reflect<T>::values));
+                        }
+                     }();
+                     if (!is_default_value(member)) {
+                        ++member_count;
+                     }
+                  }
                   else {
                      ++member_count;
                   }
@@ -1384,6 +1453,31 @@ namespace glz
                         if (is_null) {
                            return;
                         }
+                     }
+                  }
+                  else if constexpr (is_specialization_v<val_t, custom_t> && Options.skip_null_members &&
+                                     custom_getter_returns_nullable<val_t>()) {
+                     if (is_custom_field_null<T, I>(value, t, ctx)) {
+                        return;
+                     }
+                  }
+                  else if constexpr (Options.skip_null_members && glaze_value_is_nullable<val_t>()) {
+                     if (is_glaze_value_field_null<T, I>(value, t)) {
+                        return;
+                     }
+                  }
+
+                  if constexpr (check_skip_default_members(Options) && has_skippable_default<val_t>) {
+                     decltype(auto) member_val = [&]() -> decltype(auto) {
+                        if constexpr (reflectable<T>) {
+                           return get_member(value, get<I>(t));
+                        }
+                        else {
+                           return get_member(value, get<I>(reflect<T>::values));
+                        }
+                     }();
+                     if (is_default_value(member_val)) {
+                        return;
                      }
                   }
 

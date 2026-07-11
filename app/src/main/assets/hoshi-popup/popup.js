@@ -21,6 +21,8 @@ let audioUrls = {};
 let lastSelection = '';
 let currentDictionaryMedia = null;
 let selectedDictionaries = {};
+let dictionaryMediaObserver = null;
+let renderGeneration = 0;
 
 function getPopupSelectionText() {
     return window.hoshiSelection?.selection?.text || window.getSelection()?.toString() || '';
@@ -471,6 +473,38 @@ function getDictionaryMediaUrl(dictionary, path) {
     return `image://?dictionary=${encodeURIComponent(dictionary)}&path=${encodeURIComponent(path)}`;
 }
 
+function observeDictionaryMedia(target, load) {
+    if (typeof IntersectionObserver !== 'function') {
+        load();
+        return;
+    }
+    if (!dictionaryMediaObserver) {
+        dictionaryMediaObserver = new IntersectionObserver((entries, observer) => {
+            for (const entry of entries) {
+                if (!entry.isIntersecting) continue;
+                observer.unobserve(entry.target);
+                const fn = entry.target._loadDictionaryMedia;
+                delete entry.target._loadDictionaryMedia;
+                fn?.();
+            }
+        }, { root: null, rootMargin: '200px' });
+    }
+    target._loadDictionaryMedia = load;
+    dictionaryMediaObserver.observe(target);
+}
+
+function resetDictionaryMediaObserver() {
+    dictionaryMediaObserver?.disconnect();
+    dictionaryMediaObserver = null;
+}
+
+function observePendingDictionaryMedia(root) {
+    root.querySelectorAll?.('.gloss-image-container').forEach(target => {
+        const fn = target._loadDictionaryMedia;
+        if (fn) observeDictionaryMedia(target, fn);
+    });
+}
+
 function applyDictionaryImageContainerFixes(imageContainer) {
     if (window.disablePopupImageViewportMaxHeight) {
         imageContainer.style.maxHeight = 'none';
@@ -809,7 +843,7 @@ function createDefinitionImage(data, dictionary, exporting = false) {
             }
         });
         if (shouldRenderDefinitionImageToCanvas(path, appearance, usedWidth, invAspectRatio)) {
-            imageContainer.appendChild(createDefinitionImageCanvas(imageUrl, nodeData?.alt || title || '', (canvas, sourceImage) => {
+            const canvas = createDefinitionImageCanvas(imageUrl, nodeData?.alt || title || '', (canvas, sourceImage) => {
                 renderDefinitionImageToCanvas(canvas, sourceImage, usedWidth, invAspectRatio, appearance);
                 const imageWidth = Math.min(sourceImage.naturalWidth || usedWidth, window.innerWidth - 20);
                 if (!hasDimensions) {
@@ -827,7 +861,9 @@ function createDefinitionImage(data, dictionary, exporting = false) {
                     appearance,
                     hasDimensions,
                 });
-            }));
+            });
+            imageContainer.appendChild(canvas);
+            observeDictionaryMedia(imageContainer, () => canvas.loadDictionaryMedia?.());
         } else {
             const img = document.createElement('img');
             img.classList.add('gloss-image');
@@ -868,8 +904,10 @@ function createDefinitionImage(data, dictionary, exporting = false) {
                     appliedWidth: (hasDimensions && !useNaturalLayout) ? `${usedWidth}em` : `${imageWidth}px`,
                 });
             }, {once: true});
-            img.src = imageUrl;
             imageContainer.appendChild(img);
+            observeDictionaryMedia(imageContainer, () => {
+                img.src = imageUrl;
+            });
         }
     } else {
         const alt = nodeData?.alt || title || '';
@@ -936,7 +974,9 @@ function createDefinitionImageCanvas(imageUrl, alt, onLoad) {
     sourceImage.addEventListener('load', () => {
         onLoad(canvas, sourceImage);
     }, {once: true});
-    sourceImage.src = imageUrl;
+    canvas.loadDictionaryMedia = () => {
+        sourceImage.src = imageUrl;
+    };
 
     return canvas;
 }
@@ -1721,6 +1761,21 @@ const backStack = [];
 const forwardStack = [];
 let pendingHistoryRestore = null;
 
+window.resetPopupResults = function() {
+    renderGeneration++;
+    flushPendingHistoryRestore();
+    backStack.length = 0;
+    forwardStack.length = 0;
+    pendingHistoryRestore = null;
+    window.lookupEntries = undefined;
+    window.entryCount = 0;
+    audioUrls = {};
+    selectedDictionaries = {};
+    resetDictionaryMediaObserver();
+    document.getElementById('entries-container')?.replaceChildren();
+    document.scrollingElement.scrollTop = 0;
+};
+
 function appendPendingHistoryRestore(flush = false) {
     const pending = pendingHistoryRestore;
     if (!pending) {
@@ -1730,6 +1785,7 @@ function appendPendingHistoryRestore(flush = false) {
     const chunk = pending.nodes.splice(0, count);
     if (chunk.length) {
         pending.container.append(...chunk);
+        observePendingDictionaryMedia(pending.container);
     }
     if (!pending.nodes.length) {
         pendingHistoryRestore = null;
@@ -1746,6 +1802,7 @@ function flushPendingHistoryRestore() {
 
 function redirect(count) {
     flushPendingHistoryRestore();
+    resetDictionaryMediaObserver();
     backStack.push(snapshot());
     forwardStack.length = 0;
     window.lookupEntries = undefined;
@@ -1759,14 +1816,16 @@ function redirect(count) {
     });
 }
 
-window.replacePopupResults = function(count) {
+window.replacePopupResults = function(count, initialEntries) {
     flushPendingHistoryRestore();
+    renderGeneration++;
     backStack.length = 0;
     forwardStack.length = 0;
-    window.lookupEntries = undefined;
+    window.lookupEntries = Array.isArray(initialEntries) && initialEntries.length ? initialEntries : undefined;
     window.entryCount = count;
     audioUrls = {};
     selectedDictionaries = {};
+    resetDictionaryMediaObserver();
     const container = document.getElementById('entries-container');
     if (container) {
         container.innerHTML = '';
@@ -1796,10 +1855,12 @@ function restore(snapshot) {
     const shouldDeferOffscreenNodes = snapshot.scrollTop === 0 && nodes.length > 6;
     if (shouldDeferOffscreenNodes) {
         container.replaceChildren(...nodes.splice(0, 4));
+        observePendingDictionaryMedia(container);
         pendingHistoryRestore = { container, nodes };
         setTimeout(() => appendPendingHistoryRestore(), 50);
     } else {
         container.replaceChildren(...nodes);
+        observePendingDictionaryMedia(container);
     }
     window.lookupEntries = snapshot.lookupEntries;
     window.entryCount = snapshot.entryCount;
@@ -1828,9 +1889,11 @@ window.renderPopup = function() {
         return;
     }
 
+    const generation = ++renderGeneration;
     (async () => {
         for (let idx = 0; idx < window.entryCount; idx++) {
             const entry = window.lookupEntries?.[idx] ?? await webkit.messageHandlers.getEntry.postMessage(idx);
+            if (generation !== renderGeneration) return;
             if (!entry) continue;
 
             window.lookupEntries ??= [];
@@ -1860,6 +1923,7 @@ window.renderPopup = function() {
 
             container.appendChild(entryDiv);
             await new Promise(r => requestAnimationFrame(r));
+            if (generation !== renderGeneration) return;
 
             const grouped = {};
             entry.glossaries.forEach(g => {
@@ -1874,8 +1938,11 @@ window.renderPopup = function() {
             for (let dictIdx = 0; dictIdx < dictNames.length; dictIdx++) {
                 entryDiv.appendChild(createGlossarySection(dictNames[dictIdx], grouped[dictNames[dictIdx]], idx));
                 await new Promise(r => requestAnimationFrame(r));
+                if (generation !== renderGeneration) return;
             }
         }
+
+        if (generation !== renderGeneration) return;
 
         container.querySelectorAll('ruby').forEach(ruby => {
             ruby.childNodes.forEach(node => {

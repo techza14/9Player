@@ -159,7 +159,12 @@ internal object VerticalTextGlyphEngine {
                 while (end < endLimit && isAsciiRunSpace(text[end])) end += 1
                 break
             }
-            return VerticalTextToken(start, end, text.substring(start, end))
+            val tokenText = text.substring(start, end)
+            val compact = tokenText.filterNot(::isAsciiRunSpace)
+            if (compact.length in 1..3 && compact.all { it in 'A'..'Z' || it in 'a'..'z' }) {
+                return VerticalTextToken(start, start + 1, text.substring(start, start + 1))
+            }
+            return VerticalTextToken(start, end, tokenText)
         }
         return VerticalTextToken(start, start + 1, text.substring(start, start + 1))
     }

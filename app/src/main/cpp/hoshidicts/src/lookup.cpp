@@ -3,7 +3,6 @@
 #include <utf8.h>
 
 #include <algorithm>
-#include <cstdint>
 #include <map>
 #include <ranges>
 #include <sstream>
@@ -38,47 +37,6 @@ int get_freq_value_for_dict(const TermResult& term, const std::string& dict_name
 
   return INT_MAX;
 }
-
-bool freq_sort_order(const LookupResult& a, const LookupResult& b, const std::vector<std::string>& freq_dict_order) {
-  for (const auto& dict_name : freq_dict_order) {
-    const int freq_a = get_freq_value_for_dict(a.term, dict_name);
-    const int freq_b = get_freq_value_for_dict(b.term, dict_name);
-    if (freq_a != freq_b) {
-      return freq_a < freq_b;
-    }
-  }
-
-  return false;
-}
-
-bool is_kana_codepoint(uint32_t cp) {
-  return (cp >= 0x3040 && cp <= 0x309F) || (cp >= 0x30A0 && cp <= 0x30FF) || cp == 0x30FC;
-}
-
-bool is_all_kana_lookup(const std::string& text) {
-  bool has_kana = false;
-  for (auto it = text.begin(); it != text.end();) {
-    uint32_t cp = utf8::next(it, text.end());
-    if (cp == 0x20 || cp == 0x3000) {
-      continue;
-    }
-    if (!is_kana_codepoint(cp)) {
-      return false;
-    }
-    has_kana = true;
-  }
-  return has_kana;
-}
-
-int kana_lookup_priority(const LookupResult& result, const std::string& query) {
-  if (result.term.expression == query) {
-    return 0;
-  }
-  if (is_all_kana_lookup(result.term.expression)) {
-    return 1;
-  }
-  return 2;
-}
 }
 
 std::vector<LookupResult> Lookup::lookup(const std::string& lookup_string, int max_results, size_t scan_length) const {
@@ -93,22 +51,12 @@ std::vector<LookupResult> Lookup::lookup(const std::string& lookup_string, int m
     std::string search_str(lookup_string.begin(), search_str_it);
     auto processor_results = text_processor::process(search_str);
     for (auto& variant : processor_results) {
-      auto deconjugation_results = deconjugator_.deconjugate(variant.text);
-      std::map<std::pair<std::string, std::string>, const DeconjugationForm*> deduplicated;
-      for (const auto& form : deconjugation_results) {
-        auto [it, inserted] =
-            deduplicated.try_emplace(std::pair{form.text, form.tags.empty() ? std::string{} : form.tags.back()}, &form);
-        if (!inserted && form.process.size() < it->second->process.size()) {
-          it->second = &form;
-        }
-      }
+      auto deinflection_results = deinflector_.deinflect(variant.text);
+      for (auto& deinflection : deinflection_results) {
+        auto terms = query_.query_raw(deinflection.text);
+        filter_by_pos(terms, deinflection);
 
-      for (const auto& [pair, form_ptr] : deduplicated) {
-        const auto& form = *form_ptr;
-        auto terms = query_.query(pair.first);
-        filter_by_pos(terms, form);
-
-        for (const auto& term : terms) {
+        for (auto& term : terms) {
           // deduplicate glossaries
           auto key = std::make_pair(term.expression, term.reading);
           auto it = result_map.find(key);
@@ -117,16 +65,16 @@ std::vector<LookupResult> Lookup::lookup(const std::string& lookup_string, int m
             if (utf8::distance(search_str.begin(), search_str.end()) >
                 utf8::distance(it->second.matched.begin(), it->second.matched.end())) {
               it->second = LookupResult{.matched = search_str,
-                                        .deinflected = form.text,
-                                        .process = form.process,
-                                        .term = term,
+                                        .deinflected = deinflection.text,
+                                        .trace = deinflection.trace,
+                                        .term = std::move(term),
                                         .preprocessor_steps = variant.steps};
             }
           } else {
             result_map.emplace(key, LookupResult{.matched = search_str,
-                                                 .deinflected = form.text,
-                                                 .process = form.process,
-                                                 .term = term,
+                                                 .deinflected = deinflection.text,
+                                                 .trace = deinflection.trace,
+                                                 .term = std::move(term),
                                                  .preprocessor_steps = variant.steps});
           }
         }
@@ -137,16 +85,10 @@ std::vector<LookupResult> Lookup::lookup(const std::string& lookup_string, int m
     }
   }
 
-  std::vector<LookupResult> results;
-  results.reserve(result_map.size());
-  for (auto& [key, value] : result_map) {
-    (void)key;
-    results.push_back(std::move(value));
-  }
+  auto results = result_map | std::views::values | std::views::as_rvalue | std::ranges::to<std::vector>();
   const auto freq_dict_order = query_.get_freq_dict_order();
-  const bool kana_lookup = is_all_kana_lookup(lookup_string);
   auto middle_iter = std::ranges::next(results.begin(), max_results, results.end());
-  std::ranges::partial_sort(results, middle_iter, [&freq_dict_order, &lookup_string, kana_lookup](const auto& a, const auto& b) {
+  std::ranges::partial_sort(results, middle_iter, [&freq_dict_order](const auto& a, const auto& b) {
     auto len_a = utf8::distance(a.matched.begin(), a.matched.end());
     auto len_b = utf8::distance(b.matched.begin(), b.matched.end());
     if (len_a != len_b) {
@@ -159,41 +101,52 @@ std::vector<LookupResult> Lookup::lookup(const std::string& lookup_string, int m
       return steps_a < steps_b;
     }
 
-    auto process_len_a = a.process.size();
-    auto process_len_b = b.process.size();
-    if (process_len_a != process_len_b) {
-      return process_len_a < process_len_b;
+    auto trace_len_a = a.trace.size();
+    auto trace_len_b = b.trace.size();
+    if (trace_len_a != trace_len_b) {
+      return trace_len_a < trace_len_b;
     }
 
-    if (kana_lookup) {
-      const int priority_a = kana_lookup_priority(a, lookup_string);
-      const int priority_b = kana_lookup_priority(b, lookup_string);
-      if (priority_a != priority_b) {
-        return priority_a < priority_b;
+    auto match_a = a.term.expression == a.deinflected;
+    auto match_b = b.term.expression == b.deinflected;
+    if (match_a != match_b) {
+      return match_a > match_b;
+    }
+
+    for (const auto& dict_name : freq_dict_order) {
+      const int freq_a = get_freq_value_for_dict(a.term, dict_name);
+      const int freq_b = get_freq_value_for_dict(b.term, dict_name);
+      if (freq_a != freq_b) {
+        return freq_a < freq_b;
       }
     }
 
-    return freq_sort_order(a, b, freq_dict_order);
+    if (a.term.score != b.term.score) {
+      return a.term.score > b.term.score;
+    }
+
+    auto a_reading_expr_match = a.term.expression == a.term.reading;
+    auto b_reading_expr_match = b.term.expression == b.term.reading;
+    return a_reading_expr_match > b_reading_expr_match;
   });
 
   if (results.size() > static_cast<size_t>(max_results)) {
     results.resize(max_results);
   }
 
+  for (auto& r : results) {
+    query_.materialize(r.term);
+  }
+
   return results;
 }
 
-void Lookup::filter_by_pos(std::vector<TermResult>& terms, const DeconjugationForm& form) {
-  if (form.tags.empty()) {
+void Lookup::filter_by_pos(std::vector<TermResult>& terms, const DeinflectionResult& d) {
+  if (d.conditions == 0) {
     return;
   }
-
-  const auto& tag = form.tags.back();
   std::erase_if(terms, [&](const TermResult& term) {
-    if (term.rules.empty()) {
-      return true;
-    }
-    auto pos_tags = split_whitespace(term.rules);
-    return std::ranges::none_of(pos_tags, [&](const std::string& p) { return p == tag || tag.starts_with(p); });
+    auto dict_conditions = Deinflector::pos_to_conditions(split_whitespace(term.rules));
+    return (dict_conditions & d.conditions) == 0;
   });
 }

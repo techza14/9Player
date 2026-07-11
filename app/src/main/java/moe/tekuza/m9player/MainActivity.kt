@@ -4718,6 +4718,7 @@ private fun ReaderSyncScreen() {
             onRootPopupDismissed = {
                 clearMainHoshiChildPopups()
             },
+            warmRootOptions = mainHoshiLookupOptions(showRangeSelection = false),
         )
 
         VersionEasterGifPopup(

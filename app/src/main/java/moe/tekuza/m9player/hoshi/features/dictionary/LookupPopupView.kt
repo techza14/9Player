@@ -3,6 +3,7 @@ package moe.tekuza.m9player.hoshi.features.dictionary
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import android.webkit.WebView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,13 +49,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntRect
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupPositionProvider
-import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import de.manhhao.hoshi.HoshiDicts
@@ -80,6 +77,7 @@ internal fun LookupPopupView(
     state: LookupPopupState,
     onSwipeDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    lookupStartedAtNanos: Long = SystemClock.elapsedRealtimeNanos(),
     clearSelectionSignal: Int = 0,
     onTapOutside: () -> Unit = onSwipeDismiss,
     onTextSelected: (ReaderSelectionData) -> Int? = { null },
@@ -145,6 +143,7 @@ internal fun LookupPopupView(
         )
     }
     var contentReady by remember(html, contentResetKey) { mutableStateOf(false) }
+    var firstPaintLogged by remember(contentResetKey, lookupStartedAtNanos) { mutableStateOf(false) }
     var previewImageUrl by remember { mutableStateOf<String?>(null) }
     val frame = remember(
         state.selection.rect,
@@ -191,34 +190,16 @@ internal fun LookupPopupView(
             "popupFrame(screenDp)=${frameX},${frameY} ${frame.width}x${frame.height} " +
             "popupTopGapDp=${frameY - (state.selection.rect.y + state.selection.rect.height)}"
     }
-    val positionProvider = remember(effectiveFrameX, effectiveFrameY, density.density) {
-        val densityScale = density.density.coerceAtLeast(0.1f)
-        object : PopupPositionProvider {
-            override fun calculatePosition(
-                anchorBounds: IntRect,
-                windowSize: IntSize,
-                layoutDirection: androidx.compose.ui.unit.LayoutDirection,
-                popupContentSize: IntSize
-            ): IntOffset {
-                return IntOffset(
-                    x = (effectiveFrameX * densityScale).toInt(),
-                    y = (effectiveFrameY * densityScale).toInt()
-                )
-            }
-        }
-    }
-
-    Popup(
-        popupPositionProvider = positionProvider,
-        properties = PopupProperties(
-            focusable = false,
-            dismissOnBackPress = false,
-            dismissOnClickOutside = false,
-            clippingEnabled = false
-        )
-    ) {
+    val densityScale = density.density.coerceAtLeast(0.1f)
+    Box(modifier = Modifier.fillMaxSize()) {
         Surface(
             modifier = Modifier
+                .offset {
+                    IntOffset(
+                        x = (effectiveFrameX * densityScale).toInt(),
+                        y = (effectiveFrameY * densityScale).toInt(),
+                    )
+                }
                 .then(if (isPopupActive) Modifier.width(frame.width.dp).height(frame.height.dp) else Modifier.size(1.dp))
                 .alpha(if (contentReady && isPopupActive && isContentVisible) 1f else 0f)
                 .clip(popupShape)
@@ -282,7 +263,16 @@ internal fun LookupPopupView(
                                 }
                                 onLookupRedirected(selection)
                             },
-                            onContentReady = { contentReady = true },
+                            onContentReady = {
+                                contentReady = true
+                                if (!firstPaintLogged && isPopupActive && isContentVisible) {
+                                    firstPaintLogged = true
+                                    logDebug("HoshiLookupPerf") {
+                                        "popupFirstPaint elapsedMs=${(SystemClock.elapsedRealtimeNanos() - lookupStartedAtNanos) / 1_000_000.0} " +
+                                            "query='${state.selection.text.take(32)}' results=${state.results.size} warmShell=$warmShell"
+                                    }
+                                }
+                            },
                         ),
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -447,7 +437,14 @@ private fun LookupPopupWebView(
                 appliedWarmResults = results
                 lookupResultsHolder.results = results
                 contentReadyGate.reset()
-                webView.evaluateJavascript("window.replacePopupResults && window.replacePopupResults(${results.size})", null)
+                val initialEntries = results.firstOrNull()
+                    ?.let(LookupPopupHtml::entryJsonString)
+                    ?.let { "[$it]" }
+                    ?: "[]"
+                webView.evaluateJavascript(
+                    "window.replacePopupResults && window.replacePopupResults(${results.size}, $initialEntries)",
+                    null,
+                )
             } else if (!warmShell && shellReady) {
                 lookupResultsHolder.results = results
             }

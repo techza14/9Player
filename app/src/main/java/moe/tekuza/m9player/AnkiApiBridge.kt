@@ -52,14 +52,17 @@ internal data class AnkiModelTemplate(
 
 internal data class AnkiCatalog(
     val decks: List<String>,
-    val models: List<AnkiModelTemplate>
+    val models: List<AnkiModelTemplate>,
+    val deckIds: Map<String, Long> = emptyMap()
 )
 
 internal data class AnkiExportConfig(
     val deckName: String,
     val modelName: String,
     val fieldTemplates: Map<String, String>,
-    val tags: Set<String>
+    val tags: Set<String>,
+    val deckId: Long? = null,
+    val model: AnkiModelTemplate? = null
 )
 
 internal data class PreparedAnkiExport(
@@ -147,12 +150,21 @@ private val FREQUENCY_VARIABLES = setOf(
     "frequency-average-rank",
     "frequency-average-occurrence"
 )
+private val ankiPreparedExportCacheLock = Any()
+private var cachedAnkiPreparedExport: Pair<PersistedAnkiConfig, PreparedAnkiExport>? = null
+
+internal fun clearPreparedAnkiExportCache() {
+    synchronized(ankiPreparedExportCacheLock) {
+        cachedAnkiPreparedExport = null
+    }
+}
 
 internal fun loadAnkiCatalog(context: Context): AnkiCatalog {
     ankiAvailabilityErrorMessage(context, requirePermission = true)?.let(::error)
 
     val api = AddContentApi(context)
-    val deckNames = (api.getDeckList() ?: emptyMap())
+    val deckMap = api.getDeckList() ?: emptyMap()
+    val deckNames = deckMap
         .values
         .map { it.trim() }
         .filter { it.isNotBlank() }
@@ -177,7 +189,8 @@ internal fun loadAnkiCatalog(context: Context): AnkiCatalog {
 
     return AnkiCatalog(
         decks = deckNames,
-        models = models
+        models = models,
+        deckIds = deckMap.entries.associate { (id, name) -> name.trim() to id }
     )
 }
 
@@ -202,6 +215,13 @@ internal fun prepareAnkiExport(
     ankiAvailabilityErrorMessage(context, requirePermission = true)?.let(::error)
     if (persistedConfig.modelName.isBlank()) error(context.getString(R.string.error_anki_model_missing))
 
+    synchronized(ankiPreparedExportCacheLock) {
+        cachedAnkiPreparedExport
+            ?.takeIf { (cachedConfig, _) -> cachedConfig == persistedConfig }
+            ?.second
+            ?.let { return it }
+    }
+
     val catalog = loadAnkiCatalog(context)
     val model = catalog.models.firstOrNull { it.name == persistedConfig.modelName }
         ?: error(context.getString(R.string.error_anki_model_not_found, persistedConfig.modelName))
@@ -214,15 +234,28 @@ internal fun prepareAnkiExport(
     }
     val requiresLookupAudio = extractRequiredTemplateMarkers(templates.values).needs("audio")
 
-    return PreparedAnkiExport(
+    val deckName = persistedConfig.deckName.ifBlank { "Default" }
+    val deckId = catalog.deckIds.entries
+        .firstOrNull { (name, _) -> name.equals(deckName, ignoreCase = true) }
+        ?.value
+        ?: runCatching { AddContentApi(context).addNewDeck(deckName) }.getOrElse { throwable ->
+            error("Anki deck resolve failed for '$deckName'. ${throwableDetail(throwable)}")
+        }
+    val prepared = PreparedAnkiExport(
         config = AnkiExportConfig(
-            deckName = persistedConfig.deckName.ifBlank { "Default" },
+            deckName = deckName,
             modelName = model.name,
             fieldTemplates = templates,
-            tags = parseAnkiTags(persistedConfig.tags)
+            tags = parseAnkiTags(persistedConfig.tags),
+            deckId = deckId,
+            model = model
         ),
         requiresLookupAudio = requiresLookupAudio
     )
+    synchronized(ankiPreparedExportCacheLock) {
+        cachedAnkiPreparedExport = persistedConfig to prepared
+    }
+    return prepared
 }
 
 internal fun exportToAnkiDroidApi(
@@ -238,10 +271,10 @@ internal fun exportToAnkiDroidApi(
     val api = runCatching { AddContentApi(context) }.getOrElse { throwable ->
         error("Anki API init failed. ${throwableDetail(throwable)}")
     }
-    val deckId = runCatching { findOrCreateDeckId(api, config.deckName) }.getOrElse { throwable ->
+    val deckId = config.deckId ?: runCatching { findOrCreateDeckId(api, config.deckName) }.getOrElse { throwable ->
         error("Anki deck resolve failed for '${config.deckName}'. ${throwableDetail(throwable)}")
     }
-    val model = runCatching { findModel(api, config.modelName) }.getOrElse { throwable ->
+    val model = config.model ?: runCatching { findModel(api, config.modelName) }.getOrElse { throwable ->
         error("Anki model resolve failed for '${config.modelName}'. ${throwableDetail(throwable)}")
     }
         ?: error("Anki model not found: ${config.modelName}")

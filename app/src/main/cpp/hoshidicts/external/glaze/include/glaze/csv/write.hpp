@@ -41,6 +41,36 @@ namespace glz
       template <auto Opts, class B>
       static void op(auto&& value, is_context auto&& ctx, B&& b, auto& ix)
       {
+         // write_chars assumes callers ensure capacity for bounded buffers.
+         // CSV can write numerics in tight loops, so guard bounded buffers here.
+         if constexpr (!check_write_unchecked(Opts) && has_bounded_capacity<B>) {
+            constexpr size_t max_numeric_chars = [] {
+               if constexpr (std::floating_point<T>) {
+                  if constexpr (sizeof(T) > 8) {
+                     return size_t{64};
+                  }
+                  else if constexpr (sizeof(T) > 4) {
+                     return size_t{32};
+                  }
+                  else {
+                     return size_t{24};
+                  }
+               }
+               else if constexpr (sizeof(T) > 4) {
+                  return size_t{24};
+               }
+               else if constexpr (sizeof(T) > 2) {
+                  return size_t{16};
+               }
+               else {
+                  return size_t{8};
+               }
+            }();
+
+            if (!ensure_space(ctx, b, ix + max_numeric_chars)) [[unlikely]] {
+               return;
+            }
+         }
          write_chars::op<Opts>(value, ctx, b, ix);
       }
    };
@@ -82,7 +112,7 @@ namespace glz
                      if (!ensure_space(ctx, b, ix + 1 + write_padding_bytes)) [[unlikely]] {
                         return;
                      }
-                     dump(',', b, ix);
+                     dump(csv_delimiter<Opts>(), b, ix);
                      if constexpr (is_output_streaming<B>) {
                         flush_buffer(b, ix);
                      }
@@ -105,7 +135,7 @@ namespace glz
                   if (!ensure_space(ctx, b, ix + 1 + write_padding_bytes)) [[unlikely]] {
                      return;
                   }
-                  dump(',', b, ix);
+                  dump(csv_delimiter<Opts>(), b, ix);
                   if constexpr (is_output_streaming<B>) {
                      flush_buffer(b, ix);
                   }
@@ -143,7 +173,7 @@ namespace glz
                      if (!ensure_space(ctx, b, ix + 1 + write_padding_bytes)) [[unlikely]] {
                         return;
                      }
-                     dump(',', b, ix);
+                     dump(csv_delimiter<Opts>(), b, ix);
                      if constexpr (is_output_streaming<B>) {
                         flush_buffer(b, ix);
                      }
@@ -197,7 +227,7 @@ namespace glz
                      if (!ensure_space(ctx, b, ix + 1 + write_padding_bytes)) [[unlikely]] {
                         return;
                      }
-                     dump(',', b, ix);
+                     dump(csv_delimiter<Opts>(), b, ix);
                      if constexpr (is_output_streaming<B>) {
                         flush_buffer(b, ix);
                      }
@@ -227,11 +257,11 @@ namespace glz
    };
 
    // Helper function to check if a string needs CSV quoting
-   template <class Str>
+   template <char delim = ',', class Str>
    inline bool needs_csv_quoting(const Str& str)
    {
       for (const auto c : str) {
-         if (c == ',' || c == '"' || c == '\n' || c == '\r') {
+         if (c == delim || c == '"' || c == '\n' || c == '\r') {
             return true;
          }
       }
@@ -239,10 +269,10 @@ namespace glz
    }
 
    // Dump a CSV string with proper quoting and escaping
-   template <class B>
+   template <char delim = ',', class B>
    inline void dump_csv_string(is_context auto& ctx, const sv str, B& b, size_t& ix)
    {
-      if (needs_csv_quoting(str)) {
+      if (needs_csv_quoting<delim>(str)) {
          // Need to quote this string - worst case: every char is a quote (doubled) plus surrounding quotes
          if (!ensure_space(ctx, b, ix + str.size() * 2 + 2 + write_padding_bytes)) [[unlikely]] {
             return;
@@ -274,7 +304,7 @@ namespace glz
    }
 
    // Dump a single character with CSV quoting if needed
-   template <class B>
+   template <char delim = ',', class B>
    inline void dump_csv_char(is_context auto& ctx, const char c, B& b, size_t& ix)
    {
       // Worst case: quoted double-quote = 4 chars (""")
@@ -282,7 +312,7 @@ namespace glz
          return;
       }
 
-      if (c == ',' || c == '"' || c == '\n' || c == '\r') {
+      if (c == delim || c == '"' || c == '\n' || c == '\r') {
          dump('"', b, ix);
          if (c == '"') {
             dump('"', b, ix);
@@ -308,10 +338,10 @@ namespace glz
       static void op(auto&& value, is_context auto&& ctx, B&& b, auto& ix)
       {
          if constexpr (char_t<T>) {
-            dump_csv_char(ctx, value, b, ix);
+            dump_csv_char<csv_delimiter<Opts>()>(ctx, value, b, ix);
          }
          else {
-            dump_csv_string(ctx, value, b, ix);
+            dump_csv_string<csv_delimiter<Opts>()>(ctx, value, b, ix);
          }
       }
    };
@@ -329,7 +359,7 @@ namespace glz
                      return;
                   }
                   dump_maybe_empty(name, b, ix);
-                  dump(',', b, ix);
+                  dump(csv_delimiter<Opts>(), b, ix);
                }
                const auto n = data.size();
                for (size_t i = 0; i < n; ++i) {
@@ -341,7 +371,7 @@ namespace glz
                      if (!ensure_space(ctx, b, ix + 1 + write_padding_bytes)) [[unlikely]] {
                         return;
                      }
-                     dump(',', b, ix);
+                     dump(csv_delimiter<Opts>(), b, ix);
                      if constexpr (is_output_streaming<B>) {
                         flush_buffer(b, ix);
                      }
@@ -368,7 +398,7 @@ namespace glz
                   dump_maybe_empty(name, b, ix);
                   ++i;
                   if (i < n) {
-                     dump(',', b, ix);
+                     dump(csv_delimiter<Opts>(), b, ix);
                      if constexpr (is_output_streaming<B>) {
                         flush_buffer(b, ix);
                      }
@@ -402,7 +432,7 @@ namespace glz
                      if (!ensure_space(ctx, b, ix + 1 + write_padding_bytes)) [[unlikely]] {
                         return;
                      }
-                     dump(',', b, ix);
+                     dump(csv_delimiter<Opts>(), b, ix);
                      if constexpr (is_output_streaming<B>) {
                         flush_buffer(b, ix);
                      }
@@ -476,7 +506,7 @@ namespace glz
                         dump('[', b, ix);
                         write_chars::op<Opts>(i, ctx, b, ix);
                         dump(']', b, ix);
-                        dump(',', b, ix);
+                        dump(csv_delimiter<Opts>(), b, ix);
                      }
 
                      for (size_t j = 0; j < count; ++j) {
@@ -488,7 +518,7 @@ namespace glz
                            if (!ensure_space(ctx, b, ix + 1 + write_padding_bytes)) [[unlikely]] {
                               return;
                            }
-                           dump(',', b, ix);
+                           dump(csv_delimiter<Opts>(), b, ix);
                         }
                      }
 
@@ -506,7 +536,7 @@ namespace glz
                         return;
                      }
                      dump<key>(b, ix);
-                     dump(',', b, ix);
+                     dump(csv_delimiter<Opts>(), b, ix);
                   }
                   serialize<CSV>::op<Opts>(get_member(value, mem), ctx, b, ix);
                   if (bool(ctx.error)) [[unlikely]] {
@@ -550,7 +580,7 @@ namespace glz
                         write_chars::op<Opts>(i, ctx, b, ix);
                         dump(']', b, ix);
                         if (i != size - 1) {
-                           dump(',', b, ix);
+                           dump(csv_delimiter<Opts>(), b, ix);
                         }
                      }
                   }
@@ -562,7 +592,7 @@ namespace glz
                      if (!ensure_space(ctx, b, ix + 1 + write_padding_bytes)) [[unlikely]] {
                         return;
                      }
-                     dump(',', b, ix);
+                     dump(csv_delimiter<Opts>(), b, ix);
                   }
                });
 
@@ -608,7 +638,7 @@ namespace glz
                            if (!ensure_space(ctx, b, ix + 1 + write_padding_bytes)) [[unlikely]] {
                               return;
                            }
-                           dump(',', b, ix);
+                           dump(csv_delimiter<Opts>(), b, ix);
                         }
                      }
                   }
@@ -628,7 +658,7 @@ namespace glz
                         if (!ensure_space(ctx, b, ix + 1 + write_padding_bytes)) [[unlikely]] {
                            return;
                         }
-                        dump(',', b, ix);
+                        dump(csv_delimiter<Opts>(), b, ix);
                      }
                   }
                });
@@ -673,7 +703,7 @@ namespace glz
                   if (!ensure_space(ctx, b, ix + 1 + write_padding_bytes)) [[unlikely]] {
                      return;
                   }
-                  dump(',', b, ix);
+                  dump(csv_delimiter<Opts>(), b, ix);
                }
             });
 
@@ -710,7 +740,7 @@ namespace glz
                   if (!ensure_space(ctx, b, ix + 1 + write_padding_bytes)) [[unlikely]] {
                      return;
                   }
-                  dump(',', b, ix);
+                  dump(csv_delimiter<Opts>(), b, ix);
                }
             });
 

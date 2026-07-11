@@ -43,10 +43,15 @@ object BookReaderFloatingBridge {
         fun onPlaybackSpeedChanged(speed: Float)
     }
 
+    interface ControlCollectListener {
+        fun onControlCollectRequested(): Boolean
+    }
+
     private val listeners = linkedSetOf<PlaybackStateListener>()
     private val subtitleListeners = linkedSetOf<SubtitleStateListener>()
     private val playbackPositionListeners = linkedSetOf<PlaybackPositionListener>()
     private val playbackSpeedListeners = linkedSetOf<PlaybackSpeedListener>()
+    private var controlCollectListener: ControlCollectListener? = null
     @Volatile
     private var playingSnapshot: Boolean = false
     @Volatile
@@ -316,6 +321,17 @@ object BookReaderFloatingBridge {
             "bridge seekToPosition notify target=$normalized afterSession=${BookReaderPlaybackSession.currentPositionMs()} " +
                 "afterBridge=$playbackPositionSnapshot cue=${cueForLog(currentCue())}"
         )
+    }
+
+    fun setControlCollectListener(listener: ControlCollectListener?) {
+        synchronized(this) {
+            controlCollectListener = listener
+        }
+    }
+
+    fun requestControlCollect(): Boolean {
+        val listener = synchronized(this) { controlCollectListener }
+        return listener?.onControlCollectRequested() == true
     }
 
     fun setPlaybackSpeed(speed: Float) {

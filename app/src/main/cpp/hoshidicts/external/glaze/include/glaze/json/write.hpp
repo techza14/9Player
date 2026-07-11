@@ -181,7 +181,7 @@ namespace glz
                   }
                }
                else {
-                  static thread_local auto k = typename std::decay_t<T>::key_type(key);
+                  auto k = typename std::decay_t<T>::key_type(key);
                   auto it = value.find(k);
                   if (it != value.end()) {
                      serialize_partial<JSON>::op<sub_partial, Opts>(it->second, ctx, b, ix);
@@ -469,10 +469,11 @@ namespace glz
                   return 64;
                }
                else if constexpr (sizeof(T) > 4) {
-                  return 32;
+                  // zmij scratch + 4 for optional quotes and trailing comma.
+                  return zmij::double_buffer_size + 4;
                }
                else {
-                  return 24;
+                  return zmij::float_buffer_size + 4;
                }
             }
             else if constexpr (sizeof(T) > 4) {
@@ -770,6 +771,11 @@ namespace glz
                if constexpr (!char_array_t<T> && std::is_pointer_v<std::decay_t<T>>) {
                   return value ? value : "";
                }
+               else if constexpr (array_char_t<T>) {
+                  const auto* start = value.data();
+                  const auto* end = static_cast<const char*>(std::memchr(start, '\0', value.size()));
+                  return sv{start, end ? size_t(end - start) : value.size()};
+               }
                else if constexpr (u8str_t<T>) {
                   return sv{reinterpret_cast<const char*>(value.data()), value.size()};
                }
@@ -1040,6 +1046,8 @@ namespace glz
       }
    };
 
+   // Fallback handler for enums without explicit glz::meta
+   // Serializes as underlying integer unless reflect_enums option is enabled (P2996)
    template <class T>
       requires(!meta_keys<T> && std::is_enum_v<std::decay_t<T>> && !glaze_enum_t<T> && !custom_write<T>)
    struct to<JSON, T>
@@ -1049,9 +1057,31 @@ namespace glz
       template <auto Opts, class... Args>
       GLZ_ALWAYS_INLINE static void op(auto&& value, is_context auto&& ctx, Args&&... args)
       {
-         // serialize as underlying number
-         serialize<JSON>::op<Opts>(static_cast<std::underlying_type_t<std::decay_t<T>>>(value), ctx,
-                                   std::forward<Args>(args)...);
+#if GLZ_REFLECTION26
+         if constexpr (check_reflect_enums(Opts)) {
+            // P2996 reflection using reflect_constant_array and expansion statements
+            const sv name = enum_to_string(value);
+            if (!name.empty()) {
+               if constexpr (not check_unquoted(Opts)) {
+                  dump('"', args...);
+               }
+               dump_maybe_empty(name, args...);
+               if constexpr (not check_unquoted(Opts)) {
+                  dump('"', args...);
+               }
+            }
+            else [[unlikely]] {
+               serialize<JSON>::op<Opts>(static_cast<std::underlying_type_t<std::decay_t<T>>>(value), ctx,
+                                         std::forward<Args>(args)...);
+            }
+         }
+         else
+#endif
+         {
+            // Fallback: serialize as underlying number
+            serialize<JSON>::op<Opts>(static_cast<std::underlying_type_t<std::decay_t<T>>>(value), ctx,
+                                      std::forward<Args>(args)...);
+         }
       }
    };
 
@@ -1168,7 +1198,7 @@ namespace glz
    template <auto Opts, class Key, class Value, is_context Ctx, class B>
    GLZ_ALWAYS_INLINE void write_pair_content(const Key& key, Value&& value, Ctx& ctx, B&& b, auto& ix)
    {
-      if constexpr (str_t<Key> || char_t<Key> || glaze_enum_t<Key> || mimics_str_t<Key> || custom_str_t<Key> ||
+      if constexpr (str_t<Key> || char_t<Key> || is_named_enum<Key> || mimics_str_t<Key> || custom_str_t<Key> ||
                     check_quoted_num(Opts)) {
          to<JSON, core_t<Key>>::template op<Opts>(key, ctx, b, ix);
       }
@@ -1620,14 +1650,12 @@ namespace glz
    template <always_null_t T>
    struct to<JSON, T>
    {
-      static constexpr bool can_error = false;
-
       template <auto Opts, class B>
-      GLZ_ALWAYS_INLINE static void op(auto&&, is_context auto&&, B&& b, auto& ix)
+      GLZ_ALWAYS_INLINE static void op(auto&&, is_context auto&& ctx, B&& b, auto& ix)
       {
          if constexpr (not check_write_unchecked(Opts)) {
-            if (const auto k = ix + 4; k > b.size()) [[unlikely]] {
-               b.resize(2 * k);
+            if (!ensure_space(ctx, b, ix + 4)) [[unlikely]] {
+               return;
             }
          }
          if constexpr (std::endian::native == std::endian::big) {
@@ -2165,6 +2193,25 @@ namespace glz
                            if (is_null) return;
                         }
                      }
+                     else if constexpr (is_specialization_v<val_t, custom_t> && Opts.skip_null_members &&
+                                        custom_getter_returns_nullable<val_t>()) {
+                        if (is_custom_field_null<T, I>(value, t, ctx)) return;
+                     }
+                     else if constexpr (Opts.skip_null_members && glaze_value_is_nullable<val_t>()) {
+                        if (is_glaze_value_field_null<T, I>(value, t)) return;
+                     }
+
+                     if constexpr (check_skip_default_members(Opts) && has_skippable_default<val_t>) {
+                        decltype(auto) member = [&]() -> decltype(auto) {
+                           if constexpr (reflectable<T>) {
+                              return get_member(value, get<I>(t));
+                           }
+                           else {
+                              return get_member(value, get<I>(reflect<T>::values));
+                           }
+                        }();
+                        if (is_default_value(member)) return;
+                     }
 
                      if constexpr (Opts.prettify) {
                         if (!ensure_space(ctx, b, ix + padding + ctx.depth)) [[unlikely]] {
@@ -2216,7 +2263,7 @@ namespace glz
                });
             }
             else {
-               static constexpr size_t fixed_max_size = fixed_padding<T>;
+               static constexpr size_t fixed_max_size = Opts.prettify ? 0 : fixed_padding<T>;
                if constexpr (fixed_max_size && not check_write_unchecked(Options)) {
                   if (!ensure_space(ctx, b, ix + fixed_max_size)) [[unlikely]] {
                      return;
