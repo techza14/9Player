@@ -107,7 +107,7 @@
     <string name="home_display_menu">显示</string>
     <string name="home_display_bookshelf">书架</string>
     <string name="home_display_list">列表</string>
-    <string name="home_cover_aspect_book">封面比例：A4</string>
+    <string name="home_cover_aspect_book">封面比例：~A4</string>
     <string name="home_cover_aspect_square">封面比例：正方形</string>
     <string name="home_cover_adjust_title">精调封面</string>
     <string name="home_cover_adjust_reset">重置</string>

@@ -44,8 +44,10 @@ object BookReaderFloatingBridge {
     }
 
     interface ControlCollectListener {
-        fun onControlCollectRequested(): Boolean
+        fun onControlCollectRequested(): ControlCollectResult?
     }
+
+    data class ControlCollectResult(val keepScreenOnMs: Long)
 
     private val listeners = linkedSetOf<PlaybackStateListener>()
     private val subtitleListeners = linkedSetOf<SubtitleStateListener>()
@@ -329,9 +331,9 @@ object BookReaderFloatingBridge {
         }
     }
 
-    fun requestControlCollect(): Boolean {
+    fun requestControlCollect(): ControlCollectResult? {
         val listener = synchronized(this) { controlCollectListener }
-        return listener?.onControlCollectRequested() == true
+        return listener?.onControlCollectRequested()
     }
 
     fun setPlaybackSpeed(speed: Float) {

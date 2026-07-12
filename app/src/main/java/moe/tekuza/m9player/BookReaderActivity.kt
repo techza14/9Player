@@ -2010,9 +2010,9 @@ private fun BookReaderScreen(
         }
     }
 
-    fun handleControlOverlayTap() {
-        val currentIndex = playbackCueIndex.takeIf { it >= 0 } ?: return
-        val currentCue = cues.getOrNull(currentIndex) ?: return
+    fun handleControlOverlayTap(): Long? {
+        val currentIndex = playbackCueIndex.takeIf { it >= 0 } ?: return null
+        val currentCue = cues.getOrNull(currentIndex) ?: return null
         val controlConfig = loadGamepadControlConfig(context)
         val now = System.currentTimeMillis()
         val doubleTapWindowMs = 280L
@@ -2025,7 +2025,8 @@ private fun BookReaderScreen(
             pendingSingleTapBaseCueIndex = null
             playCueForControl((currentIndex - 1).coerceAtLeast(0))
             controlModeStatus = context.getString(R.string.status_double_tap_replay_prev)
-            return
+            return (cues.getOrNull((currentIndex - 1).coerceAtLeast(0))?.endMs ?: currentCue.endMs) -
+                (cues.getOrNull((currentIndex - 1).coerceAtLeast(0))?.startMs ?: currentCue.startMs)
         }
 
         pendingSingleTapJob?.cancel()
@@ -2044,6 +2045,7 @@ private fun BookReaderScreen(
                 }
             }
         }
+        return if (controlConfig.singleTapCollectOnlyInControlMode) 0L else currentCue.endMs - currentCue.startMs
     }
 
     fun handleGamepadCollect(doubleTapEnabled: Boolean) {
@@ -2411,6 +2413,9 @@ private fun BookReaderScreen(
     val latestHandleGamepadKeyEvent by rememberUpdatedState<(KeyEvent) -> Boolean>({ event ->
         handleGamepadKeyEvent(event)
     })
+    val latestWearableControlCollect = rememberUpdatedState<() -> Long?> {
+        if (playbackCueIndex !in cues.indices) null else handleControlOverlayTap()
+    }
     val controlModeConfig = loadGamepadControlConfig(context)
     val controlModePowerSaveEnabled = controlModeEnabled && controlModeConfig.powerSaveBlackScreenInControlMode
     val controlModeHintText = remember(controlModeEnabled, controlModeConfig) {
@@ -2434,10 +2439,9 @@ private fun BookReaderScreen(
 
     DisposableEffect(Unit) {
         val listener = object : BookReaderFloatingBridge.ControlCollectListener {
-            override fun onControlCollectRequested(): Boolean {
-                if (playbackCueIndex !in cues.indices) return false
-                handleControlOverlayTap()
-                return true
+            override fun onControlCollectRequested(): BookReaderFloatingBridge.ControlCollectResult? {
+                val keepScreenOnMs = latestWearableControlCollect.value() ?: return null
+                return BookReaderFloatingBridge.ControlCollectResult(keepScreenOnMs)
             }
         }
         BookReaderFloatingBridge.setControlCollectListener(listener)

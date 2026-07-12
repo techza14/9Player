@@ -403,7 +403,7 @@ internal enum class ReaderBookCoverSource {
     EBOOK
 }
 
-private const val ReaderBookCoverAspectRatio = 210f / 297f
+private const val ReaderBookCoverAspectRatio = 279f / 400f
 
 internal data class BookCoverAdjustment(
     val zoom: Float = 1f,

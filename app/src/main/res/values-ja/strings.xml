@@ -102,7 +102,7 @@
     <string name="home_display_menu">表示</string>
     <string name="home_display_bookshelf">本棚</string>
     <string name="home_display_list">一覧</string>
-    <string name="home_cover_aspect_book">表紙比率：A4</string>
+    <string name="home_cover_aspect_book">表紙比率：~A4</string>
     <string name="home_cover_aspect_square">表紙比率：正方形</string>
     <string name="home_cover_adjust_title">表紙を微調整</string>
     <string name="home_cover_adjust_reset">リセット</string>

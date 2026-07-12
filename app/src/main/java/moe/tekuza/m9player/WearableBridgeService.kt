@@ -187,10 +187,12 @@ class WearableBridgeService : Service() {
                     }
                 }
                 "COLLECT_CURRENT" -> {
-                    val accepted = BookReaderFloatingBridge.requestControlCollect()
+                    val result = BookReaderFloatingBridge.requestControlCollect()
                     send(
                         nodeId,
-                        response(request, accepted, if (accepted) "已按控制模式处理" else "当前没有可控制的字幕句")
+                        response(request, result != null, if (result != null) "已按控制模式处理" else "当前没有可控制的字幕句").apply {
+                            put("keepScreenOnMs", result?.keepScreenOnMs?.plus(1_000L) ?: 0L)
+                        }
                     )
                 }
             }

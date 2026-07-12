@@ -102,7 +102,7 @@
     <string name="home_display_menu">Display</string>
     <string name="home_display_bookshelf">Shelf</string>
     <string name="home_display_list">List</string>
-    <string name="home_cover_aspect_book">Cover ratio: A4</string>
+    <string name="home_cover_aspect_book">Cover ratio: ~A4</string>
     <string name="home_cover_aspect_square">Cover ratio: square</string>
     <string name="home_cover_adjust_title">Adjust cover</string>
     <string name="home_cover_adjust_reset">Reset</string>
