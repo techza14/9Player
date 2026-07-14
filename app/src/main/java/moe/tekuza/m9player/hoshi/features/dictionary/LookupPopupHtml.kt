@@ -188,6 +188,13 @@ internal object LookupPopupHtml {
                                 if (!entry) return;
                                 delete pending[payload.requestId];
                                 entry.resolve(payload.ok ? payload.value : null);
+                            },
+                            cancelAll: function(fallback) {
+                                Object.keys(pending).forEach(function(requestId) {
+                                    var entry = pending[requestId];
+                                    delete pending[requestId];
+                                    if (entry) entry.resolve(fallback);
+                                });
                             }
                         };
                     })();

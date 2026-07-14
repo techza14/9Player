@@ -5122,7 +5122,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
 
     private fun buildTextPageFactory(): TextPageFactory {
         return TextPageFactory(
-            M9ReadBookConfig(
+            config = M9ReadBookConfig(
                 textSizePx = readView.textSizePx,
                 lineSpacingPx = dp(readerLineSpacingDp).toFloat(),
                 paragraphSpacingPx = dp(readerParagraphSpacingDp).toFloat(),
@@ -5141,7 +5141,8 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 layoutMode = readerLayoutMode,
                 pageAnim = readerPageAnim,
                 showRubyText = showRubyText
-            )
+            ),
+            emptyPageText = readerString(R.string.reader_no_text)
         )
     }
 

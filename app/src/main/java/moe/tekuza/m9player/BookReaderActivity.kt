@@ -644,6 +644,7 @@ private fun BookReaderScreen(
     var typographyPanelVisible by remember { mutableStateOf(false) }
     var speedMenuExpanded by remember { mutableStateOf(false) }
     var sleepTimerDeadlineMs by remember { mutableStateOf<Long?>(null) }
+    var sleepTimerRemainingMs by remember { mutableStateOf<Long?>(null) }
     var sleepTimerOptionsVisible by remember { mutableStateOf(false) }
     var sleepTimerAdvancedOptionsExpanded by remember { mutableStateOf(false) }
     var sleepCustomMinutesInput by remember { mutableStateOf("") }
@@ -693,6 +694,8 @@ private fun BookReaderScreen(
     var lastOverlayTapAtMs by remember { mutableStateOf(0L) }
     var lastGamepadCollectTapAtMs by remember { mutableStateOf(0L) }
     var lastGamepadCollectCueIndex by remember { mutableStateOf<Int?>(null) }
+    var pendingGamepadCollectCueIndex by remember { mutableStateOf<Int?>(null) }
+    var pendingGamepadCollectJob by remember { mutableStateOf<Job?>(null) }
     var pendingSingleTapBaseCueIndex by remember { mutableStateOf<Int?>(null) }
     var pendingSingleTapJob by remember { mutableStateOf<Job?>(null) }
     var liveSelectedRangeAnchor by remember { mutableStateOf<ReaderLookupAnchor?>(null) }
@@ -734,7 +737,10 @@ private fun BookReaderScreen(
         }.getOrElse {
             Toast.makeText(
                 context,
-                "更换 SRT 失败：${it.message ?: "unknown"}",
+                context.getString(
+                    R.string.bookreader_replace_srt_failed,
+                    it.message ?: context.getString(R.string.common_unknown)
+                ),
                 Toast.LENGTH_SHORT
             ).show()
             pickedUri
@@ -929,7 +935,10 @@ private fun BookReaderScreen(
         onDispose { notificationController?.release() }
     }
     DisposableEffect(Unit) {
-        onDispose { pendingSingleTapJob?.cancel() }
+        onDispose {
+            pendingSingleTapJob?.cancel()
+            pendingGamepadCollectJob?.cancel()
+        }
     }
     DisposableEffect(controlModeEnabled, view) {
         view.keepScreenOn = controlModeEnabled
@@ -1483,11 +1492,7 @@ private fun BookReaderScreen(
             showOverallDuration = false
         }
     }
-    val sleepRemainingLabel = remember(sleepTimerDeadlineMs, positionMs) {
-        val deadline = sleepTimerDeadlineMs ?: return@remember null
-        val remaining = (deadline - System.currentTimeMillis()).coerceAtLeast(0L)
-        formatBookTime(remaining)
-    }
+    val sleepRemainingLabel = sleepTimerRemainingMs?.let(::formatBookTime)
     val favoriteCue = remember(playbackCueIndex, activeCueIndex, cues) {
         when {
             playbackCueIndex in cues.indices -> cues[playbackCueIndex]
@@ -1570,11 +1575,15 @@ private fun BookReaderScreen(
         sleepDisconnectControllerBluetoothWhenDone,
         sleepFadeOutAudioWhenDone
     ) {
-        val deadline = sleepTimerDeadlineMs ?: return@LaunchedEffect
+        val deadline = sleepTimerDeadlineMs ?: run {
+            sleepTimerRemainingMs = null
+            return@LaunchedEffect
+        }
         var fadeApplied = false
         try {
             while (sleepTimerDeadlineMs == deadline) {
                 val remainingMs = deadline - System.currentTimeMillis()
+                sleepTimerRemainingMs = remainingMs.coerceAtLeast(0L)
                 if (
                     sleepFadeOutAudioWhenDone &&
                     !uiTestMode &&
@@ -1594,6 +1603,8 @@ private fun BookReaderScreen(
                         setReaderPlaybackState(false)
                     }
                     sleepTimerDeadlineMs = null
+                    sleepTimerRemainingMs = null
+                    BookReaderFloatingBridge.setSleepTimerDeadline(null)
                     val statusParts = mutableListOf<String>()
                     if (sleepExitControlModeWhenDone) {
                         controlModeEnabled = false
@@ -1928,6 +1939,7 @@ private fun BookReaderScreen(
         } else {
             System.currentTimeMillis() + (minutes * 60_000L)
         }
+        BookReaderFloatingBridge.setSleepTimerDeadline(sleepTimerDeadlineMs)
         sleepTimerOptionsVisible = false
         controlModeStatus = if (minutes <= 0) {
             context.getString(R.string.status_timer_cleared)
@@ -1965,8 +1977,8 @@ private fun BookReaderScreen(
         controlModeStatus = context.getString(R.string.status_jump_chapter, chapter.title)
     }
 
-    fun collectFavoriteCue() {
-        val cue = favoriteCue ?: return
+    fun collectFavoriteCue(cueOverride: ReaderSubtitleCue? = null) {
+        val cue = cueOverride ?: favoriteCue ?: return
         val key = cueCollectionKey(cue.startMs, cue.endMs, cue.text)
         val cueIndexLabel = when {
             playbackCueIndex in cues.indices -> "${playbackCueIndex + 1}/${cues.size}"
@@ -2048,14 +2060,14 @@ private fun BookReaderScreen(
         return if (controlConfig.singleTapCollectOnlyInControlMode) 0L else currentCue.endMs - currentCue.startMs
     }
 
-    fun handleGamepadCollect(doubleTapEnabled: Boolean) {
+    fun handleGamepadCollect(config: GamepadControlConfig) {
         if (cues.isEmpty()) return
         val baseIndex = when {
             playbackCueIndex >= 0 -> playbackCueIndex
             else -> findCueIndexAtOrBeforeTime(cues, positionMs).coerceAtLeast(0)
         }
         val now = System.currentTimeMillis()
-        val isDoubleTap = doubleTapEnabled &&
+        val isDoubleTap = config.doubleTapCollectPrevious &&
             lastGamepadCollectCueIndex == baseIndex &&
             now - lastGamepadCollectTapAtMs <= 320L
         val targetIndex = if (isDoubleTap) {
@@ -2063,13 +2075,37 @@ private fun BookReaderScreen(
         } else {
             baseIndex
         }
+        pendingGamepadCollectJob?.cancel()
+        pendingGamepadCollectJob = null
+        pendingGamepadCollectCueIndex = null
         lastGamepadCollectCueIndex = baseIndex
         lastGamepadCollectTapAtMs = now
-        playCueForControl(targetIndex)
-        controlModeStatus = if (isDoubleTap) {
-            context.getString(R.string.status_gamepad_bookmark_prev)
+        if (isDoubleTap) {
+            playCueForControl(targetIndex)
+            controlModeStatus = context.getString(R.string.status_gamepad_bookmark_prev)
+            return
+        }
+        if (config.singleTapCollectOnlyInControlMode) {
+            val collect = {
+                collectFavoriteCue(cues.getOrNull(baseIndex))
+                controlModeStatus = context.getString(R.string.status_single_tap_bookmark_direct)
+            }
+            if (config.doubleTapCollectPrevious) {
+                pendingGamepadCollectCueIndex = baseIndex
+                pendingGamepadCollectJob = scope.launch {
+                    delay(320L)
+                    if (pendingGamepadCollectCueIndex == baseIndex) {
+                        pendingGamepadCollectCueIndex = null
+                        pendingGamepadCollectJob = null
+                        collect()
+                    }
+                }
+            } else {
+                collect()
+            }
         } else {
-            context.getString(R.string.status_gamepad_bookmark_current)
+            playCueForControl(baseIndex)
+            controlModeStatus = context.getString(R.string.status_gamepad_bookmark_current)
         }
     }
 
@@ -2088,7 +2124,7 @@ private fun BookReaderScreen(
                 true
             }
             config.collectKeyCode -> {
-                handleGamepadCollect(doubleTapEnabled = config.doubleTapCollectPrevious)
+                handleGamepadCollect(config)
                 true
             }
             else -> false
@@ -2416,6 +2452,10 @@ private fun BookReaderScreen(
     val latestWearableControlCollect = rememberUpdatedState<() -> Long?> {
         if (playbackCueIndex !in cues.indices) null else handleControlOverlayTap()
     }
+    val latestWearableSleepTimer = rememberUpdatedState<(Int) -> Boolean> { minutes ->
+        setSleepTimer(minutes)
+        true
+    }
     val controlModeConfig = loadGamepadControlConfig(context)
     val controlModePowerSaveEnabled = controlModeEnabled && controlModeConfig.powerSaveBlackScreenInControlMode
     val controlModeHintText = remember(controlModeEnabled, controlModeConfig) {
@@ -2438,14 +2478,16 @@ private fun BookReaderScreen(
     }
 
     DisposableEffect(Unit) {
-        val listener = object : BookReaderFloatingBridge.ControlCollectListener {
-            override fun onControlCollectRequested(): BookReaderFloatingBridge.ControlCollectResult? {
-                val keepScreenOnMs = latestWearableControlCollect.value() ?: return null
-                return BookReaderFloatingBridge.ControlCollectResult(keepScreenOnMs)
-            }
+        BookReaderFloatingBridge.setControlCollectListener {
+            latestWearableControlCollect.value()
+                ?.let(BookReaderFloatingBridge::ControlCollectResult)
         }
-        BookReaderFloatingBridge.setControlCollectListener(listener)
         onDispose { BookReaderFloatingBridge.setControlCollectListener(null) }
+    }
+
+    DisposableEffect(Unit) {
+        BookReaderFloatingBridge.setSleepTimerListener { minutes -> latestWearableSleepTimer.value(minutes) }
+        onDispose { BookReaderFloatingBridge.setSleepTimerListener(null) }
     }
 
         BackHandler {

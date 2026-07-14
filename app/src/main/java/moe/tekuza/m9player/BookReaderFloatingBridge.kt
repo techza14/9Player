@@ -43,17 +43,16 @@ object BookReaderFloatingBridge {
         fun onPlaybackSpeedChanged(speed: Float)
     }
 
-    interface ControlCollectListener {
-        fun onControlCollectRequested(): ControlCollectResult?
-    }
-
     data class ControlCollectResult(val keepScreenOnMs: Long)
+
+    private var sleepTimerListener: ((Int) -> Boolean)? = null
+    private var sleepTimerDeadlineMs: Long? = null
 
     private val listeners = linkedSetOf<PlaybackStateListener>()
     private val subtitleListeners = linkedSetOf<SubtitleStateListener>()
     private val playbackPositionListeners = linkedSetOf<PlaybackPositionListener>()
     private val playbackSpeedListeners = linkedSetOf<PlaybackSpeedListener>()
-    private var controlCollectListener: ControlCollectListener? = null
+    private var controlCollectListener: (() -> ControlCollectResult?)? = null
     @Volatile
     private var playingSnapshot: Boolean = false
     @Volatile
@@ -176,6 +175,7 @@ object BookReaderFloatingBridge {
             cueSnapshot
         }
     }
+    fun currentBookTitle(): String? = synchronized(this) { subtitleTimelineBookTitle }
     fun hasSubtitleTrack(): Boolean = subtitleTrackAvailableSnapshot
     fun currentPlaybackPositionMs(): Long =
         if (BookReaderPlaybackSession.currentAudioUri() != null) BookReaderPlaybackSession.currentPositionMs() else playbackPositionSnapshot
@@ -325,7 +325,7 @@ object BookReaderFloatingBridge {
         )
     }
 
-    fun setControlCollectListener(listener: ControlCollectListener?) {
+    fun setControlCollectListener(listener: (() -> ControlCollectResult?)?) {
         synchronized(this) {
             controlCollectListener = listener
         }
@@ -333,7 +333,24 @@ object BookReaderFloatingBridge {
 
     fun requestControlCollect(): ControlCollectResult? {
         val listener = synchronized(this) { controlCollectListener }
-        return listener?.onControlCollectRequested()
+        return listener?.invoke()
+    }
+
+    fun setSleepTimerListener(listener: ((Int) -> Boolean)?) {
+        synchronized(this) { sleepTimerListener = listener }
+    }
+
+    fun requestSleepTimer(minutes: Int): Boolean {
+        val listener = synchronized(this) { sleepTimerListener }
+        return listener?.invoke(minutes) == true
+    }
+
+    fun setSleepTimerDeadline(deadlineMs: Long?) {
+        synchronized(this) { sleepTimerDeadlineMs = deadlineMs }
+    }
+
+    fun currentSleepTimerRemainingMs(): Long = synchronized(this) {
+        (sleepTimerDeadlineMs?.minus(System.currentTimeMillis()) ?: 0L).coerceAtLeast(0L)
     }
 
     fun setPlaybackSpeed(speed: Float) {

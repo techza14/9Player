@@ -368,6 +368,7 @@ internal class VerticalTextChapterLayout(
         var cursor = start
         var usedHeight = 0f
         var lastEnd = start
+        val tokenStarts = ArrayList<Int>()
         while (cursor < paragraphEnd) {
             val token = nextToken(text, cursor, paragraphEnd)
             if (token.length <= 0) break
@@ -383,11 +384,23 @@ internal class VerticalTextChapterLayout(
                 }
                 return (cursor + count).coerceIn(cursor + 1, paragraphEnd)
             }
+            tokenStarts += cursor
             cursor += token.length
             usedHeight += height
             lastEnd = cursor
         }
-        return if (lastEnd > start) lastEnd else (start + 1).coerceAtMost(paragraphEnd)
+        var adjustedEnd = lastEnd
+        var acceptedCount = tokenStarts.size
+        while (acceptedCount > 1) {
+            val endsWithForbidden = adjustedEnd > start &&
+                VerticalTextGlyphEngine.isNoColumnEnd(text[adjustedEnd - 1])
+            val nextStartsForbidden = adjustedEnd < paragraphEnd &&
+                VerticalTextGlyphEngine.isNoColumnStart(text[adjustedEnd])
+            if (!endsWithForbidden && !nextStartsForbidden) break
+            adjustedEnd = tokenStarts[acceptedCount - 1]
+            acceptedCount -= 1
+        }
+        return if (adjustedEnd > start) adjustedEnd else (start + 1).coerceAtMost(paragraphEnd)
     }
 
     private fun fitLatinRunLength(text: String, maxHeightPx: Float): Int {

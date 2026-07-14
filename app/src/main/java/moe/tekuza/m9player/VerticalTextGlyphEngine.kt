@@ -31,6 +31,8 @@ internal object VerticalTextGlyphEngine {
         '・', '：', '︓', '︰', '︙'
     )
 
+    private val centeredInkPunctuation = setOf('︕', '︖')
+
     private val smallKana = setOf(
         'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'っ', 'ゃ', 'ゅ', 'ょ', 'ゎ',
         'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ッ', 'ャ', 'ュ', 'ョ', 'ヮ', 'ヶ'
@@ -78,6 +80,20 @@ internal object VerticalTextGlyphEngine {
         '』', '’' -> '﹄'
         '\u3001' -> '\uFE11'
         '\u3002' -> '\uFE12'
+        '\uFF0C' -> '\uFE10'
+        '\uFF0E' -> '\uFE12'
+        '\uFF1A' -> '\uFE13'
+        '\uFF1B' -> '\uFE14'
+        '\uFF01' -> '\uFE15'
+        '\uFF1F' -> '\uFE16'
+        '\uFF08' -> '\uFE35'
+        '\uFF09' -> '\uFE36'
+        '\uFF3B' -> '\uFE39'
+        '\uFF3D' -> '\uFE3A'
+        '\uFF5B' -> '\uFE37'
+        '\uFF5D' -> '\uFE38'
+        '\uFF1C' -> '\uFE3F'
+        '\uFF1E' -> '\uFE40'
         ',' -> '\uFE10'
         '.' -> '\uFE12'
         ':' -> '\uFE13'
@@ -123,7 +139,15 @@ internal object VerticalTextGlyphEngine {
     }
 
     fun isAsciiWordChar(ch: Char): Boolean {
-        return ch.code in 0x21..0x7E && !ch.isWhitespace()
+        return ch in 'A'..'Z' || ch in 'a'..'z' || ch in '0'..'9'
+    }
+
+    private fun isAsciiLetter(ch: Char): Boolean {
+        return ch in 'A'..'Z' || ch in 'a'..'z'
+    }
+
+    private fun isAsciiJoiner(ch: Char): Boolean {
+        return ch == '\'' || ch == '-' || ch == '/' || ch == '.' || ch == '_' || ch == '+' || ch == '&'
     }
 
     fun isAsciiRunSpace(ch: Char): Boolean {
@@ -133,9 +157,8 @@ internal object VerticalTextGlyphEngine {
     fun isSidewaysAsciiToken(text: String): Boolean {
         val trimmed = text.trim()
         if (trimmed.length <= 1) return false
-        val compact = trimmed.filterNot(::isAsciiRunSpace)
         return trimmed.any { it.isLetterOrDigit() } &&
-            trimmed.all { isAsciiWordChar(it) || isAsciiRunSpace(it) }
+            trimmed.all { isAsciiWordChar(it) || isAsciiJoiner(it) || isAsciiRunSpace(it) }
     }
 
     fun nextVerticalTextToken(
@@ -146,22 +169,26 @@ internal object VerticalTextGlyphEngine {
         val endLimit = endExclusive.coerceIn(0, text.length)
         if (start >= endLimit) return VerticalTextToken(start, start, "")
         val first = text[start]
-        if (first.isDigit()) {
-            var end = start + 1
-            while (end < endLimit && text[end].isDigit()) end += 1
-            return VerticalTextToken(start, end, text.substring(start, end))
-        }
         if (isAsciiWordChar(first)) {
-            var end = start + 1
-            while (end < endLimit && isAsciiWordChar(text[end])) end += 1
-            while (end < endLimit && isAsciiRunSpace(text[end])) {
-                end += 1
-                while (end < endLimit && isAsciiRunSpace(text[end])) end += 1
-                break
+            var end = start
+            while (end < endLimit) {
+                when {
+                    isAsciiWordChar(text[end]) -> end += 1
+                    end > start && end + 1 < endLimit &&
+                        isAsciiJoiner(text[end]) && isAsciiWordChar(text[end + 1]) -> end += 1
+                    else -> break
+                }
             }
             val tokenText = text.substring(start, end)
-            val compact = tokenText.filterNot(::isAsciiRunSpace)
-            if (compact.length in 1..3 && compact.all { it in 'A'..'Z' || it in 'a'..'z' }) {
+            val isLetters = tokenText.all(::isAsciiLetter)
+            val isDigits = tokenText.all { it in '0'..'9' }
+            if (tokenText.length == 1 && (isLetters || isDigits)) {
+                return VerticalTextToken(start, start + 1, text.substring(start, start + 1))
+            }
+            if (tokenText.length in 2..3 && isLetters && tokenText.all { it in 'A'..'Z' }) {
+                return VerticalTextToken(start, start + 1, text.substring(start, start + 1))
+            }
+            if (isDigits && tokenText.length != 2) {
                 return VerticalTextToken(start, start + 1, text.substring(start, start + 1))
             }
             return VerticalTextToken(start, end, tokenText)
@@ -172,7 +199,7 @@ internal object VerticalTextGlyphEngine {
     fun isTateChuYokoToken(text: String): Boolean {
         val compact = text.trim().filterNot(::isAsciiRunSpace)
         if (compact.length !in 2..4 || !compact.all { it.isLetterOrDigit() }) return false
-        return compact.all { it.isDigit() } || compact.length <= 3
+        return compact.all { it.isDigit() }
     }
 
     fun estimateCellWidth(paint: TextPaint): Float {
@@ -192,6 +219,7 @@ internal object VerticalTextGlyphEngine {
             when (val ch = displayText.first()) {
                 in topRightPunctuation -> drawTopRightPunctuation(canvas, paint, displayText, rect)
                 in smallKana -> drawSmallKana(canvas, paint, displayText, rect)
+                in centeredInkPunctuation -> drawInkCenteredText(canvas, paint, displayText, rect)
                 in centerPunctuation -> drawOffsetText(canvas, paint, displayText, rect, baselineAdjust, 0f, -paint.textSize * 0.04f)
                 else -> drawRotatableText(canvas, paint, displayText, rect, baselineAdjust)
             }
@@ -239,6 +267,7 @@ internal object VerticalTextGlyphEngine {
             val rawRect = when (val ch = displayText.first()) {
                 in topRightPunctuation -> topRightPunctuationInkRect(paint, displayText, rect)
                 in smallKana -> smallKanaInkRect(paint, displayText, rect)
+                in centeredInkPunctuation -> inkCenteredTextRect(paint, displayText, rect)
                 in centerPunctuation -> offsetInkRect(paint, displayText, rect, baselineAdjust, 0f, -paint.textSize * 0.04f)
                 else -> rotatableInkRect(paint, displayText, rect, baselineAdjust)
             }
@@ -471,6 +500,38 @@ internal object VerticalTextGlyphEngine {
         val cx = rect.centerX() + dx
         val cy = rect.centerY() + dy
         canvas.drawText(text, cx, cy + baselineAdjust, paint)
+    }
+
+    private fun drawInkCenteredText(
+        canvas: Canvas,
+        paint: TextPaint,
+        text: String,
+        rect: RectF
+    ) {
+        withPaint(paint, Paint.Align.LEFT) { markPaint ->
+            val bounds = measureBounds(markPaint, text)
+            val x = rect.centerX() - (bounds.left + bounds.right) * 0.5f
+            val baseline = rect.centerY() - (bounds.top + bounds.bottom) * 0.5f
+            canvas.drawText(text, x, baseline, markPaint)
+        }
+    }
+
+    private fun inkCenteredTextRect(
+        paint: TextPaint,
+        text: String,
+        rect: RectF
+    ): RectF {
+        withPaint(paint, Paint.Align.LEFT) { markPaint ->
+            val bounds = measureBounds(markPaint, text)
+            val x = rect.centerX() - (bounds.left + bounds.right) * 0.5f
+            val baseline = rect.centerY() - (bounds.top + bounds.bottom) * 0.5f
+            return RectF(
+                x + bounds.left,
+                baseline + bounds.top,
+                x + bounds.right,
+                baseline + bounds.bottom
+            )
+        }
     }
 
     private fun drawRotatableText(

@@ -2736,6 +2736,7 @@ companion object {
 
     private fun destroyFloatingHoshiLookupWebViews() {
         floatingHoshiLookupWebViews.values.forEach { webView ->
+            (webView.tag as? FloatingHoshiLookupWebViewTag)?.contentReadyGate?.close()
             (webView.parent as? ViewGroup)?.removeView(webView)
             runCatching { webView.destroy() }
         }

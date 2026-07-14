@@ -10,8 +10,8 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import java.io.ByteArrayInputStream
-import de.manhhao.hoshi.HoshiDicts
 import de.manhhao.hoshi.LookupResult
+import moe.tekuza.m9player.hoshi.dictionary.HoshiDictionaryQuerySession
 import moe.tekuza.m9player.hoshi.dictionary.LookupEngine
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
@@ -19,6 +19,7 @@ import moe.tekuza.m9player.AnkiDuplicateCheckResult
 import moe.tekuza.m9player.logDebug
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val HOSHI_LOOKUP_POPUP_LOG_TAG = "HoshiLookupPopup"
 
@@ -38,6 +39,7 @@ internal class PopupWebViewCallbacks(
     val onTextSelected: (ReaderSelectionData) -> Int? = { null },
     val onLookupRedirect: (String) -> List<LookupResult> = { query -> LookupEngine.lookup(query) },
     val onLookupRedirected: (ReaderSelectionData, List<LookupResult>) -> Unit = { _, _ -> },
+    val onHistoryChanged: (Int, Int) -> Unit = { _, _ -> },
     val onContentReady: () -> Unit = {},
 )
 
@@ -64,12 +66,21 @@ internal fun PopupWebViewCallbacks.withAdditionalImageTap(
     onTextSelected = onTextSelected,
     onLookupRedirect = onLookupRedirect,
     onLookupRedirected = onLookupRedirected,
+    onHistoryChanged = onHistoryChanged,
     onContentReady = onContentReady,
 )
 
 internal class PopupWebViewCallbackHolder(
     var callbacks: PopupWebViewCallbacks,
-)
+) {
+    private val closed = AtomicBoolean(false)
+
+    fun close() {
+        closed.set(true)
+    }
+
+    fun isClosed(): Boolean = closed.get()
+}
 
 internal class PopupLookupResultsHolder(
     var results: List<LookupResult>,
@@ -85,27 +96,41 @@ internal data class PopupWebViewOffsetState(
 internal class PopupContentReadyGate {
     private var generation = 0L
     private var requestId = 0L
+    private var closed = false
+
+    internal val isClosed: Boolean
+        get() = closed
+
+    fun close() {
+        closed = true
+        generation += 1
+        requestId += 1
+    }
 
     fun reset() {
+        if (closed) return
         generation += 1
         requestId += 1
     }
 
     fun awaitReadyToDraw(webView: WebView, onReady: () -> Unit) {
+        if (closed) return
         val currentGeneration = generation
         val currentRequestId = requestId + 1
         requestId = currentRequestId
-        webView.postVisualStateCallback(
-            currentRequestId,
-            object : WebView.VisualStateCallback() {
-                override fun onComplete(requestId: Long) {
-                    if (generation != currentGeneration || this@PopupContentReadyGate.requestId != currentRequestId) {
-                        return
+        runCatching {
+            webView.postVisualStateCallback(
+                currentRequestId,
+                object : WebView.VisualStateCallback() {
+                    override fun onComplete(requestId: Long) {
+                        if (closed || generation != currentGeneration || this@PopupContentReadyGate.requestId != currentRequestId) {
+                            return
+                        }
+                        onReady()
                     }
-                    onReady()
-                }
-            },
-        )
+                },
+            )
+        }
     }
 }
 
@@ -168,7 +193,7 @@ internal class PopupMessageWebViewClient(
 
 internal class DictionaryImageRequestHandler(
     private val loadMedia: (dictionary: String, path: String) -> ByteArray? = { dictionary, path ->
-        HoshiDicts.getMediaFile(HoshiDicts.lookupObject, dictionary, path)
+        HoshiDictionaryQuerySession.getMediaFile(dictionary, path)
     },
 ) {
     fun handleImageRequest(uri: Uri): WebResourceResponse? {
@@ -260,20 +285,29 @@ internal class PopupWebViewBridge(
     }
 
     @JavascriptInterface
-    fun getEntry(index: Int): String? =
-        lookupResultsHolder.results.getOrNull(index)?.let { LookupPopupHtml.entryJsonString(it) }
+    fun getEntry(index: Int): String? {
+        if (callbackHolder.isClosed()) return null
+        return lookupResultsHolder.results.getOrNull(index)?.let { LookupPopupHtml.entryJsonString(it) }
+    }
 
     @JavascriptInterface
     fun shellReady() {
-        mainHandler.post(onShellReady)
+        if (callbackHolder.isClosed()) return
+        mainHandler.post {
+            if (contentReadyGate?.isClosed == true) return@post
+            onShellReady()
+        }
     }
 
     @JavascriptInterface
     fun lookupRedirect(query: String): Int {
+        if (callbackHolder.isClosed()) return 0
+        Log.d(HOSHI_LOOKUP_POPUP_LOG_TAG, "lookupRedirect received query='${query.take(48)}'")
         val results = callbackHolder.callbacks.onLookupRedirect(query)
         logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
             "lookupRedirect query='${query.take(32)}' resultCount=${results.size}"
         }
+        Log.d(HOSHI_LOOKUP_POPUP_LOG_TAG, "lookupRedirect completed query='${query.take(48)}' results=${results.size}")
         if (results.isNotEmpty()) {
             val offset = currentSelectionOffset()
             val selection = ReaderSelectionData(
@@ -290,8 +324,10 @@ internal class PopupWebViewBridge(
 
     @JavascriptInterface
     fun lookupRedirectAt(message: String): Int {
+        if (callbackHolder.isClosed()) return 0
         val payload = runCatching { JSONObject(message) }.getOrNull() ?: return 0
         val query = payload.optString("query").takeIf { it.isNotBlank() } ?: return 0
+        Log.d(HOSHI_LOOKUP_POPUP_LOG_TAG, "lookupRedirectAt received query='${query.take(48)}'")
         val offset = currentSelectionOffset()
         val selection = payload.toSelectionData(offset.x, offset.y)?.copy(
             text = query,
@@ -303,6 +339,7 @@ internal class PopupWebViewBridge(
         logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
             "lookupRedirectAt query='${query.take(32)}' resultCount=${results.size} rect=${selection.rect.x},${selection.rect.y} ${selection.rect.width}x${selection.rect.height}"
         }
+        Log.d(HOSHI_LOOKUP_POPUP_LOG_TAG, "lookupRedirectAt completed query='${query.take(48)}' results=${results.size}")
         if (results.isNotEmpty()) {
             mainHandler.post { callbackHolder.callbacks.onLookupRedirected(selection, results) }
         }
@@ -311,6 +348,7 @@ internal class PopupWebViewBridge(
 
     @JavascriptInterface
     fun postMessage(message: String) {
+        if (callbackHolder.isClosed()) return
         val payload = runCatching { JSONObject(message) }.getOrNull() ?: return
         val callbacks = callbackHolder.callbacks
         when (payload.optString("name")) {
@@ -332,17 +370,23 @@ internal class PopupWebViewBridge(
                 mainHandler.post { callbacks.onPlayWordAudio(url, term, reading) }
             }
             "tapOutside" -> mainHandler.post {
+                if (contentReadyGate?.isClosed == true) return@post
                 callbacks.onTapOutside()
                 webView.evaluateJavascript("window.hoshiSelection.clearSelection()", null)
             }
             "swipeDismiss" -> mainHandler.post(callbacks.onSwipeDismiss)
-            "contentReady", "contentReadyToDraw" -> mainHandler.post {
+            "contentReady" -> mainHandler.post {
+                Log.d(HOSHI_LOOKUP_POPUP_LOG_TAG, "contentReady received")
                 val gate = contentReadyGate
                 if (gate != null) {
                     gate.awaitReadyToDraw(webView, callbacks.onContentReady)
                 } else {
                     callbacks.onContentReady()
                 }
+            }
+            "contentReadyToDraw" -> mainHandler.post {
+                Log.d(HOSHI_LOOKUP_POPUP_LOG_TAG, "contentReadyToDraw received")
+                if (contentReadyGate?.isClosed != true) callbacks.onContentReady()
             }
             "textSelected" -> payload.optJSONObject("body")?.let { body ->
                 val offset = currentSelectionOffset()
@@ -360,8 +404,25 @@ internal class PopupWebViewBridge(
                             "raw=${rect?.toString()}"
                     }
                     mainHandler.post {
+                        if (contentReadyGate?.isClosed == true) return@post
+                        Log.d(
+                            HOSHI_LOOKUP_POPUP_LOG_TAG,
+                            "textSelected dispatch text='${selection.text.take(48)}' sentenceLen=${selection.sentence.length} " +
+                                "sentenceOffset=${selection.sentenceOffset}"
+                        )
                         val highlightCount = callbacks.onTextSelected(selection) ?: return@post
+                        Log.d(HOSHI_LOOKUP_POPUP_LOG_TAG, "textSelected handled highlightCount=$highlightCount")
                         webView.evaluateJavascript("window.hoshiSelection.highlightSelection($highlightCount)", null)
+                    }
+                }
+            }
+            "historyChanged" -> payload.optJSONObject("body")?.let { body ->
+                val backCount = body.optInt("backCount", 0).coerceAtLeast(0)
+                val forwardCount = body.optInt("forwardCount", 0).coerceAtLeast(0)
+                mainHandler.post {
+                    if (!callbackHolder.isClosed()) {
+                        Log.d(HOSHI_LOOKUP_POPUP_LOG_TAG, "historyChanged back=$backCount forward=$forwardCount")
+                        callbacks.onHistoryChanged(backCount, forwardCount)
                     }
                 }
             }
@@ -370,6 +431,7 @@ internal class PopupWebViewBridge(
 
     @JavascriptInterface
     fun mineEntry(content: String): Boolean {
+        if (callbackHolder.isClosed()) return false
         val callbacks = callbackHolder.callbacks
         return runCatching {
             logDebug("AnkiExportDebug") {
@@ -388,7 +450,7 @@ internal class PopupWebViewBridge(
 
     @JavascriptInterface
     fun mineEntryAsync(requestId: String, content: String) {
-        if (requestId.isBlank()) return
+        if (requestId.isBlank() || callbackHolder.isClosed()) return
         val callbacks = callbackHolder.callbacks
         val asyncHandler = callbacks.onMineEntryAsync
         if (asyncHandler == null) {
@@ -410,6 +472,7 @@ internal class PopupWebViewBridge(
 
     @JavascriptInterface
     fun duplicateCheck(expression: String): String {
+        if (callbackHolder.isClosed()) return """{"duplicate":false,"noteIds":[]}"""
         val callbacks = callbackHolder.callbacks
         return runCatching {
             val result = callbacks.onDuplicateCheck(expression)
@@ -430,7 +493,7 @@ internal class PopupWebViewBridge(
 
     @JavascriptInterface
     fun duplicateCheckAsync(requestId: String, expression: String) {
-        if (requestId.isBlank()) return
+        if (requestId.isBlank() || callbackHolder.isClosed()) return
         val callbacks = callbackHolder.callbacks
         val asyncHandler = callbacks.onDuplicateCheckAsync
         if (asyncHandler == null) {
@@ -452,6 +515,7 @@ internal class PopupWebViewBridge(
 
     @JavascriptInterface
     fun viewDuplicate(noteIdsJson: String): Boolean {
+        if (callbackHolder.isClosed()) return false
         val noteIds = runCatching {
             val array = JSONArray(noteIdsJson)
             List(array.length()) { index -> array.optLong(index, 0L) }
@@ -474,6 +538,7 @@ internal class PopupWebViewBridge(
             .put("value", value)
             .toString()
         mainHandler.post {
+            if (callbackHolder.isClosed()) return@post
             webView.evaluateJavascript(
                 "window.HoshiAndroidPopupBridge && window.HoshiAndroidPopupBridge.resolve(${JSONObject.quote(payload)})",
                 null,

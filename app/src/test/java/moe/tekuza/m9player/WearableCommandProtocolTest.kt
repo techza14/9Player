@@ -19,12 +19,10 @@ class WearableCommandProtocolTest {
     @Test
     fun forwardsCollectToTheReaderControlCallback() {
         var calls = 0
-        BookReaderFloatingBridge.setControlCollectListener(object : BookReaderFloatingBridge.ControlCollectListener {
-            override fun onControlCollectRequested(): BookReaderFloatingBridge.ControlCollectResult {
-                calls += 1
-                return BookReaderFloatingBridge.ControlCollectResult(1_000L)
-            }
-        })
+        BookReaderFloatingBridge.setControlCollectListener {
+            calls += 1
+            BookReaderFloatingBridge.ControlCollectResult(1_000L)
+        }
         try {
             assertTrue(BookReaderFloatingBridge.requestControlCollect() != null)
             assertEquals(1, calls)

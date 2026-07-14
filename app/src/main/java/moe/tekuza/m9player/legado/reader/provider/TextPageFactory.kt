@@ -7,7 +7,8 @@ import moe.tekuza.m9player.legado.reader.entities.TextChapter
 import moe.tekuza.m9player.legado.reader.entities.TextPage
 
 internal class TextPageFactory(
-    private val config: M9ReadBookConfig
+    private val config: M9ReadBookConfig,
+    private val emptyPageText: String
 ) {
     fun createPages(
         document: EbookDocument,
@@ -28,7 +29,7 @@ internal class TextPageFactory(
                     chapterIndex = 0,
                     chapterSize = 1,
                     title = document.title,
-                    text = "没有可显示的文本。",
+                    text = emptyPageText,
                     charStart = 0,
                     charEnd = 0
                 )
@@ -59,7 +60,7 @@ internal class TextPageFactory(
                         chapterIndex = safeIndex,
                         chapterSize = document.chapters.size.coerceAtLeast(1),
                         title = document.title,
-                        text = "没有可显示的文本。",
+                        text = emptyPageText,
                         charStart = 0,
                         charEnd = 0
                     )

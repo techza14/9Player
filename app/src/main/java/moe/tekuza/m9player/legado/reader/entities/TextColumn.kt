@@ -327,11 +327,11 @@ internal data class TextColumn(
 
     private companion object {
         private fun isHorizontalDash(value: String): Boolean {
-            return value.length == 1 && value[0] in HORIZONTAL_DASH_CHARS
+            return value.length == 1 && value[0] in DASH_CHARS
         }
 
         private fun isVerticalDash(value: String): Boolean {
-            return value.length == 1 && value[0] in VERTICAL_DASH_CHARS
+            return value.length == 1 && value[0] in DASH_CHARS
         }
 
         private fun isJapaneseIdeograph(char: Char): Boolean =
@@ -342,17 +342,7 @@ internal data class TextColumn(
                 Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS
             )
 
-        private val VERTICAL_DASH_CHARS = setOf(
-            '\u2014',
-            '\u2015',
-            '\u2212',
-            '\u2500',
-            '\u2501',
-            '\u2E3A',
-            '\u2E3B'
-        )
-
-        private val HORIZONTAL_DASH_CHARS = setOf(
+        private val DASH_CHARS = setOf(
             '\u2014',
             '\u2015',
             '\u2212',

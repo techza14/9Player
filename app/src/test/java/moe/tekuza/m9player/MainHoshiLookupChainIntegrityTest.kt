@@ -146,6 +146,11 @@ class MainHoshiLookupChainIntegrityTest {
             "Collections first layer must be driven by renamed local state",
             mainActivitySource.contains("collectionFirstLayerHtml")
         )
+        assertTrue(
+            "Collections recursive stack should use a higher popup window without hiding the first layer",
+            mainActivitySource.contains("platformPopupHost = collectionLookupPreviewVisible") &&
+                mainActivitySource.contains("extraBottomInsetDp =")
+        )
     }
 
     @Test

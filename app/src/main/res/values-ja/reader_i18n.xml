@@ -160,6 +160,7 @@
     <string name="reader_image_preview_unavailable">画像をプレビューできません</string>
     <string name="reader_image_gallery_title">挿絵 %1$d/%2$d</string>
     <string name="reader_image_gallery_empty">挿絵がありません</string>
+    <string name="reader_no_text">表示できるテキストがありません。</string>
     <string name="reader_image_gallery_spoiler">ネタバレ</string>
     <string name="reader_title_margin">余白</string>
     <string name="reader_margin_header">ヘッダー</string>

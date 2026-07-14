@@ -2374,7 +2374,9 @@ private fun ReaderSyncScreen() {
     fun pushMainHoshiRecursiveLookup(selection: ReaderSelectionData): Boolean {
         Log.d(
             "MainHoshiResultPopup",
-            "pushRecursiveLookup start text='${selection.text.take(32)}' rect=${selection.rect.x},${selection.rect.y} ${selection.rect.width}x${selection.rect.height}"
+            "pushRecursiveLookup start currentSize=${mainHoshiLookupPopups.size} text='${selection.text.take(48)}' " +
+                "sentenceLen=${selection.sentence.length} sentenceOffset=${selection.sentenceOffset} " +
+                "rect=${selection.rect.x},${selection.rect.y} ${selection.rect.width}x${selection.rect.height}"
         )
         val popup = mainHoshiLookupSession.createPopup(
             selection = selection,
@@ -2388,7 +2390,8 @@ private fun ReaderSyncScreen() {
         mainHoshiLookupPopups.add(popup.first)
         Log.d(
             "MainHoshiResultPopup",
-            "pushRecursiveLookup applied text='${selection.text.take(32)}' popupCount=${mainHoshiLookupPopups.size}"
+            "pushRecursiveLookup applied text='${selection.text.take(48)}' popupId=${popup.first.id} " +
+                "results=${popup.first.state.results.size} popupCount=${mainHoshiLookupPopups.size}"
         )
         return true
     }
@@ -4669,56 +4672,66 @@ private fun ReaderSyncScreen() {
         }
 
         LookupPopupStackView(
-            popups = mainHoshiLookupPopups,
-            onPopupsChange = { next ->
-                mainHoshiLookupPopups.clear()
-                mainHoshiLookupPopups.addAll(next)
-                if (next.isEmpty()) {
-                    mainHoshiLookupCue = null
-                    mainHoshiLookupSelectedRange = null
-                    mainHoshiLookupAudioUri = null
-                    mainHoshiLookupTitle = ""
-                }
-            },
-            lookupChildPopup = { selection ->
-                mainHoshiLookupSession.createPopup(
-                    selection = selection,
-                    options = mainHoshiLookupOptions(showRangeSelection = false),
-                )
-            },
-            onLookupRedirect = { query ->
-                val dictionarySettings = loadDictionarySettings(context)
-                mainHoshiLookupSession.lookup(
-                    query,
-                    dictionarySettings.maxResults,
-                    dictionarySettings.scanLength,
-                )
-            },
-            onPlayWordAudio = { _url, term, reading ->
-                if (!term.isNullOrBlank()) {
-                    playLookupAudioForTerm(
-                        context = context,
-                        term = term,
-                        reading = reading,
-                        settings = audiobookSettings
+                popups = mainHoshiLookupPopups,
+                onPopupsChange = { next ->
+                    Log.d(
+                        "MainHoshiResultPopup",
+                        "stack onPopupsChange old=${mainHoshiLookupPopups.size} new=${next.size} ids=${next.joinToString(",") { it.id.take(8) }}"
                     )
-                }
-            },
-            onMineEntryAsync = { content, onComplete ->
-                exportMainHoshiLookupEntryToAnkiAsync(content, onComplete)
-            },
-            onDuplicateCheckAsync = { expression, onComplete ->
-                checkMainAnkiDuplicateAsync(expression, onComplete)
-            },
-            onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
-            onCloseAll = {
-                clearMainHoshiChildPopups()
-            },
-            modifier = Modifier.fillMaxSize(),
-            onRootPopupDismissed = {
-                clearMainHoshiChildPopups()
-            },
-            warmRootOptions = mainHoshiLookupOptions(showRangeSelection = false),
+                    mainHoshiLookupPopups.clear()
+                    mainHoshiLookupPopups.addAll(next)
+                    if (next.isEmpty()) {
+                        mainHoshiLookupCue = null
+                        mainHoshiLookupSelectedRange = null
+                        mainHoshiLookupAudioUri = null
+                        mainHoshiLookupTitle = ""
+                    }
+                },
+                lookupChildPopup = { selection ->
+                    mainHoshiLookupSession.createPopup(
+                        selection = selection,
+                        options = mainHoshiLookupOptions(showRangeSelection = false),
+                    )
+                },
+                onLookupRedirect = { query ->
+                    val dictionarySettings = loadDictionarySettings(context)
+                    mainHoshiLookupSession.lookup(
+                        query,
+                        dictionarySettings.maxResults,
+                        dictionarySettings.scanLength,
+                    )
+                },
+                onPlayWordAudio = { _url, term, reading ->
+                    if (!term.isNullOrBlank()) {
+                        playLookupAudioForTerm(
+                            context = context,
+                            term = term,
+                            reading = reading,
+                            settings = audiobookSettings
+                        )
+                    }
+                },
+                onMineEntryAsync = { content, onComplete ->
+                    exportMainHoshiLookupEntryToAnkiAsync(content, onComplete)
+                },
+                onDuplicateCheckAsync = { expression, onComplete ->
+                    checkMainAnkiDuplicateAsync(expression, onComplete)
+                },
+                onViewDuplicate = { noteIds -> openAnkiDuplicateNotesInBrowser(context, noteIds) },
+                onCloseAll = {
+                    clearMainHoshiChildPopups()
+                },
+                modifier = Modifier.fillMaxSize(),
+                onRootPopupDismissed = {
+                    clearMainHoshiChildPopups()
+                },
+                warmRootOptions = mainHoshiLookupOptions(showRangeSelection = false),
+                platformPopupHost = collectionLookupPreviewVisible,
+                extraBottomInsetDp = if (collectionLookupPreviewVisible) {
+                    innerPadding.calculateBottomPadding().value.toDouble()
+                } else {
+                    0.0
+                },
         )
 
         VersionEasterGifPopup(

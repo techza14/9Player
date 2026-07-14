@@ -27,12 +27,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PlayLesson
-import androidx.compose.material.icons.outlined.Watch
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.core.content.ContextCompat
 import moe.tekuza.m9player.ui.theme.TsetTheme
@@ -140,7 +141,7 @@ private fun OtherSettingsScreen(
                 SettingsSwitchItem(
                     title = stringResource(R.string.settings_wearable_enabled_title),
                     checked = wearableEnabled,
-                    icon = Icons.Outlined.Watch,
+                    iconPainter = painterResource(R.drawable.ic_fitness_tracker_24dp),
                     onCheckedChange = { enabled ->
                         wearableEnabled = enabled
                         saveWearableFeatureEnabled(context, enabled)
@@ -207,6 +208,7 @@ private fun SettingsSwitchItem(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     icon: ImageVector? = null,
+    iconPainter: Painter? = null,
     enabled: Boolean = true,
     showDivider: Boolean = true
 ) {
@@ -222,7 +224,17 @@ private fun SettingsSwitchItem(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (icon != null) {
+            if (iconPainter != null) {
+                Icon(
+                    painter = iconPainter,
+                    contentDescription = null,
+                    tint = if (enabled) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                    }
+                )
+            } else if (icon != null) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,

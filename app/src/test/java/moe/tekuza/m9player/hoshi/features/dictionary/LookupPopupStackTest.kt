@@ -22,4 +22,14 @@ class LookupPopupStackTest {
         assertTrue(source.contains("""onRootPopupDismissed = {"""))
         assertTrue(source.contains("""clearMainHoshiChildPopups()"""))
     }
+
+    @Test
+    fun popupHistoryDoesNotReplaceTheRecursivePopupStack() {
+        val stackSource = File("src/main/java/moe/tekuza/m9player/hoshi/features/dictionary/LookupPopupStack.kt").readText()
+        val viewSource = File("src/main/java/moe/tekuza/m9player/hoshi/features/dictionary/LookupPopupView.kt").readText()
+
+        assertTrue(!stackSource.contains("onHistoryChanged ="))
+        assertTrue(viewSource.contains("historyBackCount = backCount"))
+        assertTrue(viewSource.contains("historyForwardCount = forwardCount"))
+    }
 }

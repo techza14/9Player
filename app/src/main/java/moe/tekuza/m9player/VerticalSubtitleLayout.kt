@@ -65,6 +65,22 @@ internal object VerticalSubtitleLayoutEngine {
             row = 0
         }
 
+        fun moveToNextColumnForLineBreak(nextChar: Char?) {
+            val previous = cells.lastOrNull()
+            val startsWithForbidden = nextChar?.let(VerticalTextGlyphEngine::isNoColumnStart) == true
+            if (startsWithForbidden && previous != null && previous.column == column) {
+                cells.removeAt(cells.lastIndex)
+                moveToNextColumn()
+                val carried = previous.copy(row = 0, column = column)
+                cells += carried
+                row = carried.row + carried.rowSpan
+                maxColumn = maxOf(maxColumn, column)
+                maxRow = maxOf(maxRow, carried.row + carried.rowSpan - 1)
+            } else {
+                moveToNextColumn()
+            }
+        }
+
         fun rowSpanFor(tokenText: String): Int {
             if (!VerticalTextGlyphEngine.isSidewaysAsciiToken(tokenText) ||
                 VerticalTextGlyphEngine.isTateChuYokoToken(tokenText)
@@ -127,7 +143,7 @@ internal object VerticalSubtitleLayoutEngine {
                 if (singleColumn) {
                     row += 1
                 } else if (row > 0 || cells.isNotEmpty()) {
-                    moveToNextColumn()
+                    moveToNextColumnForLineBreak(text.getOrNull(index + 1))
                 }
                 index += 1
                 continue

@@ -10,7 +10,7 @@ import androidx.documentfile.provider.DocumentFile
 import android.util.Log
 import android.util.JsonReader
 import android.util.JsonToken
-import de.manhhao.hoshi.HoshiDicts
+import moe.tekuza.m9player.hoshi.dictionary.HoshiDictionaryQuerySession
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.File
@@ -489,8 +489,7 @@ private fun prepareHoshiLookupIfNeeded(bindings: List<HoshiDictionaryBinding>) {
                 "freqs=${freqBindings.joinToString { it.dictionary.name }} " +
                 "pitches=${pitchBindings.joinToString { it.dictionary.name }}"
         }
-        HoshiDicts.rebuildQuery(
-            HoshiDicts.lookupObject,
+        HoshiDictionaryQuerySession.rebuild(
             termPaths,
             freqPaths,
             pitchPaths

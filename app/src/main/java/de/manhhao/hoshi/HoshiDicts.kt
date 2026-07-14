@@ -52,6 +52,7 @@ object HoshiDicts {
     val lookupObject: Long = createLookupObject()
 
     external fun createLookupObject(): Long
+    external fun destroyLookupObject(session: Long)
     external fun rebuildQuery(
         session: Long,
         termPaths: Array<String>,

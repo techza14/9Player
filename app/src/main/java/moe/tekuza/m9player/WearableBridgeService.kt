@@ -51,12 +51,11 @@ class WearableBridgeService : Service() {
     private var nodeApi: NodeApi? = null
     private var messageApi: MessageApi? = null
     private var serviceApi: ServiceApi? = null
-    private var timerJob: kotlinx.coroutines.Job? = null
 
     private val messageListener = OnMessageReceivedListener { nodeId, bytes ->
         val command = WearableCommandProtocol.parse(bytes)
         if (command == null) {
-            send(nodeId, response(null, false, "无效指令"))
+            send(nodeId, response(null, false, getString(R.string.wearable_error_invalid_command)))
         } else {
             handle(nodeId, command)
         }
@@ -67,14 +66,14 @@ class WearableBridgeService : Service() {
 
         override fun onServiceDisconnected() {
             registeredNodeIds.clear()
-            updateNotification("等待小米运动健康连接")
+            updateNotification(getString(R.string.wearable_status_waiting_connection))
         }
     }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("正在连接手环"))
+        startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.wearable_status_connecting)))
         runCatching {
             nodeApi = Wearable.getNodeApi(applicationContext)
             messageApi = Wearable.getMessageApi(applicationContext)
@@ -84,7 +83,7 @@ class WearableBridgeService : Service() {
             registerConnectedNodes()
         }.onFailure {
             Log.w(TAG, "Xiaomi wearable SDK unavailable", it)
-            updateNotification("请安装并打开小米运动健康")
+            updateNotification(getString(R.string.wearable_error_install_health))
         }
     }
 
@@ -112,14 +111,14 @@ class WearableBridgeService : Service() {
         nodes.connectedNodes
             .addOnSuccessListener { connected ->
                 if (connected.isEmpty()) {
-                    updateNotification("手环未连接")
+                    updateNotification(getString(R.string.wearable_status_not_connected))
                     return@addOnSuccessListener
                 }
                 connected.forEach { node -> ensurePermissionAndListen(node.id) }
             }
             .addOnFailureListener {
                 Log.w(TAG, "get connected nodes failed", it)
-                updateNotification("等待小米运动健康连接")
+                updateNotification(getString(R.string.wearable_status_waiting_connection))
             }
     }
 
@@ -135,7 +134,7 @@ class WearableBridgeService : Service() {
                         .addOnSuccessListener { addMessageListener(nodeId) }
                         .addOnFailureListener {
                             Log.w(TAG, "wearable permission denied", it)
-                            updateNotification("请授权 9player 访问手环")
+                            updateNotification(getString(R.string.wearable_error_permission))
                         }
                 }
             }
@@ -146,8 +145,8 @@ class WearableBridgeService : Service() {
         messageApi?.addListener(nodeId, messageListener)
             ?.addOnSuccessListener {
                 registeredNodeIds += nodeId
-                updateNotification("手环联动已启用")
-                send(nodeId, currentStateResponse(null, "手环联动已启用"))
+                updateNotification(getString(R.string.wearable_status_enabled))
+                send(nodeId, currentStateResponse(null, getString(R.string.wearable_status_enabled)))
             }
             ?.addOnFailureListener { Log.w(TAG, "message listener failed", it) }
     }
@@ -155,42 +154,70 @@ class WearableBridgeService : Service() {
     private fun handle(nodeId: String, request: WearableCommand) {
         scope.launch {
             when (request.command) {
-                "GET_STATE" -> send(nodeId, currentStateResponse(request, "已同步"))
+                "GET_STATE" -> send(nodeId, currentStateResponse(request, getString(R.string.wearable_status_synced)))
                 "PLAY_PAUSE" -> {
                     BookReaderFloatingBridge.togglePlayPause()
-                    send(nodeId, currentStateResponse(request, if (BookReaderFloatingBridge.isPlaying()) "播放中" else "已暂停"))
+                    send(
+                        nodeId,
+                        currentStateResponse(
+                            request,
+                            getString(
+                                if (BookReaderFloatingBridge.isPlaying()) {
+                                    R.string.wearable_status_playing
+                                } else {
+                                    R.string.wearable_status_paused
+                                }
+                            )
+                        )
+                    )
                 }
                 "SEEK_PREVIOUS" -> {
                     BookReaderFloatingBridge.seekPrevious()
-                    send(nodeId, currentStateResponse(request, "已往前跳转"))
+                    send(nodeId, currentStateResponse(request, getString(R.string.wearable_status_seek_previous)))
                 }
                 "SEEK_NEXT" -> {
                     BookReaderFloatingBridge.seekNext()
-                    send(nodeId, currentStateResponse(request, "已往后跳转"))
+                    send(nodeId, currentStateResponse(request, getString(R.string.wearable_status_seek_next)))
                 }
                 "SET_SPEED" -> {
                     val speed = request.value?.toFloat()?.coerceIn(0.5f, 3f) ?: 1f
                     BookReaderFloatingBridge.setPlaybackSpeed(speed)
-                    send(nodeId, currentStateResponse(request, "倍速 ${"%.1f".format(speed)}x"))
+                    send(
+                        nodeId,
+                        currentStateResponse(request, getString(R.string.wearable_status_speed, speed))
+                    )
                 }
                 "SET_TIMER" -> {
                     val minutes = request.value?.toLong()?.coerceIn(1L, 180L) ?: 0L
-                    timerJob?.cancel()
-                    if (minutes == 0L) {
-                        send(nodeId, currentStateResponse(request, "已取消定时"))
-                    } else {
-                        timerJob = scope.launch {
-                            kotlinx.coroutines.delay(minutes * 60_000L)
-                            BookReaderFloatingBridge.setPlaying(false)
+                    if (BookReaderFloatingBridge.requestSleepTimer(minutes.toInt())) {
+                        val message = if (minutes == 0L) {
+                            getString(R.string.wearable_status_timer_cancelled)
+                        } else {
+                            getString(R.string.wearable_status_timer_set, minutes)
                         }
-                        send(nodeId, currentStateResponse(request, "${minutes}分钟后暂停"))
+                        send(
+                            nodeId,
+                            currentStateResponse(request, message)
+                        )
+                    } else {
+                        send(nodeId, response(request, false, getString(R.string.wearable_error_player_not_ready)))
                     }
                 }
                 "COLLECT_CURRENT" -> {
                     val result = BookReaderFloatingBridge.requestControlCollect()
                     send(
                         nodeId,
-                        response(request, result != null, if (result != null) "已按控制模式处理" else "当前没有可控制的字幕句").apply {
+                        response(
+                            request,
+                            result != null,
+                            getString(
+                                if (result != null) {
+                                    R.string.wearable_status_control_processed
+                                } else {
+                                    R.string.wearable_error_no_subtitle
+                                }
+                            )
+                        ).apply {
                             put("keepScreenOnMs", result?.keepScreenOnMs?.plus(1_000L) ?: 0L)
                         }
                     )
@@ -202,10 +229,12 @@ class WearableBridgeService : Service() {
     private fun currentStateResponse(request: WearableCommand?, message: String): JSONObject {
         val cue = BookReaderFloatingBridge.currentCue()
         return response(request, true, message, cue?.text).apply {
+            put("title", BookReaderFloatingBridge.currentBookTitle().orEmpty())
             put("playing", BookReaderFloatingBridge.isPlaying())
             put("speed", BookReaderFloatingBridge.currentPlaybackSpeed())
             put("positionMs", BookReaderFloatingBridge.currentPlaybackPositionMs())
             put("durationMs", BookReaderFloatingBridge.currentPlaybackDurationMs())
+            put("timerRemainingMs", BookReaderFloatingBridge.currentSleepTimerRemainingMs())
             put("vertical", loadAudiobookSettingsConfig(applicationContext).bookSubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL)
         }
     }
@@ -232,13 +261,17 @@ class WearableBridgeService : Service() {
     private fun createNotificationChannel() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "9player 手环联动", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(
+                CHANNEL_ID,
+                getString(R.string.wearable_notification_title),
+                NotificationManager.IMPORTANCE_LOW
+            )
         )
     }
 
     private fun buildNotification(text: String) = NotificationCompat.Builder(this, CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_overlay_play)
-        .setContentTitle("9player 手环联动")
+        .setContentTitle(getString(R.string.wearable_notification_title))
         .setContentText(text)
         .setOngoing(true)
         .setOnlyAlertOnce(true)

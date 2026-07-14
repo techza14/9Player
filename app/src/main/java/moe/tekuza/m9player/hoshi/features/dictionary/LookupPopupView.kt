@@ -53,7 +53,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import de.manhhao.hoshi.HoshiDicts
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import de.manhhao.hoshi.LookupResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -67,6 +69,7 @@ import moe.tekuza.m9player.R
 import moe.tekuza.m9player.decodeSampledBitmap
 import moe.tekuza.m9player.destroyWebViewSafely
 import moe.tekuza.m9player.logDebug
+import moe.tekuza.m9player.hoshi.dictionary.HoshiDictionaryQuerySession
 
 private val LookupPopupActionBarHeight = 44.dp
 private const val HOSHI_LOOKUP_POPUP_LOG_TAG = "HoshiLookupPopup"
@@ -79,6 +82,8 @@ internal fun LookupPopupView(
     modifier: Modifier = Modifier,
     lookupStartedAtNanos: Long = SystemClock.elapsedRealtimeNanos(),
     clearSelectionSignal: Int = 0,
+    backSignal: Int = 0,
+    forwardSignal: Int = 0,
     onTapOutside: () -> Unit = onSwipeDismiss,
     onTextSelected: (ReaderSelectionData) -> Int? = { null },
     onRangeSelection: (() -> Unit)? = null,
@@ -104,6 +109,8 @@ internal fun LookupPopupView(
         )
     },
     onLookupRedirected: (ReaderSelectionData) -> Unit = {},
+    platformPopupHost: Boolean = false,
+    extraBottomInsetDp: Double = 0.0,
 ) {
     if (state.results.isEmpty() && !warmShell) {
         logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
@@ -144,6 +151,10 @@ internal fun LookupPopupView(
     }
     var contentReady by remember(html, contentResetKey) { mutableStateOf(false) }
     var firstPaintLogged by remember(contentResetKey, lookupStartedAtNanos) { mutableStateOf(false) }
+    var requestedBackSignal by remember { mutableStateOf(backSignal) }
+    var requestedForwardSignal by remember { mutableStateOf(forwardSignal) }
+    var historyBackCount by remember(contentResetKey) { mutableStateOf(0) }
+    var historyForwardCount by remember(contentResetKey) { mutableStateOf(0) }
     var previewImageUrl by remember { mutableStateOf<String?>(null) }
     val frame = remember(
         state.selection.rect,
@@ -156,6 +167,7 @@ internal fun LookupPopupView(
         state.isFullWidth,
         state.topInset,
         state.bottomInset,
+        extraBottomInsetDp,
     ) {
         LookupPopupLayout(
             selectionRect = state.selection.rect,
@@ -167,7 +179,7 @@ internal fun LookupPopupView(
             isVertical = state.isVertical,
             isFullWidth = state.isFullWidth,
             topInset = state.topInset,
-            bottomInset = state.bottomInset,
+            bottomInset = state.bottomInset + extraBottomInsetDp,
         ).calculate()
     }
     val frameX = frame.centerX - frame.width / 2
@@ -191,15 +203,22 @@ internal fun LookupPopupView(
             "popupTopGapDp=${frameY - (state.selection.rect.y + state.selection.rect.height)}"
     }
     val densityScale = density.density.coerceAtLeast(0.1f)
-    Box(modifier = Modifier.fillMaxSize()) {
+    @Composable
+    fun PopupCard() {
         Surface(
             modifier = Modifier
-                .offset {
-                    IntOffset(
-                        x = (effectiveFrameX * densityScale).toInt(),
-                        y = (effectiveFrameY * densityScale).toInt(),
-                    )
-                }
+                .then(
+                    if (platformPopupHost) {
+                        Modifier
+                    } else {
+                        Modifier.offset {
+                            IntOffset(
+                                x = (effectiveFrameX * densityScale).toInt(),
+                                y = (effectiveFrameY * densityScale).toInt(),
+                            )
+                        }
+                    }
+                )
                 .then(if (isPopupActive) Modifier.width(frame.width.dp).height(frame.height.dp) else Modifier.size(1.dp))
                 .alpha(if (contentReady && isPopupActive && isContentVisible) 1f else 0f)
                 .clip(popupShape)
@@ -230,6 +249,8 @@ internal fun LookupPopupView(
                         selectionOffsetX = frameX + 10.0,
                         selectionOffsetY = frameY + 10.0,
                         clearSelectionSignal = clearSelectionSignal,
+                        backSignal = requestedBackSignal,
+                        forwardSignal = requestedForwardSignal,
                         warmShell = warmShell,
                         callbacks = PopupWebViewCallbacks(
                             onTapOutside = onTapOutside,
@@ -258,12 +279,28 @@ internal fun LookupPopupView(
                             onTextSelected = onTextSelected,
                             onLookupRedirect = onLookupRedirect,
                             onLookupRedirected = { selection, results ->
+                                android.util.Log.d(
+                                    HOSHI_LOOKUP_POPUP_LOG_TAG,
+                                    "redirected callback text='${selection.text.take(48)}' results=${results.size}"
+                                )
                                 logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
                                     "redirected query='${selection.text.take(32)}' resultCount=${results.size} freqCount=${results.firstOrNull()?.term?.frequencies?.size ?: 0} pitchCount=${results.firstOrNull()?.term?.pitches?.size ?: 0} rect=${selection.rect.x},${selection.rect.y} ${selection.rect.width}x${selection.rect.height}"
                                 }
                                 onLookupRedirected(selection)
                             },
+                            onHistoryChanged = { backCount, forwardCount ->
+                                android.util.Log.d(
+                                    HOSHI_LOOKUP_POPUP_LOG_TAG,
+                                    "history state updated back=$backCount forward=$forwardCount"
+                                )
+                                historyBackCount = backCount
+                                historyForwardCount = forwardCount
+                            },
                             onContentReady = {
+                                android.util.Log.d(
+                                    HOSHI_LOOKUP_POPUP_LOG_TAG,
+                                    "content ready text='${state.selection.text.take(48)}' warmShell=$warmShell active=$isPopupActive visible=$isContentVisible"
+                                )
                                 contentReady = true
                                 if (!firstPaintLogged && isPopupActive && isContentVisible) {
                                     firstPaintLogged = true
@@ -282,9 +319,43 @@ internal fun LookupPopupView(
                         onClose = onSwipeDismiss,
                         showCloseAll = showCloseAll,
                         onCloseAll = onCloseAll,
+                        historyBackCount = historyBackCount,
+                        historyForwardCount = historyForwardCount,
+                        onNavigateBack = { requestedBackSignal += 1 },
+                        onNavigateForward = { requestedForwardSignal += 1 },
                     )
                 }
             }
+        }
+    }
+
+    if (platformPopupHost) {
+        Popup(
+            popupPositionProvider = remember(effectiveFrameX, effectiveFrameY, densityScale) {
+                object : PopupPositionProvider {
+                    override fun calculatePosition(
+                        anchorBounds: androidx.compose.ui.unit.IntRect,
+                        windowSize: androidx.compose.ui.unit.IntSize,
+                        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+                        popupContentSize: androidx.compose.ui.unit.IntSize,
+                    ): IntOffset = IntOffset(
+                        x = (effectiveFrameX * densityScale).toInt(),
+                        y = (effectiveFrameY * densityScale).toInt(),
+                    )
+                }
+            },
+            properties = PopupProperties(
+                focusable = false,
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false,
+                clippingEnabled = false,
+            ),
+        ) {
+            PopupCard()
+        }
+    } else {
+        Box(modifier = Modifier.fillMaxSize()) {
+            PopupCard()
         }
     }
     previewImageUrl?.takeIf { it.isNotBlank() }?.let { imageUrl ->
@@ -315,6 +386,10 @@ private fun LookupPopupActionBar(
     onClose: () -> Unit,
     showCloseAll: Boolean,
     onCloseAll: (() -> Unit)?,
+    historyBackCount: Int,
+    historyForwardCount: Int,
+    onNavigateBack: () -> Unit,
+    onNavigateForward: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -332,6 +407,24 @@ private fun LookupPopupActionBar(
             contentPadding = ButtonDefaults.ContentPadding
         ) {
             Text(text = stringResource(R.string.common_close))
+        }
+        if (historyBackCount > 0) {
+            TextButton(
+                onClick = onNavigateBack,
+                colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF32679A)),
+                contentPadding = ButtonDefaults.ContentPadding,
+            ) {
+                Text(text = "←")
+            }
+        }
+        if (historyForwardCount > 0) {
+            TextButton(
+                onClick = onNavigateForward,
+                colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF32679A)),
+                contentPadding = ButtonDefaults.ContentPadding,
+            ) {
+                Text(text = "→")
+            }
         }
         if (showCloseAll && onCloseAll != null) {
             TextButton(
@@ -383,6 +476,12 @@ private fun LookupPopupWebView(
     var appliedWarmResults by remember { mutableStateOf<List<LookupResult>?>(null) }
     DisposableEffect(Unit) {
         onDispose {
+            contentReadyGate.close()
+            webViewHolder.value?.evaluateJavascript(
+                "window.HoshiAndroidPopupBridge && window.HoshiAndroidPopupBridge.cancelAll(null)",
+                null,
+            )
+            callbackHolder.close()
             webViewHolder.value?.let(::destroyWebViewSafely)
             webViewHolder.value = null
         }
@@ -512,7 +611,7 @@ private fun decodeHoshiPreviewImageBitmap(rawUrl: String): ImageBitmap? {
     }
     if (dictionary.isBlank() || path.isBlank()) return null
     return runCatching {
-        val data = HoshiDicts.getMediaFile(HoshiDicts.lookupObject, dictionary, path)
+        val data = HoshiDictionaryQuerySession.getMediaFile(dictionary, path)
             ?.takeIf { it.isNotEmpty() }
             ?: return null
         logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {

@@ -646,6 +646,11 @@ Java_de_manhhao_hoshi_HoshiDicts_createLookupObject(JNIEnv*, jobject) {
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_de_manhhao_hoshi_HoshiDicts_destroyLookupObject(JNIEnv*, jobject, jlong session) {
+  delete reinterpret_cast<LookupContext*>(session);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_de_manhhao_hoshi_HoshiDicts_rebuildQuery(JNIEnv* env,
                                               jobject,
                                               jlong session,

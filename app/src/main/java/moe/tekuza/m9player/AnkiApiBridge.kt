@@ -1946,47 +1946,7 @@ private fun transcodeAudioToM4a(
 
     return try {
         val outputFile = createAnkiMediaTempFile(context, prefix = prefix, extension = "m4a")
-        val done = AtomicBoolean(false)
-        val success = AtomicBoolean(false)
-        val latch = CountDownLatch(1)
-        var errorDetail: String? = null
-
-        val listener = object : Transformer.Listener {
-            override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                if (done.compareAndSet(false, true)) {
-                    success.set(true)
-                    latch.countDown()
-                }
-            }
-
-            override fun onError(
-                composition: Composition,
-                exportResult: ExportResult,
-                exportException: ExportException
-            ) {
-                if (done.compareAndSet(false, true)) {
-                    errorDetail = "${exportException.errorCodeName}:${exportException.message.orEmpty()}"
-                    latch.countDown()
-                }
-            }
-
-            override fun onTransformationCompleted(
-                mediaItem: MediaItem,
-                transformationResult: TransformationResult
-            ) {
-                if (done.compareAndSet(false, true)) {
-                    success.set(true)
-                    latch.countDown()
-                }
-            }
-
-            override fun onTransformationError(mediaItem: MediaItem, exception: Exception) {
-                if (done.compareAndSet(false, true)) {
-                    errorDetail = "${exception.javaClass.simpleName}:${exception.message.orEmpty()}"
-                    latch.countDown()
-                }
-            }
-        }
+        val completion = TransformerCompletion()
 
         val mediaItem = MediaItem.fromUri(sourceUri)
         val editedItem = EditedMediaItem.Builder(mediaItem)
@@ -1994,7 +1954,7 @@ private fun transcodeAudioToM4a(
             .build()
         val transformer = Transformer.Builder(context)
             .setAudioMimeType("audio/mp4a-latm")
-            .setListener(listener)
+            .setListener(completion.listener)
             .build()
 
         val started = runCatching {
@@ -2008,7 +1968,7 @@ private fun transcodeAudioToM4a(
         }
 
         val finished = runCatching {
-            latch.await(120, TimeUnit.SECONDS)
+            completion.await(120)
         }.getOrElse {
             onFailure("await-failed=${it.javaClass.simpleName}")
             false
@@ -2019,8 +1979,8 @@ private fun transcodeAudioToM4a(
             outputFile.delete()
             return null
         }
-        if (!success.get()) {
-            onFailure("error=${errorDetail.orEmpty()}")
+        if (!completion.succeeded()) {
+            onFailure("error=${completion.errorDetail()}")
             outputFile.delete()
             return null
         }
@@ -2033,6 +1993,51 @@ private fun transcodeAudioToM4a(
     } catch (e: Exception) {
         onFailure("exception=${e.javaClass.simpleName}")
         null
+    }
+}
+
+private class TransformerCompletion {
+    private val done = AtomicBoolean(false)
+    private val success = AtomicBoolean(false)
+    private val latch = CountDownLatch(1)
+    private var error: String? = null
+
+    val listener = object : Transformer.Listener {
+        override fun onCompleted(composition: Composition, exportResult: ExportResult) = finishSuccess()
+
+        override fun onError(
+            composition: Composition,
+            exportResult: ExportResult,
+            exportException: ExportException
+        ) = finishFailure("${exportException.errorCodeName}:${exportException.message.orEmpty()}")
+
+        override fun onTransformationCompleted(
+            mediaItem: MediaItem,
+            transformationResult: TransformationResult
+        ) = finishSuccess()
+
+        override fun onTransformationError(mediaItem: MediaItem, exception: Exception) =
+            finishFailure("${exception.javaClass.simpleName}:${exception.message.orEmpty()}")
+    }
+
+    fun await(timeoutSeconds: Long): Boolean = latch.await(timeoutSeconds, TimeUnit.SECONDS)
+
+    fun succeeded(): Boolean = success.get()
+
+    fun errorDetail(): String = error.orEmpty()
+
+    private fun finishSuccess() {
+        if (done.compareAndSet(false, true)) {
+            success.set(true)
+            latch.countDown()
+        }
+    }
+
+    private fun finishFailure(detail: String) {
+        if (done.compareAndSet(false, true)) {
+            error = detail
+            latch.countDown()
+        }
     }
 }
 
@@ -2237,47 +2242,7 @@ private fun createCueAudioClipByTransformer(
 ): File? {
     return try {
         val outputFile = createAnkiMediaTempFile(context, prefix = "cue-tx", extension = "m4a")
-        val done = AtomicBoolean(false)
-        val success = AtomicBoolean(false)
-        val latch = CountDownLatch(1)
-        var errorDetail: String? = null
-
-        val listener = object : Transformer.Listener {
-            override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                if (done.compareAndSet(false, true)) {
-                    success.set(true)
-                    latch.countDown()
-                }
-            }
-
-            override fun onError(
-                composition: Composition,
-                exportResult: ExportResult,
-                exportException: ExportException
-            ) {
-                if (done.compareAndSet(false, true)) {
-                    errorDetail = "${exportException.errorCodeName}:${exportException.message.orEmpty()}"
-                    latch.countDown()
-                }
-            }
-
-            override fun onTransformationCompleted(
-                mediaItem: MediaItem,
-                transformationResult: TransformationResult
-            ) {
-                if (done.compareAndSet(false, true)) {
-                    success.set(true)
-                    latch.countDown()
-                }
-            }
-
-            override fun onTransformationError(mediaItem: MediaItem, exception: Exception) {
-                if (done.compareAndSet(false, true)) {
-                    errorDetail = "${exception.javaClass.simpleName}:${exception.message.orEmpty()}"
-                    latch.countDown()
-                }
-            }
-        }
+        val completion = TransformerCompletion()
 
         val mediaItem = MediaItem.Builder()
             .setUri(sourceUri)
@@ -2289,7 +2254,7 @@ private fun createCueAudioClipByTransformer(
             .build()
         val transformer = Transformer.Builder(context)
             .setAudioMimeType("audio/mp4a-latm")
-            .setListener(listener)
+            .setListener(completion.listener)
             .build()
 
         val started = runCatching {
@@ -2303,7 +2268,7 @@ private fun createCueAudioClipByTransformer(
         }
 
         val finished = runCatching {
-            latch.await(90, TimeUnit.SECONDS)
+            completion.await(90)
         }.getOrElse {
             onFailure("transformer-await-failed=${it.javaClass.simpleName}")
             false
@@ -2314,8 +2279,8 @@ private fun createCueAudioClipByTransformer(
             outputFile.delete()
             return null
         }
-        if (!success.get()) {
-            onFailure("transformer-error=${errorDetail.orEmpty()}")
+        if (!completion.succeeded()) {
+            onFailure("transformer-error=${completion.errorDetail()}")
             outputFile.delete()
             return null
         }

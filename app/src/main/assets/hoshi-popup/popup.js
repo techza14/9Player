@@ -1761,6 +1761,13 @@ const backStack = [];
 const forwardStack = [];
 let pendingHistoryRestore = null;
 
+function publishHistory() {
+    window.HoshiAndroidPopup?.postMessage('historyChanged', {
+        backCount: backStack.length,
+        forwardCount: forwardStack.length,
+    });
+}
+
 window.resetPopupResults = function() {
     renderGeneration++;
     flushPendingHistoryRestore();
@@ -1774,6 +1781,7 @@ window.resetPopupResults = function() {
     resetDictionaryMediaObserver();
     document.getElementById('entries-container')?.replaceChildren();
     document.scrollingElement.scrollTop = 0;
+    publishHistory();
 };
 
 function appendPendingHistoryRestore(flush = false) {
@@ -1814,6 +1822,7 @@ function redirect(count) {
     requestAnimationFrame(() => {
         document.scrollingElement.scrollTop = 0;
     });
+    publishHistory();
 }
 
 window.replacePopupResults = function(count, initialEntries) {
@@ -1835,6 +1844,7 @@ window.replacePopupResults = function(count, initialEntries) {
     requestAnimationFrame(() => {
         document.scrollingElement.scrollTop = 0;
     });
+    publishHistory();
 };
 
 function snapshot() {
@@ -1877,6 +1887,7 @@ function navigate(origin, destination) {
     }
     destination.push(snapshot());
     restore(origin.pop());
+    publishHistory();
 }
 
 window.navigateBack = () => navigate(backStack, forwardStack);
