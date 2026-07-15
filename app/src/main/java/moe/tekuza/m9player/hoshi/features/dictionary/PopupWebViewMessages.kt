@@ -20,6 +20,7 @@ import moe.tekuza.m9player.logDebug
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 private const val HOSHI_LOOKUP_POPUP_LOG_TAG = "HoshiLookupPopup"
 
@@ -39,6 +40,7 @@ internal class PopupWebViewCallbacks(
     val onTextSelected: (ReaderSelectionData) -> Int? = { null },
     val onLookupRedirect: (String) -> List<LookupResult> = { query -> LookupEngine.lookup(query) },
     val onLookupRedirected: (ReaderSelectionData, List<LookupResult>) -> Unit = { _, _ -> },
+    val isLookupPopupActive: () -> Boolean = { true },
     val onHistoryChanged: (Int, Int) -> Unit = { _, _ -> },
     val onContentReady: () -> Unit = {},
 )
@@ -66,6 +68,7 @@ internal fun PopupWebViewCallbacks.withAdditionalImageTap(
     onTextSelected = onTextSelected,
     onLookupRedirect = onLookupRedirect,
     onLookupRedirected = onLookupRedirected,
+    isLookupPopupActive = isLookupPopupActive,
     onHistoryChanged = onHistoryChanged,
     onContentReady = onContentReady,
 )
@@ -74,12 +77,19 @@ internal class PopupWebViewCallbackHolder(
     var callbacks: PopupWebViewCallbacks,
 ) {
     private val closed = AtomicBoolean(false)
+    private val lookupGeneration = AtomicLong(0L)
 
     fun close() {
         closed.set(true)
+        lookupGeneration.incrementAndGet()
     }
 
     fun isClosed(): Boolean = closed.get()
+
+    fun beginLookup(): Long = lookupGeneration.incrementAndGet()
+
+    fun isLookupActive(generation: Long): Boolean =
+        !closed.get() && lookupGeneration.get() == generation && callbacks.isLookupPopupActive()
 }
 
 internal class PopupLookupResultsHolder(
@@ -302,6 +312,7 @@ internal class PopupWebViewBridge(
     @JavascriptInterface
     fun lookupRedirect(query: String): Int {
         if (callbackHolder.isClosed()) return 0
+        val lookupGeneration = callbackHolder.beginLookup()
         Log.d(HOSHI_LOOKUP_POPUP_LOG_TAG, "lookupRedirect received query='${query.take(48)}'")
         val results = callbackHolder.callbacks.onLookupRedirect(query)
         logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
@@ -317,7 +328,10 @@ internal class PopupWebViewBridge(
                 normalizedOffset = 0,
                 sentenceOffset = 0,
             )
-            mainHandler.post { callbackHolder.callbacks.onLookupRedirected(selection, results) }
+            mainHandler.post {
+                if (!callbackHolder.isLookupActive(lookupGeneration)) return@post
+                callbackHolder.callbacks.onLookupRedirected(selection, results)
+            }
         }
         return 0
     }
@@ -335,13 +349,17 @@ internal class PopupWebViewBridge(
             normalizedOffset = 0,
             sentenceOffset = 0,
         ) ?: return 0
+        val lookupGeneration = callbackHolder.beginLookup()
         val results = callbackHolder.callbacks.onLookupRedirect(query)
         logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
             "lookupRedirectAt query='${query.take(32)}' resultCount=${results.size} rect=${selection.rect.x},${selection.rect.y} ${selection.rect.width}x${selection.rect.height}"
         }
         Log.d(HOSHI_LOOKUP_POPUP_LOG_TAG, "lookupRedirectAt completed query='${query.take(48)}' results=${results.size}")
         if (results.isNotEmpty()) {
-            mainHandler.post { callbackHolder.callbacks.onLookupRedirected(selection, results) }
+            mainHandler.post {
+                if (!callbackHolder.isLookupActive(lookupGeneration)) return@post
+                callbackHolder.callbacks.onLookupRedirected(selection, results)
+            }
         }
         return 0
     }

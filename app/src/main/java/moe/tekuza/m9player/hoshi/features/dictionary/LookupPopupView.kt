@@ -109,6 +109,7 @@ internal fun LookupPopupView(
         )
     },
     onLookupRedirected: (ReaderSelectionData) -> Unit = {},
+    isLookupPopupActive: () -> Boolean = { true },
     platformPopupHost: Boolean = false,
     extraBottomInsetDp: Double = 0.0,
 ) {
@@ -278,6 +279,7 @@ internal fun LookupPopupView(
                             },
                             onTextSelected = onTextSelected,
                             onLookupRedirect = onLookupRedirect,
+                            isLookupPopupActive = isLookupPopupActive,
                             onLookupRedirected = { selection, results ->
                                 android.util.Log.d(
                                     HOSHI_LOOKUP_POPUP_LOG_TAG,

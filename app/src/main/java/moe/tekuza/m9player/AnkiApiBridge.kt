@@ -264,7 +264,8 @@ internal fun exportToAnkiDroidApi(
     config: AnkiExportConfig
 ): ExportAnkiOutcome {
     logDebug(ANKI_EXPORT_DEBUG_TAG) {
-        "export start word=${card.word} primaryDict=${card.dictionaryName.orEmpty()} glossaryByDictCount=${card.glossaryByDictionary.size} model=${config.modelName} deck=${config.deckName}"
+        "export start wordLength=${card.word.length} primaryDictionaryLength=${card.dictionaryName?.length ?: 0} " +
+            "glossaryByDictCount=${card.glossaryByDictionary.size} modelLength=${config.modelName.length} deckLength=${config.deckName.length}"
     }
     ankiAvailabilityErrorMessage(context, requirePermission = true)?.let(::error)
 
@@ -298,7 +299,8 @@ internal fun exportToAnkiDroidApi(
         error("Anki variable build failed. ${throwableDetail(throwable)}")
     }
     logDebug(ANKI_EXPORT_DEBUG_TAG) {
-        "export variables dict=${variables["dictionary"].orEmpty()} glossaryLen=${variables["glossary"]?.length ?: 0} singleGlossaryLen=${variables["single-glossary"]?.length ?: 0}"
+        "export variables dictionaryLength=${variables["dictionary"].orEmpty().length} " +
+            "glossaryLen=${variables["glossary"]?.length ?: 0} singleGlossaryLen=${variables["single-glossary"]?.length ?: 0}"
     }
 
     val fieldValues = runCatching {
@@ -334,7 +336,8 @@ internal fun exportToAnkiDroidApi(
         }.getOrDefault(false)
         if (hasDuplicate) {
             logDebug(ANKI_EXPORT_DEBUG_TAG) {
-                "export duplicate hit action=${duplicateConfig.action} scope=${duplicateConfig.scope} model=${model.name} key=${duplicateKey.take(80)}"
+                "export duplicate hit action=${duplicateConfig.action} scope=${duplicateConfig.scope} " +
+                    "modelLength=${model.name.length} keyLength=${duplicateKey.length}"
             }
             when (duplicateConfig.action.lowercase(Locale.ROOT)) {
                 "add" -> Unit
@@ -520,7 +523,7 @@ private fun buildAnkiVariables(
         emptyList()
     }
     logDebug(ANKI_EXPORT_DEBUG_TAG) {
-        "variables sources count=${glossarySources.size} names=${glossarySources.joinToString(separator = "|") { "${it.dictionaryName}:${it.definitions.size}" }}"
+        "variables sources count=${glossarySources.size} dictionaryNameLengths=${glossarySources.joinToString(separator = "|") { "${it.dictionaryName.length}:${it.definitions.size}" }}"
     }
     val primaryGlossarySource = selectPrimaryGlossarySource(card, glossarySources)
     val dictionaryName = if (requiredMarkers.needs("dictionary-name", "dictionary", "dictionary-alias")) {
@@ -591,7 +594,7 @@ private fun buildAnkiVariables(
         }
     }.orEmpty()
     logDebug(ANKI_EXPORT_DEBUG_TAG) {
-        "glossary templates primary=${primaryGlossarySource?.dictionaryName.orEmpty()} " +
+        "glossary templates primaryDictionaryLength=${primaryGlossarySource?.dictionaryName?.length ?: 0} " +
             "cssLen=${primaryGlossarySource?.dictionaryCss?.length ?: 0} " +
             "rawGlossaryFirstLen=${card.glossaryFirstHtml?.length ?: 0} " +
             "glossaryLen=${glossaryHtml.length} glossaryHasScope=${glossaryHtml.contains("data-dictionary=")} " +
@@ -700,7 +703,8 @@ private fun buildAnkiVariables(
     }
     }
     logDebug(ANKI_EXPORT_DEBUG_TAG) {
-        "variables done primary=${primaryGlossarySource?.dictionaryName.orEmpty()} dynamicSingleKeys=${variables.keys.count { it.startsWith("__single-glossary::") }}"
+        "variables done primaryDictionaryLength=${primaryGlossarySource?.dictionaryName?.length ?: 0} " +
+            "dynamicSingleKeys=${variables.keys.count { it.startsWith("__single-glossary::") }}"
     }
     return variables
 }
@@ -1040,7 +1044,7 @@ private fun buildMinedCardGlossarySources(card: MinedCard): List<MinedCardGlossa
     if (mapped.isNotEmpty()) {
         logDebug(ANKI_EXPORT_DEBUG_TAG) {
             "sources using glossaryByDictionary count=${mapped.size} " +
-                "names=${mapped.joinToString("|") { it.dictionaryName }} " +
+                "dictionaryNameLengths=${mapped.joinToString("|") { it.dictionaryName.length.toString() }} " +
                 "cssLens=${mapped.joinToString("|") { it.dictionaryCss?.length?.toString().orEmpty() }} " +
                 "defs=${mapped.joinToString("|") { it.definitions.size.toString() }}"
         }
@@ -1058,7 +1062,7 @@ private fun buildMinedCardGlossarySources(card: MinedCard): List<MinedCardGlossa
         )
     )
     logDebug(ANKI_EXPORT_DEBUG_TAG) {
-        "sources fallback dict=${fallback.first().dictionaryName} defs=${fallbackDefinitions.size} " +
+        "sources fallback dictionaryNameLength=${fallback.first().dictionaryName.length} defs=${fallbackDefinitions.size} " +
             "cssLen=${fallback.first().dictionaryCss?.length ?: 0}"
     }
     return fallback
@@ -1077,8 +1081,8 @@ private fun selectPrimaryGlossarySource(
         ?: sources.firstOrNull()
     }
     logDebug(ANKI_EXPORT_DEBUG_TAG) {
-        "primary source selected preferred=${preferred.ifBlank { "<blank>" }} " +
-            "selected=${selected?.dictionaryName.orEmpty()} " +
+        "primary source selected preferredLength=${preferred.length} " +
+            "selectedNameLength=${selected?.dictionaryName?.length ?: 0} " +
             "selectedCssLen=${selected?.dictionaryCss?.length ?: 0} " +
             "selectedDefs=${selected?.definitions?.size ?: 0} " +
             "sourceCount=${sources.size}"
@@ -1090,7 +1094,7 @@ private fun buildStyledGlossaryFromSources(sources: List<MinedCardGlossarySource
     if (sources.isEmpty()) return ""
     logDebug(ANKI_EXPORT_DEBUG_TAG) {
         "buildStyledGlossaryFromSources count=${sources.size} " +
-            "names=${sources.joinToString("|") { it.dictionaryName }} " +
+            "dictionaryNameLengths=${sources.joinToString("|") { it.dictionaryName.length.toString() }} " +
             "cssLens=${sources.joinToString("|") { it.dictionaryCss?.length?.toString().orEmpty() }}"
     }
     return renderYomitanGlossaryHtml(
@@ -1145,7 +1149,7 @@ private fun buildStyledGlossary(
     wrapItemsInList: Boolean = true
 ): String {
     logDebug(ANKI_EXPORT_DEBUG_TAG) {
-        "buildStyledGlossary dict=${dictionaryName.orEmpty()} defs=${definitions.size} " +
+        "buildStyledGlossary dictionaryNameLength=${dictionaryName?.length ?: 0} defs=${definitions.size} " +
             "cssLen=${dictionaryCss?.length ?: 0} wrapItemsInList=$wrapItemsInList"
     }
     return renderYomitanGlossaryHtml(

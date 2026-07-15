@@ -252,6 +252,7 @@ internal fun LookupPopupStackView(
                         onPopupsChange(nextPopups + childPopup)
                     }
                 },
+                isLookupPopupActive = { popups.any { it.id == popup.id } },
                 platformPopupHost = platformPopupHost,
                 extraBottomInsetDp = extraBottomInsetDp,
                 modifier = modifier.fillMaxSize(),

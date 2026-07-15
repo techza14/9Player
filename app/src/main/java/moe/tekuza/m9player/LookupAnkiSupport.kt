@@ -20,10 +20,10 @@ internal fun addLookupDefinitionToAnkiShared(
     sentenceOverride: String? = null,
     lookupTermOverride: String? = null
 ): AnkiExportResult {
-    android.util.Log.d(
-        "AnkiExportDebug",
-        "sharedExport start term=${entry.term} dict=${entry.dictionary} groupedCount=${groupedDictionaries.size} grouped=${groupedDictionaries.joinToString("|") { it.dictionary }}"
-    )
+    logDebug("AnkiExportDebug") {
+        "sharedExport start termLength=${entry.term.length} dictionaryLength=${entry.dictionary.length} " +
+            "groupedCount=${groupedDictionaries.size} groupedNonBlank=${groupedDictionaries.count { it.dictionary.isNotBlank() }}"
+    }
     val persistedConfig = withAnkiStep("load-config") {
         loadPersistedAnkiConfig(context)
     }
@@ -71,10 +71,10 @@ internal fun addLookupDefinitionToAnkiShared(
         audioTagOnly = true,
         requireCueAudioClip = audioUri != null
     )
-    android.util.Log.d(
-        "AnkiExportDebug",
-        "sharedExport card word=${card.word} primaryDict=${card.dictionaryName.orEmpty()} glossaryByDict=${card.glossaryByDictionary.joinToString("|") { "${it.dictionaryName}:${it.definitions.size}" }}"
-    )
+    logDebug("AnkiExportDebug") {
+        "sharedExport card wordLength=${card.word.length} primaryDictionaryLength=${card.dictionaryName?.length ?: 0} " +
+            "glossaryDictionaryCount=${card.glossaryByDictionary.size} glossaryDefinitionCount=${card.glossaryByDictionary.sumOf { it.definitions.size }}"
+    }
 
     return withAnkiStep("export-note") {
         exportToAnkiDroidApiResult(context, card, preparedExport.config)
