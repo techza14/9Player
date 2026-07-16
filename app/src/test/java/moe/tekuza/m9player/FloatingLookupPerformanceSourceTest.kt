@@ -12,7 +12,10 @@ class FloatingLookupPerformanceSourceTest {
 
         assertTrue(source.contains("prewarmFloatingLookup()"))
         assertTrue(source.contains("createFloatingLookupWindowLayoutParams(position, touchable = false)"))
-        assertTrue(source.contains("enableLookupTap = true"))
+        assertTrue(source.contains("val useHoshiWebView = mode == FloatingCardMode.Results"))
+        assertFalse(source.contains("forceHoshiWebView"))
+        assertFalse(source.contains("buildLookupPresentation(layer)"))
+        assertTrue(source.contains("onTextSelected = { selection -> pushFloatingHoshiRecursiveLookup(layerIndex, selection) }"))
         assertFalse(source.contains("interceptAllTouches"))
         assertFalse(source.contains("tapReturn"))
         assertFalse(source.contains("fun groupFloatingHoshiResults("))

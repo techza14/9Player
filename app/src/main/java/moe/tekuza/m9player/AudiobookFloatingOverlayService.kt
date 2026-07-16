@@ -182,7 +182,6 @@ companion object {
     private var subtitleTickerBaseRealtimeMs: Long = 0L
     private var subtitlePlaybackSpeed: Float = 1f
     private var lookupRequestNonce: Long = 0L
-    private var floatingLookupStartedAtNanos: Long = 0L
     private var floatingLookupWarmupJob: Job? = null
     private var cachedLookupDictionaries: List<LoadedDictionary>? = null
     private var cachedLookupDictionariesVersion: Long = -1L
@@ -194,18 +193,10 @@ companion object {
     private val floatingLookupHostSizeListeners = mutableMapOf<Int, View.OnLayoutChangeListener>()
     private val floatingHoshiLookupWebViews = mutableMapOf<Int, WebView>()
     private val floatingHoshiLookupHtmlByLayer = mutableMapOf<Int, String>()
-    private val floatingAnkiDuplicateByKey = mutableMapOf<String, Boolean>()
-    private val floatingAnkiDuplicateNoteIdsByKey = mutableMapOf<String, List<Long>>()
-    private val floatingAnkiCheckingByKey = mutableSetOf<String>()
     private val floatingHoshiLookupAssets: LookupPopupAssets by lazy { LookupPopupAssets.load(this) }
     private val floatingHoshiLookupSession: HoshiLookupSession by lazy {
         HoshiLookupSession(this, dictionariesProvider = { loadFloatingLookupDictionaries() })
     }
-
-    private data class FloatingDefinitionWebViewTag(
-        val bridge: DefinitionLookupBridge,
-        val definitionKey: String
-    )
 
     private class FloatingHoshiLookupWebView(context: Context) : WebView(context) {
         var maxLookupHeightPx: Int = 1
@@ -715,7 +706,6 @@ companion object {
         val layer = buildFloatingLookupLayer(
             term = "",
             popupSentence = null,
-            groupedResults = emptyList(),
             hoshiDictionaryStyles = dictionaryStyles
         )
         val sizeSpec = computeFloatingLookupPopupSizeSpec(
@@ -728,8 +718,7 @@ companion object {
             layerIndex = 0,
             layer = layer,
             mode = FloatingCardMode.Results,
-            maxLookupHeightPx = sizeSpec.contentMaxHeightPx,
-            forceHoshiWebView = true
+            maxLookupHeightPx = sizeSpec.contentMaxHeightPx
         ).apply {
             layoutParams = FrameLayout.LayoutParams(
                 sizeSpec.widthPx,
@@ -748,7 +737,6 @@ companion object {
             wm.addView(host, createFloatingLookupWindowLayoutParams(position, touchable = false))
         }.onSuccess {
             floatingLookupHostViews[0] = host
-            Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "floating warm root ready")
         }
     }
 
@@ -2050,7 +2038,6 @@ companion object {
             FLOATING_LOOKUP_TAP_LOG_TAG,
             "floating lookup start offset=$offset term='${term.take(24)}' range=${selection.range.first}..${selection.range.last} subtitleLen=${subtitleText.length}"
         )
-        floatingLookupStartedAtNanos = SystemClock.elapsedRealtimeNanos()
         val requestNonce = lookupRequestNonce + 1L
         lookupRequestNonce = requestNonce
         serviceScope.launch {
@@ -2114,7 +2101,6 @@ companion object {
                         term = finalSelectionText,
                         popupSentence = BookReaderFloatingBridge.currentSubtitle(),
                         sourceTerm = null,
-                        groupedResults = emptyList(),
                         selectedRange = trimmedRange,
                         anchor = anchorRects.takeIf { it.isNotEmpty() }?.let { ReaderLookupAnchor(rects = it) },
                         avoidAnchor = selectionRects.takeIf { it.isNotEmpty() }?.let { ReaderLookupAnchor(rects = it) },
@@ -2127,10 +2113,6 @@ companion object {
                     floatingLookupCardPositions.clear()
                     floatingLookupSession.clear()
                     floatingLookupSession.push(layer)
-                    Log.d(
-                        FLOATING_LOOKUP_TAP_LOG_TAG,
-                        "floating lookup render term='${finalSelectionText.take(24)}' matched=$matchedLength anchorRects=${anchorRects.size} placeBelow=$shouldPlaceBelow grouped=skipped"
-                    )
                     renderFloatingLookupResults(layer)
                     serviceScope.launch(Dispatchers.IO) {
                         recordStatisticsLookup(
@@ -2172,7 +2154,7 @@ companion object {
         applySubtitleSelectionHighlight(floatingLookupSession.getOrNull(0)?.selectedRange)
         clearFloatingLookupHosts()
         val layerIndex = floatingLookupSession.lastIndex.coerceAtLeast(0)
-        val layer = buildFloatingLookupLayer(term = "", popupSentence = null, groupedResults = emptyList())
+        val layer = buildFloatingLookupLayer(term = "", popupSentence = null)
         val sizeSpec = computeFloatingLookupPopupSizeSpec(
             windowSize = IntSize(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels),
             anchor = layer.anchor,
@@ -2394,9 +2376,6 @@ companion object {
                 return
             }
             host.visibility = View.VISIBLE
-            if (reuseHost) {
-                refreshFloatingLookupHostHighlight(layerIndex, host, layer)
-            }
         }
     }
 
@@ -2410,26 +2389,10 @@ companion object {
         val base = layer.copy(
             anchor = null,
             selectedRange = null,
-            highlightedDefinitionKey = null,
-            highlightedDefinitionRects = emptyList(),
-            highlightedDefinitionNodePathJson = null,
-            highlightedDefinitionOffset = null,
-            highlightedDefinitionLength = null,
             autoPlayNonce = 0L,
             autoPlayedKey = null
         ).hashCode()
-        val duplicateStateSignature = layer.groupedResults.joinToString("|") { grouped ->
-            val duplicateCheckText = layer.selectionText?.trim()?.takeIf { it.isNotBlank() } ?: grouped.term
-            val key = normalizeAnkiDuplicateKey(duplicateCheckText)
-            val state = when {
-                floatingAnkiCheckingByKey.contains(key) -> "checking"
-                floatingAnkiDuplicateByKey[key] == true -> "dup"
-                floatingAnkiDuplicateByKey.containsKey(key) -> "ok"
-                else -> "unknown"
-            }
-            "${grouped.term}:${grouped.reading.orEmpty()}:$state"
-        }.hashCode()
-        return 31 * base + duplicateStateSignature
+        return base
     }
 
     private fun showFloatingLookupHost(
@@ -2875,7 +2838,6 @@ companion object {
         runCatching { wm.updateViewLayout(host, createFloatingLookupWindowLayoutParams(candidate, touchable = true)) }
         floatingLookupCardPositions[storageKey] = candidate
         Log.d(FLOATING_LOOKUP_LOG_TAG, "relayout layer=$layerIndex pos=${candidate.x},${candidate.y}")
-        refreshFloatingLookupHostHighlight(layerIndex, host, layer)
     }
 
     private fun ensureFloatingHostMeasured(host: View, width: Int, force: Boolean = false) {
@@ -3212,9 +3174,6 @@ companion object {
         lookupRequestNonce += 1L
         floatingLookupSession.clear()
         floatingLookupCardPositions.clear()
-        floatingAnkiDuplicateByKey.clear()
-        floatingAnkiDuplicateNoteIdsByKey.clear()
-        floatingAnkiCheckingByKey.clear()
         applySubtitleSelectionHighlight(null)
         hideFloatingLookupHostsKeepingWarmRoot()
         updateFloatingLookupPanelPosition()
@@ -3306,21 +3265,11 @@ companion object {
         layerIndex: Int,
         layer: ReaderLookupLayer,
         mode: FloatingCardMode,
-        maxLookupHeightPx: Int,
-        forceHoshiWebView: Boolean = false
+        maxLookupHeightPx: Int
     ): View {
         val density = resources.displayMetrics.density
         val palette = floatingLookupPalette()
-        val useHoshiWebView = mode == FloatingCardMode.Results &&
-            (layer.hoshiResults.isNotEmpty() || forceHoshiWebView)
-        val actionState = buildLookupCardActionState(
-            sourceTerm = layer.sourceTerm,
-            layerIndex = layerIndex,
-            sessionSize = floatingLookupSession.size,
-            showRangeSelection = false,
-            showPlayAudio = loadAudiobookSettingsConfig(this).lookupPlaybackAudioEnabled,
-            showAddToAnki = true
-        )
+        val useHoshiWebView = mode == FloatingCardMode.Results
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding((12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt(), (10 * density).toInt())
@@ -3331,89 +3280,13 @@ companion object {
                 content.addView(createLookupBodyText(mode.message, topMarginDp = 0f, palette = palette))
             }
             FloatingCardMode.Results -> {
-                if (layer.hoshiResults.isNotEmpty()) {
-                    content.addView(
-                        createFloatingHoshiLookupWebView(
-                            layerIndex = layerIndex,
-                            layer = layer,
-                            maxLookupHeightPx = maxLookupHeightPx
-                        )
+                content.addView(
+                    createFloatingHoshiLookupWebView(
+                        layerIndex = layerIndex,
+                        layer = layer,
+                        maxLookupHeightPx = maxLookupHeightPx
                     )
-                } else {
-                val presentation = buildLookupPresentation(layer)
-                presentation.forEachIndexed { index, groupedPresentation ->
-                    val grouped = groupedPresentation.groupedResult
-                    if (index > 0) {
-                        content.addView(View(this).apply {
-                            layoutParams = LinearLayout.LayoutParams(
-                                LinearLayout.LayoutParams.MATCH_PARENT,
-                                (1 * density).toInt().coerceAtLeast(1)
-                            ).apply {
-                                topMargin = (10 * density).toInt()
-                                bottomMargin = (10 * density).toInt()
-                            }
-                            setBackgroundColor(palette.divider)
-                        })
-                    }
-                    content.addView(
-                        LinearLayout(this).apply {
-                            orientation = LinearLayout.HORIZONTAL
-                            gravity = Gravity.TOP
-                            layoutParams = LinearLayout.LayoutParams(
-                                LinearLayout.LayoutParams.MATCH_PARENT,
-                                LinearLayout.LayoutParams.WRAP_CONTENT
-                            ).apply {
-                                topMargin = ((if (index == 0) 6f else 0f) * density).toInt()
-                            }
-                            addView(
-                                createLookupTitle(grouped.term, grouped.reading, palette = palette).apply {
-                                    layoutParams = LinearLayout.LayoutParams(
-                                        0,
-                                        LinearLayout.LayoutParams.WRAP_CONTENT,
-                                        1f
-                                    ).apply {
-                                        marginEnd = (8 * density).toInt()
-                                    }
-                                }
-                            )
-                            addView(createLookupActionRow(grouped, layerIndex, layer, actionState, inline = true))
-                        }
-                    )
-                    groupedPresentation.dictionaries.forEachIndexed { dictIndex, dictionaryPresentation ->
-                        content.addView(
-                            createFloatingDictionaryHeader(
-                                dictionaryName = dictionaryPresentation.dictionaryName,
-                                expanded = dictionaryPresentation.expanded,
-                                topMarginDp = if (dictIndex == 0) 8f else 10f,
-                                palette = palette,
-                                onToggle = {
-                                    floatingLookupSession.toggleCollapsedSection(
-                                        layerIndex,
-                                        dictionaryPresentation.sectionKey,
-                                        dictionaryPresentation.expanded
-                                    )
-                                    floatingLookupSession.getOrNull(layerIndex)?.let(::renderFloatingLookupResults)
-                                }
-                            )
-                        )
-                        val mergedContent = dictionaryPresentation.mergedContent
-                        if (dictionaryPresentation.expanded && mergedContent != null) {
-                            content.addView(
-                                createLookupDefinitionWebView(
-                                    definition = mergedContent.definitionHtml,
-                                    dictionaryCss = mergedContent.dictionaryCss,
-                                    topMarginDp = 6f,
-                                    palette = palette,
-                                    layerIndex = layerIndex,
-                                    layer = layer,
-                                    definitionKey = mergedContent.firstDefinitionKey,
-                                    enableLookupTap = true
-                                )
-                            )
-                        }
-                    }
-                }
-                }
+                )
             }
         }
         val lookupContentView: View = if (useHoshiWebView) {
@@ -3517,30 +3390,6 @@ companion object {
         }
     }
 
-    private fun createFloatingDictionaryHeader(
-        dictionaryName: String,
-        expanded: Boolean,
-        topMarginDp: Float,
-        palette: FloatingLookupPalette,
-        onToggle: () -> Unit
-    ): TextView {
-        val density = resources.displayMetrics.density
-        return TextView(this).apply {
-            text = if (expanded) "$dictionaryName ▾" else "$dictionaryName ▸"
-            textSize = 12f
-            setTextColor(palette.dictionaryText)
-            background = createRoundedBackground(palette.dictionaryFill, cornerDp = 6f, strokeColor = 0x00FFFFFF)
-            setPadding((8 * density).toInt(), (4 * density).toInt(), (8 * density).toInt(), (4 * density).toInt())
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = (topMarginDp * density).toInt()
-            }
-            setOnClickListener { onToggle() }
-        }
-    }
-
     private fun truncateFloatingLookupLayersTo(index: Int, render: Boolean = true) {
         if (index !in floatingLookupSession.layers.indices) return
         floatingLookupSession.truncateTo(index)
@@ -3555,23 +3404,17 @@ companion object {
     private fun buildFloatingLookupLayer(
         term: String,
         popupSentence: String?,
-        groupedResults: List<GroupedLookupResult>,
         sourceTerm: String? = null,
         anchor: ReaderLookupAnchor? = null,
         avoidAnchor: ReaderLookupAnchor? = null,
         placeBelow: Boolean = true,
         preferSidePlacement: Boolean = false,
         selectedRange: IntRange? = null,
-        highlightedDefinitionKey: String? = null,
-        highlightedDefinitionRects: List<Rect> = emptyList(),
-        highlightedDefinitionNodePathJson: String? = null,
-        highlightedDefinitionOffset: Int? = null,
-        highlightedDefinitionLength: Int? = null,
         hoshiResults: List<LookupResult> = emptyList(),
         hoshiDictionaryStyles: Map<String, String> = emptyMap()
     ): ReaderLookupLayer {
         return buildLookupLayerFromGroupedResults(
-            groupedResults = groupedResults,
+            groupedResults = emptyList(),
             loading = false,
             error = null,
             sourceTerm = sourceTerm,
@@ -3585,131 +3428,12 @@ companion object {
             selectedRange = selectedRange,
             selectionText = term.takeIf { it.isNotBlank() },
             popupSentence = popupSentence,
-            highlightedDefinitionKey = highlightedDefinitionKey,
-            highlightedDefinitionRects = highlightedDefinitionRects,
-            highlightedDefinitionNodePathJson = highlightedDefinitionNodePathJson,
-            highlightedDefinitionOffset = highlightedDefinitionOffset,
-            highlightedDefinitionLength = highlightedDefinitionLength,
             collapsedSections = emptyMap(),
             autoPlayNonce = System.nanoTime(),
             autoPlayedKey = null,
             hoshiResults = hoshiResults,
             hoshiDictionaryStyles = hoshiDictionaryStyles
         )
-    }
-
-    private fun createLookupTitle(
-        term: String,
-        reading: String?,
-        topMarginDp: Float = 0f,
-        palette: FloatingLookupPalette
-    ): LinearLayout {
-        val density = resources.displayMetrics.density
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = (topMarginDp * density).toInt()
-            }
-            addView(TextView(this@AudiobookFloatingOverlayService).apply {
-                text = term
-                textSize = 24f
-                setTextColor(palette.title)
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-            })
-            if (!reading.isNullOrBlank()) {
-                addView(TextView(this@AudiobookFloatingOverlayService).apply {
-                    text = reading
-                    textSize = 13f
-                    setTextColor(palette.reading)
-                    setPadding(0, (2 * density).toInt(), 0, 0)
-                })
-            }
-        }
-    }
-
-    private fun createLookupActionRow(
-        grouped: GroupedLookupResult,
-        layerIndex: Int,
-        layer: ReaderLookupLayer,
-        actionState: LookupCardActionState,
-        inline: Boolean = false
-    ): LinearLayout {
-        val density = resources.displayMetrics.density
-        val duplicateCheckText = layer.selectionText?.trim()?.takeIf { it.isNotBlank() } ?: grouped.term
-        val duplicateKey = normalizeAnkiDuplicateKey(duplicateCheckText)
-        ensureFloatingLookupDuplicateState(layerIndex, duplicateKey)
-        val hasDuplicateState = floatingAnkiDuplicateByKey.containsKey(duplicateKey)
-        val duplicateInAnki = floatingAnkiDuplicateByKey[duplicateKey] == true
-        val duplicateNoteIds = floatingAnkiDuplicateNoteIdsByKey[duplicateKey].orEmpty()
-        val checkingDuplicate = floatingAnkiCheckingByKey.contains(duplicateKey) || !hasDuplicateState
-        val duplicateConfig = loadAnkiDuplicateConfig(this)
-        val preventDuplicateAdd = duplicateInAnki &&
-            duplicateConfig.enabled &&
-            !duplicateConfig.action.equals("add", ignoreCase = true)
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END or if (inline) Gravity.TOP else Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                if (inline) LinearLayout.LayoutParams.WRAP_CONTENT else LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = if (inline) 0 else (8 * density).toInt()
-            }
-            if (actionState.showPlayAudio) {
-                addView(createTextButton("\u266B") {
-                    playLookupAudioForTerm(
-                        context = this@AudiobookFloatingOverlayService,
-                        term = grouped.term,
-                        reading = grouped.reading,
-                        settings = loadAudiobookSettingsConfig(this@AudiobookFloatingOverlayService)
-                    ) { error ->
-                        Toast.makeText(this@AudiobookFloatingOverlayService, error.take(160), Toast.LENGTH_SHORT).show()
-                    }
-                })
-            }
-            if (actionState.showAddToAnki) {
-                addView(createTextButton(
-                    when {
-                        checkingDuplicate -> "…"
-                        duplicateInAnki -> "-"
-                        else -> "+"
-                    }
-                ) {
-                    exportFloatingLookupToAnki(grouped, layerIndex, layer)
-                }.apply {
-                    (layoutParams as? LinearLayout.LayoutParams)?.marginEnd = 0
-                    isEnabled = !preventDuplicateAdd && !checkingDuplicate
-                    alpha = if (isEnabled) 1f else 0.55f
-                })
-                if (duplicateInAnki && duplicateNoteIds.isNotEmpty()) {
-                    addView(createActionIconButton(R.drawable.ic_search) {
-                        openAnkiDuplicateNotesInBrowser(this@AudiobookFloatingOverlayService, duplicateNoteIds)
-                    }.apply {
-                        contentDescription = getString(R.string.floating_lookup_view_duplicate)
-                        alpha = 1f
-                    })
-                }
-            }
-        }
-    }
-
-    private fun ensureFloatingLookupDuplicateState(layerIndex: Int, duplicateKey: String) {
-        if (duplicateKey.isBlank()) return
-        if (floatingAnkiDuplicateByKey.containsKey(duplicateKey)) return
-        if (floatingAnkiCheckingByKey.contains(duplicateKey)) return
-        floatingAnkiCheckingByKey.add(duplicateKey)
-        serviceScope.launch {
-            val noteIds = withContext(Dispatchers.IO) {
-                findAnkiDuplicateNoteIdsByFirstFieldAsync(this@AudiobookFloatingOverlayService, duplicateKey)
-            }
-            floatingAnkiDuplicateByKey[duplicateKey] = noteIds.isNotEmpty()
-            floatingAnkiDuplicateNoteIdsByKey[duplicateKey] = noteIds
-            floatingAnkiCheckingByKey.remove(duplicateKey)
-            floatingLookupSession.getOrNull(layerIndex)?.let(::renderFloatingLookupResults)
-        }
     }
 
     private fun createFloatingHoshiLookupWebView(
@@ -3811,12 +3535,6 @@ companion object {
                         host.alpha = 1f
                         host.visibility = View.VISIBLE
                     }
-                    if (layerIndex == floatingLookupSession.lastIndex && floatingLookupStartedAtNanos > 0L) {
-                        Log.d(
-                            FLOATING_LOOKUP_TAP_LOG_TAG,
-                            "floating popup first paint elapsedMs=${(SystemClock.elapsedRealtimeNanos() - floatingLookupStartedAtNanos) / 1_000_000.0} layer=$layerIndex"
-                        )
-                    }
                 }
             }
         )
@@ -3885,7 +3603,6 @@ companion object {
         sourceLayerIndex: Int,
         selection: ReaderSelectionData
     ): Int? {
-        floatingLookupStartedAtNanos = SystemClock.elapsedRealtimeNanos()
         val settings = loadAudiobookSettingsConfig(this)
         val popup = floatingHoshiLookupSession.createPopup(
             selection = selection,
@@ -3916,7 +3633,6 @@ companion object {
                 term = hoshiResults.firstOrNull()?.matched?.takeIf { it.isNotBlank() } ?: selection.text,
                 popupSentence = selection.sentence,
                 sourceTerm = currentLayer?.selectionText,
-                groupedResults = emptyList(),
                 anchor = ReaderLookupAnchor(listOf(anchorRect)),
                 placeBelow = shouldPlaceBelow,
                 preferSidePlacement = false,
@@ -3927,347 +3643,6 @@ companion object {
         )
         floatingLookupSession.getOrNull(floatingLookupSession.lastIndex)?.let(::renderFloatingLookupResults)
         return popup.second
-    }
-
-    private fun createLookupDefinitionWebView(
-        definition: String,
-        dictionaryCss: String?,
-        topMarginDp: Float,
-        palette: FloatingLookupPalette,
-        layerIndex: Int,
-        layer: ReaderLookupLayer,
-        definitionKey: String,
-        enableLookupTap: Boolean
-    ): View {
-        val density = resources.displayMetrics.density
-        val container = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = (topMarginDp * density).toInt()
-            }
-        }
-        val bridge = DefinitionLookupBridge(onLookupTap = { tapData ->
-            Log.d(
-                FLOATING_LOOKUP_TAP_LOG_TAG,
-                "bridge onTap layer=$layerIndex key=$definitionKey scanLen=${tapData.scanText.length} textLen=${tapData.text.length} screenChars=${tapData.screenCharRects.size}"
-            )
-            performFloatingRecursiveLookup(layerIndex, definitionKey, tapData)
-        })
-        val html = buildDefinitionHtml(
-            definitionHtml = definition.trim(),
-            indexLabel = "",
-            definitionCount = 1,
-            dictionaryName = null,
-            dictionaryCss = dictionaryCss,
-            bodyTextColorCss = palette.bodyCss,
-            enableLookupTap = enableLookupTap
-        )
-        val webView = WebView(this).apply {
-            tag = FloatingDefinitionWebViewTag(bridge, definitionKey)
-            setBackgroundColor(0x00000000)
-            overScrollMode = WebView.OVER_SCROLL_NEVER
-            isVerticalScrollBarEnabled = false
-            isHorizontalScrollBarEnabled = false
-            isHapticFeedbackEnabled = false
-            isSoundEffectsEnabled = false
-            isLongClickable = false
-            isClickable = enableLookupTap
-            isFocusable = false
-            isFocusableInTouchMode = false
-            settings.javaScriptEnabled = enableLookupTap
-            settings.domStorageEnabled = false
-            settings.allowFileAccess = true
-            settings.allowFileAccessFromFileURLs = true
-            settings.allowUniversalAccessFromFileURLs = true
-            settings.allowContentAccess = false
-            settings.blockNetworkLoads = true
-            settings.blockNetworkImage = false
-            settings.loadsImagesAutomatically = true
-            settings.offscreenPreRaster = true
-            settings.builtInZoomControls = false
-            settings.displayZoomControls = false
-            settings.setSupportZoom(false)
-            setOnLongClickListener { true }
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
-            setOnTouchListener(object : View.OnTouchListener {
-                private var downX = 0f
-                private var downY = 0f
-                private var moved = false
-                private var swipeCloseTriggered = false
-                override fun onTouch(v: View?, event: MotionEvent?): Boolean {
-                    if (!enableLookupTap || event == null) return false
-                    when (event.actionMasked) {
-                        MotionEvent.ACTION_DOWN -> {
-                            downX = event.x
-                            downY = event.y
-                            moved = false
-                            swipeCloseTriggered = false
-                            Log.d(
-                                FLOATING_LOOKUP_TAP_LOG_TAG,
-                                "definitionTouch down layer=$layerIndex key=$definitionKey x=${event.x} y=${event.y}"
-                            )
-                        }
-                        MotionEvent.ACTION_MOVE -> {
-                            val dx = event.x - downX
-                            val dy = event.y - downY
-                            if (
-                                !swipeCloseTriggered &&
-                                kotlin.math.abs(dx) > 56f &&
-                                kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.2f
-                            ) {
-                                swipeCloseTriggered = true
-                                closeFloatingLookupLayer(layerIndex)
-                                return true
-                            }
-                            if (
-                                kotlin.math.abs(dx) > 14f ||
-                                kotlin.math.abs(dy) > 14f
-                            ) {
-                                moved = true
-                            }
-                        }
-                        MotionEvent.ACTION_UP -> {
-                            if (swipeCloseTriggered) return true
-                            Log.d(
-                                FLOATING_LOOKUP_TAP_LOG_TAG,
-                                "definitionTouch up layer=$layerIndex key=$definitionKey moved=$moved x=${event.x} y=${event.y}"
-                            )
-                            if (!moved) {
-                                val effectiveScale = this@apply.scale.takeIf { it.isFinite() && it > 0f } ?: 1f
-                                val clientX = event.x / effectiveScale
-                                val clientY = event.y / effectiveScale
-                                evaluateJavascript(
-                                    "(function(){try{if(!window.__nineLookupHandleTap){return 'missing_handle';} window.__nineLookupHandleTap($clientX,$clientY,true); return 'ok';}catch(e){return 'error:' + (e && e.message ? e.message : 'unknown');}})();"
-                                ) { result ->
-                                    val normalized = (result ?: "").trim('"')
-                                    Log.d(
-                                        FLOATING_LOOKUP_TAP_LOG_TAG,
-                                        "native jsResult=$normalized x=$clientX y=$clientY"
-                                    )
-                                }
-                            }
-                        }
-                        MotionEvent.ACTION_CANCEL -> {
-                            swipeCloseTriggered = false
-                        }
-                    }
-                    return true
-                }
-            })
-            webViewClient = object : android.webkit.WebViewClient() {
-                override fun shouldInterceptRequest(
-                    view: WebView?,
-                    request: android.webkit.WebResourceRequest?
-                ): WebResourceResponse? {
-                    val uri = request?.url ?: return null
-                    val payload = loadDictionaryMediaPayload(this@AudiobookFloatingOverlayService, uri) ?: return null
-                    return buildDictionaryWebResourceResponse(payload)
-                }
-
-                override fun shouldInterceptRequest(view: WebView?, url: String?): WebResourceResponse? {
-                    val uri = runCatching { Uri.parse(url.orEmpty()) }.getOrNull() ?: return null
-                    val payload = loadDictionaryMediaPayload(this@AudiobookFloatingOverlayService, uri) ?: return null
-                    return buildDictionaryWebResourceResponse(payload)
-                }
-
-                override fun shouldOverrideUrlLoading(
-                    view: WebView?,
-                    request: android.webkit.WebResourceRequest?
-                ): Boolean {
-                    val uri = request?.url ?: return false
-                    val raw = uri.toString()
-                    if (parseCustomLookupUrlTarget(raw) != null) {
-                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
-                        return true
-                    }
-                    return false
-                }
-
-                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                    val raw = url?.trim().orEmpty()
-                    if (parseCustomLookupUrlTarget(raw) != null) {
-                        Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "block lookup navigation uri=$raw")
-                        return true
-                    }
-                    return false
-                }
-
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    super.onPageFinished(view, url)
-                    if (
-                        layer.highlightedDefinitionKey == definitionKey &&
-                        !layer.highlightedDefinitionNodePathJson.isNullOrBlank() &&
-                        layer.highlightedDefinitionOffset != null &&
-                        layer.highlightedDefinitionLength != null
-                    ) {
-                        post {
-                            serviceScope.launch {
-                                val applied = applyDefinitionMatchedHighlight(
-                                    DefinitionLookupTapData(
-                                        text = "",
-                                        scanText = "",
-                                        tapSource = "text",
-                                        sentence = "",
-                                        offset = layer.highlightedDefinitionOffset,
-                                        nodeText = "",
-                                        nodePathJson = layer.highlightedDefinitionNodePathJson,
-                                        tappedDefinitionKey = null,
-                                        hostView = this@apply,
-                                        screenRect = null,
-                                        localRects = emptyList(),
-                                        localCharRects = emptyList(),
-                                        screenCharRects = emptyList()
-                                    ),
-                                    layer.highlightedDefinitionLength
-                                )
-                                Log.d(
-                                    FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG,
-                                    "onPageFinished key=$definitionKey len=${layer.highlightedDefinitionLength} applied=$applied"
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            bridge.hostView = this
-            addJavascriptInterface(bridge, "NineLookup")
-            loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
-        }
-        container.addView(webView, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT
-        ))
-        return container
-    }
-
-    private fun refreshFloatingLookupHostHighlight(layerIndex: Int, host: View, layer: ReaderLookupLayer) {
-        val webViews = collectFloatingLookupWebViews(host)
-        val targetKey = layer.highlightedDefinitionKey ?: return
-        val offset = layer.highlightedDefinitionOffset ?: return
-        val length = layer.highlightedDefinitionLength ?: return
-        val nodePathJson = layer.highlightedDefinitionNodePathJson?.takeIf { it.isNotBlank() } ?: return
-        Log.d(
-            FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG,
-            "refresh start key=$targetKey len=$length webViews=${webViews.size}"
-        )
-        webViews.forEach(::clearDefinitionMatchedHighlight)
-        val target = webViews.firstOrNull { view ->
-            (view.tag as? FloatingDefinitionWebViewTag)?.definitionKey == targetKey
-        } ?: run {
-            Log.d(
-                FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG,
-                "refresh missingTarget key=$targetKey"
-            )
-            return
-        }
-        serviceScope.launch {
-            webViews.filter { it !== target }.forEach { clearDefinitionMatchedHighlightAwait(it) }
-            clearDefinitionMatchedHighlightAwait(target)
-            val applied = applyDefinitionMatchedHighlight(
-                DefinitionLookupTapData(
-                    text = "",
-                    scanText = "",
-                    tapSource = "text",
-                    sentence = "",
-                    offset = offset,
-                    nodeText = "",
-                    nodePathJson = nodePathJson,
-                    tappedDefinitionKey = null,
-                    hostView = target,
-                    screenRect = null,
-                    localRects = emptyList(),
-                    localCharRects = emptyList(),
-                    screenCharRects = emptyList()
-                ),
-                length
-            )
-            if (applied) {
-                val resolvedRects = resolveDefinitionMatchedRects(
-                    DefinitionLookupTapData(
-                        text = "",
-                        scanText = "",
-                        tapSource = "text",
-                        sentence = "",
-                        offset = offset,
-                        nodeText = "",
-                        nodePathJson = nodePathJson,
-                        tappedDefinitionKey = null,
-                        hostView = target,
-                        screenRect = null,
-                        localRects = emptyList(),
-                        localCharRects = emptyList(),
-                        screenCharRects = emptyList()
-                    ),
-                    length
-                )
-                val rebuiltScreenRects = resolvedRects?.screenCharRects
-                    ?.let { rebuildRectsFromCharacterRectsShared(it, length) }
-                    .orEmpty()
-                val fallbackScreenRects = resolvedRects?.screenRects.orEmpty()
-                val finalScreenRects = if (rebuiltScreenRects.isNotEmpty()) rebuiltScreenRects else fallbackScreenRects
-                if (finalScreenRects.isNotEmpty()) {
-                    floatingLookupSession.replaceAt(layerIndex) { current ->
-                        current.copy(highlightedDefinitionRects = finalScreenRects)
-                    }
-                    Log.d(
-                        FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG,
-                        "refresh rectSync layer=$layerIndex key=$targetKey rects=${finalScreenRects.size}"
-                    )
-                }
-            }
-            Log.d(
-                FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG,
-                "refresh apply key=$targetKey len=$length applied=$applied"
-            )
-        }
-    }
-
-    private fun clearDefinitionMatchedHighlight(webView: WebView) {
-        webView.post {
-            serviceScope.launch {
-                clearDefinitionMatchedHighlightAwait(webView)
-            }
-        }
-    }
-
-    private suspend fun clearDefinitionMatchedHighlightAwait(webView: WebView): Boolean {
-        val js = """
-            (function() {
-                if (!window.__nineLookupClearMatchedHighlight) return false;
-                return !!window.__nineLookupClearMatchedHighlight();
-            })();
-        """.trimIndent()
-        val raw = withContext(Dispatchers.Main.immediate) {
-            kotlinx.coroutines.suspendCancellableCoroutine<String?> { continuation ->
-                webView.evaluateJavascript(js) { value ->
-                    if (continuation.isActive) continuation.resume(value) {}
-                }
-            }
-        }
-        val decoded = raw
-            ?.trim()
-            ?.removePrefix("\"")
-            ?.removeSuffix("\"")
-            ?.replace("\\\"", "\"")
-        return decoded?.toBooleanStrictOrNull() ?: false
-    }
-
-    private fun collectFloatingLookupWebViews(root: View): List<WebView> {
-        val result = mutableListOf<WebView>()
-        fun walk(view: View) {
-            when (view) {
-                is WebView -> result += view
-                is android.view.ViewGroup -> {
-                    for (index in 0 until view.childCount) {
-                        walk(view.getChildAt(index))
-                    }
-                }
-            }
-        }
-        walk(root)
-        return result
     }
 
     private fun createLookupBodyText(textValue: String, topMarginDp: Float, palette: FloatingLookupPalette): TextView {
@@ -4367,23 +3742,6 @@ companion object {
             layoutParams = LinearLayout.LayoutParams(sizePx, sizePx)
             scaleType = ImageView.ScaleType.CENTER
             setPadding(sizePx / 5, sizePx / 5, sizePx / 5, sizePx / 5)
-            setOnClickListener { onClick() }
-        }
-    }
-
-    private fun createActionIconButton(iconRes: Int, onClick: () -> Unit): ImageButton {
-        val density = resources.displayMetrics.density
-        val widthPx = (44 * density).toInt()
-        val heightPx = (34 * density).toInt()
-        return ImageButton(this).apply {
-            setImageResource(iconRes)
-            background = createRoundedBackground(0x22151515, cornerDp = 14f, strokeColor = 0x22FFFFFF)
-            setColorFilter(0xFFFFFFFF.toInt())
-            layoutParams = LinearLayout.LayoutParams(widthPx, heightPx).apply {
-                marginEnd = (8 * density).toInt()
-            }
-            scaleType = ImageView.ScaleType.CENTER
-            setPadding(widthPx / 4, heightPx / 5, widthPx / 4, heightPx / 5)
             setOnClickListener { onClick() }
         }
     }
@@ -4576,242 +3934,6 @@ companion object {
         bubbleControlsRow = null
         bubbleLockButton = null
         bubbleControlsVisible = false
-    }
-
-    private fun performFloatingRecursiveLookup(
-        sourceLayerIndex: Int,
-        definitionKey: String,
-        tapData: DefinitionLookupTapData
-    ) {
-        floatingLookupStartedAtNanos = SystemClock.elapsedRealtimeNanos()
-        serviceScope.launch {
-            Log.d(
-                FLOATING_LOOKUP_TAP_LOG_TAG,
-                "recursive start sourceLayer=$sourceLayerIndex key=$definitionKey tapSource=${tapData.tapSource} scan='${tapData.scanText.take(32)}' text='${tapData.text.take(32)}'"
-            )
-            val settings = loadAudiobookSettingsConfig(this@AudiobookFloatingOverlayService)
-            pausePlaybackForFloatingLookupIfNeeded(settings)
-            val isEntryLikeTap = tapData.tapSource.equals("entry", ignoreCase = true) ||
-                tapData.tapSource.equals("entry-link", ignoreCase = true)
-            val term = if (isEntryLikeTap) {
-                tapData.scanText.trim().ifBlank { tapData.text.trim() }
-            } else {
-                selectLookupScanText(tapData.scanText.ifBlank { tapData.text }, 0)?.text?.trim().orEmpty()
-            }.takeIf { it.isNotBlank() } ?: run {
-                Log.d(
-                    FLOATING_LOOKUP_TAP_LOG_TAG,
-                    "recursive ignored empty_term sourceLayer=$sourceLayerIndex tapSource=${tapData.tapSource}"
-                )
-                return@launch
-            }
-            val requestNonce = lookupRequestNonce + 1L
-            lookupRequestNonce = requestNonce
-            val currentLayer = floatingLookupSession.getOrNull(sourceLayerIndex) ?: return@launch
-            if (lookupRequestNonce != requestNonce) return@launch
-            Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "recursive query term=$term tapSource=${tapData.tapSource}")
-            val anchorRect = tapData.screenRect ?: tapData.screenCharRects.firstOrNull() ?: Rect(
-                left = resources.displayMetrics.widthPixels * 0.5f,
-                top = resources.displayMetrics.heightPixels * 0.45f,
-                right = resources.displayMetrics.widthPixels * 0.5f + 1f,
-                bottom = resources.displayMetrics.heightPixels * 0.45f + 1f
-            )
-            val recursiveText = tapData.scanText.ifBlank { tapData.text }.ifBlank { term }
-            val hoshiSelection = createFloatingHoshiSelection(
-                selectedText = term,
-                subtitleText = recursiveText,
-                selectedRange = 0 until term.length.coerceAtLeast(1),
-                anchorRect = anchorRect,
-                sentenceOverride = tapData.sentence.trim().ifBlank { recursiveText }
-            )
-            val result = withContext(Dispatchers.Default) {
-                runCatching {
-                    floatingHoshiLookupSession.createPopup(
-                        selection = hoshiSelection,
-                        options = floatingHoshiLookupOptions(settings),
-                    )
-                }
-            }
-            if (lookupRequestNonce != requestNonce) return@launch
-            result.onSuccess { popup ->
-                val hoshiResults = popup?.first?.state?.results.orEmpty()
-                val matchedLength = popup?.second
-                    ?: hoshiResults.firstOrNull()?.matched?.length
-                    ?: term.length
-                Log.d(
-                    FLOATING_LOOKUP_TAP_LOG_TAG,
-                    "recursive hoshi result hits=${hoshiResults.size} term=$term matched=$matchedLength tapSource=${tapData.tapSource}"
-                )
-                if (hoshiResults.isEmpty()) {
-                    Log.d(
-                        FLOATING_LOOKUP_TAP_LOG_TAG,
-                        "recursive ignored no_hits sourceLayer=$sourceLayerIndex term=$term tapSource=${tapData.tapSource}"
-                    )
-                    return@onSuccess
-                }
-                val resolvedRects = resolveDefinitionMatchedRects(tapData, matchedLength)
-                val preflightApplied = applyDefinitionMatchedHighlight(tapData, matchedLength)
-                Log.d(
-                    FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG,
-                    "preflight key=$definitionKey len=$matchedLength applied=$preflightApplied"
-                )
-                if (!preflightApplied && !isEntryLikeTap) {
-                    return@onSuccess
-                }
-                val resolvedAnchorFromChars = resolvedRects?.screenCharRects
-                    ?.let { rebuildRectsFromCharacterRectsShared(it, matchedLength) }
-                    ?.takeIf { it.isNotEmpty() }
-                val resolvedAnchorFromRects = resolvedRects?.screenRects?.takeIf { it.isNotEmpty() }
-                val tapAnchorFromChars = tapData.screenCharRects
-                    .takeIf { it.isNotEmpty() }
-                val tapAnchorFromRect = tapData.screenRect?.let { listOf(it) }?.takeIf { it.isNotEmpty() }
-                val resolvedAnchorRects = resolvedAnchorFromChars
-                    ?: resolvedAnchorFromRects
-                    ?: tapAnchorFromChars
-                    ?: tapAnchorFromRect
-                val anchorSource = when {
-                    resolvedAnchorFromChars != null -> "resolvedChars"
-                    resolvedAnchorFromRects != null -> "resolvedRects"
-                    tapAnchorFromChars != null -> "tapChars"
-                    tapAnchorFromRect != null -> "tapRect"
-                    else -> "none"
-                }
-                val dictionaryStyles = popup?.first?.state?.dictionaryStyles ?: currentDictionaryStyles()
-                Log.d(
-                    FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG,
-                    "setHighlight layer=$sourceLayerIndex key=$definitionKey len=$matchedLength applied=$preflightApplied"
-                )
-                val popupAnchorRects = resolvedAnchorRects ?: run {
-                    Log.d(
-                        FLOATING_LOOKUP_LOG_TAG,
-                        "recursive ignored no_anchor layer=$sourceLayerIndex term=$term"
-                    )
-                    return@onSuccess
-                }
-                Log.d(
-                    FLOATING_LOOKUP_LOG_TAG,
-                    "anchor layer=$sourceLayerIndex source=$anchorSource rects=${popupAnchorRects.size}"
-                )
-                val estimatedAnchorY = popupAnchorRects
-                    .minOfOrNull { it.bottom }
-                    ?: return@onSuccess
-                val shouldPlaceBelow = estimatedAnchorY <= (resources.displayMetrics.heightPixels / 2f)
-                val finalSelectionText = term.take(matchedLength.coerceAtLeast(1)).trim().ifBlank { term }
-                truncateFloatingLookupLayersTo(sourceLayerIndex, render = false)
-                val layer = buildFloatingLookupLayer(
-                    term = finalSelectionText,
-                    popupSentence = tapData.sentence.trim().ifBlank { null },
-                    sourceTerm = currentLayer.selectionText,
-                    groupedResults = emptyList(),
-                    anchor = ReaderLookupAnchor(popupAnchorRects),
-                    placeBelow = shouldPlaceBelow,
-                    preferSidePlacement = false,
-                    selectedRange = currentLayer.selectedRange,
-                    hoshiResults = hoshiResults,
-                    hoshiDictionaryStyles = dictionaryStyles
-                )
-                // Single-visible-card mode with history stack: keep previous layers for back navigation.
-                floatingLookupSession.push(layer)
-                renderFloatingLookupResults(layer)
-            }.onFailure {
-                Log.d(
-                    FLOATING_LOOKUP_TAP_LOG_TAG,
-                    "recursive ignored failure sourceLayer=$sourceLayerIndex term=$term error='${it.message.orEmpty().take(120)}'"
-                )
-            }
-        }
-    }
-
-    private fun exportFloatingLookupToAnki(grouped: GroupedLookupResult, layerIndex: Int, layer: ReaderLookupLayer) {
-        val dictionaryGroup = grouped.dictionaries.firstOrNull() ?: return
-        val cueSnapshot = BookReaderFloatingBridge.currentCue() ?: return
-        val settings = loadAudiobookSettingsConfig(this)
-        val closeAction = floatingLookupSession.closeLayerOrClear(layerIndex)
-        applyCloseLookupAction(closeAction)
-        val audioUri = cueSnapshot.audioUri
-            ?.takeIf { layer.sourceTerm == null }
-            ?.let { runCatching { Uri.parse(it) }.getOrNull() }
-        val exportStartMs = if (settings.lookupExportFullSentence) {
-            cueSnapshot.fullSentenceStartMs ?: cueSnapshot.startMs
-        } else {
-            cueSnapshot.startMs
-        }
-        val exportEndMs = if (settings.lookupExportFullSentence) {
-            cueSnapshot.fullSentenceEndMs ?: cueSnapshot.endMs
-        } else {
-            cueSnapshot.endMs
-        }
-        val sentence = if (settings.lookupExportFullSentence) {
-            cueSnapshot.fullSentenceText ?: cueSnapshot.text
-        } else {
-            layer.popupSentence?.trim().takeIf { !it.isNullOrBlank() } ?: cueSnapshot.text
-        }
-        Log.d(
-            FLOATING_LOOKUP_LOG_TAG,
-            "ankiExport fullSentence=${settings.lookupExportFullSentence} sentenceLen=${sentence.length} popupLen=${layer.popupSentence?.length ?: 0} cueLen=${cueSnapshot.text.length} fullCueLen=${cueSnapshot.fullSentenceText?.length ?: 0} start=$exportStartMs end=$exportEndMs"
-        )
-        val popupSelectionText = layer.selectionText?.trim()?.takeIf { it.isNotBlank() }
-        val exportDefinitionHtml = dictionaryGroup.definitions
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .joinToString("<br>")
-            .ifBlank { grouped.term }
-        serviceScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val preparedLookupAudio = prepareLookupAudioForAnkiExport(
-                        context = this@AudiobookFloatingOverlayService,
-                        term = grouped.term,
-                        reading = grouped.reading,
-                        settings = loadAudiobookSettingsConfig(this@AudiobookFloatingOverlayService)
-                    )
-                    try {
-                        addLookupDefinitionToAnkiShared(
-                            context = this@AudiobookFloatingOverlayService,
-                            cueText = cueSnapshot.text,
-                            cueStartMs = exportStartMs,
-                            cueEndMs = exportEndMs,
-                            audioUri = audioUri,
-                            lookupAudioUri = preparedLookupAudio?.uri,
-                            bookTitle = cueSnapshot.bookTitle,
-                            entry = dictionaryGroup.entry,
-                            definition = exportDefinitionHtml,
-                            dictionaryCss = dictionaryGroup.css,
-                            groupedDictionaries = grouped.dictionaries,
-                            popupSelectionText = popupSelectionText,
-                            sentenceOverride = sentence,
-                            lookupTermOverride = grouped.term
-                        )
-                    } finally {
-                        preparedLookupAudio?.cleanup?.invoke()
-                    }
-                }
-            }
-            result.fold(
-                onSuccess = { exportResult ->
-                    val message = ankiExportResultMessage(this@AudiobookFloatingOverlayService, exportResult)
-                    if (exportResult !is AnkiExportResult.DuplicateSkipped &&
-                        message.isNotBlank()
-                    ) {
-                        Toast.makeText(
-                            this@AudiobookFloatingOverlayService,
-                            message.take(220),
-                            if (exportResult == AnkiExportResult.Added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
-                        ).show()
-                    }
-                },
-                onFailure = {
-                    Toast.makeText(
-                        this@AudiobookFloatingOverlayService,
-                        explainFloatingAnkiFailure(it).take(220),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            )
-        }
-    }
-
-    private fun explainFloatingAnkiFailure(error: Throwable): String {
-        return ankiExportResultMessage(this, classifyAnkiExportFailure(this, error))
     }
 
     private fun exportFloatingHoshiLookupEntryToAnkiAsync(
