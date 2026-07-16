@@ -32,4 +32,14 @@ class LookupPopupStackTest {
         assertTrue(viewSource.contains("historyBackCount = backCount"))
         assertTrue(viewSource.contains("historyForwardCount = forwardCount"))
     }
+
+    @Test
+    fun replacingWarmRootResultsClearsThePreviousWebSelectionFirst() {
+        val source = File("src/main/java/moe/tekuza/m9player/hoshi/features/dictionary/LookupPopupView.kt").readText()
+        val clearSelection = source.indexOf("window.hoshiSelection && window.hoshiSelection.clearSelection()")
+        val replaceResults = source.indexOf("window.replacePopupResults && window.replacePopupResults")
+
+        assertTrue(clearSelection >= 0)
+        assertTrue(replaceResults > clearSelection)
+    }
 }

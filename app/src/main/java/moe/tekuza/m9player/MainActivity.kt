@@ -4727,11 +4727,9 @@ private fun ReaderSyncScreen() {
                 },
                 warmRootOptions = mainHoshiLookupOptions(showRangeSelection = false),
                 platformPopupHost = collectionLookupPreviewVisible,
-                extraBottomInsetDp = if (collectionLookupPreviewVisible) {
-                    innerPadding.calculateBottomPadding().value.toDouble()
-                } else {
-                    0.0
-                },
+                extraBottomInsetDp = (
+                    innerPadding.calculateBottomPadding().value.toDouble() - navigationBarBottomInsetDp
+                ).coerceAtLeast(0.0),
         )
 
         VersionEasterGifPopup(

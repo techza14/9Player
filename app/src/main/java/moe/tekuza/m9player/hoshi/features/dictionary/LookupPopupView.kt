@@ -543,7 +543,8 @@ private fun LookupPopupWebView(
                     ?.let { "[$it]" }
                     ?: "[]"
                 webView.evaluateJavascript(
-                    "window.replacePopupResults && window.replacePopupResults(${results.size}, $initialEntries)",
+                    "window.hoshiSelection && window.hoshiSelection.clearSelection();" +
+                        "window.replacePopupResults && window.replacePopupResults(${results.size}, $initialEntries)",
                     null,
                 )
             } else if (!warmShell && shellReady) {

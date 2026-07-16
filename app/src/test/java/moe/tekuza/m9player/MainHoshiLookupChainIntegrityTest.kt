@@ -151,6 +151,12 @@ class MainHoshiLookupChainIntegrityTest {
             mainActivitySource.contains("platformPopupHost = collectionLookupPreviewVisible") &&
                 mainActivitySource.contains("extraBottomInsetDp =")
         )
+        assertTrue(
+            "All main lookup popups should stay above the app bottom navigation without double-counting system bars",
+            mainActivitySource.contains(
+                "innerPadding.calculateBottomPadding().value.toDouble() - navigationBarBottomInsetDp"
+            )
+        )
     }
 
     @Test
