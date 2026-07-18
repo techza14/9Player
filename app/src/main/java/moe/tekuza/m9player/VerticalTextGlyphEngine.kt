@@ -288,11 +288,6 @@ internal object VerticalTextGlyphEngine {
         }
     }
 
-    fun shouldMirrorAfterRotation(text: String): Boolean {
-        val ch = text.firstOrNull()?.let(::presentationChar) ?: return false
-        return vjapDashRotation[ch]?.mirrorAfterRotation == true || ch in mirrorAfterRotation
-    }
-
     private fun rotationStyleFor(text: String): RotationStyle {
         val ch = text.firstOrNull()?.let(::presentationChar) ?: return RotationStyle(0f)
         vjapDashRotation[ch]?.let { return it }

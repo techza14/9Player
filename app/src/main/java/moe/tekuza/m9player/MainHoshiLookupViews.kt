@@ -2,9 +2,6 @@ package moe.tekuza.m9player
 
 import android.annotation.SuppressLint
 import android.webkit.WebView
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -13,15 +10,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import de.manhhao.hoshi.LookupResult
-import moe.tekuza.m9player.hoshi.features.dictionary.HoshiImagePreviewWebView
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupAssets
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupLookupResultsHolder
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupMessageWebViewClient
@@ -29,6 +21,7 @@ import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewBridge
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbackHolder
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbacks
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewOffsetState
+import moe.tekuza.m9player.hoshi.features.dictionary.openHoshiImagePreview
 import moe.tekuza.m9player.hoshi.features.dictionary.withAdditionalImageTap
 import moe.tekuza.m9player.hoshi.webview.applyHoshiWebViewSecurityDefaults
 
@@ -47,8 +40,9 @@ internal fun MainHoshiResultWebView(
 ) {
     val currentCallbacks by rememberUpdatedState(callbacks)
     val context = LocalContext.current
-    var previewImageUrl by remember { mutableStateOf<String?>(null) }
-    val effectiveCallbacks = currentCallbacks.withAdditionalImageTap { src -> previewImageUrl = src }
+    val effectiveCallbacks = currentCallbacks.withAdditionalImageTap { src ->
+        context.openHoshiImagePreview(src)
+    }
     val assets = remember(context) { LookupPopupAssets.load(context) }
     val callbackHolder = remember { PopupWebViewCallbackHolder(effectiveCallbacks) }
     val lookupResultsHolder = remember { PopupLookupResultsHolder(results) }
@@ -115,24 +109,4 @@ internal fun MainHoshiResultWebView(
             }
         },
     )
-    previewImageUrl?.takeIf { it.isNotBlank() }?.let { imageUrl ->
-        Dialog(
-            onDismissRequest = { previewImageUrl = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-                    .clickable { previewImageUrl = null },
-                contentAlignment = Alignment.Center,
-            ) {
-                HoshiImagePreviewWebView(
-                    imageUrl = imageUrl,
-                    onTap = { previewImageUrl = null },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-        }
-    }
 }

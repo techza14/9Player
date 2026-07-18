@@ -70,6 +70,7 @@ private enum class DictionarySettingsDestination {
 private fun DictionarySettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val dictionaryScrollState = rememberScrollState()
     val dictionaryController = rememberDictionaryManagementController(
         context = context,
         contentResolver = context.contentResolver,
@@ -196,7 +197,7 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
                 .fillMaxSize()
                 .padding(padding)
                 .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(dictionaryScrollState),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Card(
@@ -238,6 +239,7 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
 
             DictionaryManagementCard(
                 context = context,
+                dictionaryScrollState = dictionaryScrollState,
                 dictionaryCount = dictionaryRefs.count { it.enabled },
                 showHeader = false,
                 containerColor = hoshiPanelBackgroundColor(),

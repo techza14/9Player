@@ -17,6 +17,7 @@
     <string name="common_delete">Delete</string>
     <string name="common_play">Play</string>
     <string name="common_lookup">Lookup</string>
+    <string name="common_temporary_lookup">Jump</string>
     <string name="common_loading">Loading...</string>
     <string name="common_not_selected">Not selected</string>
     <string name="common_unknown">Unknown</string>
@@ -125,9 +126,6 @@
     <string name="home_cover_aspect_square">Cover ratio: square</string>
     <string name="home_cover_adjust_title">Adjust cover</string>
     <string name="home_cover_adjust_reset">Reset</string>
-    <string name="home_cover_adjust_zoom">Zoom %1$sx</string>
-    <string name="home_cover_adjust_anchor">Anchor %1$d, %2$d</string>
-    <string name="home_cover_adjust_magnifier">Magnifier</string>
     <string name="home_cover_adjust_scale">Scale</string>
     <string name="home_cover_adjust_rounded">Rounded corners</string>
     <string name="home_cover_adjust_mode">Mode</string>
@@ -139,7 +137,6 @@
     <string name="home_cover_adjust_pixel_nudge">Pixel nudge</string>
     <string name="home_rename_book">Rename</string>
     <string name="home_book_name">Name</string>
-    <string name="floating_lookup_view_duplicate">View duplicate</string>
     <string name="home_no_books">No books yet.</string>
     <string name="home_no_books_hint">Tap +Book, choose the audiobook folder first, then choose audio/m4b (SRT optional).</string>
     <string name="home_selected">Selected</string>
@@ -154,6 +151,7 @@
     <string name="dictionary_hide_list">Hide dictionary list</string>
     <string name="dictionary_show_list">Show dictionary list</string>
     <string name="dictionary_empty">No imported dictionaries yet.</string>
+    <string name="dictionary_legacy_media_format_hint">Legacy format; reimport recommended</string>
     <string name="dictionary_default_name">Dictionary %1$d</string>
     <string name="dictionary_query_label">Lookup</string>
     <string name="dictionary_querying">Searching dictionaries...</string>

@@ -32,7 +32,8 @@ internal fun importedDictionaryId(ref: PersistedDictionaryRef): String {
 internal data class CombinedDictionaryItem(
     val id: String,
     val title: String,
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val usesLegacyMediaFormat: Boolean = false,
 )
 
 internal fun buildCombinedDictionaryItems(
@@ -43,7 +44,11 @@ internal fun buildCombinedDictionaryItems(
         CombinedDictionaryItem(
             id = importedDictionaryId(ref),
             title = ref.name.ifBlank { context.getString(R.string.dictionary_default_name, index + 1) },
-            enabled = ref.enabled
+            enabled = ref.enabled,
+            usesLegacyMediaFormat = usesLegacyDictionaryMediaFormat(
+                context = context,
+                cacheKey = ref.cacheKey ?: buildDictionaryCacheKey(ref.uri, ref.name.ifBlank { "dictionary" }),
+            ),
         )
     }
 }

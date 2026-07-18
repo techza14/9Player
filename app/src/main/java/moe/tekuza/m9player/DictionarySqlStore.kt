@@ -1,5 +1,6 @@
 package moe.tekuza.m9player
 
+import android.app.ActivityManager
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
@@ -12,14 +13,14 @@ import android.util.JsonReader
 import android.util.JsonToken
 import moe.tekuza.m9player.hoshi.dictionary.HoshiDictionaryQuerySession
 import org.json.JSONObject
-import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStreamReader
 import java.io.StringReader
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Locale
-import java.util.zip.ZipFile
-import java.util.zip.ZipInputStream
+import java.util.UUID
 
 private const val DICTIONARY_ENTRY_STORE_DIR = "dictionary_entry_store"
 private const val DICTIONARY_HOSHI_ROOT_DIR = "hoshidicts"
@@ -31,11 +32,7 @@ private const val DICTIONARY_HOSHI_HASH_FILE = "hash.mph"
 private const val DICTIONARY_HOSHI_HASH_TABLE_FILE = "hash.table"
 private const val DICTIONARY_HOSHI_STYLES_FILE = "styles.css"
 private const val HOSHI_LOOKUP_PERF_LOG_TAG = "HoshiLookupPerf"
-private const val HOSHI_META_TYPE_SCAN_LIMIT_ROWS = 2048
-private const val HOSHI_META_TYPE_SCAN_MAX_BYTES = 8L * 1024L * 1024L
-private const val HOSHI_TYPE_SCAN_MAX_ENTRIES = 20_000
-private const val HOSHI_TYPE_SCAN_MAX_ENTRY_BYTES = 64L * 1024L * 1024L
-private const val HOSHI_TYPE_SCAN_MAX_PATH_CHARS = 512
+private const val HOSHI_IMPORT_PERF_LOG_TAG = "HoshiImportPerf"
 private const val HOSHI_IMPORT_ARCHIVE_MAX_BYTES = 2L * 1024L * 1024L * 1024L
 private const val HOSHI_IMPORT_COPY_BUFFER_BYTES = 256 * 1024
 
@@ -47,12 +44,9 @@ private val MARKDOWN_IMAGE_REGEX = Regex("!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)")
 private val MARKDOWN_LINK_REGEX = Regex("\\[([^\\]]+)\\]\\(([^)\\s]+)\\)")
 private val PLAIN_URL_REGEX = Regex("https?://[^\\s<]+")
 private val DICTIONARY_STORAGE_SAFE_KEY_REGEX = Regex("[^A-Za-z0-9._-]")
-private val HOSHI_TERM_BANK_FILE_REGEX = Regex("term_bank_\\d+\\.json")
-private val HOSHI_TERM_META_BANK_FILE_REGEX = Regex("term_meta_bank_\\d+\\.json")
 private val HTML_TAG_NAME_SANITIZE_REGEX = Regex("[^a-z0-9-]")
 private val CSS_SIZE_UNIT_REGEX = Regex("^[a-z%]+$")
 private val CSS_NUMBER_REGEX = Regex("^[+-]?(?:\\d+\\.?\\d*|\\.\\d+)$")
-private val HOSHI_WINDOWS_ABSOLUTE_PATH_REGEX = Regex("""^[A-Za-z]:.*""")
 private val DANGEROUS_HTML_BLOCK_REGEX =
     Regex("(?is)<\\s*(script|style|iframe|object|embed|form|textarea|select|button|svg|math)\\b[^>]*>.*?<\\s*/\\s*\\1\\s*>")
 private val DANGEROUS_HTML_TAG_REGEX =
@@ -102,16 +96,6 @@ private fun dictionaryHoshiRootDir(context: Context, cacheKey: String): File {
     return dir
 }
 
-private fun dictionaryHoshiTypeRootDir(
-    context: Context,
-    cacheKey: String,
-    type: HoshiDictionaryType
-): File {
-    val dir = File(dictionaryHoshiRootDir(context, cacheKey), type.directoryName)
-    if (!dir.exists()) dir.mkdirs()
-    return dir
-}
-
 private fun isValidHoshiDictionaryDir(dir: File): Boolean {
     if (!dir.isDirectory) return false
     if (!File(dir, DICTIONARY_HOSHI_BLOBS_FILE).isFile) return false
@@ -121,33 +105,6 @@ private fun isValidHoshiDictionaryDir(dir: File): Boolean {
     val current = File(dir, DICTIONARY_HOSHI_INDEX_FILE).isFile &&
         File(dir, DICTIONARY_HOSHI_HASH_TABLE_FILE).isFile
     return legacy || current
-}
-
-private fun normalizeHoshiZipPath(path: String): String {
-    return path.replace('\\', '/').trimStart('/').removePrefix("./")
-}
-
-private fun isSafeHoshiZipPath(path: String): Boolean {
-    val normalized = path.trim().replace('\\', '/')
-    if (
-        normalized.isBlank() ||
-        normalized.length > HOSHI_TYPE_SCAN_MAX_PATH_CHARS ||
-        normalized.startsWith("/") ||
-        HOSHI_WINDOWS_ABSOLUTE_PATH_REGEX.matches(normalized)
-    ) {
-        return false
-    }
-    return normalized.split('/').none { it == ".." }
-}
-
-private fun isHoshiTermBankFile(path: String): Boolean {
-    val fileName = normalizeHoshiZipPath(path).substringAfterLast('/').lowercase(Locale.US)
-    return HOSHI_TERM_BANK_FILE_REGEX.matches(fileName)
-}
-
-private fun isHoshiTermMetaBankFile(path: String): Boolean {
-    val fileName = normalizeHoshiZipPath(path).substringAfterLast('/').lowercase(Locale.US)
-    return HOSHI_TERM_META_BANK_FILE_REGEX.matches(fileName)
 }
 
 private fun inferHoshiDictionaryTypeFromPath(dir: File): HoshiDictionaryType? {
@@ -161,231 +118,6 @@ private fun inferHoshiDictionaryTypeFromPath(dir: File): HoshiDictionaryType? {
         current = current.parentFile
     }
     return null
-}
-
-private fun detectHoshiDictionaryType(
-    contentResolver: ContentResolver,
-    uri: Uri
-): HoshiDictionaryType {
-    return contentResolver.openInputStream(uri)?.use { stream ->
-        detectHoshiDictionaryType(stream)
-    } ?: HoshiDictionaryType.Term
-}
-
-private fun detectHoshiDictionaryType(zipFile: File): HoshiDictionaryType {
-    var hasTermBank = false
-    var hasFrequencyMeta = false
-    var hasPitchMeta = false
-
-    ZipFile(zipFile).use { zip ->
-        val entries = zip.entries()
-        var entryCount = 0
-        while (entries.hasMoreElements()) {
-            val entry = entries.nextElement()
-            entryCount += 1
-            require(entryCount <= HOSHI_TYPE_SCAN_MAX_ENTRIES) {
-                "Dictionary ZIP has too many entries: $entryCount"
-            }
-            require(isSafeHoshiZipPath(entry.name)) {
-                "Unsafe dictionary ZIP entry: ${entry.name}"
-            }
-            if (entry.size >= 0L) {
-                require(entry.size <= HOSHI_TYPE_SCAN_MAX_ENTRY_BYTES) {
-                    "Dictionary ZIP entry too large: ${entry.size} bytes"
-                }
-            }
-            if (!entry.isDirectory) {
-                val path = normalizeHoshiZipPath(entry.name)
-                when {
-                    isHoshiTermBankFile(path) -> {
-                        hasTermBank = true
-                    }
-
-                    isHoshiTermMetaBankFile(path) -> {
-                        val modeFlags = zip.getInputStream(entry).use(::readHoshiMetaModeFlags)
-                        if (modeFlags.hasFrequency) hasFrequencyMeta = true
-                        if (modeFlags.hasPitch) hasPitchMeta = true
-                    }
-                }
-            }
-            if (hasFrequencyMeta) {
-                break
-            }
-        }
-    }
-
-    return classifyHoshiDictionaryType(hasTermBank, hasFrequencyMeta, hasPitchMeta)
-}
-
-internal fun detectHoshiDictionaryType(
-    stream: java.io.InputStream
-): HoshiDictionaryType {
-    var hasTermBank = false
-    var hasFrequencyMeta = false
-    var hasPitchMeta = false
-
-    ZipInputStream(BufferedInputStream(stream)).use { zip ->
-        var entryCount = 0
-        var entry = zip.nextEntry
-        while (entry != null) {
-            entryCount += 1
-            require(entryCount <= HOSHI_TYPE_SCAN_MAX_ENTRIES) {
-                "Dictionary ZIP has too many entries: $entryCount"
-            }
-            require(isSafeHoshiZipPath(entry.name)) {
-                "Unsafe dictionary ZIP entry: ${entry.name}"
-            }
-            if (entry.size >= 0L) {
-                require(entry.size <= HOSHI_TYPE_SCAN_MAX_ENTRY_BYTES) {
-                    "Dictionary ZIP entry too large: ${entry.size} bytes"
-                }
-            }
-            if (!entry.isDirectory) {
-                val path = normalizeHoshiZipPath(entry.name)
-                when {
-                    isHoshiTermBankFile(path) -> {
-                        hasTermBank = true
-                    }
-
-                    isHoshiTermMetaBankFile(path) -> {
-                        val modeFlags = readHoshiMetaModeFlags(zip)
-                        if (modeFlags.hasFrequency) hasFrequencyMeta = true
-                        if (modeFlags.hasPitch) hasPitchMeta = true
-                    }
-                }
-            }
-            if (hasFrequencyMeta) {
-                break
-            }
-            zip.closeEntry()
-            entry = zip.nextEntry
-        }
-    }
-
-    return classifyHoshiDictionaryType(hasTermBank, hasFrequencyMeta, hasPitchMeta)
-}
-
-private fun classifyHoshiDictionaryType(
-    hasTermBank: Boolean,
-    hasFrequencyMeta: Boolean,
-    hasPitchMeta: Boolean
-): HoshiDictionaryType {
-    return when {
-        hasTermBank -> HoshiDictionaryType.Term
-        hasFrequencyMeta && !hasPitchMeta -> HoshiDictionaryType.Frequency
-        hasPitchMeta && !hasFrequencyMeta -> HoshiDictionaryType.Pitch
-        hasFrequencyMeta -> HoshiDictionaryType.Frequency
-        hasPitchMeta -> HoshiDictionaryType.Pitch
-        else -> HoshiDictionaryType.Term
-    }
-}
-
-private data class HoshiMetaModeFlags(
-    val hasFrequency: Boolean = false,
-    val hasPitch: Boolean = false
-)
-
-private fun readHoshiMetaModeFlags(stream: java.io.InputStream): HoshiMetaModeFlags {
-    return try {
-        val reader = InputStreamReader(stream, Charsets.UTF_8)
-        var flags = HoshiMetaModeFlags()
-        var arrayDepth = 0
-        var rowFieldIndex = -1
-        var rowCount = 0
-        var scannedBytes = 0L
-        var inString = false
-        var escaped = false
-        var capturingMode = false
-        val modeBuilder = StringBuilder()
-
-        while (true) {
-            val read = reader.read()
-            if (read < 0) break
-            scannedBytes += 1
-            require(scannedBytes <= HOSHI_META_TYPE_SCAN_MAX_BYTES) {
-                "Dictionary meta scan exceeded byte limit"
-            }
-            val char = read.toChar()
-
-            if (inString) {
-                when {
-                    escaped -> {
-                        if (capturingMode) modeBuilder.append(char)
-                        escaped = false
-                    }
-
-                    char == '\\' -> {
-                        escaped = true
-                    }
-
-                    char == '"' -> {
-                        inString = false
-                        if (capturingMode) {
-                            flags = flags.withMode(modeBuilder.toString())
-                            capturingMode = false
-                            modeBuilder.clear()
-                            if (flags.hasFrequency && flags.hasPitch) break
-                        }
-                    }
-
-                    capturingMode -> modeBuilder.append(char)
-                }
-                continue
-            }
-
-            when (char) {
-                '"' -> {
-                    inString = true
-                    if (arrayDepth == 2 && rowFieldIndex == 1) {
-                        capturingMode = true
-                        modeBuilder.clear()
-                    }
-                }
-
-                '[' -> {
-                    arrayDepth += 1
-                    if (arrayDepth == 2) {
-                        rowFieldIndex = 0
-                        rowCount += 1
-                        if (rowCount > HOSHI_META_TYPE_SCAN_LIMIT_ROWS) break
-                    }
-                }
-
-                ']' -> {
-                    if (arrayDepth == 2) rowFieldIndex = -1
-                    if (arrayDepth > 0) arrayDepth -= 1
-                }
-
-                ',' -> {
-                    if (arrayDepth == 2 && rowFieldIndex >= 0) {
-                        rowFieldIndex += 1
-                    }
-                }
-            }
-        }
-        flags
-    } catch (error: IllegalArgumentException) {
-        throw error
-    } catch (_: Throwable) {
-        HoshiMetaModeFlags()
-    }
-}
-
-private fun HoshiMetaModeFlags.with(other: HoshiMetaModeFlags): HoshiMetaModeFlags {
-    return HoshiMetaModeFlags(
-        hasFrequency = hasFrequency || other.hasFrequency,
-        hasPitch = hasPitch || other.hasPitch
-    )
-}
-
-private fun HoshiMetaModeFlags.withMode(mode: String): HoshiMetaModeFlags {
-    val normalizedMode = mode.lowercase(Locale.US)
-    return with(
-        HoshiMetaModeFlags(
-            hasFrequency = normalizedMode == "freq",
-            hasPitch = normalizedMode == "pitch" || normalizedMode.contains("accent")
-        )
-    )
 }
 
 private fun locateHoshiDictionaryDir(
@@ -412,6 +144,54 @@ private fun locateHoshiDictionaryDir(
             ?.filter { isValidHoshiDictionaryDir(it) }
             ?.sortedByDescending { it.lastModified() }
             ?.firstOrNull()
+}
+
+internal fun classifyHoshiDictionaryType(result: HoshiImportResult): HoshiDictionaryType {
+    return when {
+        result.termCount > 0L -> HoshiDictionaryType.Term
+        result.frequencyCount > 0L -> HoshiDictionaryType.Frequency
+        result.pitchCount > 0L -> HoshiDictionaryType.Pitch
+        else -> error("Failed to detect dictionary type")
+    }
+}
+
+private fun moveDictionaryDirectory(source: File, target: File) {
+    try {
+        Files.move(
+            source.toPath(),
+            target.toPath(),
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING
+        )
+    } catch (_: AtomicMoveNotSupportedException) {
+        Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
+}
+
+internal fun replaceDictionaryDirectory(staged: File, target: File) {
+    target.parentFile?.mkdirs()
+    val backup = target.takeIf(File::exists)?.let {
+        File(requireNotNull(target.parentFile), ".${target.name}-replace-${UUID.randomUUID()}")
+            .also { backup -> moveDictionaryDirectory(target, backup) }
+    }
+    try {
+        moveDictionaryDirectory(staged, target)
+        backup?.deleteRecursively()
+    } catch (error: Throwable) {
+        target.deleteRecursively()
+        if (backup?.exists() == true) moveDictionaryDirectory(backup, target)
+        throw error
+    }
+}
+
+internal fun isLegacyDictionaryMediaDir(directory: File): Boolean =
+    File(directory, "media_index.bin").isFile && !File(directory, "media.idx").isFile
+
+internal fun usesLegacyDictionaryMediaFormat(context: Context, cacheKey: String): Boolean {
+    if (cacheKey.isBlank()) return false
+    return runCatching {
+        locateHoshiDictionaryDir(context, cacheKey)?.let(::isLegacyDictionaryMediaDir) == true
+    }.getOrDefault(false)
 }
 
 private fun deleteDictionaryStorageDir(context: Context, cacheKey: String): Boolean {
@@ -625,9 +405,12 @@ private fun importDictionaryZipWithHoshi(
         error("hoshidicts native bridge unavailable")
     }
 
+    val totalStartNs = SystemClock.elapsedRealtimeNanos()
     onProgress?.invoke(DictionaryImportProgress(stage = "准备导入", current = 0, total = 100))
     val tempZip = File.createTempFile("dict_import_", ".zip", context.cacheDir)
+    var stagingTypeRoot: File? = null
     try {
+        val copyStartNs = SystemClock.elapsedRealtimeNanos()
         val archiveSize = queryDictionaryImportSize(contentResolver, uri).takeIf { it > 0L }
         archiveSize?.let { size ->
             require(size <= HOSHI_IMPORT_ARCHIVE_MAX_BYTES) {
@@ -659,39 +442,50 @@ private fun importDictionaryZipWithHoshi(
                 }
             }
         } ?: error("Unable to read dictionary archive")
+        val copyMs = (SystemClock.elapsedRealtimeNanos() - copyStartNs) / 1_000_000L
         onProgress?.invoke(DictionaryImportProgress(stage = "分析辞典", current = 35, total = 100))
 
-        val dictionaryType = detectHoshiDictionaryType(tempZip)
-        logDebug(HOSHI_LOOKUP_PERF_LOG_TAG) {
-            "auto classify import uri=${uri} type=${dictionaryType.name}"
-        }
-        val hoshiTypeRoot = dictionaryHoshiTypeRootDir(context, cacheKey, dictionaryType)
-        if (hoshiTypeRoot.exists()) {
-            hoshiTypeRoot.deleteRecursively()
-        }
-        hoshiTypeRoot.mkdirs()
+        val hoshiRoot = dictionaryHoshiRootDir(context, cacheKey)
+        stagingTypeRoot = File(hoshiRoot, ".import-${UUID.randomUUID()}").also(File::mkdirs)
 
         onProgress?.invoke(DictionaryImportProgress(stage = "导入辞典，可能需要几分钟", current = 0, total = 0))
         onProgress?.invoke(DictionaryImportProgress(stage = "整理辞典", current = 95, total = 100))
         HoshiNativeBridge.clearLookupCache()
         clearHoshiLookupPreparation()
+        val lowRamImport = context.getSystemService(ActivityManager::class.java)?.isLowRamDevice != false
+        val nativeStartNs = SystemClock.elapsedRealtimeNanos()
         val nativeResult = HoshiNativeBridge.importZip(
             zipPath = tempZip.absolutePath,
-            outputDir = hoshiTypeRoot.absolutePath,
-            lowRam = true
+            outputDir = stagingTypeRoot.absolutePath,
+            lowRam = lowRamImport
         )
+        val nativeMs = (SystemClock.elapsedRealtimeNanos() - nativeStartNs) / 1_000_000L
         if (!nativeResult.success) {
             val errorDetail = nativeResult.errors.firstOrNull().orEmpty()
             val message = if (errorDetail.isBlank()) "hoshidicts import failed" else "hoshidicts import failed: $errorDetail"
             error(message)
         }
 
-        val importedDir = nativeResult.dictPath
+        val dictionaryType = classifyHoshiDictionaryType(nativeResult)
+        logDebug(HOSHI_LOOKUP_PERF_LOG_TAG) {
+            "native classify import uri=${uri} type=${dictionaryType.name}"
+        }
+        val stagedImportedDir = nativeResult.dictPath
             .takeIf { it.isNotBlank() }
             ?.let(::File)
             ?.takeIf(::isValidHoshiDictionaryDir)
-            ?: locateHoshiDictionaryDir(context, cacheKey, dictionaryType)
             ?: error("hoshidicts output not found")
+        require(stagedImportedDir.parentFile?.canonicalFile == stagingTypeRoot.canonicalFile) {
+            "hoshidicts output escaped staging directory"
+        }
+        val hoshiTypeRoot = File(hoshiRoot, dictionaryType.directoryName)
+        val publishStartNs = SystemClock.elapsedRealtimeNanos()
+        replaceDictionaryDirectory(stagingTypeRoot, hoshiTypeRoot)
+        stagingTypeRoot = null
+        val publishMs = (SystemClock.elapsedRealtimeNanos() - publishStartNs) / 1_000_000L
+        val importedDir = File(hoshiTypeRoot, stagedImportedDir.name)
+            .takeIf(::isValidHoshiDictionaryDir)
+            ?: error("hoshidicts output not found after publish")
 
         val dictionaryName = nativeResult.title.ifBlank {
             importedDir.name.ifBlank {
@@ -713,6 +507,13 @@ private fun importDictionaryZipWithHoshi(
 
         HoshiNativeBridge.clearLookupCache()
         onProgress?.invoke(DictionaryImportProgress(stage = "完成", current = 100, total = 100))
+        val totalMs = (SystemClock.elapsedRealtimeNanos() - totalStartNs) / 1_000_000L
+        Log.i(
+            HOSHI_IMPORT_PERF_LOG_TAG,
+            "name=${displayName.take(80)} bytes=${tempZip.length()} lowRam=$lowRamImport " +
+                "copyMs=$copyMs classifyMs=0 nativeMs=$nativeMs publishMs=$publishMs " +
+                "otherMs=${(totalMs - copyMs - nativeMs - publishMs).coerceAtLeast(0L)} totalMs=$totalMs"
+        )
         return LoadedDictionary(
             cacheKey = cacheKey,
             name = dictionaryName,
@@ -723,6 +524,7 @@ private fun importDictionaryZipWithHoshi(
             entryCount = entryCount
         )
     } finally {
+        stagingTypeRoot?.deleteRecursively()
         runCatching { tempZip.delete() }
     }
 }

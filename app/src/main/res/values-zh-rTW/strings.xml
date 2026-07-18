@@ -17,6 +17,7 @@
     <string name="common_delete">刪除</string>
     <string name="common_play">播放</string>
     <string name="common_lookup">查詞</string>
+    <string name="common_temporary_lookup">跳轉</string>
     <string name="common_loading">載入中...</string>
     <string name="common_not_selected">未選擇</string>
     <string name="common_unknown">未知</string>
@@ -125,9 +126,6 @@
     <string name="home_cover_aspect_square">封面比例：正方形</string>
     <string name="home_cover_adjust_title">微調封面</string>
     <string name="home_cover_adjust_reset">重設</string>
-    <string name="home_cover_adjust_zoom">縮放 %1$sx</string>
-    <string name="home_cover_adjust_anchor">錨點 %1$d, %2$d</string>
-    <string name="home_cover_adjust_magnifier">放大預覽</string>
     <string name="home_cover_adjust_scale">縮放</string>
     <string name="home_cover_adjust_rounded">圓角</string>
     <string name="home_cover_adjust_mode">模式</string>
@@ -139,7 +137,6 @@
     <string name="home_cover_adjust_pixel_nudge">像素微調</string>
     <string name="home_rename_book">修改名稱</string>
     <string name="home_book_name">名稱</string>
-    <string name="floating_lookup_view_duplicate">查看重複</string>
     <string name="home_no_books">還沒有書籍。</string>
     <string name="home_no_books_hint">點擊 +書籍，先選擇有聲書資料夾，再選擇音訊/m4b（SRT 可選）。</string>
     <string name="home_selected">已選中</string>
@@ -154,6 +151,7 @@
     <string name="dictionary_hide_list">隱藏辭典列表</string>
     <string name="dictionary_show_list">查看辭典列表</string>
     <string name="dictionary_empty">暫無已匯入辭典。</string>
+    <string name="dictionary_legacy_media_format_hint">舊格式，建議重新匯入</string>
     <string name="dictionary_default_name">辭典 %1$d</string>
     <string name="dictionary_query_label">查詞</string>
     <string name="dictionary_querying">正在查詢辭典...</string>

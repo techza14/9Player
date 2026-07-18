@@ -1,5 +1,6 @@
 package moe.tekuza.m9player.hoshi.features.dictionary
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -8,9 +9,18 @@ class LookupPopupHtmlShimTest {
     @Test
     fun lookupPopupHtmlExposesDictionaryCollapseAndCustomCssSettings() {
         val htmlSource = File("src/main/java/moe/tekuza/m9player/hoshi/features/dictionary/LookupPopupHtml.kt").readText()
+        val bridgeSource = File("src/main/java/moe/tekuza/m9player/hoshi/features/dictionary/PopupWebViewMessages.kt").readText()
+        val popupViewSource = File("src/main/java/moe/tekuza/m9player/hoshi/features/dictionary/LookupPopupView.kt").readText()
+        val popupScript = File("src/main/assets/hoshi-popup/popup.js").readText()
 
         assertTrue(htmlSource.contains("""window.collapsedDictionaries = ${'$'}collapsedDictionaries;"""))
         assertTrue(htmlSource.contains("""window.customCSS = ${'$'}{JSONObject.quote(normalizedSettings.customCSS)};"""))
+        assertTrue(htmlSource.contains("""window.dictionaryMediaRequestEndpoint = "https://hoshi.local/image";"""))
+        assertTrue(bridgeSource.contains("""uri.scheme == "https"""))
+        assertFalse(bridgeSource.contains("""uri.scheme == "image"""))
+        assertFalse(popupViewSource.contains("""uri.scheme == "image"""))
+        assertFalse(popupScript.contains("image://"))
+        assertFalse(popupScript.contains("showImagePreview"))
     }
 
     @Test

@@ -13,28 +13,13 @@ internal data class ReaderLookupAnchor(
 )
 
 internal data class ReaderLookupLayer(
-    val loading: Boolean,
-    val error: String?,
-    val groupedResults: List<GroupedLookupResult>,
     val sourceTerm: String?,
-    val cue: ReaderSubtitleCue?,
-    val cueIndex: Int?,
-    val anchorOffset: Int?,
     val anchor: ReaderLookupAnchor?,
     val avoidAnchor: ReaderLookupAnchor? = null,
     val placeBelow: Boolean,
     val preferSidePlacement: Boolean,
     val selectedRange: IntRange?,
     val selectionText: String?,
-    val popupSentence: String?,
-    val highlightedDefinitionKey: String?,
-    val highlightedDefinitionRects: List<Rect>,
-    val highlightedDefinitionNodePathJson: String?,
-    val highlightedDefinitionOffset: Int?,
-    val highlightedDefinitionLength: Int?,
-    val collapsedSections: Map<String, Boolean>,
-    val autoPlayNonce: Long,
-    val autoPlayedKey: String?,
     val hoshiResults: List<LookupResult> = emptyList(),
     val hoshiDictionaryStyles: Map<String, String> = emptyMap()
 )

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -15,11 +16,8 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
-import android.text.SpannableString
-import android.text.Spanned
 import android.text.TextPaint
 import android.text.TextUtils
-import android.text.style.BackgroundColorSpan
 import android.view.View.MeasureSpec
 import android.view.Choreographer
 import android.view.GestureDetector
@@ -67,6 +65,8 @@ import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbackHolder
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbacks
 import moe.tekuza.m9player.hoshi.features.dictionary.currentDictionaryStyles
 import moe.tekuza.m9player.hoshi.features.dictionary.loadDictionarySettings
+import moe.tekuza.m9player.hoshi.features.dictionary.openPopupExternalLink
+import moe.tekuza.m9player.hoshi.features.dictionary.openHoshiImagePreview
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
 import org.json.JSONObject
@@ -139,7 +139,6 @@ companion object {
         const val ACTION_HIDE = "moe.tekuza.m9player.action.HIDE_FLOATING_OVERLAY"
         const val ACTION_REFRESH = "moe.tekuza.m9player.action.REFRESH_FLOATING_OVERLAY"
         private const val FLOATING_LOOKUP_LOG_TAG = "FloatingLookupPos"
-        private const val FLOATING_LOOKUP_HIGHLIGHT_LOG_TAG = "FloatingLookupHighlight"
         private const val FLOATING_LOOKUP_TAP_LOG_TAG = "FloatingLookupTap"
         private const val FLOATING_BUBBLE_LOG_TAG = "FloatingBubblePos"
         private const val FLOATING_SUBTITLE_SCROLL_LOG_TAG = "FloatingSubtitleScroll"
@@ -158,7 +157,7 @@ companion object {
     private var bubbleControlsRow: LinearLayout? = null
     private var bubbleLockButton: ImageButton? = null
     private var subtitleFrameView: FrameLayout? = null
-    private var subtitleTextView: TextView? = null
+    private var subtitleTextView: HorizontalSubtitleTextView? = null
     private var subtitleOutlineTextView: TextView? = null
     private var subtitleVerticalCanvasView: FloatingVerticalSubtitleCanvasView? = null
     private var subtitleControlsRow: LinearLayout? = null
@@ -206,6 +205,40 @@ companion object {
                 widthMeasureSpec,
                 MeasureSpec.makeMeasureSpec(maxLookupHeightPx, MeasureSpec.EXACTLY)
             )
+        }
+    }
+
+    private class HorizontalSubtitleTextView(context: Context) : AppCompatTextView(context) {
+        private val selectionPaint = Paint().apply {
+            color = 0x33A1A1AA
+            style = Paint.Style.FILL
+        }
+        private val selectionPath = Path()
+        private var selectedRange: IntRange? = null
+
+        fun setSelectedRange(range: IntRange?) {
+            if (selectedRange == range) return
+            selectedRange = range
+            invalidate()
+        }
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            val textLength = text?.length ?: 0
+            val range = selectedRange
+            val textLayout = layout
+            if (range != null && textLayout != null && range.first in 0 until textLength) {
+                val endExclusive = (range.last + 1).coerceIn(range.first + 1, textLength)
+                selectionPath.reset()
+                textLayout.getSelectionPath(range.first, endExclusive, selectionPath)
+                val saveCount = canvas.save()
+                canvas.translate(
+                    compoundPaddingLeft.toFloat() - scrollX,
+                    compoundPaddingTop.toFloat() - scrollY,
+                )
+                canvas.drawPath(selectionPath, selectionPaint)
+                canvas.restoreToCount(saveCount)
+            }
+            super.onDraw(canvas)
         }
     }
 
@@ -359,11 +392,6 @@ companion object {
                 "verticalCanvasTap offset=${hit.sourceOffset} row=${hit.row} col=${hit.column} rect=${anchor.left},${anchor.top},${anchor.right},${anchor.bottom} view=${width}x$height"
             }
             performFloatingLookup(hit.sourceOffset.coerceAtLeast(0), anchor)
-        }
-
-        fun cachedAnchorForRange(range: IntRange): Rect? {
-            val anchor = lastAnchorRect ?: return null
-            return if (selectedRange == range || selectedRange == null) anchor else null
         }
 
         fun resolveAnchorRectsForRange(range: IntRange, callback: (List<Rect>) -> Unit) {
@@ -705,7 +733,6 @@ companion object {
         val wm = windowManager ?: return
         val layer = buildFloatingLookupLayer(
             term = "",
-            popupSentence = null,
             hoshiDictionaryStyles = dictionaryStyles
         )
         val sizeSpec = computeFloatingLookupPopupSizeSpec(
@@ -833,7 +860,7 @@ companion object {
         }
         subtitleOutlineTextView = subtitleOutlineText
 
-        val subtitleText = AppCompatTextView(this).apply {
+        val subtitleText = HorizontalSubtitleTextView(this).apply {
             setLineSpacing(0f, 1.08f)
             maxLines = 3
             ellipsize = null
@@ -1591,6 +1618,7 @@ companion object {
         val subtitleEnabledByData = settings.floatingOverlaySubtitleEnabled && hasSubtitleData(normalized)
         val displayText = normalized
         if (!subtitleEnabledByData || normalized == null) {
+            subtitle.setSelectedRange(null)
             subtitle.animate().cancel()
             subtitle.text = ""
             subtitle.visibility = View.GONE
@@ -1612,6 +1640,7 @@ companion object {
             return
         }
         if (verticalWriting && verticalSubtitle != null) {
+            subtitle.setSelectedRange(null)
             subtitle.animate().cancel()
             subtitle.text = ""
             subtitle.visibility = View.GONE
@@ -1655,6 +1684,7 @@ companion object {
             return
         }
         subtitle.animate().cancel()
+        subtitle.setSelectedRange(null)
         subtitle.alpha = 1f
         subtitle.text = displayText
         subtitle.visibility = View.VISIBLE
@@ -1861,12 +1891,14 @@ companion object {
         val settings = loadAudiobookSettingsConfig(this)
         val baseText = BookReaderFloatingBridge.currentSubtitle()?.trim().orEmpty()
         if (baseText.isBlank()) {
+            subtitle?.setSelectedRange(null)
             subtitle?.text = ""
             outline?.text = ""
             verticalSubtitle?.setSelectedSourceRange(null)
             return
         }
         if (settings.floatingOverlaySubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL) {
+            subtitle?.setSelectedRange(null)
             verticalSubtitle?.bindText(
                 baseText,
                 settings.floatingOverlaySubtitleColor,
@@ -1886,23 +1918,19 @@ companion object {
         verticalSubtitle?.visibility = View.GONE
         if (selectedRange == null || selectedRange.first !in baseText.indices) {
             subtitle.text = baseText
+            subtitle.setSelectedRange(null)
             outline?.text = baseText
             return
         }
         val endExclusive = (selectedRange.last + 1).coerceAtMost(baseText.length)
         if (endExclusive <= selectedRange.first) {
             subtitle.text = baseText
+            subtitle.setSelectedRange(null)
             outline?.text = baseText
             return
         }
-        val spannable = SpannableString(baseText)
-        spannable.setSpan(
-            BackgroundColorSpan(0x33A1A1AA),
-            selectedRange.first,
-            endExclusive,
-            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-        )
-        subtitle.text = spannable
+        subtitle.text = baseText
+        subtitle.setSelectedRange(selectedRange.first until endExclusive)
         outline?.text = baseText
     }
 
@@ -2099,7 +2127,6 @@ companion object {
                     val shouldPlaceBelow = estimatedAnchorY <= (resources.displayMetrics.heightPixels / 2f)
                     val layer = buildFloatingLookupLayer(
                         term = finalSelectionText,
-                        popupSentence = BookReaderFloatingBridge.currentSubtitle(),
                         sourceTerm = null,
                         selectedRange = trimmedRange,
                         anchor = anchorRects.takeIf { it.isNotEmpty() }?.let { ReaderLookupAnchor(rects = it) },
@@ -2154,7 +2181,7 @@ companion object {
         applySubtitleSelectionHighlight(floatingLookupSession.getOrNull(0)?.selectedRange)
         clearFloatingLookupHosts()
         val layerIndex = floatingLookupSession.lastIndex.coerceAtLeast(0)
-        val layer = buildFloatingLookupLayer(term = "", popupSentence = null)
+        val layer = buildFloatingLookupLayer(term = "")
         val sizeSpec = computeFloatingLookupPopupSizeSpec(
             windowSize = IntSize(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels),
             anchor = layer.anchor,
@@ -2388,9 +2415,7 @@ companion object {
     private fun floatingHostSignature(layer: ReaderLookupLayer): Int {
         val base = layer.copy(
             anchor = null,
-            selectedRange = null,
-            autoPlayNonce = 0L,
-            autoPlayedKey = null
+            selectedRange = null
         ).hashCode()
         return base
     }
@@ -3403,7 +3428,6 @@ companion object {
 
     private fun buildFloatingLookupLayer(
         term: String,
-        popupSentence: String?,
         sourceTerm: String? = null,
         anchor: ReaderLookupAnchor? = null,
         avoidAnchor: ReaderLookupAnchor? = null,
@@ -3413,24 +3437,14 @@ companion object {
         hoshiResults: List<LookupResult> = emptyList(),
         hoshiDictionaryStyles: Map<String, String> = emptyMap()
     ): ReaderLookupLayer {
-        return buildLookupLayerFromGroupedResults(
-            groupedResults = emptyList(),
-            loading = false,
-            error = null,
+        return ReaderLookupLayer(
             sourceTerm = sourceTerm,
-            cue = null,
-            cueIndex = null,
-            anchorOffset = null,
             anchor = anchor,
             avoidAnchor = avoidAnchor,
             placeBelow = placeBelow,
             preferSidePlacement = preferSidePlacement,
             selectedRange = selectedRange,
             selectionText = term.takeIf { it.isNotBlank() },
-            popupSentence = popupSentence,
-            collapsedSections = emptyMap(),
-            autoPlayNonce = System.nanoTime(),
-            autoPlayedKey = null,
             hoshiResults = hoshiResults,
             hoshiDictionaryStyles = hoshiDictionaryStyles
         )
@@ -3485,12 +3499,10 @@ companion object {
         val callbacks = PopupWebViewCallbacks(
             onSwipeDismiss = { closeFloatingLookupLayer(layerIndex) },
             onTapOutside = {},
+            onOpenLink = { this@AudiobookFloatingOverlayService.openPopupExternalLink(it) },
             onImageTap = { src ->
                 Log.d(FLOATING_LOOKUP_TAP_LOG_TAG, "floating hoshi imageTap src=$src")
-                popupWebView?.evaluateJavascript(
-                    "if(window.showImagePreview){window.showImagePreview(${JSONObject.quote(src)}, '');}",
-                    null
-                )
+                this@AudiobookFloatingOverlayService.openHoshiImagePreview(src)
             },
             onMineEntryAsync = { content, onComplete ->
                 exportFloatingHoshiLookupEntryToAnkiAsync(content, layer, onComplete)
@@ -3631,7 +3643,6 @@ companion object {
         floatingLookupSession.push(
             buildFloatingLookupLayer(
                 term = hoshiResults.firstOrNull()?.matched?.takeIf { it.isNotBlank() } ?: selection.text,
-                popupSentence = selection.sentence,
                 sourceTerm = currentLayer?.selectionText,
                 anchor = ReaderLookupAnchor(listOf(anchorRect)),
                 placeBelow = shouldPlaceBelow,
@@ -3992,7 +4003,6 @@ companion object {
                             definition = glossary,
                             glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
                             dictionaryCss = layer.hoshiDictionaryStyles[dictionaryName],
-                            groupedDictionaries = emptyList(),
                             popupSelectionText = payload.optString("popupSelectionText").trim().takeIf { it.isNotBlank() }
                                 ?: layer.selectionText,
                             sentenceOverride = sentence,

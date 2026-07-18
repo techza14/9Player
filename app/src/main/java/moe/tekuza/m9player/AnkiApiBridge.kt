@@ -2000,6 +2000,7 @@ private fun transcodeAudioToM4a(
     }
 }
 
+@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 private class TransformerCompletion {
     private val done = AtomicBoolean(false)
     private val success = AtomicBoolean(false)

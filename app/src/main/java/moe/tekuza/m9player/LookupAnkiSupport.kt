@@ -15,14 +15,12 @@ internal fun addLookupDefinitionToAnkiShared(
     definition: String,
     glossaryFirstHtml: String? = null,
     dictionaryCss: String?,
-    groupedDictionaries: List<GroupedLookupDictionary> = emptyList(),
     popupSelectionText: String? = null,
     sentenceOverride: String? = null,
     lookupTermOverride: String? = null
 ): AnkiExportResult {
     logDebug("AnkiExportDebug") {
-        "sharedExport start termLength=${entry.term.length} dictionaryLength=${entry.dictionary.length} " +
-            "groupedCount=${groupedDictionaries.size} groupedNonBlank=${groupedDictionaries.count { it.dictionary.isNotBlank() }}"
+        "sharedExport start termLength=${entry.term.length} dictionaryLength=${entry.dictionary.length}"
     }
     val persistedConfig = withAnkiStep("load-config") {
         loadPersistedAnkiConfig(context)
@@ -53,15 +51,6 @@ internal fun addLookupDefinitionToAnkiShared(
         dictionaryName = entry.dictionary,
         dictionaryCss = dictionaryCss,
         glossaryFirstHtml = glossaryFirstHtml,
-        glossaryByDictionary = groupedDictionaries
-            .map { dictionaryGroup ->
-                MinedDictionaryGlossary(
-                    dictionaryName = dictionaryGroup.dictionary,
-                    definitions = dictionaryGroup.definitions,
-                    dictionaryCss = dictionaryGroup.css
-                )
-            }
-            .filter { it.dictionaryName.isNotBlank() && it.definitions.isNotEmpty() },
         pitch = entry.pitch,
         frequency = entry.frequency,
         cueStartMs = cueStartMs,

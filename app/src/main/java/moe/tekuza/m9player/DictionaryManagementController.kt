@@ -158,6 +158,9 @@ internal class DictionaryManagementController(
         onPersistDictionaryRefs: (List<PersistedDictionaryRef>) -> Unit,
         onLookupDataChanged: () -> Unit
     ) {
+        val loadedById = dictionaryRefs.mapIndexedNotNull { index, ref ->
+            loadedDictionaries.getOrNull(index)?.let { importedDictionaryId(ref) to it }
+        }.toMap()
         val nextRefs = moveImportedDictionaryRefs(
             dictionaryRefs = dictionaryRefs,
             dictionaryId = dictionaryId,
@@ -165,6 +168,7 @@ internal class DictionaryManagementController(
         )
         if (nextRefs === dictionaryRefs || nextRefs == dictionaryRefs) return
         dictionaryRefs = nextRefs
+        loadedDictionaries = nextRefs.mapNotNull { loadedById[importedDictionaryId(it)] }
         onPersistDictionaryRefs(dictionaryRefs)
         onLookupDataChanged()
     }

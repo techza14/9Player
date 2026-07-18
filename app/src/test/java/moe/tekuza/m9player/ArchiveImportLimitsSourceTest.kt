@@ -13,6 +13,8 @@ class ArchiveImportLimitsSourceTest {
         val zipHeader = File("src/main/cpp/hoshidicts/src/zip/zip.hpp").readText()
 
         assertTrue(zipHeader.contains("kMaxZipEntries = 20000"))
+        assertTrue(zipHeader.contains("kMaxBankBytes = 64u * 1024u * 1024u"))
+        assertTrue(zipHeader.contains("kMaxZipPathBytes = 512"))
         assertTrue(zipHeader.contains("kMaxMediaEntryBytes = 32u * 1024u * 1024u"))
         assertTrue(zipHeader.contains("kMaxTotalMediaBytes = 256ull * 1024ull * 1024ull"))
         assertTrue(zipSource.contains("is_safe_zip_entry_name"))
@@ -30,13 +32,13 @@ class ArchiveImportLimitsSourceTest {
         val jni = File("src/main/cpp/hoshidicts_jni.cpp").readText()
 
         assertTrue(store.contains("HOSHI_IMPORT_ARCHIVE_MAX_BYTES"))
-        assertTrue(store.contains("HOSHI_TYPE_SCAN_MAX_ENTRIES"))
-        assertTrue(store.contains("HOSHI_TYPE_SCAN_MAX_ENTRY_BYTES"))
-        assertTrue(store.contains("HOSHI_META_TYPE_SCAN_MAX_BYTES"))
         assertTrue(media.contains("DICTIONARY_MEDIA_RESPONSE_MAX_BYTES"))
         assertTrue(media.contains("readDictionaryMediaBytesLimited"))
         assertFalse(media.contains("input.readBytes()"))
         assertTrue(jni.contains("kMaxJavaMediaBytes"))
         assertTrue(jni.contains("entry.size > kMaxJavaMediaBytes"))
+        assertTrue(jni.contains("obj->query.get_media_file(dict_name_str, media_path_str)"))
+        assertTrue(jni.indexOf("obj->query.get_media_file(dict_name_str, media_path_str)") < jni.indexOf("get_imported_media_file(obj, root, media_path_str)"))
+        assertTrue(jni.contains("read_media_index(root_path)"))
     }
 }

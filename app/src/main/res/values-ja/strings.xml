@@ -18,6 +18,7 @@
     <string name="common_play">再生</string>
     <string name="common_pause">一時停止</string>
     <string name="common_lookup">辞書</string>
+    <string name="common_temporary_lookup">ジャンプ</string>
     <string name="common_loading">読み込み中...</string>
     <string name="common_not_selected">未選択</string>
     <string name="common_unknown">不明</string>
@@ -126,9 +127,6 @@
     <string name="home_cover_aspect_square">表紙比率：正方形</string>
     <string name="home_cover_adjust_title">表紙を微調整</string>
     <string name="home_cover_adjust_reset">リセット</string>
-    <string name="home_cover_adjust_zoom">拡大 %1$sx</string>
-    <string name="home_cover_adjust_anchor">アンカー %1$d, %2$d</string>
-    <string name="home_cover_adjust_magnifier">拡大プレビュー</string>
     <string name="home_cover_adjust_scale">拡大率</string>
     <string name="home_cover_adjust_rounded">角丸</string>
     <string name="home_cover_adjust_mode">モード</string>
@@ -140,7 +138,6 @@
     <string name="home_cover_adjust_pixel_nudge">ピクセル微調整</string>
     <string name="home_rename_book">名前を変更</string>
     <string name="home_book_name">名前</string>
-    <string name="floating_lookup_view_duplicate">重複を表示</string>
     <string name="home_no_books">まだ書籍がありません。</string>
     <string name="home_no_books_hint">+書籍 を押して、先にオーディオブックフォルダを選び、その後 audio/m4b を選択してください（SRT は任意）。</string>
     <string name="home_subtitle_attached">字幕付き</string>
@@ -157,6 +154,7 @@
     <string name="dictionary_hide_list">辞書一覧を隠す</string>
     <string name="dictionary_show_list">辞書一覧を見る</string>
     <string name="dictionary_empty">インポート済みの辞書はありません。</string>
+    <string name="dictionary_legacy_media_format_hint">旧形式です。再インポートを推奨します</string>
     <string name="dictionary_default_name">辞書 %1$d</string>
     <string name="dictionary_query_label">検索</string>
     <string name="dictionary_querying">辞書を検索中...</string>

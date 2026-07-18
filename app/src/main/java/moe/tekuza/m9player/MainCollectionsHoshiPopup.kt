@@ -30,6 +30,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.IntOffset
@@ -41,6 +42,7 @@ import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import de.manhhao.hoshi.LookupResult
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbacks
+import moe.tekuza.m9player.hoshi.features.dictionary.openPopupExternalLink
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 
 @Composable
@@ -63,6 +65,7 @@ internal fun MainCollectionsHoshiPopup(
     onViewDuplicate: (List<Long>) -> Boolean,
     onPlayWordAudio: (String?, String?) -> Unit,
 ) {
+    val context = LocalContext.current
     val rootDensity = LocalDensity.current
     val hasPopupResults = html.isNotBlank()
     val popupFooterHeight = 44.dp
@@ -234,6 +237,7 @@ internal fun MainCollectionsHoshiPopup(
                             callbacks = PopupWebViewCallbacks(
                                 onTapOutside = onTapOutside,
                                 onSwipeDismiss = onTapOutside,
+                                onOpenLink = { context.openPopupExternalLink(it) },
                                 onMineEntry = onMineEntry,
                                 onMineEntryAsync = onMineEntryAsync,
                                 onDuplicateCheck = onDuplicateCheck,

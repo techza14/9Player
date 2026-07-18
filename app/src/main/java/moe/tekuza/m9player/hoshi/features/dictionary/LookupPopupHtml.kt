@@ -264,6 +264,7 @@ internal object LookupPopupHtml {
                     window.embedMedia = false;
                     window.compactGlossariesAnki = false;
                     window.customCSS = ${JSONObject.quote(normalizedSettings.customCSS)};
+                    window.dictionaryMediaRequestEndpoint = "https://hoshi.local/image";
                     window.swipeThreshold = $effectiveSwipeThreshold;
                     window.dictionaryStyles = $styles;
                     window.lookupEntries = $entries;

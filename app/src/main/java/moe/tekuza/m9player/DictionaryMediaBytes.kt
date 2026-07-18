@@ -3,8 +3,6 @@ package moe.tekuza.m9player
 import android.content.Context
 import android.net.Uri
 import android.util.LruCache
-import android.webkit.WebResourceResponse
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.util.Locale
@@ -156,22 +154,4 @@ private fun mapDictionaryMediaRequestUri(requestUri: Uri): Uri? {
 
 internal fun clearDictionaryMediaPayloadCache() {
     DictionaryMediaByteCache.clearAsync()
-}
-
-internal fun buildDictionaryWebResourceResponse(
-    payload: DictionaryMediaPayload
-): WebResourceResponse {
-    logDebug("BookLookupTap") { "media response mime=${payload.mimeType} bytes=${payload.bytes.size}" }
-    val encoding = if (payload.mimeType.startsWith("text/", ignoreCase = true)) "utf-8" else null
-    val headers = mutableMapOf(
-        "Cache-Control" to "public, max-age=31536000, immutable"
-    )
-    return WebResourceResponse(
-        payload.mimeType,
-        encoding,
-        200,
-        "OK",
-        headers,
-        ByteArrayInputStream(payload.bytes)
-    )
 }

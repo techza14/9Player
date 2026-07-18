@@ -4,61 +4,45 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
+import java.io.File
+import java.nio.file.Files
 
 class DictionarySqlStoreTest {
     @Test
-    fun detectHoshiDictionaryTypeRecognizesFrequencyTermMetaBank() {
-        val zip = zipBytes(
-            "term_meta_bank_1.json" to """[["日本","freq",123]]"""
+    fun nativeImportCountsClassifyDictionaryType() {
+        fun result(term: Long = 0, frequency: Long = 0, pitch: Long = 0) = HoshiImportResult(
+            success = true,
+            title = "test",
+            termCount = term,
+            metaCount = frequency + pitch,
+            frequencyCount = frequency,
+            pitchCount = pitch,
+            mediaCount = 0,
+            dictPath = "",
+            errors = emptyList()
         )
 
-        assertEquals(HoshiDictionaryType.Frequency, detectHoshiDictionaryType(ByteArrayInputStream(zip)))
+        assertEquals(HoshiDictionaryType.Term, classifyHoshiDictionaryType(result(term = 1, frequency = 1)))
+        assertEquals(HoshiDictionaryType.Frequency, classifyHoshiDictionaryType(result(frequency = 1, pitch = 1)))
+        assertEquals(HoshiDictionaryType.Pitch, classifyHoshiDictionaryType(result(pitch = 1)))
     }
 
     @Test
-    fun detectHoshiDictionaryTypeRecognizesPitchTermMetaBank() {
-        val zip = zipBytes(
-            "term_meta_bank_1.json" to """[["日本","pitch",{"reading":"にほん"}]]"""
-        )
+    fun dictionaryDirectoryReplacementPublishesStagedOutput() {
+        val root = Files.createTempDirectory("dictionary-replace-test").toFile()
+        try {
+            val staged = root.resolve("staged").also(File::mkdirs)
+            val target = root.resolve("target").also(File::mkdirs)
+            staged.resolve("new.txt").writeText("new")
+            target.resolve("old.txt").writeText("old")
 
-        assertEquals(HoshiDictionaryType.Pitch, detectHoshiDictionaryType(ByteArrayInputStream(zip)))
-    }
+            replaceDictionaryDirectory(staged, target)
 
-    @Test
-    fun detectHoshiDictionaryTypePrefersFrequencyWhenMetaBankContainsPitchThenFrequency() {
-        val zip = zipBytes(
-            "term_meta_bank_1.json" to """
-                [
-                  ["日本","pitch",{"reading":"にほん"}],
-                  ["日本","freq",123]
-                ]
-            """.trimIndent()
-        )
-
-        assertEquals(HoshiDictionaryType.Frequency, detectHoshiDictionaryType(ByteArrayInputStream(zip)))
-    }
-
-    @Test
-    fun detectHoshiDictionaryTypeKeepsTermBankAsTermDictionary() {
-        val zip = zipBytes(
-            "term_bank_1.json" to """[["日本","にほん","tag","","Japan",1,[]]]"""
-        )
-
-        assertEquals(HoshiDictionaryType.Term, detectHoshiDictionaryType(ByteArrayInputStream(zip)))
-    }
-
-    @Test
-    fun detectHoshiDictionaryTypeRejectsUnsafeZipEntryPath() {
-        val zip = zipBytes(
-            "../term_bank_1.json" to """[["日本","にほん","tag","","Japan",1,[]]]"""
-        )
-
-        assertIllegalArgument {
-            detectHoshiDictionaryType(ByteArrayInputStream(zip))
+            assertTrue(target.resolve("new.txt").isFile)
+            assertFalse(target.resolve("old.txt").exists())
+            assertFalse(staged.exists())
+        } finally {
+            root.deleteRecursively()
         }
     }
 
@@ -86,23 +70,4 @@ class DictionarySqlStoreTest {
         assertFalse(image, image.contains("<img", ignoreCase = true))
     }
 
-    private fun zipBytes(vararg entries: Pair<String, String>): ByteArray {
-        val output = ByteArrayOutputStream()
-        ZipOutputStream(output).use { zip ->
-            entries.forEach { (name, content) ->
-                zip.putNextEntry(ZipEntry(name))
-                zip.write(content.toByteArray(Charsets.UTF_8))
-                zip.closeEntry()
-            }
-        }
-        return output.toByteArray()
-    }
-
-    private fun assertIllegalArgument(block: () -> Unit) {
-        try {
-            block()
-            org.junit.Assert.fail("Expected IllegalArgumentException")
-        } catch (_: IllegalArgumentException) {
-        }
-    }
 }

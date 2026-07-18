@@ -176,6 +176,7 @@ import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupOptions
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupStackView
 import moe.tekuza.m9player.hoshi.features.dictionary.PopupWebViewCallbacks
 import moe.tekuza.m9player.hoshi.features.dictionary.loadDictionarySettings
+import moe.tekuza.m9player.hoshi.features.dictionary.openPopupExternalLink
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
 import de.manhhao.hoshi.LookupResult
@@ -316,21 +317,6 @@ internal enum class HomeCoverAspect {
 internal enum class HomeCoverCropFocus {
     CENTER,
     START
-}
-
-private sealed interface MainLookupRequest {
-    data class Cue(
-        val cue: SubtitleCue,
-        val offset: Int,
-        val sourceBookTitle: String? = null,
-        val anchor: ReaderLookupAnchor? = null,
-        val placeBelow: Boolean = true
-    ) : MainLookupRequest
-    data class Candidates(
-        val rawCandidates: List<String>,
-        val anchor: ReaderLookupAnchor? = null,
-        val placeBelow: Boolean = true
-    ) : MainLookupRequest
 }
 
 private val miningSectionSaver = Saver<MiningSection, String>(
@@ -2396,65 +2382,6 @@ private fun ReaderSyncScreen() {
         return true
     }
 
-    fun startMainHoshiLookup(request: MainLookupRequest): Boolean {
-        Log.d("MainHoshiResultPopup", "startMainHoshiLookup request=${request::class.simpleName}")
-        return when (request) {
-            is MainLookupRequest.Cue -> {
-                val cue = request.cue
-                val selection = findMainLookupSelection(cue.text, request.offset) ?: return true
-                val selectedToken = selection.text.trim().takeIf { it.isNotBlank() } ?: return true
-                val readerSelection = request.anchor?.boundingRectCoreOrNull()?.let { anchorRect ->
-                    createHoshiReaderSelectionFromCueTap(
-                        cueText = cue.text,
-                        cueIndex = 0,
-                        cues = listOf(cue.toReaderSubtitleCue()),
-                        offset = request.offset,
-                        anchorRect = anchorRect,
-                        density = rootDensity.density
-                    )
-                } ?: mainHoshiFallbackSelection(selectedToken, request.anchor).copy(
-                    sentence = cue.text,
-                    sentenceOffset = selection.range.first
-                )
-                val exportAudioUri = if (request.sourceBookTitle.isNullOrBlank()) {
-                    audioUri
-                } else {
-                    readerBooks.firstOrNull { it.title == request.sourceBookTitle }?.audioUri ?: audioUri
-                }
-                showMainHoshiLookup(
-                    selection = readerSelection,
-                    cue = cue,
-                    selectedRange = selection.range,
-                    audioForExport = exportAudioUri,
-                    titleForExport = selectedToken,
-                    showRangeSelection = false
-                )
-                true
-            }
-            is MainLookupRequest.Candidates -> {
-                val query = request.rawCandidates.firstOrNull()?.trim().orEmpty()
-                if (query.isBlank()) return true
-                showMainHoshiLookup(
-                    selection = mainHoshiFallbackSelection(query, request.anchor),
-                    cue = null,
-                    selectedRange = null,
-                    audioForExport = audioUri,
-                    titleForExport = query,
-                    showRangeSelection = false
-                )
-                true
-            }
-        }
-    }
-
-    fun startMainLookup(request: MainLookupRequest) {
-        if (effectiveLookupDictionaries.isEmpty()) {
-            exportStatus = context.getString(R.string.bookreader_lookup_no_dict)
-            return
-        }
-        startMainHoshiLookup(request)
-    }
-
     fun triggerMainHoshiQueryLookup(rawQuery: String) {
         val query = rawQuery.trim()
         lookupQuery = query
@@ -2599,7 +2526,6 @@ private fun ReaderSyncScreen() {
                             definition = glossary,
                             glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
                             dictionaryCss = dictionaryCssByName[primaryDictionaryName],
-                            groupedDictionaries = emptyList(),
                             popupSelectionText = popupSelectionText,
                             sentenceOverride = cue.text,
                             lookupTermOverride = expression
@@ -4106,6 +4032,7 @@ private fun ReaderSyncScreen() {
                     if (dictionaryUiConfig.showRichHomeDictionary) {
                         DictionaryManagementCard(
                             context = context,
+                            dictionaryScrollState = dictionaryManagerScrollState,
                             dictionaryCount = dictionaryCount,
                             containerColor = hoshiPanelBackgroundColor(),
                             itemContainerColor = hoshiCardBackgroundColor(),
@@ -4205,6 +4132,7 @@ private fun ReaderSyncScreen() {
                                     callbacks = PopupWebViewCallbacks(
                                         onTapOutside = { dictionaryFirstLayerClearSelectionSignal += 1 },
                                         onSwipeDismiss = { dictionaryFirstLayerClearSelectionSignal += 1 },
+                                        onOpenLink = { context.openPopupExternalLink(it) },
                                         onMineEntryAsync = { content, onComplete ->
                                             exportMainHoshiLookupEntryToAnkiAsync(content, onComplete)
                                         },
@@ -6406,16 +6334,6 @@ internal fun MainLookupClickableSentence(
             textLayoutResult = it
             onTextLayout(it)
         }
-    )
-}
-
-private fun findMainLookupSelection(
-    text: String,
-    offset: Int
-): LookupScanSelection? {
-    return selectLookupScanText(
-        text = text,
-        charOffset = offset
     )
 }
 

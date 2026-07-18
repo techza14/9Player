@@ -48,18 +48,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.PopupMenu
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
-import coil3.request.ImageRequest
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
@@ -71,9 +67,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
-import me.saket.telephoto.zoomable.rememberZoomableState
-import me.saket.telephoto.zoomable.zoomable
 import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.util.Date
@@ -1294,7 +1287,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun applyLayoutInDisplayCutoutMode() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
         val targetMode = if (readBodyToLh) {
             WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         } else {
@@ -4033,19 +4025,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 return@launch
             }
             focusImage.setContent {
-                val zoomableState = rememberZoomableState()
-                val request = remember(imageBytes) {
-                    ImageRequest.Builder(this@LegadoReaderActivity)
-                        .data(imageBytes)
-                        .build()
-                }
-                ZoomableAsyncImage(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(ComposeColor.Black)
-                        .zoomable(state = zoomableState),
-                    model = request,
-                    contentDescription = null
+                ZoomableImagePreview(
+                    imageBytes = imageBytes,
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
         }
@@ -4192,19 +4174,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                     return@launch
                 }
                 focusImage.setContent {
-                    val zoomableState = rememberZoomableState()
-                    val request = remember(imageBytes) {
-                        ImageRequest.Builder(this@LegadoReaderActivity)
-                            .data(imageBytes)
-                            .build()
-                    }
-                    ZoomableAsyncImage(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(ComposeColor.Black)
-                            .zoomable(state = zoomableState),
-                        model = request,
-                        contentDescription = null
+                    ZoomableImagePreview(
+                        imageBytes = imageBytes,
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
             }
@@ -6712,28 +6684,6 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         )
     }
 
-    private fun saveSharedAudioPlaybackSnapshot(
-        positionMs: Long,
-        durationMs: Long,
-        allowZeroPositionWrite: Boolean = false
-    ) {
-        val currentAudioUri = audioUri ?: return
-        saveReaderAudioPlaybackProgress(
-            context = this,
-            title = currentReaderTitle(),
-            audioUri = currentAudioUri,
-            srtUri = srtUri,
-            positionMs = positionMs,
-            durationMs = durationMs.coerceAtLeast(0L),
-            allowZeroPositionWrite = allowZeroPositionWrite
-        )
-        Log.d(
-            LEGADO_AUDIO_PROGRESS_LOG_TAG,
-            "saved shared audio progress positionMs=$positionMs durationMs=${durationMs.coerceAtLeast(0L)} " +
-                "allowZero=$allowZeroPositionWrite audioUri=${currentAudioUri.toString().take(80)}"
-        )
-    }
-
     private fun currentReaderBottomPaddingPx(): Int {
         return dp(readerPaddingBottomDp) + playbackBarEffectiveHeightPx()
     }
@@ -8145,9 +8095,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         private const val AUDIO_SEEK_STALE_POSITION_TOLERANCE_MS = 30_000L
         private const val AUDIO_TIMER_MAX_MINUTES = 180
         private const val M4B_CHAPTER_TEXT_SYNC_LOOKAHEAD_MS = 8_000L
-        private const val MENU_BG = 0xFFF7F0E2.toInt()
         private const val MENU_TEXT = 0xFF2C241B.toInt()
-        private const val SUBTLE_TEXT = 0xFF7D6E5C.toInt()
     }
 }
 

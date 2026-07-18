@@ -10,6 +10,4 @@ internal interface BaseColumn {
     var sourceEnd: Int
 
     fun draw(view: ContentTextView, canvas: Canvas, line: TextLine, selected: Boolean)
-
-    fun isTouch(x: Float): Boolean = x >= start && x <= end
 }

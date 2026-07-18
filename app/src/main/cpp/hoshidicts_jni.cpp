@@ -422,6 +422,8 @@ std::string build_import_json(const ImportResult& result, const std::string& out
   append_json_string(out, result.title);
   out << ",\"termCount\":" << result.term_count;
   out << ",\"metaCount\":" << result.meta_count;
+  out << ",\"frequencyCount\":" << result.freq_count;
+  out << ",\"pitchCount\":" << result.pitch_count;
   out << ",\"mediaCount\":" << result.media_count;
 
   std::string safe_title;
@@ -716,6 +718,20 @@ Java_de_manhhao_hoshi_HoshiDicts_getMediaFile(JNIEnv* env,
   const std::string media_path_str = jstring_to_string(env, media_path);
   if (media_path_str.empty()) return nullptr;
   std::lock_guard<std::mutex> lock(obj->mutex);
+
+  const std::vector<char> current_data = obj->query.get_media_file(dict_name_str, media_path_str);
+  if (!current_data.empty()) {
+    if (current_data.size() > kMaxJavaMediaBytes ||
+        current_data.size() > static_cast<size_t>(std::numeric_limits<jsize>::max())) {
+      return nullptr;
+    }
+    jbyteArray result = env->NewByteArray(static_cast<jsize>(current_data.size()));
+    if (result == nullptr) return nullptr;
+    env->SetByteArrayRegion(result, 0, static_cast<jsize>(current_data.size()),
+                            reinterpret_cast<const jbyte*>(current_data.data()));
+    return result;
+  }
+
   std::vector<std::string> roots;
   roots.reserve(obj->dictionary_paths.size());
   if (!dict_name_str.empty()) {

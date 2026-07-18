@@ -53,7 +53,7 @@ internal fun PopupWebViewCallbacks.withAdditionalImageTap(
     onOpenLink = onOpenLink,
     onImageTap = { src ->
         onImageTap(src)
-        if (isHoshiPreviewBitmapCandidate(src)) {
+        if (isHoshiPreviewImageCandidate(src)) {
             handler(src)
         }
     },
@@ -207,11 +207,10 @@ internal class DictionaryImageRequestHandler(
     },
 ) {
     fun handleImageRequest(uri: Uri): WebResourceResponse? {
-        val isIosImageScheme = uri.scheme == "image"
-        val isAndroidImageEndpoint = uri.scheme == "https" &&
+        val isDictionaryImageEndpoint = uri.scheme == "https" &&
             uri.host == "hoshi.local" &&
             uri.path == "/image"
-        if (!isIosImageScheme && !isAndroidImageEndpoint) return null
+        if (!isDictionaryImageEndpoint) return null
         logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) { "image request uri=$uri" }
         val dictionary = uri.getQueryParameter("dictionary").orEmpty()
         val mediaPath = uri.getQueryParameter("path").orEmpty()

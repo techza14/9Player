@@ -8,16 +8,6 @@ internal fun ReaderLookupSession.closeLayerOrClear(layerIndex: Int): CloseLookup
     }
 }
 
-internal fun ReaderLookupSession.toggleCollapsedSection(layerIndex: Int, sectionKey: String, currentlyExpanded: Boolean) {
-    replaceAt(layerIndex) { current ->
-        current.copy(
-            collapsedSections = current.collapsedSections.toMutableMap().apply {
-                put(sectionKey, currentlyExpanded)
-            }
-        )
-    }
-}
-
 internal sealed interface CloseLookupAction {
     data object ClearAll : CloseLookupAction
     data class ShowLayer(val index: Int) : CloseLookupAction

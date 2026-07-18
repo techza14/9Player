@@ -1925,11 +1925,6 @@ private fun BookReaderScreen(
         }
         jumpToCue(targetIndex.coerceIn(0, lastIndex), showStatus = false)
     }
-    fun jumpToAdjacentCueByUi(step: Int) {
-        val effectiveStep = if (uiTestSwapPrevNext) -step else step
-        jumpToAdjacentCue(effectiveStep)
-    }
-
     fun setSleepTimer(minutes: Int) {
         if (!uiTestMode) {
             player.volume = 1f
@@ -2382,7 +2377,6 @@ private fun BookReaderScreen(
                             definition = glossary,
                             glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
                             dictionaryCss = dictionaryCssByName[primaryDictionaryName],
-                            groupedDictionaries = emptyList(),
                             popupSelectionText = popupSelectionText,
                             sentenceOverride = sentenceSelection.text,
                             lookupTermOverride = expression

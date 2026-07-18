@@ -7,9 +7,3 @@ internal inline fun logDebug(tag: String, message: () -> String) {
         Log.d(tag, message())
     }
 }
-
-internal inline fun logVerbose(tag: String, message: () -> String) {
-    if (Log.isLoggable(tag, Log.VERBOSE)) {
-        Log.v(tag, message())
-    }
-}

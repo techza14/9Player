@@ -79,6 +79,11 @@
             android:label="@string/settings_overlay_preview_title"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Tset" />
+        <activity
+            android:name=".hoshi.features.dictionary.HoshiImagePreviewActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Tset" />
         <service
             android:name=".AudiobookFloatingOverlayService"
             android:enabled="true"

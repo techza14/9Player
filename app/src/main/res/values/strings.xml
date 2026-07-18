@@ -130,9 +130,6 @@
     <string name="home_cover_aspect_square">封面比例：正方形</string>
     <string name="home_cover_adjust_title">精调封面</string>
     <string name="home_cover_adjust_reset">重置</string>
-    <string name="home_cover_adjust_zoom">缩放 %1$sx</string>
-    <string name="home_cover_adjust_anchor">锚点 %1$d, %2$d</string>
-    <string name="home_cover_adjust_magnifier">放大预览</string>
     <string name="home_cover_adjust_scale">缩放</string>
     <string name="home_cover_adjust_rounded">圆角</string>
     <string name="home_cover_adjust_mode">模式</string>
@@ -150,7 +147,6 @@
     <string name="home_opened">已打开</string>
     <string name="home_rename_book">修改名称</string>
     <string name="home_book_name">名称</string>
-    <string name="floating_lookup_view_duplicate">查看重复</string>
     <string name="dictionary_title">查询</string>
     <string name="dictionary_home_rich_mode_label">查询页显示辞典</string>
     <string name="dictionary_summary">辞典：%1$d</string>
@@ -162,6 +158,7 @@
     <string name="dictionary_hide_list">隐藏辞典列表</string>
     <string name="dictionary_show_list">查看辞典列表</string>
     <string name="dictionary_empty">暂无已导入辞典。</string>
+    <string name="dictionary_legacy_media_format_hint">旧格式，建议重新导入</string>
     <string name="dictionary_default_name">辞典 %1$d</string>
     <string name="dictionary_query_label">查词</string>
     <string name="dictionary_querying">正在查询辞典...</string>

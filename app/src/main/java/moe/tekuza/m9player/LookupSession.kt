@@ -24,11 +24,6 @@ internal class ReaderLookupSession {
         _layers += layer
     }
 
-    fun replaceAt(index: Int, transform: (ReaderLookupLayer) -> ReaderLookupLayer) {
-        if (index !in _layers.indices) return
-        _layers[index] = transform(_layers[index])
-    }
-
     fun truncateTo(index: Int) {
         if (index !in _layers.indices) return
         while (_layers.size > index + 1) {

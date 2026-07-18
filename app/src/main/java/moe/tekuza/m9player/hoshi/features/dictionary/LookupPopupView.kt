@@ -1,12 +1,10 @@
 package moe.tekuza.m9player.hoshi.features.dictionary
 
 import android.annotation.SuppressLint
-import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
 import android.webkit.WebView
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,11 +37,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -51,8 +46,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
@@ -62,18 +55,18 @@ import kotlinx.coroutines.withContext
 import moe.tekuza.m9player.hoshi.webview.applyHoshiWebViewSecurityDefaults
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.AnkiDuplicateCheckResult
+import moe.tekuza.m9player.DICTIONARY_MEDIA_RESPONSE_MAX_BYTES
 import moe.tekuza.m9player.HoshiCardBackground
 import moe.tekuza.m9player.HoshiDarkCardBackground
 import moe.tekuza.m9player.HoshiDarkPopupBorder
 import moe.tekuza.m9player.R
-import moe.tekuza.m9player.decodeSampledBitmap
 import moe.tekuza.m9player.destroyWebViewSafely
 import moe.tekuza.m9player.logDebug
+import moe.tekuza.m9player.ZoomableImagePreview
 import moe.tekuza.m9player.hoshi.dictionary.HoshiDictionaryQuerySession
 
 private val LookupPopupActionBarHeight = 44.dp
 private const val HOSHI_LOOKUP_POPUP_LOG_TAG = "HoshiLookupPopup"
-private const val HOSHI_PREVIEW_MAX_SIDE_PX = 2048
 
 @Composable
 internal fun LookupPopupView(
@@ -93,7 +86,6 @@ internal fun LookupPopupView(
     onDuplicateCheckAsync: ((String, (AnkiDuplicateCheckResult) -> Unit) -> Unit)? = null,
     onViewDuplicate: ((List<Long>) -> Boolean)? = null,
     onPlayWordAudio: ((String, String?, String?) -> Unit)? = null,
-    onImageTap: ((String) -> Unit)? = null,
     onCloseAll: (() -> Unit)? = null,
     showActionBar: Boolean = false,
     showCloseAll: Boolean = false,
@@ -156,7 +148,6 @@ internal fun LookupPopupView(
     var requestedForwardSignal by remember { mutableStateOf(forwardSignal) }
     var historyBackCount by remember(contentResetKey) { mutableStateOf(0) }
     var historyForwardCount by remember(contentResetKey) { mutableStateOf(0) }
-    var previewImageUrl by remember { mutableStateOf<String?>(null) }
     val frame = remember(
         state.selection.rect,
         state.avoidRects,
@@ -259,9 +250,8 @@ internal fun LookupPopupView(
                             onRangeSelection = onRangeSelection ?: {},
                             onPlayWordAudio = onPlayWordAudio ?: { _, _, _ -> },
                             onImageTap = { src ->
-                                onImageTap?.invoke(src)
-                                if (isHoshiPreviewBitmapCandidate(src)) {
-                                    previewImageUrl = src
+                                if (isHoshiPreviewImageCandidate(src)) {
+                                    context.openHoshiImagePreview(src)
                                 }
                             },
                             onMineEntry = onMineEntry ?: { false },
@@ -269,14 +259,7 @@ internal fun LookupPopupView(
                             onDuplicateCheck = onDuplicateCheck ?: { AnkiDuplicateCheckResult() },
                             onDuplicateCheckAsync = onDuplicateCheckAsync,
                             onViewDuplicate = onViewDuplicate ?: { false },
-                            onOpenLink = { rawUrl ->
-                                val uri = runCatching { Uri.parse(rawUrl.trim()) }.getOrNull() ?: return@PopupWebViewCallbacks
-                                val scheme = uri.scheme?.lowercase().orEmpty()
-                                if (scheme !in setOf("http", "https", "mailto", "tel")) return@PopupWebViewCallbacks
-                                val popupContext = context.applicationContext
-                                val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                runCatching { popupContext.startActivity(intent) }
-                            },
+                            onOpenLink = { context.openPopupExternalLink(it) },
                             onTextSelected = onTextSelected,
                             onLookupRedirect = onLookupRedirect,
                             isLookupPopupActive = isLookupPopupActive,
@@ -358,27 +341,6 @@ internal fun LookupPopupView(
     } else {
         Box(modifier = Modifier.fillMaxSize()) {
             PopupCard()
-        }
-    }
-    previewImageUrl?.takeIf { it.isNotBlank() }?.let { imageUrl ->
-        Dialog(
-            onDismissRequest = { previewImageUrl = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-                    .clickable { previewImageUrl = null },
-                contentAlignment = Alignment.Center,
-            ) {
-                HoshiImagePreviewWebView(
-                    imageUrl = imageUrl,
-                    onTap = { previewImageUrl = null },
-                    modifier = Modifier
-                        .fillMaxSize(),
-                )
-            }
         }
     }
 }
@@ -566,46 +528,36 @@ private fun LookupPopupWebView(
     )
 }
 
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
-internal fun HoshiImagePreviewWebView(
+internal fun HoshiImagePreview(
     imageUrl: String,
-    onTap: () -> Unit = {},
+    onUnavailable: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val previewState = produceState<Pair<Boolean, ImageBitmap?>>(initialValue = false to null, key1 = imageUrl) {
+    val previewState = produceState<Pair<Boolean, ByteArray?>>(initialValue = false to null, key1 = imageUrl) {
         value = true to withContext(Dispatchers.IO) {
-            decodeHoshiPreviewImageBitmap(imageUrl)
+            loadHoshiPreviewImageBytes(imageUrl)
         }
     }.value
-    val previewBitmap = previewState.second
-    if (previewState.first && previewBitmap == null) {
-        LaunchedEffect(imageUrl) { onTap() }
+    val imageBytes = previewState.second
+    if (previewState.first && imageBytes == null) {
+        LaunchedEffect(imageUrl) { onUnavailable() }
     }
-    if (previewBitmap != null) {
-        Image(
-            bitmap = previewBitmap,
-            contentDescription = null,
-            modifier = modifier
-                .background(Color.Black)
-                .padding(12.dp)
-                .clickable { onTap() },
-            contentScale = ContentScale.Fit,
+    if (imageBytes != null) {
+        ZoomableImagePreview(
+            imageBytes = imageBytes,
+            modifier = modifier,
         )
     } else {
-        Box(modifier = modifier.clickable { onTap() })
+        Box(modifier = modifier)
     }
 }
 
-private fun decodeHoshiPreviewImageBitmap(rawUrl: String): ImageBitmap? {
+private fun loadHoshiPreviewImageBytes(rawUrl: String): ByteArray? {
     val uri = runCatching { Uri.parse(rawUrl) }.getOrNull() ?: return null
     val dictionary: String
     val path: String
     when {
-        uri.scheme == "image" -> {
-            dictionary = uri.getQueryParameter("dictionary").orEmpty()
-            path = uri.getQueryParameter("path").orEmpty()
-        }
         uri.scheme == "https" && uri.host == "hoshi.local" && uri.path == "/image" -> {
             dictionary = uri.getQueryParameter("dictionary").orEmpty()
             path = uri.getQueryParameter("path").orEmpty()
@@ -616,23 +568,18 @@ private fun decodeHoshiPreviewImageBitmap(rawUrl: String): ImageBitmap? {
     return runCatching {
         val data = HoshiDictionaryQuerySession.getMediaFile(dictionary, path)
             ?.takeIf { it.isNotEmpty() }
+            ?.takeIf { it.size.toLong() <= DICTIONARY_MEDIA_RESPONSE_MAX_BYTES }
             ?: return null
         logDebug(HOSHI_LOOKUP_POPUP_LOG_TAG) {
-            "imagePreview bitmap hit dictionary=$dictionary path=$path bytes=${data.size}"
+            "imagePreview bytes hit dictionary=$dictionary path=$path bytes=${data.size}"
         }
-        decodeSampledBitmap(
-            bytes = data,
-            targetWidthPx = HOSHI_PREVIEW_MAX_SIDE_PX,
-            targetHeightPx = HOSHI_PREVIEW_MAX_SIDE_PX,
-        )
-            ?.asImageBitmap()
+        data
     }.getOrNull()
 }
 
-internal fun isHoshiPreviewBitmapCandidate(rawUrl: String): Boolean {
+internal fun isHoshiPreviewImageCandidate(rawUrl: String): Boolean {
     val uri = runCatching { Uri.parse(rawUrl) }.getOrNull() ?: return false
     val path = when {
-        uri.scheme == "image" -> uri.getQueryParameter("path").orEmpty()
         uri.scheme == "https" && uri.host == "hoshi.local" && uri.path == "/image" -> {
             uri.getQueryParameter("path").orEmpty()
         }

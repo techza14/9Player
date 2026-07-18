@@ -104,36 +104,13 @@ function showDescription(element) {
         return;
     }
     const overlay = document.querySelector('.overlay');
-    overlay.classList.remove('overlay-image-preview');
     document.querySelector('.overlay-content').textContent = description;
     overlay.style.display = 'block';
-}
-
-function showImagePreview(src, alt) {
-    const overlay = document.querySelector('.overlay');
-    const content = document.querySelector('.overlay-content');
-    if (!overlay || !content || !src) {
-        return;
-    }
-    overlay.classList.add('overlay-image-preview');
-    content.innerHTML = '';
-    const image = document.createElement('img');
-    image.classList.add('overlay-preview-image');
-    image.alt = alt || '';
-    image.src = src;
-    content.appendChild(image);
-    overlay.style.display = 'flex';
-    overlay.onclick = function(event) {
-        if (event.target === overlay) {
-            closeOverlay();
-        }
-    };
 }
 
 function closeOverlay() {
     const overlay = document.querySelector('.overlay');
     if (overlay) {
-        overlay.classList.remove('overlay-image-preview');
         overlay.onclick = null;
     }
     const content = document.querySelector('.overlay-content');
@@ -467,10 +444,8 @@ function getMediaFilename(dictionary, path) {
 }
 
 function getDictionaryMediaUrl(dictionary, path) {
-    if (window.dictionaryMediaRequestEndpoint) {
-        return `${window.dictionaryMediaRequestEndpoint}?dictionary=${encodeURIComponent(dictionary)}&path=${encodeURIComponent(path)}`;
-    }
-    return `image://?dictionary=${encodeURIComponent(dictionary)}&path=${encodeURIComponent(path)}`;
+    const endpoint = window.dictionaryMediaRequestEndpoint || 'https://hoshi.local/image';
+    return `${endpoint}?dictionary=${encodeURIComponent(dictionary)}&path=${encodeURIComponent(path)}`;
 }
 
 function observeDictionaryMedia(target, load) {
