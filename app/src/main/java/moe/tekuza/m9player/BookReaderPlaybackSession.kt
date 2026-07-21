@@ -111,45 +111,6 @@ object BookReaderPlaybackSession {
         return targetMs
     }
 
-    fun seekPrevious(): Long? {
-        val sharedPlayer = player ?: return null
-        val targetMs = (sharedPlayer.currentPosition - SEEK_INCREMENT_MS).coerceAtLeast(0L)
-        Log.d(
-            READER_PAUSED_SEEK_LOG_TAG,
-            "session seekPrevious request target=$targetMs ${sharedPlayer.seekStateForLog()}"
-        )
-        sharedPlayer.seekTo(targetMs)
-        Log.d(
-            READER_PAUSED_SEEK_LOG_TAG,
-            "session seekPrevious immediate target=$targetMs ${sharedPlayer.seekStateForLog()}"
-        )
-        return targetMs
-    }
-
-    fun seekNext(): Long? {
-        val sharedPlayer = player ?: return null
-        val durationMs = sharedPlayer.duration
-        val targetMs = (sharedPlayer.currentPosition + SEEK_INCREMENT_MS)
-            .let { positionMs ->
-                if (durationMs > 0L) {
-                    positionMs.coerceAtMost(durationMs)
-                } else {
-                    positionMs
-                }
-            }
-            .coerceAtLeast(0L)
-        Log.d(
-            READER_PAUSED_SEEK_LOG_TAG,
-            "session seekNext request target=$targetMs ${sharedPlayer.seekStateForLog()}"
-        )
-        sharedPlayer.seekTo(targetMs)
-        Log.d(
-            READER_PAUSED_SEEK_LOG_TAG,
-            "session seekNext immediate target=$targetMs ${sharedPlayer.seekStateForLog()}"
-        )
-        return targetMs
-    }
-
     private fun Player.seekStateForLog(): String {
         return "actual=$currentPosition duration=$duration playWhenReady=$playWhenReady " +
             "isPlaying=$isPlaying state=$playbackState suppression=$playbackSuppressionReason"

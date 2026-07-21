@@ -1,7 +1,6 @@
 package moe.tekuza.m9player
 
 import android.content.Context
-import java.util.Locale
 
 internal data class DictionaryImportProgress(
     val stage: String,

@@ -5,9 +5,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
-import android.provider.DocumentsContract
 import android.provider.OpenableColumns
-import androidx.documentfile.provider.DocumentFile
 import android.util.Log
 import android.util.JsonReader
 import android.util.JsonToken

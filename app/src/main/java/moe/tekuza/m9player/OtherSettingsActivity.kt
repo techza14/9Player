@@ -1,7 +1,6 @@
 package moe.tekuza.m9player
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Build
@@ -149,55 +148,14 @@ private fun OtherSettingsScreen(
                     },
                     showDivider = true
                 )
-                SettingsLikeItem(
+                SettingsListItem(
                     icon = Icons.Outlined.PlayLesson,
                     title = stringResource(R.string.settings_ebook_title),
+                    iconSize = 24.dp,
                     onClick = { showEbookSettings = true },
                     showDivider = false
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun SettingsLikeItem(
-    icon: ImageVector,
-    title: String,
-    onClick: () -> Unit,
-    showDivider: Boolean = true
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 18.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                if (title.isNotBlank()) {
-                    Text(text = title, style = MaterialTheme.typography.bodyLarge)
-                }
-            }
-        }
-        if (showDivider) {
-            HorizontalDivider(
-                modifier = Modifier.padding(start = 20.dp, end = 20.dp),
-                color = androidx.compose.ui.graphics.Color.Transparent
-            )
         }
     }
 }

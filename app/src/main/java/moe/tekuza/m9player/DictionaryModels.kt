@@ -54,6 +54,7 @@ internal data class MinedCard(
     val definitions: List<String>,
     val dictionaryName: String?,
     val dictionaryCss: String?,
+    val dictionaryMedia: List<MinedDictionaryMedia> = emptyList(),
     val glossaryFirstHtml: String? = null,
     val glossaryByDictionary: List<MinedDictionaryGlossary> = emptyList(),
     val pitch: String?,
@@ -64,6 +65,12 @@ internal data class MinedCard(
     val lookupAudioUri: Uri? = null,
     val audioTagOnly: Boolean = false,
     val requireCueAudioClip: Boolean = false
+)
+
+internal data class MinedDictionaryMedia(
+    val dictionary: String,
+    val path: String,
+    val filename: String,
 )
 
 internal data class MinedDictionaryGlossary(

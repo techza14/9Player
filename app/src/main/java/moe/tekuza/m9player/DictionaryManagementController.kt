@@ -33,8 +33,6 @@ internal class DictionaryManagementController(
     var dictionaryError by mutableStateOf<String?>(null)
         private set
 
-    fun reloadExternalState() = Unit
-
     fun setPersistedDictionaryRefs(persistedRefs: List<PersistedDictionaryRef>) {
         dictionaryError = null
         dictionaryRefs = persistedRefs.distinctBy { it.uri }

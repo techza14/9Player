@@ -6,6 +6,7 @@ import android.util.Log
 
 object BookReaderFloatingBridge {
     private const val READER_PAUSED_SEEK_LOG_TAG = "ReaderPausedSeek"
+    private const val WEARABLE_SEEK_LOG_TAG = "WearableSeek"
 
     data class SubtitleTimelineCue(
         val startMs: Long,
@@ -53,6 +54,7 @@ object BookReaderFloatingBridge {
     private val playbackPositionListeners = linkedSetOf<PlaybackPositionListener>()
     private val playbackSpeedListeners = linkedSetOf<PlaybackSpeedListener>()
     private var controlCollectListener: (() -> ControlCollectResult?)? = null
+    private var adjacentSeekListener: ((Int) -> Unit)? = null
     @Volatile
     private var playingSnapshot: Boolean = false
     @Volatile
@@ -155,7 +157,10 @@ object BookReaderFloatingBridge {
     }
 
     fun isPlaying(): Boolean = if (BookReaderPlaybackSession.currentAudioUri() != null) {
-        BookReaderPlaybackSession.isPlaying()
+        // Keep the wearable state aligned with the reader UI. During a seek or
+        // a short buffering transition ExoPlayer.isPlaying can be false even
+        // though playback is still requested and will continue automatically.
+        BookReaderPlaybackSession.isPlaybackRequested()
     } else {
         playingSnapshot
     }
@@ -331,6 +336,33 @@ object BookReaderFloatingBridge {
         }
     }
 
+    fun setAdjacentSeekListener(listener: ((Int) -> Unit)?) {
+        synchronized(this) { adjacentSeekListener = listener }
+    }
+
+    fun seekAdjacent(context: Context, step: Int) {
+        val listener = synchronized(this) { adjacentSeekListener }
+        Log.d(WEARABLE_SEEK_LOG_TAG, "request step=$step path=${if (listener != null) "reader" else "fallback"}")
+        if (listener != null) {
+            listener(step)
+        } else {
+            val stepMillis = runCatching {
+                loadAudiobookSettingsConfig(context).seekStepMillis
+            }.getOrNull() ?: return
+            val delta = if (step < 0) -stepMillis else stepMillis
+            val current = currentPlaybackPositionMs()
+            val duration = currentPlaybackDurationMs()
+            val target = (current + delta).coerceAtLeast(0L).let {
+                if (duration > 0L) it.coerceAtMost(duration) else it
+            }
+            Log.d(
+                WEARABLE_SEEK_LOG_TAG,
+                "fallback stepMs=$stepMillis current=$current duration=$duration target=$target"
+            )
+            seekToPosition(target)
+        }
+    }
+
     fun requestControlCollect(): ControlCollectResult? {
         val listener = synchronized(this) { controlCollectListener }
         return listener?.invoke()
@@ -356,40 +388,6 @@ object BookReaderFloatingBridge {
     fun setPlaybackSpeed(speed: Float) {
         BookReaderPlaybackSession.setPlaybackSpeed(speed)
         notifyPlaybackSpeed(BookReaderPlaybackSession.currentPlaybackSpeed())
-    }
-
-    fun seekPrevious() {
-        val beforeSession = BookReaderPlaybackSession.currentPositionMs()
-        val beforeCue = currentCue()
-        val targetMs = BookReaderPlaybackSession.seekPrevious() ?: return
-        Log.d(
-            READER_PAUSED_SEEK_LOG_TAG,
-            "bridge seekPrevious target=$targetMs beforeSession=$beforeSession beforeBridge=$playbackPositionSnapshot " +
-                "beforeCue=${cueForLog(beforeCue)}"
-        )
-        notifyPlaybackPosition(targetMs)
-        Log.d(
-            READER_PAUSED_SEEK_LOG_TAG,
-            "bridge seekPrevious notify target=$targetMs afterSession=${BookReaderPlaybackSession.currentPositionMs()} " +
-                "afterBridge=$playbackPositionSnapshot afterCue=${cueForLog(currentCue())}"
-        )
-    }
-
-    fun seekNext() {
-        val beforeSession = BookReaderPlaybackSession.currentPositionMs()
-        val beforeCue = currentCue()
-        val targetMs = BookReaderPlaybackSession.seekNext() ?: return
-        Log.d(
-            READER_PAUSED_SEEK_LOG_TAG,
-            "bridge seekNext target=$targetMs beforeSession=$beforeSession beforeBridge=$playbackPositionSnapshot " +
-                "beforeCue=${cueForLog(beforeCue)}"
-        )
-        notifyPlaybackPosition(targetMs)
-        Log.d(
-            READER_PAUSED_SEEK_LOG_TAG,
-            "bridge seekNext notify target=$targetMs afterSession=${BookReaderPlaybackSession.currentPositionMs()} " +
-                "afterBridge=$playbackPositionSnapshot afterCue=${cueForLog(currentCue())}"
-        )
     }
 
     fun replayCurrentCue() {

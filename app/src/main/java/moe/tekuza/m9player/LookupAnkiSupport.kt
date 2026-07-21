@@ -2,6 +2,8 @@ package moe.tekuza.m9player
 
 import android.content.Context
 import android.net.Uri
+import org.json.JSONArray
+import org.json.JSONObject
 
 internal fun addLookupDefinitionToAnkiShared(
     context: Context,
@@ -15,6 +17,7 @@ internal fun addLookupDefinitionToAnkiShared(
     definition: String,
     glossaryFirstHtml: String? = null,
     dictionaryCss: String?,
+    dictionaryMedia: List<MinedDictionaryMedia> = emptyList(),
     popupSelectionText: String? = null,
     sentenceOverride: String? = null,
     lookupTermOverride: String? = null
@@ -50,6 +53,7 @@ internal fun addLookupDefinitionToAnkiShared(
         definitions = listOf(definition),
         dictionaryName = entry.dictionary,
         dictionaryCss = dictionaryCss,
+        dictionaryMedia = dictionaryMedia,
         glossaryFirstHtml = glossaryFirstHtml,
         pitch = entry.pitch,
         frequency = entry.frequency,
@@ -58,7 +62,7 @@ internal fun addLookupDefinitionToAnkiShared(
         audioUri = audioUri,
         lookupAudioUri = lookupAudioUri,
         audioTagOnly = true,
-        requireCueAudioClip = audioUri != null
+        requireCueAudioClip = audioUri != null && cueEndMs > cueStartMs
     )
     logDebug("AnkiExportDebug") {
         "sharedExport card wordLength=${card.word.length} primaryDictionaryLength=${card.dictionaryName?.length ?: 0} " +
@@ -67,6 +71,23 @@ internal fun addLookupDefinitionToAnkiShared(
 
     return withAnkiStep("export-note") {
         exportToAnkiDroidApiResult(context, card, preparedExport.config)
+    }
+}
+
+internal fun parseLookupDictionaryMedia(payload: JSONObject): List<MinedDictionaryMedia> {
+    val raw = payload.optString("dictionaryMedia").trim()
+    if (raw.isBlank()) return emptyList()
+    val array = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
+    return buildList {
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val dictionary = item.optString("dictionary").trim()
+            val path = item.optString("path").trim()
+            val filename = item.optString("filename").trim()
+            if (dictionary.isNotBlank() && path.isNotBlank() && filename.isNotBlank()) {
+                add(MinedDictionaryMedia(dictionary, path, filename))
+            }
+        }
     }
 }
 

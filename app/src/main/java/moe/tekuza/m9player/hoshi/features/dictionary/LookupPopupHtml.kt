@@ -261,7 +261,7 @@ internal object LookupPopupHtml {
                     window.needsAudio = ${showPlayAudio};
                     window.allowDupes = true;
                     window.useAnkiConnect = false;
-                    window.embedMedia = false;
+                    window.embedMedia = true;
                     window.compactGlossariesAnki = false;
                     window.customCSS = ${JSONObject.quote(normalizedSettings.customCSS)};
                     window.dictionaryMediaRequestEndpoint = "https://hoshi.local/image";

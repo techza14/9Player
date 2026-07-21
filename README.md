@@ -124,6 +124,10 @@ While playing an audiobook, return to home or switch apps to show it.
 Floating bubble:  
 Double tap: Expand the control bar.
 
+## Mi Band
+
+https://github.com/techza14/9Player-vela
+
 ## Credits
 
 - [hoshidicts](https://github.com/Manhhao/hoshidicts)
@@ -134,9 +138,7 @@ Double tap: Expand the control bar.
 - [Voice](https://github.com/PaulWoitaschek/Voice)
 - [AudioConverter](https://github.com/renezuidhof/AudioConverter)
 - [taglib](https://github.com/Kyant0/taglib)
-- [Ciyue](https://github.com/mumu-lhl/Ciyue/)
 - [APlayer](https://github.com/rRemix/APlayer)
-- [mdict-rs](https://crates.io/crates/mdict-rs)
 - [Legado](https://github.com/gedoor/legado)
 - [ッツ Ebook Reader](https://github.com/ttu-ttu/ebook-reader)
 

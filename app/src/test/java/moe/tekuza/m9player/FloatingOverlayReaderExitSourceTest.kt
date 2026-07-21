@@ -37,8 +37,7 @@ class FloatingOverlayReaderExitSourceTest {
         assertFalse(source.contains("fun attach("))
         assertFalse(source.contains("fun detach("))
         assertTrue(source.contains("BookReaderPlaybackSession.togglePlayPause()"))
-        assertTrue(source.contains("BookReaderPlaybackSession.seekPrevious()"))
-        assertTrue(source.contains("BookReaderPlaybackSession.seekNext()"))
+        assertTrue(source.contains("fun seekAdjacent(context: Context, step: Int)"))
         assertTrue(source.contains("BookReaderPlaybackSession.seekToPosition(cueStartMs)"))
     }
 }

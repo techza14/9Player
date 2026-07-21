@@ -23,6 +23,8 @@ internal data class PersistedReaderBook(
     val ebookUri: String? = null,
     val ebookName: String? = null,
     val ebookFormat: String? = null,
+    val audioCoverUri: String? = null,
+    val ebookCoverUri: String? = null,
     val coverFocus: String? = null,
     val startBookCoverZoom: Double? = null,
     val startBookCoverAnchorXPx: Int? = null,
@@ -56,6 +58,7 @@ internal data class PersistedImports(
 
 private const val PREFS_NAME = "reader_sync_imports"
 private const val KEY_STATE_JSON = "state_json"
+private const val KEY_STATE_VERSION = "state_version"
 private const val KEY_DICTIONARY_VERSION = "dictionary_version"
 
 internal fun loadPersistedImports(context: Context): PersistedImports {
@@ -126,6 +129,8 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         val srtName = item.optString("srtName").trim().ifBlank { null }
         val ebookName = item.optString("ebookName").trim().ifBlank { null }
         val ebookFormat = item.optString("ebookFormat").trim().ifBlank { null }
+        val audioCoverUri = item.optString("audioCoverUri").trim().ifBlank { null }
+        val ebookCoverUri = item.optString("ebookCoverUri").trim().ifBlank { null }
         val coverFocus = item.optString("coverFocus").trim().ifBlank { null }
         val startBookCoverZoom = item.optDouble("startBookCoverZoom").takeIf { !it.isNaN() }
         val startBookCoverAnchorXPx = item.optInt("startBookCoverAnchorXPx").takeIf { it >= 0 }
@@ -158,6 +163,8 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
             ebookUri = ebookUri,
             ebookName = ebookName,
             ebookFormat = ebookFormat,
+            audioCoverUri = audioCoverUri,
+            ebookCoverUri = ebookCoverUri,
             coverFocus = coverFocus,
             startBookCoverZoom = startBookCoverZoom,
             startBookCoverAnchorXPx = startBookCoverAnchorXPx,
@@ -216,6 +223,8 @@ internal fun savePersistedImports(context: Context, state: PersistedImports) {
                         put("ebookUri", book.ebookUri ?: "")
                         put("ebookName", book.ebookName ?: "")
                         put("ebookFormat", book.ebookFormat ?: "")
+                        put("audioCoverUri", book.audioCoverUri ?: "")
+                        put("ebookCoverUri", book.ebookCoverUri ?: "")
                         put("coverFocus", book.coverFocus ?: "")
                         put("startBookCoverZoom", book.startBookCoverZoom ?: JSONObject.NULL)
                         put("startBookCoverAnchorXPx", book.startBookCoverAnchorXPx ?: JSONObject.NULL)
@@ -248,10 +257,17 @@ internal fun savePersistedImports(context: Context, state: PersistedImports) {
             }
         )
     }
-    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        .edit()
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val nextVersion = prefs.getLong(KEY_STATE_VERSION, 0L) + 1L
+    prefs.edit()
         .putString(KEY_STATE_JSON, obj.toString())
+        .putLong(KEY_STATE_VERSION, nextVersion)
         .apply()
+}
+
+internal fun loadPersistedImportsVersion(context: Context): Long {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .getLong(KEY_STATE_VERSION, 0L)
 }
 
 internal fun loadDictionaryDataVersion(context: Context): Long {

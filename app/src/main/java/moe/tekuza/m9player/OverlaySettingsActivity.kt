@@ -11,7 +11,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,9 +22,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -36,7 +32,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -53,7 +48,6 @@ class OverlaySettingsActivity : AppCompatActivity() {
         }
     }
 }
-
 @Composable
 private fun OverlaySettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -245,8 +239,9 @@ private fun OverlaySettingsScreen(onBack: () -> Unit) {
                     }
                     if (currentOverlayMode.showsSubtitle) {
                         Text(stringResource(R.string.audiobook_overlay_subtitle_help))
-                        OverlaySubtitleWritingModeDropdown(
+                        SubtitleWritingModeSelector(
                             selected = config.floatingOverlaySubtitleWritingMode,
+                            showLabel = true,
                             onSelected = { mode ->
                                 if (mode != config.floatingOverlaySubtitleWritingMode) {
                                     saveAudiobookFloatingOverlaySubtitleWritingMode(context, mode)
@@ -263,64 +258,5 @@ private fun OverlaySettingsScreen(onBack: () -> Unit) {
                 Text(it)
             }
         }
-    }
-}
-
-@Composable
-private fun OverlaySubtitleWritingModeDropdown(
-    selected: FloatingSubtitleWritingMode,
-    onSelected: (FloatingSubtitleWritingMode) -> Unit
-) {
-    val context = LocalContext.current
-
-    Text(
-        text = stringResource(R.string.audiobook_overlay_subtitle_writing_mode),
-        style = MaterialTheme.typography.labelMedium
-    )
-    SingleChoiceSegmentedButtonRow(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 40.dp)
-    ) {
-        SegmentedButton(
-            selected = selected == FloatingSubtitleWritingMode.HORIZONTAL,
-            onClick = { onSelected(FloatingSubtitleWritingMode.HORIZONTAL) },
-            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-            colors = SegmentedButtonDefaults.colors(
-                activeContainerColor = Color.Transparent,
-                inactiveContainerColor = Color.Transparent
-            )
-        ) {
-            Text(
-                text = floatingSubtitleWritingModeLabel(context, FloatingSubtitleWritingMode.HORIZONTAL),
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-        SegmentedButton(
-            selected = selected == FloatingSubtitleWritingMode.VERTICAL_RTL,
-            onClick = { onSelected(FloatingSubtitleWritingMode.VERTICAL_RTL) },
-            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-            colors = SegmentedButtonDefaults.colors(
-                activeContainerColor = Color.Transparent,
-                inactiveContainerColor = Color.Transparent
-            )
-        ) {
-            Text(
-                text = floatingSubtitleWritingModeLabel(context, FloatingSubtitleWritingMode.VERTICAL_RTL),
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-    }
-}
-
-private fun floatingSubtitleWritingModeLabel(
-    context: android.content.Context,
-    mode: FloatingSubtitleWritingMode
-): String {
-    return when (mode) {
-        FloatingSubtitleWritingMode.HORIZONTAL ->
-            context.getString(R.string.audiobook_overlay_subtitle_writing_mode_horizontal)
-        FloatingSubtitleWritingMode.VERTICAL_RTL ->
-            context.getString(R.string.audiobook_overlay_subtitle_writing_mode_vertical_rtl)
     }
 }

@@ -128,6 +128,10 @@ Anki模板：[Lapis](https://github.com/donkuri/lapis)
 懸浮球：  
 雙擊：展開控制欄
 
+## 手環端
+
+https://github.com/techza14/9Player-vela
+
 ## 特別感謝
 
 - [hoshidicts](https://github.com/Manhhao/hoshidicts)
@@ -138,9 +142,7 @@ Anki模板：[Lapis](https://github.com/donkuri/lapis)
 - [Voice](https://github.com/PaulWoitaschek/Voice)
 - [AudioConverter](https://github.com/renezuidhof/AudioConverter)
 - [taglib](https://github.com/Kyant0/taglib)
-- [Ciyue](https://github.com/mumu-lhl/Ciyue/)
 - [APlayer](https://github.com/rRemix/APlayer)
-- [mdict-rs](https://crates.io/crates/mdict-rs)
 - [Legado](https://github.com/gedoor/legado)
 - [ッツ Ebook Reader](https://github.com/ttu-ttu/ebook-reader)
 

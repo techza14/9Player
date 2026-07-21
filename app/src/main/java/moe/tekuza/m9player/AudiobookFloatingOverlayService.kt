@@ -12,12 +12,10 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
-import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
 import android.text.TextPaint
-import android.text.TextUtils
 import android.view.View.MeasureSpec
 import android.view.Choreographer
 import android.view.GestureDetector
@@ -40,10 +38,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.appcompat.widget.AppCompatTextView
-import androidx.core.text.HtmlCompat
 import java.util.Locale
 import android.webkit.WebView
-import android.webkit.WebResourceResponse
 import android.widget.Toast
 import de.manhhao.hoshi.LookupResult
 import kotlinx.coroutines.CoroutineScope
@@ -72,7 +68,6 @@ import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionRect
 import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.ceil
-import kotlin.math.floor
 import kotlin.math.roundToInt
 
 private fun hasOverlayPermission(context: Context): Boolean {
@@ -973,7 +968,7 @@ companion object {
         subtitleLockButton = lockButton
         controls.addView(lockButton)
         controls.addView(createControlButton(R.drawable.ic_overlay_previous) {
-            BookReaderFloatingBridge.seekPrevious()
+            BookReaderFloatingBridge.seekAdjacent(this@AudiobookFloatingOverlayService, -1)
         })
         controls.addView(createControlButton(R.drawable.ic_overlay_pause) {
             BookReaderFloatingBridge.togglePlayPause()
@@ -981,7 +976,7 @@ companion object {
             updatePlayPauseIcon(BookReaderFloatingBridge.isPlaying())
         }.also { it.tag = "playPause" })
         controls.addView(createControlButton(R.drawable.ic_overlay_next) {
-            BookReaderFloatingBridge.seekNext()
+            BookReaderFloatingBridge.seekAdjacent(this@AudiobookFloatingOverlayService, 1)
         })
         controls.addView(createControlButton(R.drawable.ic_overlay_settings) {
             subtitleSettingsExpanded = !subtitleSettingsExpanded
@@ -1332,10 +1327,10 @@ companion object {
                 updateBubbleLockIcon()
             }.also { bubbleLockButton = it })
             addView(createControlButton(R.drawable.ic_overlay_previous, bubbleScale) {
-                BookReaderFloatingBridge.seekPrevious()
+                BookReaderFloatingBridge.seekAdjacent(this@AudiobookFloatingOverlayService, -1)
             })
             addView(createControlButton(R.drawable.ic_overlay_next, bubbleScale) {
-                BookReaderFloatingBridge.seekNext()
+                BookReaderFloatingBridge.seekAdjacent(this@AudiobookFloatingOverlayService, 1)
             })
         }
         val bubbleParams = LinearLayout.LayoutParams(bubbleSizePx, bubbleSizePx).apply {
@@ -3975,6 +3970,7 @@ companion object {
                     payload.optString("pitchPositions").trim()
                 }
                 val dictionaryName = payload.optString("selectedDictionary").trim()
+                val dictionaryMedia = parseLookupDictionaryMedia(payload)
                 val sentence = cueSnapshot.fullSentenceText ?: cueSnapshot.text
                 val exportResult = withContext(Dispatchers.IO) {
                     val preparedLookupAudio = prepareLookupAudioForAnkiExport(
@@ -4003,6 +3999,7 @@ companion object {
                             definition = glossary,
                             glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
                             dictionaryCss = layer.hoshiDictionaryStyles[dictionaryName],
+                            dictionaryMedia = dictionaryMedia,
                             popupSelectionText = payload.optString("popupSelectionText").trim().takeIf { it.isNotBlank() }
                                 ?: layer.selectionText,
                             sentenceOverride = sentence,

@@ -1,7 +1,6 @@
 package moe.tekuza.m9player
 
 import android.Manifest
-import android.app.ActivityManager
 import android.app.PendingIntent
 import android.content.ContentResolver
 import android.content.Context
@@ -163,6 +162,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.PlayerMessage
 import moe.tekuza.m9player.ui.theme.TsetTheme
 import moe.tekuza.m9player.hoshi.features.reader.ReaderSelectionData
 import moe.tekuza.m9player.hoshi.features.dictionary.LookupPopupItem
@@ -203,6 +203,7 @@ private const val BOOK_READER_BACK_LOG_TAG = "BookReaderBack"
 private const val BOOK_READER_SEEK_LOG_TAG = "BookReaderSeek"
 private const val BOOK_UI_MODE_LOG_TAG = "BookUiMode"
 private const val FLOATING_OVERLAY_EXIT_LOG_TAG = "FloatingOverlayExit"
+private const val BOOK_READER_AUDIO_CUE_LOOP_MESSAGE_TYPE = 1
 private const val BOOK_VERTICAL_TAP_DEBUG_OVERLAY = false
 private const val BOOK_VERTICAL_COLUMN_WIDTH_FACTOR = 1.0f
 private val BOOK_VERTICAL_CUE_EDGE_PADDING = 28.dp
@@ -330,7 +331,7 @@ class BookReaderActivity : AppCompatActivity() {
             val refreshed = loadAudiobookSettingsConfig(this@BookReaderActivity)
             val refreshedOverlayEnabled =
                 refreshed.floatingOverlayEnabled || refreshed.floatingOverlaySubtitleEnabled
-            val appForeground = isAppProcessInForeground(this@BookReaderActivity)
+            val appForeground = isAppProcessInForeground()
             val readerOrPlayerVisible = isReaderOrPlayerScreenVisible()
             val shouldShowAfterReaderExit =
                 (refreshed.floatingOverlayShowOnReaderExit || !appForeground) && !readerOrPlayerVisible
@@ -1030,6 +1031,44 @@ private fun BookReaderScreen(
         onDispose { player.removeListener(listener) }
     }
 
+    val latestCueLoopEnabled = rememberUpdatedState(cueLoopEnabled)
+    val latestCueLoopWindow = rememberUpdatedState(cueLoopWindow)
+    val audioCueLoopBoundaryTarget = remember(player) {
+        object : PlayerMessage.Target {
+            override fun handleMessage(messageType: Int, message: Any?) {
+                if (messageType != BOOK_READER_AUDIO_CUE_LOOP_MESSAGE_TYPE) return
+                val startMs = message as? Long ?: return
+                activity?.runOnUiThread {
+                    if (
+                        !latestCueLoopEnabled.value ||
+                        latestCueLoopWindow.value?.first != startMs
+                    ) {
+                        return@runOnUiThread
+                    }
+                    player.seekTo(startMs)
+                    positionMs = startMs
+                }
+            }
+        }
+    }
+    DisposableEffect(player, cueLoopEnabled, cueLoopWindow, temporaryLookupMode) {
+        val window = cueLoopWindow
+        if (temporaryLookupMode || !cueLoopEnabled || window == null) {
+            onDispose { }
+        } else {
+            val startMs = window.first.coerceAtLeast(0L)
+            val endMs = window.second.coerceAtLeast(startMs + 1L)
+            val loopAt = (endMs - 40L).coerceAtLeast(startMs)
+            val boundaryMessage = player.createMessage(audioCueLoopBoundaryTarget)
+                .setType(BOOK_READER_AUDIO_CUE_LOOP_MESSAGE_TYPE)
+                .setPayload(startMs)
+                .setPosition(loopAt)
+                .setDeleteAfterDelivery(false)
+                .send()
+            onDispose { boundaryMessage.cancel() }
+        }
+    }
+
     if (!uiTestMode || temporaryLookupMode) LaunchedEffect(
         player,
         isPlaying,
@@ -1063,17 +1102,7 @@ private fun BookReaderScreen(
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = if (player.duration > 0L) player.duration else 0L
             val currentCueIndex = findBookCueIndexAtTime(cues, positionMs)
-            if (!temporaryLookupMode && cueLoopEnabled) {
-                val window = cueLoopWindow
-                if (window != null) {
-                    val startMs = window.first.coerceAtLeast(0L)
-                    val endMs = window.second.coerceAtLeast(startMs + 1L)
-                    val loopAt = (endMs - 40L).coerceAtLeast(startMs)
-                    if (positionMs >= loopAt || positionMs < startMs) {
-                        player.seekTo(startMs)
-                    }
-                }
-            } else if (!temporaryLookupMode && audiobookSettings.readerPlaybackMode == ReaderPlaybackMode.CONDENSED) {
+            if (!temporaryLookupMode && !cueLoopEnabled && audiobookSettings.readerPlaybackMode == ReaderPlaybackMode.CONDENSED) {
                 val nowMs = SystemClock.elapsedRealtime()
                 val target = findCondensedPlaybackSeekTarget(
                     cues = cues,
@@ -1895,9 +1924,14 @@ private fun BookReaderScreen(
     }
 
     fun jumpToAdjacentCue(step: Int) {
+        val configuredStepMillis = loadAudiobookSettingsConfig(context).seekStepMillis
+        Log.d(
+            BOOK_READER_SEEK_LOG_TAG,
+            "jumpAdjacent step=$step mode=$effectiveAdjacentJumpMode configuredStepMs=$configuredStepMillis " +
+                "position=$positionMs cueIndex=$playbackCueIndex"
+        )
         if (effectiveAdjacentJumpMode == AdjacentJumpMode.DURATION) {
-            val stepMillis = loadAudiobookSettingsConfig(context).seekStepMillis
-            val delta = if (step < 0) -stepMillis else stepMillis
+            val delta = if (step < 0) -configuredStepMillis else configuredStepMillis
             seekToManual(positionMs + delta)
             setReaderPlaybackState(true)
             return
@@ -2298,6 +2332,7 @@ private fun BookReaderScreen(
                     payload.optString("pitchPositions").trim()
                 }
                 val primaryDictionaryName = payload.optString("selectedDictionary").trim()
+                val dictionaryMedia = parseLookupDictionaryMedia(payload)
                 val cueIndex = hoshiLookupSelectionCueIndex ?: activeCueIndex
                 val sourceCue = cueIndex.takeIf { it in cues.indices }?.let { cues[it] }
                 val cueText = sourceCue?.text?.trim()?.takeIf { it.isNotBlank() }
@@ -2377,6 +2412,7 @@ private fun BookReaderScreen(
                             definition = glossary,
                             glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
                             dictionaryCss = dictionaryCssByName[primaryDictionaryName],
+                            dictionaryMedia = dictionaryMedia,
                             popupSelectionText = popupSelectionText,
                             sentenceOverride = sentenceSelection.text,
                             lookupTermOverride = expression
@@ -2446,6 +2482,14 @@ private fun BookReaderScreen(
     val latestWearableControlCollect = rememberUpdatedState<() -> Long?> {
         if (playbackCueIndex !in cues.indices) null else handleControlOverlayTap()
     }
+    val latestWearableAdjacentSeek = rememberUpdatedState<(Int) -> Unit> { step ->
+        Log.d(
+            BOOK_READER_SEEK_LOG_TAG,
+            "wearableAdjacent step=$step mode=$effectiveAdjacentJumpMode configuredStepMs=" +
+                "${loadAudiobookSettingsConfig(context).seekStepMillis}"
+        )
+        jumpToAdjacentCue(step)
+    }
     val latestWearableSleepTimer = rememberUpdatedState<(Int) -> Boolean> { minutes ->
         setSleepTimer(minutes)
         true
@@ -2477,6 +2521,13 @@ private fun BookReaderScreen(
                 ?.let(BookReaderFloatingBridge::ControlCollectResult)
         }
         onDispose { BookReaderFloatingBridge.setControlCollectListener(null) }
+    }
+
+    DisposableEffect(Unit) {
+        BookReaderFloatingBridge.setAdjacentSeekListener { step ->
+            latestWearableAdjacentSeek.value(step)
+        }
+        onDispose { BookReaderFloatingBridge.setAdjacentSeekListener(null) }
     }
 
     DisposableEffect(Unit) {
@@ -6207,13 +6258,6 @@ private fun openReaderInputStream(contentResolver: ContentResolver, uri: Uri): I
     if (direct != null) return direct
     val pfd = runCatching { contentResolver.openFileDescriptor(uri, "r") }.getOrNull() ?: return null
     return ParcelFileDescriptor.AutoCloseInputStream(pfd)
-}
-
-private fun isAppProcessInForeground(context: Context): Boolean {
-    val processInfo = ActivityManager.RunningAppProcessInfo()
-    ActivityManager.getMyMemoryState(processInfo)
-    return processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
-        processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
 }
 
 private fun parseBookSrtTimestamp(raw: String): Long? {

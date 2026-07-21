@@ -1,7 +1,6 @@
 package moe.tekuza.m9player
 
 import android.app.Activity
-import android.app.ActivityManager
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
@@ -19,8 +18,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
-import android.provider.OpenableColumns
 import android.util.Log
+import android.util.LruCache
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -99,6 +98,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -389,6 +389,15 @@ internal enum class ReaderBookCoverSource {
     EBOOK
 }
 
+private fun parseCachedCoverUri(raw: String?): Uri? {
+    val uri = raw?.trim()?.takeIf { it.isNotBlank() }?.let {
+        runCatching { Uri.parse(it) }.getOrNull()
+    } ?: return null
+    if (!uri.scheme.equals("file", ignoreCase = true)) return null
+    val file = uri.path?.let(::File) ?: return null
+    return file.takeIf { it.isFile && it.length() > 0L }?.let(Uri::fromFile)
+}
+
 private const val ReaderBookCoverAspectRatio = 279f / 400f
 
 internal data class BookCoverAdjustment(
@@ -627,6 +636,7 @@ private fun ReaderSyncScreen() {
     var importOnboardingCompleted by remember { mutableStateOf(false) }
     var importGuideVisible by remember { mutableStateOf(false) }
     var persistedImportsLoaded by remember { mutableStateOf(false) }
+    var persistedImportsVersion by remember { mutableStateOf<Long?>(null) }
     var autoUpdatePromptVisible by remember { mutableStateOf(false) }
     var autoUpdateStartupHandled by remember { mutableStateOf(false) }
     val selectedBookIds = remember { mutableStateListOf<String>() }
@@ -657,12 +667,8 @@ private fun ReaderSyncScreen() {
     var ankiDeckName by remember { mutableStateOf("Default") }
     var ankiModelName by remember { mutableStateOf("") }
     var ankiTagsInput by remember { mutableStateOf(DEFAULT_ANKI_TAG) }
-    var ankiDecks by remember { mutableStateOf<List<String>>(emptyList()) }
     var ankiModels by remember { mutableStateOf<List<AnkiModelTemplate>>(emptyList()) }
-    var ankiModelFields by remember { mutableStateOf<List<String>>(emptyList()) }
     val ankiFieldTemplates = remember { mutableStateMapOf<String, String>() }
-    var ankiLoading by remember { mutableStateOf(false) }
-    var ankiError by remember { mutableStateOf<String?>(null) }
 
     var showDictionaryManager by remember { mutableStateOf(false) }
     var showDictionaryDeleteActions by remember { mutableStateOf(false) }
@@ -795,16 +801,16 @@ private fun ReaderSyncScreen() {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                if (!persistedImportsLoaded) return@LifecycleEventObserver
                 audiobookSettings = loadAudiobookSettingsConfig(context)
                 dictionaryUiConfig = loadDictionaryUiConfig(context)
-                dictionaryController.reloadExternalState()
                 scope.launch {
-                    var loadedSnapshots = loadReaderBookPlaybackSnapshotsForBooks(
-                        context = context,
-                        books = readerBooks
-                    )
-                    run {
+                    val persistedVersion = loadPersistedImportsVersion(context)
+                    var loadedSnapshots = readerBookPlaybackSnapshots
+                    if (persistedImportsVersion != persistedVersion) {
                         val persistedNow = loadPersistedImports(context)
+                        persistedImportsVersion = persistedVersion
+                        var snapshotBooks = readerBooks
                         dictionaryController.syncPersistedDictionaries(persistedNow.dictionaries)
                         if (persistedNow.books.isNotEmpty() && readerBooks.isNotEmpty()) {
                             val persistedByAudio = persistedNow.books.associateBy { it.audioUri }
@@ -835,6 +841,7 @@ private fun ReaderSyncScreen() {
                             }
                             if (changed) {
                                 readerBooks = mergedBooks
+                                snapshotBooks = mergedBooks
                                 val selected = mergedBooks.firstOrNull { it.id == selectedBookId }
                                     ?: mergedBooks.firstOrNull { it.audioUri?.toString() == audioUri?.toString() }
                                 if (selected != null) {
@@ -846,6 +853,10 @@ private fun ReaderSyncScreen() {
                                 }
                             }
                         }
+                        loadedSnapshots = loadReaderBookPlaybackSnapshotsForBooks(
+                            context = context,
+                            books = snapshotBooks
+                        )
                     }
                     val returnedProgress = consumeReturnedBookProgress(activity?.intent)
                     if (returnedProgress != null) {
@@ -901,6 +912,8 @@ private fun ReaderSyncScreen() {
                                         ebookUri = book.ebookUri?.toString(),
                                         ebookName = book.ebookName,
                                         ebookFormat = book.ebookFormat,
+                                        audioCoverUri = book.audioCoverUri?.toString(),
+                                        ebookCoverUri = book.ebookCoverUri?.toString(),
                                         coverFocus = book.coverFocus.name,
                                         startBookCoverZoom = book.startBookCoverAdjustment?.zoom?.toDouble(),
                                         startBookCoverAnchorXPx = book.startBookCoverAdjustment?.anchorXPx,
@@ -1128,6 +1141,8 @@ private fun ReaderSyncScreen() {
                 ebookUri = book.ebookUri?.toString(),
                 ebookName = book.ebookName,
                 ebookFormat = book.ebookFormat,
+                audioCoverUri = book.audioCoverUri?.toString(),
+                ebookCoverUri = book.ebookCoverUri?.toString(),
                 coverFocus = book.coverFocus.name,
                 startBookCoverZoom = book.startBookCoverAdjustment?.zoom?.toDouble(),
                 startBookCoverAnchorXPx = book.startBookCoverAdjustment?.anchorXPx,
@@ -1235,15 +1250,6 @@ private fun ReaderSyncScreen() {
         )
     }
 
-    fun syncTemplatesWithModelFields(fields: List<String>, clearExisting: Boolean = false) {
-        ankiModelFields = fields
-        syncAnkiFieldTemplates(
-            target = ankiFieldTemplates,
-            fields = fields,
-            clearExisting = clearExisting
-        )
-    }
-
     fun selectAnkiModel(modelName: String) {
         val modelChanged = ankiModelName != modelName
         ankiModelName = modelName
@@ -1252,7 +1258,8 @@ private fun ReaderSyncScreen() {
             ANKI_CONFIG_LOG_TAG,
             "MainActivity select model='$modelName' modelChanged=$modelChanged found=${model != null} fieldCount=${model?.fields?.size ?: 0}"
         )
-        syncTemplatesWithModelFields(
+        syncAnkiFieldTemplates(
+            target = ankiFieldTemplates,
             fields = model?.fields ?: emptyList(),
             clearExisting = modelChanged
         )
@@ -1261,16 +1268,12 @@ private fun ReaderSyncScreen() {
 
     fun refreshAnkiCatalog() {
         ankiAvailabilityUiMessage(context, requirePermission = true)?.let { availabilityMessage ->
-            ankiError = availabilityMessage
-            ankiDecks = emptyList()
+            Log.d(ANKI_CONFIG_LOG_TAG, "MainActivity refresh unavailable message='$availabilityMessage'")
             ankiModels = emptyList()
-            ankiModelFields = emptyList()
             return
         }
 
         scope.launch {
-            ankiLoading = true
-            ankiError = null
             val result = withContext(Dispatchers.IO) {
                 loadResolvedAnkiCatalogResult(
                     context = context,
@@ -1279,8 +1282,6 @@ private fun ReaderSyncScreen() {
                     defaultDeckName = "Default"
                 )
             }
-            ankiLoading = false
-
             when (result) {
                 is AnkiCatalogLoadResult.Success -> {
                     val resolvedCatalog = result.data
@@ -1296,7 +1297,6 @@ private fun ReaderSyncScreen() {
                         ANKI_CONFIG_LOG_TAG,
                         "MainActivity refresh success currentDeck='$ankiDeckName' currentModel='$ankiModelName' resolvedDeck='${resolvedCatalog.selection.deckName}' resolvedModel='$resolvedModelName' modelInCatalog=$modelInCatalog modelCount=${resolvedCatalog.models.size}"
                     )
-                    ankiDecks = resolvedCatalog.decks
                     ankiModels = resolvedCatalog.models
                     ankiDeckName = resolvedCatalog.selection.deckName
                     if (modelInCatalog) {
@@ -1309,7 +1309,6 @@ private fun ReaderSyncScreen() {
                     }
                 }
                 is AnkiCatalogLoadResult.Failure -> {
-                    ankiError = result.message
                     Log.d(
                         ANKI_CONFIG_LOG_TAG,
                         "MainActivity refresh failed message='${result.message}'"
@@ -1329,13 +1328,6 @@ private fun ReaderSyncScreen() {
         )
     }
 
-    fun clearCurrentFieldTemplates() {
-        ankiModelFields.forEach { field ->
-            ankiFieldTemplates[field] = ""
-        }
-        persistAnkiConfig()
-    }
-
     fun refreshCollectedCues() {
         collectedCues = loadBookReaderCollectedCues(context)
     }
@@ -1347,7 +1339,9 @@ private fun ReaderSyncScreen() {
         srtDisplayName: String?,
         ebook: Uri? = null,
         ebookDisplayName: String? = null,
-        ebookFormat: String? = null
+        ebookFormat: String? = null,
+        cachedAudioCoverUri: Uri? = null,
+        cachedEbookCoverUri: Uri? = null
     ): ReaderBook {
         val resolvedAudioName = audio?.let {
             audioDisplayName?.takeIf { name -> name.isNotBlank() }
@@ -1363,14 +1357,14 @@ private fun ReaderSyncScreen() {
         }
         val title = resolvedAudioName?.let { buildBookTitle(it, resolvedSrtName) }
             ?: buildEbookTitle(resolvedEbookName)
-        val audioCoverUri = audio?.let {
+        val audioCoverUri = cachedAudioCoverUri ?: audio?.let {
             resolveEmbeddedCoverUriForM4b(
                 context = context,
                 audioUri = it,
                 audioDisplayName = resolvedAudioName.orEmpty()
             )
         }
-        val ebookCoverUri = resolveEmbeddedCoverUriForEpub(
+        val ebookCoverUri = cachedEbookCoverUri ?: resolveEmbeddedCoverUriForEpub(
             context = context,
             ebookUri = ebook,
             ebookDisplayName = resolvedEbookName,
@@ -1988,6 +1982,7 @@ private fun ReaderSyncScreen() {
         }
 
         val persisted = loadPersistedImports(context)
+        persistedImportsVersion = loadPersistedImportsVersion(context)
         addBookFolderUri = persisted.audiobookFolderUri
             ?.let { rawUri -> runCatching { Uri.parse(rawUri) }.getOrNull() }
         addBookFolderName = persisted.audiobookFolderName?.ifBlank { null }
@@ -2032,7 +2027,9 @@ private fun ReaderSyncScreen() {
                                 srtDisplayName = savedBook.srtName,
                                 ebook = ebook,
                                 ebookDisplayName = savedBook.ebookName,
-                                ebookFormat = savedBook.ebookFormat
+                                ebookFormat = savedBook.ebookFormat,
+                                cachedAudioCoverUri = parseCachedCoverUri(savedBook.audioCoverUri),
+                                cachedEbookCoverUri = parseCachedCoverUri(savedBook.ebookCoverUri)
                             )
                             val coverFocus = when (savedBook.coverFocus?.uppercase(Locale.ROOT)) {
                                 HomeCoverCropFocus.START.name -> HomeCoverCropFocus.START
@@ -2062,6 +2059,27 @@ private fun ReaderSyncScreen() {
             srtLoading = false
             restoreBooksResult.onSuccess { (restoredBooks, failedBooks) ->
                 readerBooks = restoredBooks
+                val restoredById = restoredBooks.associateBy { it.id }
+                val indexedBooks = persisted.books.map { savedBook ->
+                    val restored = restoredById[savedBook.id] ?: return@map savedBook
+                    savedBook.copy(
+                        audioCoverUri = restored.audioCoverUri?.toString(),
+                        ebookCoverUri = restored.ebookCoverUri?.toString()
+                    )
+                }
+                if (indexedBooks != persisted.books) {
+                    val loadedVersion = persistedImportsVersion
+                    scope.launch(Dispatchers.IO) {
+                        if (loadedVersion != null &&
+                            loadPersistedImportsVersion(context) == loadedVersion
+                        ) {
+                            savePersistedImports(
+                                context = context,
+                                state = persisted.copy(books = indexedBooks)
+                            )
+                        }
+                    }
+                }
                 val restoredSelected = restoredBooks.firstOrNull { it.id == persisted.selectedBookId }
                     ?: restoredBooks.firstOrNull()
                 if (restoredSelected != null) {
@@ -2481,6 +2499,7 @@ private fun ReaderSyncScreen() {
                     payload.optString("pitchPositions").trim()
                 }
                 val primaryDictionaryName = payload.optString("selectedDictionary").trim()
+                val dictionaryMedia = parseLookupDictionaryMedia(payload)
                 val sourceCue = mainHoshiLookupCue
                 val cueText = sourceCue?.text?.trim()?.takeIf { it.isNotBlank() }
                     ?: mainHoshiLookupTitle.trim().ifBlank { expression }
@@ -2491,7 +2510,10 @@ private fun ReaderSyncScreen() {
                         val endExclusive = (range.last + 1).coerceIn(start, cue.text.length)
                         if (endExclusive > start) cue.text.substring(start, endExclusive) else null
                     }?.trim()?.takeIf { it.isNotBlank() }
-                val exportAudioUri = mainHoshiLookupAudioUri
+                // A normal query-page lookup has no subtitle cue. Do not pass the
+                // currently selected book audio as a cue source, otherwise the
+                // Anki exporter tries to cut a synthetic 0ms..0ms clip.
+                val exportAudioUri = sourceCue?.let { mainHoshiLookupAudioUri }
                 android.util.Log.d(
                     "AnkiExportDebug",
                     "mainHoshiExport payload expression=$expression reading=${reading.orEmpty()} dict=$primaryDictionaryName " +
@@ -2526,6 +2548,7 @@ private fun ReaderSyncScreen() {
                             definition = glossary,
                             glossaryFirstHtml = payload.optString("glossaryFirst").trim().takeIf { it.isNotBlank() },
                             dictionaryCss = dictionaryCssByName[primaryDictionaryName],
+                            dictionaryMedia = dictionaryMedia,
                             popupSelectionText = popupSelectionText,
                             sentenceOverride = cue.text,
                             lookupTermOverride = expression
@@ -5012,8 +5035,35 @@ private fun BookCoverThumbnail(
     clampToBounds: Boolean = true,
     showBlackBackground: Boolean = false
 ) {
+    val context = LocalContext.current.applicationContext
+    var targetSize by remember(coverUri) { mutableStateOf(IntSize.Zero) }
+    val decodeDimension = if (targetSize.width > 0 && targetSize.height > 0) {
+        val zoom = coverAdjustment?.zoom?.coerceIn(1f, maxZoom) ?: 1f
+        (maxOf(targetSize.width, targetSize.height) * zoom)
+            .roundToInt()
+            .coerceIn(1, 1536)
+    } else {
+        0
+    }
+    val needsCustomMatrix = coverAdjustment != null ||
+        (useStartFocus && coverFocus == HomeCoverCropFocus.START)
+    val renderKey = "$coverUri|$coverAdjustment|$coverFocus|$useStartFocus|$maxZoom|$clampToBounds|$decodeDimension"
+    val bitmap by produceState<Bitmap?>(
+        initialValue = BookCoverThumbnailCache.get(coverUri, decodeDimension),
+        key1 = coverUri,
+        key2 = decodeDimension
+    ) {
+        if (decodeDimension > 0 && value == null) {
+            value = BookCoverThumbnailCache.load(context, coverUri, decodeDimension)
+        }
+    }
+    val bitmapRenderKey = if (bitmap != null) {
+        "$renderKey|bitmap:${System.identityHashCode(bitmap)}"
+    } else {
+        renderKey
+    }
     AndroidView(
-        modifier = modifier,
+        modifier = modifier.onSizeChanged { targetSize = it },
         factory = { context ->
             ImageView(context).apply {
                 scaleType = ImageView.ScaleType.CENTER_CROP
@@ -5021,33 +5071,92 @@ private fun BookCoverThumbnail(
                 if (showBlackBackground) {
                     setBackgroundColor(android.graphics.Color.BLACK)
                 }
-                tag = coverUri.toString()
-                setImageURI(coverUri)
+                tag = bitmapRenderKey
+                alpha = if (needsCustomMatrix && bitmap != null) 0f else 1f
+                if (bitmap != null) setImageBitmap(bitmap) else setImageDrawable(null)
             }
         },
         update = { view ->
             view.setBackgroundColor(
                 if (showBlackBackground) android.graphics.Color.BLACK else android.graphics.Color.TRANSPARENT
             )
-            val coverUriTag = coverUri.toString()
-            if (view.tag != coverUriTag) {
-                view.tag = coverUriTag
-                view.setImageURI(coverUri)
+            if (view.tag != bitmapRenderKey) {
+                view.tag = bitmapRenderKey
+                if (bitmap != null) view.setImageBitmap(bitmap) else view.setImageDrawable(null)
+                view.alpha = if (needsCustomMatrix && bitmap != null) 0f else 1f
             }
-            view.scaleType = when {
-                coverAdjustment != null -> ImageView.ScaleType.MATRIX
-                useStartFocus && coverFocus == HomeCoverCropFocus.START -> ImageView.ScaleType.MATRIX
-                else -> ImageView.ScaleType.CENTER_CROP
+            view.scaleType = if (needsCustomMatrix) {
+                ImageView.ScaleType.MATRIX
+            } else {
+                ImageView.ScaleType.CENTER_CROP
             }
-            if (coverAdjustment != null) {
-                view.post { applyBookCoverAdjustment(view, coverAdjustment, maxZoom, clampToBounds) }
-            } else if (useStartFocus && coverFocus == HomeCoverCropFocus.START) {
-                view.post { applyStartCrop(view) }
-            } else if (!useStartFocus) {
-                view.imageMatrix = null
+            if (needsCustomMatrix) {
+                fun applyMatrixWhenReady() {
+                    if (view.tag != bitmapRenderKey || view.drawable == null) return
+                    if (view.width <= 0 || view.height <= 0) {
+                        view.post { applyMatrixWhenReady() }
+                        return
+                    }
+                    if (coverAdjustment != null) {
+                        applyBookCoverAdjustment(view, coverAdjustment, maxZoom, clampToBounds)
+                    } else {
+                        applyStartCrop(view)
+                    }
+                    view.alpha = 1f
+                }
+                view.post { applyMatrixWhenReady() }
+            } else {
+                view.imageMatrix = Matrix()
+                view.alpha = 1f
             }
         }
     )
+}
+
+private object BookCoverThumbnailCache {
+    private val cache = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
+
+    fun get(uri: Uri, targetDimension: Int): Bitmap? = synchronized(cache) {
+        cache.get(cacheKey(uri, targetDimension))
+    }
+
+    suspend fun load(context: Context, uri: Uri, targetDimension: Int): Bitmap? = withContext(Dispatchers.IO) {
+        if (targetDimension <= 0) return@withContext null
+        val key = cacheKey(uri, targetDimension)
+        synchronized(cache) {
+            cache.get(key)?.let { return@withContext it }
+        }
+
+        val bitmap = try {
+            val source = if (uri.scheme.equals("file", ignoreCase = true)) {
+                ImageDecoder.createSource(File(uri.path ?: return@withContext null))
+            } else {
+                ImageDecoder.createSource(context.contentResolver, uri)
+            }
+            ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                val longest = maxOf(info.size.width, info.size.height).coerceAtLeast(1)
+                val scale = minOf(1f, targetDimension.toFloat() / longest)
+                decoder.setTargetSize(
+                    (info.size.width * scale).roundToInt().coerceAtLeast(1),
+                    (info.size.height * scale).roundToInt().coerceAtLeast(1)
+                )
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+        } catch (error: Exception) {
+            Log.e("BookCoverThumbnail", "decode failed uri=$uri target=$targetDimension", error)
+            return@withContext null
+        }
+        bitmap.prepareToDraw()
+        synchronized(cache) {
+            cache.put(key, bitmap)
+        }
+        bitmap
+    }
+
+    private fun cacheKey(uri: Uri, targetDimension: Int): String =
+        "${uri}#$targetDimension"
 }
 
 private fun applyStartCrop(view: ImageView) {
@@ -6337,25 +6446,6 @@ internal fun MainLookupClickableSentence(
     )
 }
 
-private fun isAppProcessInForeground(): Boolean {
-    val processInfo = ActivityManager.RunningAppProcessInfo()
-    ActivityManager.getMyMemoryState(processInfo)
-    return processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
-        processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
-}
-
-private fun formatTime(ms: Long): String {
-    val totalSeconds = (ms.coerceAtLeast(0L) / 1000L)
-    val hours = totalSeconds / 3600L
-    val minutes = (totalSeconds % 3600L) / 60L
-    val seconds = totalSeconds % 60L
-    return if (hours > 0L) {
-        String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
-    } else {
-        String.format(Locale.US, "%02d:%02d", minutes, seconds)
-    }
-}
-
 private fun consumeReturnedBookProgress(intent: Intent?): ReturnedBookProgress? {
     val sourceIntent = intent ?: return null
     val audioUri = sourceIntent
@@ -6385,14 +6475,14 @@ private fun formatCollectedCueMeta(context: Context, item: BookReaderCollectedCu
     val chapterLabel = item.chapterTitle?.takeIf { it.isNotBlank() }
         ?: item.chapterIndex?.let { context.getString(R.string.chapter_label_number, it + 1) }
     val startLabel = if (item.chapterStartOffsetMs != null) {
-        formatTime(item.chapterStartOffsetMs)
+        formatPlaybackTime(item.chapterStartOffsetMs)
     } else {
-        formatTime(item.startMs)
+        formatPlaybackTime(item.startMs)
     }
     val endLabel = if (item.chapterEndOffsetMs != null) {
-        formatTime(item.chapterEndOffsetMs)
+        formatPlaybackTime(item.chapterEndOffsetMs)
     } else {
-        formatTime(item.endMs)
+        formatPlaybackTime(item.endMs)
     }
     return buildString {
         append(item.bookTitle)

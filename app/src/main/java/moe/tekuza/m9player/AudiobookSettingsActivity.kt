@@ -3,7 +3,6 @@ package moe.tekuza.m9player
 import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
@@ -15,7 +14,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,9 +29,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -45,7 +40,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -501,7 +495,7 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(stringResource(R.string.audiobook_overlay_subtitle_style), style = MaterialTheme.typography.titleMedium)
-                SubtitleWritingModeDropdown(
+                SubtitleWritingModeSelector(
                     selected = config.bookSubtitleWritingMode,
                     onSelected = { mode ->
                         if (mode != config.bookSubtitleWritingMode) {
@@ -518,61 +512,6 @@ private fun AudiobookSettingsScreen(onBack: () -> Unit) {
             Text(it)
         }
         }
-    }
-}
-
-@Composable
-private fun SubtitleWritingModeDropdown(
-    selected: FloatingSubtitleWritingMode,
-    onSelected: (FloatingSubtitleWritingMode) -> Unit
-) {
-    val context = LocalContext.current
-
-    SingleChoiceSegmentedButtonRow(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 40.dp)
-    ) {
-        SegmentedButton(
-            selected = selected == FloatingSubtitleWritingMode.HORIZONTAL,
-            onClick = { onSelected(FloatingSubtitleWritingMode.HORIZONTAL) },
-            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-            colors = SegmentedButtonDefaults.colors(
-                activeContainerColor = Color.Transparent,
-                inactiveContainerColor = Color.Transparent
-            )
-        ) {
-            Text(
-                text = floatingSubtitleWritingModeLabel(context, FloatingSubtitleWritingMode.HORIZONTAL),
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-        SegmentedButton(
-            selected = selected == FloatingSubtitleWritingMode.VERTICAL_RTL,
-            onClick = { onSelected(FloatingSubtitleWritingMode.VERTICAL_RTL) },
-            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-            colors = SegmentedButtonDefaults.colors(
-                activeContainerColor = Color.Transparent,
-                inactiveContainerColor = Color.Transparent
-            )
-        ) {
-            Text(
-                text = floatingSubtitleWritingModeLabel(context, FloatingSubtitleWritingMode.VERTICAL_RTL),
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-    }
-}
-
-private fun floatingSubtitleWritingModeLabel(
-    context: android.content.Context,
-    mode: FloatingSubtitleWritingMode
-): String {
-    return when (mode) {
-        FloatingSubtitleWritingMode.HORIZONTAL ->
-            context.getString(R.string.audiobook_overlay_subtitle_writing_mode_horizontal)
-        FloatingSubtitleWritingMode.VERTICAL_RTL ->
-            context.getString(R.string.audiobook_overlay_subtitle_writing_mode_vertical_rtl)
     }
 }
 

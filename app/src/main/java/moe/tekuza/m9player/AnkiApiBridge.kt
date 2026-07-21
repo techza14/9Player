@@ -7,7 +7,6 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.net.Uri
-import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
@@ -305,6 +304,7 @@ internal fun exportToAnkiDroidApi(
 
     val fieldValues = runCatching {
         val mediaSrcCache = mutableMapOf<String, String>()
+        val dictionaryMediaByFilename = card.dictionaryMedia.associateBy { it.filename }
         model.fields.map { fieldName ->
             val template = templatesByField[fieldName].orEmpty()
             val rendered = resolveTemplate(template, variables).trim()
@@ -313,7 +313,8 @@ internal fun exportToAnkiDroidApi(
                 api = api,
                 html = rendered,
                 sourceLabel = "field:$fieldName",
-                mediaSrcCache = mediaSrcCache
+                mediaSrcCache = mediaSrcCache,
+                dictionaryMediaByFilename = dictionaryMediaByFilename
             )
         }.toTypedArray()
     }.getOrElse { throwable ->
@@ -775,7 +776,8 @@ private fun rewriteHtmlForAnkiExport(
     api: AddContentApi,
     html: String,
     sourceLabel: String,
-    mediaSrcCache: MutableMap<String, String>
+    mediaSrcCache: MutableMap<String, String>,
+    dictionaryMediaByFilename: Map<String, MinedDictionaryMedia>
 ): String {
     if (html.isBlank()) return html
     if (!html.contains("<img", ignoreCase = true) && !html.contains("<link", ignoreCase = true)) {
@@ -825,7 +827,8 @@ private fun rewriteHtmlForAnkiExport(
                 rawSrc = rawSrc,
                 sourceLabel = sourceLabel,
                 imageIndex = imageIndex,
-                mediaSrcCache = mediaSrcCache
+                mediaSrcCache = mediaSrcCache,
+                dictionaryMediaByFilename = dictionaryMediaByFilename
             )
             replaced = true
             imageIndex += 1
@@ -840,7 +843,8 @@ private fun rewriteHtmlForAnkiExport(
                     rawSrc = rawSrc,
                     sourceLabel = sourceLabel,
                     imageIndex = imageIndex,
-                    mediaSrcCache = mediaSrcCache
+                    mediaSrcCache = mediaSrcCache,
+                    dictionaryMediaByFilename = dictionaryMediaByFilename
                 )
                 imageIndex += 1
                 "src=\"${escapeHtmlAttributeAnki(rewritten)}\""
@@ -857,7 +861,8 @@ private fun rewriteAnkiImageSrc(
     rawSrc: String,
     sourceLabel: String,
     imageIndex: Int,
-    mediaSrcCache: MutableMap<String, String>
+    mediaSrcCache: MutableMap<String, String>,
+    dictionaryMediaByFilename: Map<String, MinedDictionaryMedia>
 ): String {
     val src = rawSrc.trim().trim('"', '\'')
     if (src.isBlank()) return rawSrc
@@ -867,6 +872,16 @@ private fun rewriteAnkiImageSrc(
     if (src.startsWith("http://", ignoreCase = true) || src.startsWith("https://", ignoreCase = true)) return rawSrc
 
     mediaSrcCache[src]?.let { return it }
+
+    dictionaryMediaByFilename[src]?.let { media ->
+        val resolvedSrc = addDictionaryMediaAsImageSrc(
+            api = api,
+            context = context,
+            media = media
+        ) ?: rawSrc
+        mediaSrcCache[src] = resolvedSrc
+        return resolvedSrc
+    }
 
     val uri = resolveAnkiHtmlResourceUri(src) ?: return rawSrc
     val preferredName = buildPreferredImageMediaName(context, uri, sourceLabel, imageIndex)
@@ -885,11 +900,50 @@ private fun addMediaAsImageSrc(
     context: Context,
     sourceUri: Uri,
     preferredName: String
+): String? = addMediaAsImageInput(
+    api = api,
+    context = context,
+    preferredName = preferredName
+) {
+    openInputStreamForUri(context, sourceUri)
+}
+
+private fun addDictionaryMediaAsImageSrc(
+    api: AddContentApi,
+    context: Context,
+    media: MinedDictionaryMedia
+): String? {
+    val requestUri = Uri.Builder()
+        .scheme("https")
+        .authority("hoshi.local")
+        .path("/image")
+        .appendQueryParameter("dictionary", media.dictionary)
+        .appendQueryParameter("path", media.path)
+        .build()
+    val payload = runCatching { loadDictionaryMediaPayload(context, requestUri) }.getOrNull() ?: return null
+    val extension = media.filename.substringAfterLast('.', "png")
+        .lowercase(Locale.ROOT)
+        .takeIf { it.length in 1..8 && it.all { character -> character.isLetterOrDigit() } }
+        ?: "png"
+    return addMediaAsImageInput(
+        api = api,
+        context = context,
+        preferredName = "hoshi_dict_${payload.bytes.contentHashCode()}.$extension"
+    ) {
+        java.io.ByteArrayInputStream(payload.bytes)
+    }
+}
+
+private fun addMediaAsImageInput(
+    api: AddContentApi,
+    context: Context,
+    preferredName: String,
+    openInputStream: () -> InputStream?
 ): String? {
     val extension = preferredName.substringAfterLast('.', "png")
     val temp = createAnkiMediaTempFile(context, prefix = "anki-img", extension = extension)
     return try {
-        openInputStreamForUri(context, sourceUri)?.use { input ->
+        openInputStream()?.use { input ->
             temp.outputStream().use { output ->
                 input.copyTo(output)
             }
@@ -981,16 +1035,20 @@ private fun resolveAnkiHtmlResourceUri(raw: String): Uri? {
     if (src.startsWith("#")) return null
     if (src.startsWith("//")) return null
     if (src.startsWith("data:", ignoreCase = true)) return null
-    if (src.startsWith("http://", ignoreCase = true) || src.startsWith("https://", ignoreCase = true)) return null
-
-    return if (ANKI_URI_SCHEME_REGEX.containsMatchIn(src)) {
+    val uri = if (ANKI_URI_SCHEME_REGEX.containsMatchIn(src)) {
         runCatching { Uri.parse(src) }.getOrNull()
     } else {
         runCatching {
             val asFile = File(src)
             if (asFile.isAbsolute) Uri.fromFile(asFile) else null
         }.getOrNull()
+    } ?: return null
+
+    val scheme = uri.scheme?.lowercase(Locale.ROOT).orEmpty()
+    if (scheme == "http" || scheme == "https") {
+        return null
     }
+    return uri
 }
 
 private fun findHtmlAttributeValue(tag: String, attribute: String): String? {

@@ -120,7 +120,6 @@ private fun DictionarySettingsScreen(onBack: () -> Unit) {
     LaunchedEffect(Unit) {
         uiConfig = loadDictionaryUiConfig(context)
         dictionarySettings = loadDictionarySettings(context)
-        dictionaryController.reloadExternalState()
         dictionaryController.setPersistedDictionaryRefs(loadPersistedImports(context).dictionaries)
     }
 

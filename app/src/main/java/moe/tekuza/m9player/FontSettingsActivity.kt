@@ -7,7 +7,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,8 +17,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FontDownload
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -30,8 +27,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import moe.tekuza.m9player.ui.theme.TsetTheme
@@ -46,7 +41,6 @@ class FontSettingsActivity : ComponentActivity() {
         }
     }
 }
-
 @Composable
 private fun FontSettingsScreen(onBack: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -85,10 +79,11 @@ private fun FontSettingsScreen(onBack: () -> Unit) {
                 .padding(vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
-            SettingsLikeItem(
+            SettingsListItem(
                 icon = Icons.Outlined.FontDownload,
                 title = stringResource(R.string.settings_font_import),
                 subtitle = fontLabel,
+                iconSize = 24.dp,
                 onClick = { fontPicker.launch(arrayOf("font/*", "application/octet-stream")) }
             )
             SettingsLikeInfo(text = stringResource(R.string.settings_font_default_scope))
@@ -111,10 +106,11 @@ private fun FontSettingsScreen(onBack: () -> Unit) {
                     }
                 )
             }
-            SettingsLikeItem(
+            SettingsListItem(
                 icon = Icons.Outlined.Delete,
                 title = stringResource(R.string.common_clear),
                 titleColor = MaterialTheme.colorScheme.error,
+                iconSize = 24.dp,
                 onClick = {
                     deleteImportedSubtitleCustomFont(context)
                     saveSubtitleCustomFontUri(context, null)
@@ -123,10 +119,11 @@ private fun FontSettingsScreen(onBack: () -> Unit) {
                 },
                 showDivider = false
             )
-            SettingsLikeItem(
+            SettingsListItem(
                 icon = Icons.Outlined.AutoStories,
                 title = stringResource(R.string.settings_audiobook_ui_title),
                 subtitle = stringResource(R.string.settings_audiobook_ui_subtitle),
+                iconSize = 24.dp,
                 onClick = { context.startActivity(Intent(context, AudiobookUiSettingsActivity::class.java)) },
                 showDivider = false
             )
@@ -147,54 +144,5 @@ private fun SettingsLikeInfo(text: String) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-    }
-}
-
-@Composable
-private fun SettingsLikeItem(
-    icon: ImageVector,
-    title: String,
-    onClick: () -> Unit,
-    subtitle: String? = null,
-    titleColor: Color = MaterialTheme.colorScheme.onSurface,
-    showDivider: Boolean = true
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 18.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                Text(text = title, style = MaterialTheme.typography.bodyLarge, color = titleColor)
-                if (!subtitle.isNullOrBlank()) {
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-        if (showDivider) {
-            HorizontalDivider(
-                modifier = Modifier.padding(start = 20.dp, end = 20.dp),
-                color = Color.Transparent
-            )
-        }
     }
 }

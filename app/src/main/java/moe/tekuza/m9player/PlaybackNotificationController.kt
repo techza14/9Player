@@ -20,7 +20,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.util.Locale
 
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 internal class PlaybackNotificationController(
@@ -90,8 +89,8 @@ internal class PlaybackNotificationController(
                     return appContext.getString(
                         R.string.playback_progress_template,
                         percent,
-                        formatTime(currentMs),
-                        formatTime(durationMs)
+                        formatPlaybackTime(currentMs),
+                        formatPlaybackTime(durationMs)
                     )
                 }
 
@@ -202,16 +201,5 @@ internal class PlaybackNotificationController(
         private const val PROGRESS_REFRESH_INTERVAL_MS = 1_000L
         private const val DEFAULT_NOTIFICATION_SEEK_MS = 10_000L
 
-        private fun formatTime(ms: Long): String {
-            val totalSeconds = (ms.coerceAtLeast(0L) / 1000L)
-            val hours = totalSeconds / 3600L
-            val minutes = (totalSeconds % 3600L) / 60L
-            val seconds = totalSeconds % 60L
-            return if (hours > 0L) {
-                String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
-            } else {
-                String.format(Locale.US, "%02d:%02d", minutes, seconds)
-            }
-        }
     }
 }

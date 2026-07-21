@@ -48,6 +48,7 @@ internal fun stopWearableBridgeService(context: Context) {
 class WearableBridgeService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val registeredNodeIds = linkedSetOf<String>()
+    private val registeringNodeIds = linkedSetOf<String>()
     private var nodeApi: NodeApi? = null
     private var messageApi: MessageApi? = null
     private var serviceApi: ServiceApi? = null
@@ -65,7 +66,10 @@ class WearableBridgeService : Service() {
         override fun onServiceConnected() = registerConnectedNodes()
 
         override fun onServiceDisconnected() {
-            registeredNodeIds.clear()
+            synchronized(this@WearableBridgeService) {
+                registeredNodeIds.clear()
+                registeringNodeIds.clear()
+            }
             updateNotification(getString(R.string.wearable_status_waiting_connection))
         }
     }
@@ -99,8 +103,13 @@ class WearableBridgeService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        registeredNodeIds.toList().forEach { nodeId -> messageApi?.removeListener(nodeId) }
-        registeredNodeIds.clear()
+        val nodesToRemove = synchronized(this) {
+            registeredNodeIds.toList().also {
+                registeredNodeIds.clear()
+                registeringNodeIds.clear()
+            }
+        }
+        nodesToRemove.forEach { nodeId -> messageApi?.removeListener(nodeId) }
         serviceApi?.unregisterServiceConnectionListener(serviceConnectionListener)
         scope.cancel()
         super.onDestroy()
@@ -123,8 +132,15 @@ class WearableBridgeService : Service() {
     }
 
     private fun ensurePermissionAndListen(nodeId: String) {
-        if (nodeId.isBlank() || nodeId in registeredNodeIds) return
-        val auth = runCatching { Wearable.getAuthApi(applicationContext) }.getOrNull() ?: return
+        if (nodeId.isBlank()) return
+        synchronized(this) {
+            if (nodeId in registeredNodeIds || !registeringNodeIds.add(nodeId)) return
+        }
+        val auth = runCatching { Wearable.getAuthApi(applicationContext) }.getOrNull()
+        if (auth == null) {
+            synchronized(this) { registeringNodeIds.remove(nodeId) }
+            return
+        }
         auth.checkPermission(nodeId, Permission.DEVICE_MANAGER)
             .addOnSuccessListener { granted ->
                 if (granted) {
@@ -133,22 +149,37 @@ class WearableBridgeService : Service() {
                     auth.requestPermission(nodeId, Permission.DEVICE_MANAGER)
                         .addOnSuccessListener { addMessageListener(nodeId) }
                         .addOnFailureListener {
+                            synchronized(this) { registeringNodeIds.remove(nodeId) }
                             Log.w(TAG, "wearable permission denied", it)
                             updateNotification(getString(R.string.wearable_error_permission))
                         }
                 }
             }
-            .addOnFailureListener { Log.w(TAG, "permission check failed", it) }
+            .addOnFailureListener {
+                synchronized(this) { registeringNodeIds.remove(nodeId) }
+                Log.w(TAG, "permission check failed", it)
+            }
     }
 
     private fun addMessageListener(nodeId: String) {
-        messageApi?.addListener(nodeId, messageListener)
+        val api = messageApi
+        if (api == null) {
+            synchronized(this) { registeringNodeIds.remove(nodeId) }
+            return
+        }
+        api.addListener(nodeId, messageListener)
             ?.addOnSuccessListener {
-                registeredNodeIds += nodeId
+                synchronized(this) {
+                    registeringNodeIds.remove(nodeId)
+                    registeredNodeIds += nodeId
+                }
                 updateNotification(getString(R.string.wearable_status_enabled))
                 send(nodeId, currentStateResponse(null, getString(R.string.wearable_status_enabled)))
             }
-            ?.addOnFailureListener { Log.w(TAG, "message listener failed", it) }
+            ?.addOnFailureListener {
+                synchronized(this) { registeringNodeIds.remove(nodeId) }
+                Log.w(TAG, "message listener failed", it)
+            }
     }
 
     private fun handle(nodeId: String, request: WearableCommand) {
@@ -172,11 +203,13 @@ class WearableBridgeService : Service() {
                     )
                 }
                 "SEEK_PREVIOUS" -> {
-                    BookReaderFloatingBridge.seekPrevious()
+                    Log.d(TAG, "received wearable seek step=-1")
+                    BookReaderFloatingBridge.seekAdjacent(applicationContext, -1)
                     send(nodeId, currentStateResponse(request, getString(R.string.wearable_status_seek_previous)))
                 }
                 "SEEK_NEXT" -> {
-                    BookReaderFloatingBridge.seekNext()
+                    Log.d(TAG, "received wearable seek step=1")
+                    BookReaderFloatingBridge.seekAdjacent(applicationContext, 1)
                     send(nodeId, currentStateResponse(request, getString(R.string.wearable_status_seek_next)))
                 }
                 "SET_SPEED" -> {
@@ -199,6 +232,13 @@ class WearableBridgeService : Service() {
                             nodeId,
                             currentStateResponse(request, message)
                         )
+                    } else {
+                        send(nodeId, response(request, false, getString(R.string.wearable_error_player_not_ready)))
+                    }
+                }
+                "CLEAR_TIMER" -> {
+                    if (BookReaderFloatingBridge.requestSleepTimer(0)) {
+                        send(nodeId, currentStateResponse(request, getString(R.string.wearable_status_timer_cancelled)))
                     } else {
                         send(nodeId, response(request, false, getString(R.string.wearable_error_player_not_ready)))
                     }
@@ -235,7 +275,6 @@ class WearableBridgeService : Service() {
             put("positionMs", BookReaderFloatingBridge.currentPlaybackPositionMs())
             put("durationMs", BookReaderFloatingBridge.currentPlaybackDurationMs())
             put("timerRemainingMs", BookReaderFloatingBridge.currentSleepTimerRemainingMs())
-            put("vertical", loadAudiobookSettingsConfig(applicationContext).bookSubtitleWritingMode == FloatingSubtitleWritingMode.VERTICAL_RTL)
         }
     }
 
@@ -291,7 +330,7 @@ class WearableBridgeService : Service() {
 internal data class WearableCommand(val command: String, val requestId: String, val value: Double? = null)
 
 internal object WearableCommandProtocol {
-    private val allowed = setOf("GET_STATE", "PLAY_PAUSE", "SEEK_PREVIOUS", "SEEK_NEXT", "SET_SPEED", "SET_TIMER", "COLLECT_CURRENT")
+    private val allowed = setOf("GET_STATE", "PLAY_PAUSE", "SEEK_PREVIOUS", "SEEK_NEXT", "SET_SPEED", "SET_TIMER", "CLEAR_TIMER", "COLLECT_CURRENT")
 
     fun parse(bytes: ByteArray): WearableCommand? {
         if (bytes.isEmpty() || bytes.size > 8_192) return null

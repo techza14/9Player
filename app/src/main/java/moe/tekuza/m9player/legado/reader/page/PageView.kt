@@ -1,7 +1,6 @@
 package moe.tekuza.m9player.legado.reader.page
 
 import android.content.Context
-import android.os.BatteryManager
 import android.view.Gravity
 import android.view.View
 import android.graphics.drawable.ColorDrawable
@@ -20,9 +19,8 @@ import moe.tekuza.m9player.ReaderInfoSlot
 import moe.tekuza.m9player.ReaderTipContent
 import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.TextPage
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import moe.tekuza.m9player.readerBatteryPercent
+import moe.tekuza.m9player.readerClockText
 
 internal class PageView(context: Context) : LinearLayout(context) {
     data class SelectedTextSnapshot(
@@ -399,8 +397,8 @@ internal class PageView(context: Context) : LinearLayout(context) {
 
     private fun updateTipText() {
         val page = currentPage
-        val clockText = currentClockText()
-        val batteryPercent = batteryPercent()
+        val clockText = readerClockText()
+        val batteryPercent = readerBatteryPercent(context)
         updateTipView(headerLeftView, tipHeaderLeft, page, ReaderInfoSlot.HEADER_LEFT, clockText, batteryPercent)
         updateTipView(headerMiddleView, tipHeaderMiddle, page, ReaderInfoSlot.HEADER_MIDDLE, clockText, batteryPercent)
         updateTipView(headerRightView, tipHeaderRight, page, ReaderInfoSlot.HEADER_RIGHT, clockText, batteryPercent)
@@ -456,8 +454,8 @@ internal class PageView(context: Context) : LinearLayout(context) {
         content: ReaderTipContent,
         page: TextPage?,
         slot: ReaderInfoSlot,
-        clockText: String = currentClockText(),
-        batteryPercent: Int = batteryPercent()
+        clockText: String = readerClockText(),
+        batteryPercent: Int = readerBatteryPercent(context)
     ): String {
         return ReaderTipFormatter.text(
             content = content,
@@ -480,19 +478,6 @@ internal class PageView(context: Context) : LinearLayout(context) {
                 null
             }
         )
-    }
-
-    private fun batteryPercent(): Int {
-        return runCatching {
-            context.getSystemService(BatteryManager::class.java)
-                ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-                ?.takeIf { it >= 0 }
-                ?: 100
-        }.getOrDefault(100)
-    }
-
-    private fun currentClockText(): String {
-        return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
     }
 
     private fun withAlpha(color: Int, alpha: Float): Int {
