@@ -95,6 +95,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -3654,6 +3655,7 @@ private fun ReaderSyncScreen() {
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             rowBooks.forEach { book ->
+                                key(book.id, homeCoverAspect) {
                                 val selected = selectedBookId == book.id
                                 val multiSelected = selectedBookIds.contains(book.id)
                                 val playbackSnapshot = readerBookPlaybackSnapshots[book.id]
@@ -3836,6 +3838,7 @@ private fun ReaderSyncScreen() {
                                         }
                                     }
                                 }
+                                }
                             }
                             if (rowBooks.size == 1) {
                                 Spacer(modifier = Modifier.weight(1f))
@@ -3844,6 +3847,7 @@ private fun ReaderSyncScreen() {
                     }
                 } else {
                     readerBooks.forEach { book ->
+                        key(book.id, homeCoverAspect) {
                         val selected = selectedBookId == book.id
                         val multiSelected = selectedBookIds.contains(book.id)
                         val playbackSnapshot = readerBookPlaybackSnapshots[book.id]
@@ -4012,6 +4016,7 @@ private fun ReaderSyncScreen() {
                                     }
                                 }
                             }
+                        }
                         }
                     }
                 }

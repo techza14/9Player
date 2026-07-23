@@ -6335,6 +6335,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun startAudioCueRepeatDelay(currentPlayer: ExoPlayer, startMs: Long, endMs: Long) {
+        currentPlayer.seekTo(startMs)
         if (audioCueRepeatDelayJob?.isActive == true) return
         fun launchRepeatDelay(pauseMs: Long, block: suspend (ExoPlayer) -> Unit) {
             val generation = ++audioCueRepeatDelayGeneration

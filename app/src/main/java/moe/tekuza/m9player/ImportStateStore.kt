@@ -52,7 +52,7 @@ internal data class PersistedImports(
     val books: List<PersistedReaderBook> = emptyList(),
     val selectedBookId: String? = null,
     val homeLibraryView: String = "BOOKSHELF",
-    val homeCoverAspect: String = "BOOK",
+    val homeCoverAspect: String = "SQUARE",
     val dictionaries: List<PersistedDictionaryRef>
 )
 
@@ -76,7 +76,7 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         books = emptyList(),
         selectedBookId = null,
         homeLibraryView = "BOOKSHELF",
-        homeCoverAspect = "BOOK",
+        homeCoverAspect = "SQUARE",
         dictionaries = emptyList()
     )
 
@@ -93,7 +93,7 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         books = emptyList(),
         selectedBookId = null,
         homeLibraryView = "BOOKSHELF",
-        homeCoverAspect = "BOOK",
+        homeCoverAspect = "SQUARE",
         dictionaries = emptyList()
     )
 
@@ -193,7 +193,7 @@ internal fun loadPersistedImports(context: Context): PersistedImports {
         books = books,
         selectedBookId = obj.optString("selectedBookId").trim().ifBlank { null },
         homeLibraryView = obj.optString("homeLibraryView").trim().ifBlank { "BOOKSHELF" },
-        homeCoverAspect = obj.optString("homeCoverAspect").trim().ifBlank { "BOOK" },
+        homeCoverAspect = obj.optString("homeCoverAspect").trim().ifBlank { "SQUARE" },
         dictionaries = dictionaries
     )
 }
