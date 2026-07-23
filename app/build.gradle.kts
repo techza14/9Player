@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
@@ -14,8 +14,8 @@ android {
         applicationId = "moe.tekuza.m9player"
         minSdk = 29
         targetSdk = 36
-        versionCode = 47
-        versionName = "1.7.0"
+        versionCode = 48
+        versionName = "1.7.1"
 
         externalNativeBuild {
             cmake {
@@ -89,6 +89,7 @@ dependencies {
     implementation("me.saket.telephoto:zoomable-image-coil3:0.19.0")
     testImplementation(libs.junit)
 }
+
 
 
 
