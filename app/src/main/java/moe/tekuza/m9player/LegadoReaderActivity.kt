@@ -6335,8 +6335,9 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
     }
 
     private fun startAudioCueRepeatDelay(currentPlayer: ExoPlayer, startMs: Long, endMs: Long) {
-        currentPlayer.seekTo(startMs)
         if (audioCueRepeatDelayJob?.isActive == true) return
+        currentPlayer.pause()
+        currentPlayer.seekTo(startMs)
         fun launchRepeatDelay(pauseMs: Long, block: suspend (ExoPlayer) -> Unit) {
             val generation = ++audioCueRepeatDelayGeneration
             audioCueLoopPausedForRepeat = true
@@ -6371,6 +6372,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                 if (nextCueTarget != null) {
                     val nextCueIndex = nextCueTarget
                     if (pauseMs <= 0L) {
+                        currentPlayer.play()
                         seekToCueIndex(nextCueIndex, cancelRepeatDelay = false)
                         return
                     }
@@ -6381,6 +6383,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
                     return
                 }
                 if (!audioCueRepeatTailPauseEnabled || pauseMs <= 0L) {
+                    currentPlayer.play()
                     disableAudioCueLoop(updateUi = true)
                     return
                 }
@@ -6403,7 +6406,7 @@ class LegadoReaderActivity : AppCompatActivity(), ColorPickerDialogListener {
         }
         val pauseMs = audioCueRepeatPauseMs(startMs, endMs, currentPlayer)
         if (pauseMs <= 0L) {
-            currentPlayer.seekTo(startMs)
+            currentPlayer.play()
             scheduleAudioCueLoopBoundaryMessage()
             return
         }
