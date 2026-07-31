@@ -3,7 +3,6 @@ package moe.tekuza.m9player.legado.reader.provider
 import android.graphics.Paint
 import android.text.TextPaint
 import moe.tekuza.m9player.EBOOK_IMAGE_MARKER
-import moe.tekuza.m9player.EbookRubySpan
 import moe.tekuza.m9player.decodeBitmapBounds
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9ReadBookConfig

@@ -6,12 +6,7 @@ internal data class GlossaryHtmlItem(
     val dictionaryCss: String?
 )
 
-internal fun renderYomitanGlossaryHtml(
-    items: List<GlossaryHtmlItem>,
-    includeDictionaryLabel: Boolean = true,
-    includeParityCss: Boolean = true,
-    wrapItemsInList: Boolean = true
-): String {
+internal fun renderYomitanGlossaryHtml(items: List<GlossaryHtmlItem>): String {
     val normalizedItems = items.mapNotNull { item ->
         val defs = item.definitions
             .map { it.trim() }
@@ -36,9 +31,7 @@ internal fun renderYomitanGlossaryHtml(
                 .ifBlank { null }
         }
         .toMutableList()
-    if (includeParityCss) {
-        cssChunks += glossaryDisplayParityCss()
-    }
+    cssChunks += glossaryDisplayParityCss()
     val styleBlock = cssChunks
         .map { it.trim() }
         .filter { it.isNotBlank() }
@@ -46,49 +39,31 @@ internal fun renderYomitanGlossaryHtml(
         .joinToString(separator = "\n")
         .let { css -> if (css.isBlank()) "" else "<style>$css</style>" }
 
-    val itemsHtml = normalizedItems.joinToString(separator = if (wrapItemsInList) "" else "<br>") { item ->
-        val dictionaryLabel = item.dictionaryName
-        val dictionaryAttr = resolveDictionaryAttr(dictionaryLabel)
+    val itemsHtml = normalizedItems.joinToString(separator = "<br>") { item ->
+        val dictionaryAttr = resolveDictionaryAttr(item.dictionaryName)
         val safeAttr = escapeHtmlAttributeShared(dictionaryAttr)
-        val safeLabel = escapeHtmlTextShared(dictionaryLabel)
         val definitions = item.definitions
         if (definitions.size <= 1) {
-            val def = definitions.firstOrNull().orEmpty()
             buildGlossaryListItem(
                 dictionaryAttr = safeAttr,
-                leadingLabel = "",
-                definition = def,
-                wrapInListItem = wrapItemsInList
+                definition = definitions.firstOrNull().orEmpty()
             )
         } else {
-            definitions.mapIndexed { index, def ->
+            definitions.joinToString(separator = "") { def ->
                 buildGlossaryListItem(
                     dictionaryAttr = safeAttr,
-                    leadingLabel = "",
-                    definition = def,
-                    wrapInListItem = wrapItemsInList
+                    definition = def
                 )
-            }.joinToString(separator = "")
+            }
         }
     }
 
-    return if (wrapItemsInList) {
-        """
-            <div style="text-align: left;" class="yomitan-glossary">
-                <ol>
-                    $itemsHtml
-                </ol>
-                $styleBlock
-            </div>
-        """.trimIndent()
-    } else {
-        """
-            <div style="text-align: left;" class="yomitan-glossary">
-                $itemsHtml
-                $styleBlock
-            </div>
-        """.trimIndent()
-    }
+    return """
+        <div style="text-align: left;" class="yomitan-glossary">
+            $itemsHtml
+            $styleBlock
+        </div>
+    """.trimIndent()
 }
 
 internal fun normalizeStructuredContentLikeHoshi(raw: String): String {
@@ -449,36 +424,23 @@ private fun applyHoshiTableInlineStyles(html: String): String {
 
 private fun buildGlossaryListItem(
     dictionaryAttr: String,
-    leadingLabel: String,
-    definition: String,
-    wrapInListItem: Boolean = true
+    definition: String
 ): String {
     val wrappedContent = if (definition.trimStart().startsWith("<li", ignoreCase = true)) {
-        if (wrapInListItem) {
-            "<ol>$definition</ol>"
-        } else {
-            extractInnerListItemHtml(definition)
-        }
+        extractInnerListItemHtml(definition)
     } else {
         "<span>$definition</span>"
     }
-    return if (wrapInListItem) {
-        """
-            <li data-dictionary="$dictionaryAttr">
-                $leadingLabel$wrappedContent
-            </li>
-        """.trimIndent()
-    } else {
-        """
-            <div data-dictionary="$dictionaryAttr">
-                $leadingLabel$wrappedContent
-            </div>
-        """.trimIndent()
-    }
+    return """
+        <div data-dictionary="$dictionaryAttr">
+            $wrappedContent
+        </div>
+    """.trimIndent()
 }
 
-private fun extractInnerListItemHtml(html: String): String {
+internal fun extractInnerListItemHtml(html: String): String {
     val trimmed = html.trim()
+    if (!trimmed.startsWith("<li", ignoreCase = true)) return trimmed
     val openTagEnd = trimmed.indexOf('>')
     val closeTagStart = trimmed.lastIndexOf("</li>", ignoreCase = true)
     if (openTagEnd < 0 || closeTagStart <= openTagEnd) return trimmed

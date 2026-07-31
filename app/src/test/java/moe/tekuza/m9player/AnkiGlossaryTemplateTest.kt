@@ -89,8 +89,7 @@ class AnkiGlossaryTemplateTest {
                     definitions = listOf("gamma"),
                     dictionaryCss = null
                 )
-            ),
-            wrapItemsInList = false
+            )
         )
         assertFalse(html.contains("(1,"))
         assertFalse(html.contains("<li"))
@@ -105,8 +104,7 @@ class AnkiGlossaryTemplateTest {
                     definitions = listOf("""<span class="term">alpha</span>"""),
                     dictionaryCss = """.term { color: red; }"""
                 )
-            ),
-            wrapItemsInList = false
+            )
         )
 
         assertFalse(html.contains("<li"))
@@ -126,8 +124,7 @@ class AnkiGlossaryTemplateTest {
                     ),
                     dictionaryCss = null
                 )
-            ),
-            wrapItemsInList = false
+            )
         )
 
         assertTrue(html.contains("""data-sc-previous_h3="""))
@@ -151,8 +148,7 @@ class AnkiGlossaryTemplateTest {
                     definitions = listOf(firstItem),
                     dictionaryCss = """.term { color: red; }"""
                 )
-            ),
-            wrapItemsInList = false
+            )
         )
 
         assertTrue(html.contains("""<div data-dictionary="小学館3日中""""))

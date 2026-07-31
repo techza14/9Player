@@ -562,8 +562,7 @@ private fun buildAnkiVariables(
             buildStyledGlossary(
                 definitions = source.definitions,
                 dictionaryName = source.dictionaryName,
-                dictionaryCss = source.dictionaryCss,
-                wrapItemsInList = false
+                dictionaryCss = source.dictionaryCss
             )
         }.orEmpty()
     } else {
@@ -589,8 +588,7 @@ private fun buildAnkiVariables(
             buildStyledGlossary(
                 definitions = listOf(firstItemHtml),
                 dictionaryName = source.dictionaryName,
-                dictionaryCss = source.dictionaryCss,
-                wrapItemsInList = false
+                dictionaryCss = source.dictionaryCss
             )
         }
     }.orEmpty()
@@ -689,8 +687,7 @@ private fun buildAnkiVariables(
             variables[templateSingleGlossaryKey("single-glossary", normalizedName)] = buildStyledGlossary(
                 definitions = source.definitions,
                 dictionaryName = source.dictionaryName,
-                dictionaryCss = source.dictionaryCss,
-                wrapItemsInList = false
+                dictionaryCss = source.dictionaryCss
             )
         }
         if (requiredMarkers.needs("single-glossary-brief") || requiredMarkers.singleGlossaryTokens.contains(normalizedName)) {
@@ -1162,10 +1159,7 @@ private fun buildStyledGlossaryFromSources(sources: List<MinedCardGlossarySource
                 definitions = source.definitions.map(::sanitizeAnkiDefinitionHtml),
                 dictionaryCss = source.dictionaryCss
             )
-        },
-        includeDictionaryLabel = true,
-        includeParityCss = true,
-        wrapItemsInList = false
+        }
     )
 }
 
@@ -1203,12 +1197,11 @@ private fun resolveAudioDisplayName(context: Context, uri: Uri?): String? {
 private fun buildStyledGlossary(
     definitions: List<String>,
     dictionaryName: String?,
-    dictionaryCss: String?,
-    wrapItemsInList: Boolean = true
+    dictionaryCss: String?
 ): String {
     logDebug(ANKI_EXPORT_DEBUG_TAG) {
         "buildStyledGlossary dictionaryNameLength=${dictionaryName?.length ?: 0} defs=${definitions.size} " +
-            "cssLen=${dictionaryCss?.length ?: 0} wrapItemsInList=$wrapItemsInList"
+            "cssLen=${dictionaryCss?.length ?: 0}"
     }
     return renderYomitanGlossaryHtml(
         items = listOf(
@@ -1217,22 +1210,14 @@ private fun buildStyledGlossary(
                 definitions = definitions.map(::sanitizeAnkiDefinitionHtml),
                 dictionaryCss = dictionaryCss
             )
-        ),
-        includeDictionaryLabel = true,
-        includeParityCss = true,
-        wrapItemsInList = wrapItemsInList
+        )
     )
 }
 
 internal fun buildGlossaryFirstItemHtml(definitions: List<String>): String {
     val firstDefinition = definitions.firstOrNull()?.trim().orEmpty()
     if (firstDefinition.isBlank()) return ""
-    val extracted = extractFirstGlossaryListItemHtml(firstDefinition)
-        ?: if (firstDefinition.trimStart().startsWith("<li", ignoreCase = true)) {
-            firstDefinition
-        } else {
-            firstDefinition
-        }
+    val extracted = extractFirstGlossaryListItemHtml(firstDefinition) ?: firstDefinition
     return removeLeadingGlossaryIndex(extractInnerListItemHtml(extracted))
 }
 
@@ -1294,15 +1279,6 @@ private fun extractFirstGlossaryListItemHtml(raw: String): String? {
         match = ANKI_LI_TAG_REGEX.find(raw, tagEnd + 1)
     }
     return null
-}
-
-private fun extractInnerListItemHtml(html: String): String {
-    val trimmed = html.trim()
-    if (!trimmed.startsWith("<li", ignoreCase = true)) return trimmed
-    val openTagEnd = trimmed.indexOf('>')
-    val closeTagStart = trimmed.lastIndexOf("</li>", ignoreCase = true)
-    if (openTagEnd < 0 || closeTagStart <= openTagEnd) return trimmed
-    return trimmed.substring(openTagEnd + 1, closeTagStart).trim()
 }
 
 internal fun classifyAnkiExportFailure(
