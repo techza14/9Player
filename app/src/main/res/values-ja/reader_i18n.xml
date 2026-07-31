@@ -201,6 +201,7 @@
     <string name="reader_tip_chapter_progress">進捗(xx/yyy)</string>
     <string name="reader_tip_page_and_total">ページ数と進捗</string>
     <string name="reader_tip_page_or_progress">ページ数/進捗</string>
+    <string name="reader_tip_char_count">文字数</string>
     <string name="reader_tip_time_battery">時刻とバッテリー</string>
     <string name="reader_tip_time_battery_percentage">時刻とバッテリー%</string>
     <string name="reader_dialog_done">完了</string>

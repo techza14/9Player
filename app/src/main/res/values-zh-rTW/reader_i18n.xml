@@ -201,6 +201,7 @@
     <string name="reader_tip_chapter_progress">進度(xx/yyy)</string>
     <string name="reader_tip_page_and_total">頁數及進度</string>
     <string name="reader_tip_page_or_progress">頁數/進度</string>
+    <string name="reader_tip_char_count">字數</string>
     <string name="reader_tip_time_battery">時間及電量</string>
     <string name="reader_tip_time_battery_percentage">時間及電量%</string>
     <string name="reader_dialog_done">完成</string>

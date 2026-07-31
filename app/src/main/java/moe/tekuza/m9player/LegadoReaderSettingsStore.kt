@@ -101,6 +101,7 @@ internal enum class ReaderTipContent {
     CHAPTER_PROGRESS,
     PAGE_AND_TOTAL,
     PAGE_OR_PROGRESS,
+    CHAR_COUNT,
     TIME_BATTERY,
     TIME_BATTERY_PERCENTAGE
 }

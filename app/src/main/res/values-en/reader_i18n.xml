@@ -201,6 +201,7 @@
     <string name="reader_tip_chapter_progress">Progress(xx/yyy)</string>
     <string name="reader_tip_page_and_total">Pages and progress</string>
     <string name="reader_tip_page_or_progress">Pages/Progress</string>
+    <string name="reader_tip_char_count">Chars</string>
     <string name="reader_tip_time_battery">Time and Battery</string>
     <string name="reader_tip_time_battery_percentage">Time and Battery%</string>
     <string name="reader_dialog_done">Done</string>

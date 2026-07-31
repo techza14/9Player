@@ -41,6 +41,7 @@ internal object ReaderTipFormatter {
             ReaderTipContent.TOTAL_PROGRESS -> if (alternateProgress) page.chapterReadProgress() else page.readProgress
             ReaderTipContent.CHAPTER_PROGRESS -> page.chapterProgressText()
             ReaderTipContent.PAGE_AND_TOTAL -> "${page.chapterPageText()}  ${page.readProgress}"
+            ReaderTipContent.CHAR_COUNT -> "${page.documentCharEnd} / ${page.documentCharCount}"
             ReaderTipContent.TIME_BATTERY -> "$clockText  $batteryPercent"
             ReaderTipContent.TIME_BATTERY_PERCENTAGE -> "$clockText $batteryPercent%"
         }
