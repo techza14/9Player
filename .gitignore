@@ -34,6 +34,9 @@ classes-shizuku-provider.jar
 # Android signature sidecar generated alongside APK
 /release/*.idsig
 
+# Local debug-suffix test build variant
+/app/debug-suffix.gradle
+/app/src/debugSuffix/
 
 # Rust build artifacts
 /app/src/main/rust/**/target/

@@ -61,6 +61,10 @@ android {
     }
 }
 
+if (file("debug-suffix.gradle").exists()) {
+    apply(from = "debug-suffix.gradle")
+}
+
 dependencies {
     implementation(files("libs/xms-wearable-lib_1.4_release.aar"))
     implementation("androidx.appcompat:appcompat:1.7.0")
