@@ -415,6 +415,12 @@ private data class BookCoverRenderSpec(
     val viewHeight: Int
 )
 
+private data class DecodedBookCover(
+    val bitmap: Bitmap,
+    val originalWidth: Int,
+    val originalHeight: Int
+)
+
 private const val BookCoverPreviewMaxZoom = 3f
 private const val BookCoverMagnifierZoom = 16f
 
@@ -3879,11 +3885,11 @@ private fun ReaderSyncScreen() {
                                     verticalAlignment = Alignment.Top
                                 ) {
                                     if (displayCover != null || book.isEbookOnly) {
-                                        Box(
+                                        BoxWithConstraints(
                                             modifier = Modifier
                                                 .then(
                                                     if (homeCoverAspect == HomeCoverAspect.BOOK) {
-                                                        Modifier.width(96.dp).height(96.dp / ReaderBookCoverAspectRatio)
+                                                        Modifier.width(96.dp).aspectRatio(ReaderBookCoverAspectRatio)
                                                     } else {
                                                         Modifier.size(96.dp)
                                                     }
@@ -3904,6 +3910,7 @@ private fun ReaderSyncScreen() {
                                                     }
                                                 )
                                         ) {
+                                            val coverSlotWidth = maxWidth
                                             if (displayCover != null) {
                                                 val squareEbookCover =
                                                     homeCoverAspect == HomeCoverAspect.SQUARE &&
@@ -3912,8 +3919,8 @@ private fun ReaderSyncScreen() {
                                                     coverUri = displayCover.uri,
                                                     modifier = if (squareEbookCover) {
                                                         Modifier
-                                                            .width(96.dp * ReaderBookCoverAspectRatio)
-                                                            .height(96.dp)
+                                                            .width(coverSlotWidth * ReaderBookCoverAspectRatio)
+                                                            .height(coverSlotWidth)
                                                             .align(Alignment.Center)
                                                             .clip(RoundedCornerShape(10.dp))
                                                     } else {
@@ -4950,6 +4957,7 @@ private fun extractRecentReaderLogs(recentLogs: String): String {
         "MainReaderRestore",
         "LegadoAudioProgress",
         "LegadoMatch",
+        "LegadoRepeatClip",
         "ReaderPausedSeek",
         "FloatingSubtitleScroll",
         "FloatingSubtitleRender",
@@ -5047,7 +5055,7 @@ private fun BookCoverThumbnail(
     val needsCustomMatrix = coverAdjustment != null ||
         (useStartFocus && coverFocus == HomeCoverCropFocus.START)
     val renderKey = "$coverUri|$coverAdjustment|$coverFocus|$useStartFocus|$maxZoom|$clampToBounds|$decodeDimension"
-    val bitmap by produceState<Bitmap?>(
+    val coverEntry by produceState<DecodedBookCover?>(
         initialValue = BookCoverThumbnailCache.get(coverUri, decodeDimension),
         key1 = coverUri,
         key2 = decodeDimension
@@ -5056,6 +5064,7 @@ private fun BookCoverThumbnail(
             value = BookCoverThumbnailCache.load(context, coverUri, decodeDimension)
         }
     }
+    val bitmap = coverEntry?.bitmap
     val bitmapRenderKey = if (bitmap != null) {
         "$renderKey|bitmap:${System.identityHashCode(bitmap)}"
     } else {
@@ -5097,7 +5106,14 @@ private fun BookCoverThumbnail(
                         return
                     }
                     if (coverAdjustment != null) {
-                        applyBookCoverAdjustment(view, coverAdjustment, maxZoom, clampToBounds)
+                        applyBookCoverAdjustment(
+                            view,
+                            coverAdjustment,
+                            maxZoom,
+                            clampToBounds,
+                            coverEntry?.originalWidth,
+                            coverEntry?.originalHeight
+                        )
                     } else {
                         applyStartCrop(view)
                     }
@@ -5113,21 +5129,22 @@ private fun BookCoverThumbnail(
 }
 
 private object BookCoverThumbnailCache {
-    private val cache = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
-        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    private val cache = object : LruCache<String, DecodedBookCover>(24 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: DecodedBookCover): Int = value.bitmap.byteCount
     }
 
-    fun get(uri: Uri, targetDimension: Int): Bitmap? = synchronized(cache) {
+    fun get(uri: Uri, targetDimension: Int): DecodedBookCover? = synchronized(cache) {
         cache.get(cacheKey(uri, targetDimension))
     }
 
-    suspend fun load(context: Context, uri: Uri, targetDimension: Int): Bitmap? = withContext(Dispatchers.IO) {
+    suspend fun load(context: Context, uri: Uri, targetDimension: Int): DecodedBookCover? = withContext(Dispatchers.IO) {
         if (targetDimension <= 0) return@withContext null
         val key = cacheKey(uri, targetDimension)
         synchronized(cache) {
             cache.get(key)?.let { return@withContext it }
         }
 
+        val originalSize = readBookCoverOriginalSize(context, uri)
         val bitmap = try {
             val source = if (uri.scheme.equals("file", ignoreCase = true)) {
                 ImageDecoder.createSource(File(uri.path ?: return@withContext null))
@@ -5148,10 +5165,35 @@ private object BookCoverThumbnailCache {
             return@withContext null
         }
         bitmap.prepareToDraw()
+        val entry = DecodedBookCover(
+            bitmap = bitmap,
+            originalWidth = originalSize?.first ?: bitmap.width,
+            originalHeight = originalSize?.second ?: bitmap.height
+        )
         synchronized(cache) {
-            cache.put(key, bitmap)
+            cache.put(key, entry)
         }
-        bitmap
+        entry
+    }
+
+    private fun readBookCoverOriginalSize(context: Context, uri: Uri): Pair<Int, Int>? {
+        return try {
+            val input = if (uri.scheme.equals("file", ignoreCase = true)) {
+                File(uri.path ?: return null).inputStream()
+            } else {
+                context.contentResolver.openInputStream(uri) ?: return null
+            }
+            input.use { stream ->
+                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeStream(stream, null, options)
+                val width = options.outWidth.takeIf { it > 0 } ?: return null
+                val height = options.outHeight.takeIf { it > 0 } ?: return null
+                width to height
+            }
+        } catch (error: Exception) {
+            Log.w("BookCoverThumbnail", "bounds decode failed uri=$uri", error)
+            null
+        }
     }
 
     private fun cacheKey(uri: Uri, targetDimension: Int): String =
@@ -5289,19 +5331,28 @@ private fun applyBookCoverAdjustment(
     view: ImageView,
     adjustment: BookCoverAdjustment,
     maxZoom: Float = BookCoverPreviewMaxZoom,
-    clampToBounds: Boolean = true
+    clampToBounds: Boolean = true,
+    originalWidth: Int? = null,
+    originalHeight: Int? = null
 ) {
     val drawable = view.drawable ?: return
     val drawableWidth = drawable.intrinsicWidth.takeIf { it > 0 } ?: return
     val drawableHeight = drawable.intrinsicHeight.takeIf { it > 0 } ?: return
     val viewWidth = view.width.takeIf { it > 0 } ?: return
     val viewHeight = view.height.takeIf { it > 0 } ?: return
+    val renderAdjustment = scaleBookCoverAdjustmentForDrawable(
+        adjustment = adjustment,
+        drawableWidth = drawableWidth,
+        drawableHeight = drawableHeight,
+        originalWidth = originalWidth,
+        originalHeight = originalHeight
+    )
     val renderSpec = computeBookCoverRenderSpec(
         drawableWidth = drawableWidth,
         drawableHeight = drawableHeight,
         viewWidth = viewWidth,
         viewHeight = viewHeight,
-        adjustment = adjustment,
+        adjustment = renderAdjustment,
         focus = HomeCoverCropFocus.CENTER,
         maxZoom = maxZoom,
         clampToBounds = clampToBounds
@@ -5310,6 +5361,28 @@ private fun applyBookCoverAdjustment(
         setScale(renderSpec.scale, renderSpec.scale)
         postTranslate(renderSpec.dx, renderSpec.dy)
     }
+}
+
+private fun scaleBookCoverAdjustmentForDrawable(
+    adjustment: BookCoverAdjustment,
+    drawableWidth: Int,
+    drawableHeight: Int,
+    originalWidth: Int?,
+    originalHeight: Int?
+): BookCoverAdjustment {
+    if (originalWidth == null || originalHeight == null) return adjustment
+    if (originalWidth == drawableWidth && originalHeight == drawableHeight) return adjustment
+    val rotated = originalWidth == drawableHeight && originalHeight == drawableWidth
+    val sourceWidth = if (rotated) originalHeight else originalWidth
+    val sourceHeight = if (rotated) originalWidth else originalHeight
+    val scaleX = drawableWidth.toFloat() / sourceWidth.toFloat()
+    val scaleY = drawableHeight.toFloat() / sourceHeight.toFloat()
+    return adjustment.copy(
+        anchorXPx = adjustment.anchorXPx?.let { (it * scaleX).roundToInt() },
+        anchorYPx = adjustment.anchorYPx?.let { (it * scaleY).roundToInt() },
+        anchorXExactPx = adjustment.anchorXExactPx?.let { it * scaleX },
+        anchorYExactPx = adjustment.anchorYExactPx?.let { it * scaleY }
+    )
 }
 
 private fun computeBookCoverRenderSpec(

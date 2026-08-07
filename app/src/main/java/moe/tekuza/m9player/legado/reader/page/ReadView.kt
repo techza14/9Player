@@ -43,6 +43,7 @@ import moe.tekuza.m9player.ReaderFooterMode
 import moe.tekuza.m9player.ReaderHeaderMode
 import moe.tekuza.m9player.ReaderInfoSlot
 import moe.tekuza.m9player.ReaderTipContent
+import moe.tekuza.m9player.dp
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9PageAnim
 import moe.tekuza.m9player.legado.reader.M9TextWeight
@@ -1830,7 +1831,7 @@ internal class ReadView @JvmOverloads constructor(
         return if (delta == 0) pageView.currentPage else onPagePreview?.invoke(delta)
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int = value.dp(context)
 
     private class SimulationCurlRenderer {
         private val path0 = Path()
@@ -2624,9 +2625,7 @@ internal class ReadView @JvmOverloads constructor(
             }
         }
 
-        private fun dp(context: Context, value: Int): Int {
-            return (value * context.resources.displayMetrics.density).toInt()
-        }
+        private fun dp(context: Context, value: Int): Int = value.dp(context)
 
         private fun processTextIntents(context: Context): List<ProcessTextItem> {
             val baseIntent = Intent()

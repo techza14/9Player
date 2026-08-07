@@ -12,6 +12,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.util.TypedValue
 import moe.tekuza.m9player.EbookImageRef
+import moe.tekuza.m9player.dp
 import moe.tekuza.m9player.ReaderBodyTitleMode
 import moe.tekuza.m9player.ReaderFooterMode
 import moe.tekuza.m9player.ReaderHeaderMode
@@ -485,5 +486,5 @@ internal class PageView(context: Context) : LinearLayout(context) {
         return (color and 0x00FFFFFF) or (safeAlpha shl 24)
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int = value.dp(context)
 }

@@ -16,6 +16,3 @@ internal object ReaderPlaybackScreenVisibility {
     @Synchronized
     fun isReaderOrPlayerScreenVisible(): Boolean = visibleScreens.isNotEmpty()
 }
-
-internal fun isReaderOrPlayerScreenVisible(): Boolean =
-    ReaderPlaybackScreenVisibility.isReaderOrPlayerScreenVisible()

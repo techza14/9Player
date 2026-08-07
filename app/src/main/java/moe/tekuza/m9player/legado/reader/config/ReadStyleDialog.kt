@@ -17,6 +17,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import java.util.Locale
 import kotlin.math.abs
+import moe.tekuza.m9player.dp
 import moe.tekuza.m9player.legado.reader.M9PageAnim
 import moe.tekuza.m9player.legado.reader.M9TextWeight
 import moe.tekuza.m9player.R
@@ -394,6 +395,6 @@ internal class ReadStyleDialog(
         return (value / 100f).toString()
     }
 
-    private fun dp(value: Int): Int = (value * activity.resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int = value.dp(activity)
 
 }

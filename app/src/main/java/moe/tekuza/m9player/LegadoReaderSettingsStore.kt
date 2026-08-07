@@ -13,6 +13,7 @@ private const val LEGADO_READER_SETTINGS_PREFS = "legado_reader_settings"
 private const val LEGADO_READER_SETTINGS_KEY = "legado_reader_settings_json"
 private const val LEGADO_READER_BOOK_ANCHORS_KEY = "legado_reader_book_anchors_json"
 private const val LEGADO_READER_SIMULATED_READING_KEY = "legado_reader_simulated_reading_json"
+private const val LEGADO_READER_BOOK_STYLE_SELECT_KEY = "legado_reader_book_style_select_json"
 internal const val DEFAULT_LEGADO_READER_STYLE_INDEX = 1
 
 internal data class LegadoReaderStyleConfig(
@@ -32,6 +33,7 @@ internal data class LegadoReaderStyleConfig(
     val textWeight: M9TextWeight = M9TextWeight.NORMAL,
     val typefaceIndex: Int = 0,
     val paragraphIndentCount: Int = 0,
+    val layoutMode: M9LayoutMode = M9LayoutMode.HORIZONTAL,
     val paddingDp: Int = 22
 )
 
@@ -471,6 +473,10 @@ private fun readStyleConfigs(
                         "paragraphIndentCount",
                         layoutFallback.paragraphIndentCount
                     ),
+                    layoutMode = item.optString("layoutMode")
+                        .takeIf { it.isNotBlank() }
+                        ?.let { runCatching { M9LayoutMode.valueOf(it) }.getOrNull() }
+                        ?: layoutFallback.layoutMode,
                     paddingDp = item.optInt("paddingDp", layoutFallback.paddingDp)
                 )
             )
@@ -519,6 +525,7 @@ internal fun saveLegadoReaderPersistedState(
                     put("textWeight", style.textWeight.name)
                     put("typefaceIndex", style.typefaceIndex)
                     put("paragraphIndentCount", style.paragraphIndentCount)
+                    put("layoutMode", style.layoutMode.name)
                     put("paddingDp", style.paddingDp)
                 })
             }
@@ -606,10 +613,7 @@ internal fun saveLegadoReaderPersistedState(
 
 internal fun loadLegadoReaderBookAnchor(context: Context, bookUri: String?): LegadoReaderBookAnchor? {
     val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return null
-    val raw = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .getString(LEGADO_READER_BOOK_ANCHORS_KEY, null)
-        ?: return null
-    val root = runCatching { JSONObject(raw) }.getOrNull() ?: return null
+    val root = readBookJsonMap(context, LEGADO_READER_BOOK_ANCHORS_KEY) ?: return null
     val item = root.optJSONObject(key) ?: return null
     return LegadoReaderBookAnchor(
         chapterIndex = item.optInt("chapterIndex", 0),
@@ -625,10 +629,7 @@ internal fun saveLegadoReaderBookAnchor(
 ) {
     val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return
     val safeAnchor = anchor ?: return
-    val prefs = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
-    val root = prefs.getString(LEGADO_READER_BOOK_ANCHORS_KEY, null)
-        ?.let { runCatching { JSONObject(it) }.getOrNull() }
-        ?: JSONObject()
+    val root = readBookJsonMap(context, LEGADO_READER_BOOK_ANCHORS_KEY) ?: JSONObject()
     root.put(
         key,
         JSONObject().apply {
@@ -636,8 +637,35 @@ internal fun saveLegadoReaderBookAnchor(
             put("charPosition", safeAnchor.charPosition.coerceAtLeast(0))
         }
     )
-    val editor = prefs.edit()
-        .putString(LEGADO_READER_BOOK_ANCHORS_KEY, root.toString())
+    writeBookJsonMap(context, LEGADO_READER_BOOK_ANCHORS_KEY, root, commitImmediately)
+}
+
+internal fun readerStyleConfigsHaveLayoutMode(context: Context): Boolean {
+    val raw = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .getString(LEGADO_READER_SETTINGS_KEY, null) ?: return true
+    val json = runCatching { JSONObject(raw) }.getOrNull() ?: return true
+    val array = json.optJSONArray("readerStyleConfigs") ?: return true
+    for (index in 0 until array.length()) {
+        if (array.optJSONObject(index)?.has("layoutMode") == true) return true
+    }
+    return false
+}
+
+private fun readBookJsonMap(context: Context, storageKey: String): JSONObject? {
+    val raw = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .getString(storageKey, null) ?: return null
+    return runCatching { JSONObject(raw) }.getOrNull()
+}
+
+private fun writeBookJsonMap(
+    context: Context,
+    storageKey: String,
+    root: JSONObject,
+    commitImmediately: Boolean = false
+) {
+    val editor = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(storageKey, root.toString())
     if (commitImmediately) {
         editor.commit()
     } else {
@@ -645,12 +673,27 @@ internal fun saveLegadoReaderBookAnchor(
     }
 }
 
+internal fun loadLegadoReaderBookStyleSelect(context: Context, bookUri: String?): Int? {
+    val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    val root = readBookJsonMap(context, LEGADO_READER_BOOK_STYLE_SELECT_KEY) ?: return null
+    return root.optInt(key, -1).takeIf { it >= 0 }
+}
+
+internal fun saveLegadoReaderBookStyleSelect(context: Context, bookUri: String?, styleIndex: Int?) {
+    val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return
+    val root = readBookJsonMap(context, LEGADO_READER_BOOK_STYLE_SELECT_KEY) ?: JSONObject()
+    if (styleIndex == null) {
+        root.remove(key)
+    } else {
+        root.put(key, styleIndex.coerceAtLeast(0))
+    }
+    writeBookJsonMap(context, LEGADO_READER_BOOK_STYLE_SELECT_KEY, root)
+}
+
 internal fun loadSimulatedReadingConfig(context: Context, bookUri: String?): SimulatedReadingConfig {
     val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return SimulatedReadingConfig()
-    val raw = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
-        .getString(LEGADO_READER_SIMULATED_READING_KEY, null)
+    val root = readBookJsonMap(context, LEGADO_READER_SIMULATED_READING_KEY)
         ?: return SimulatedReadingConfig()
-    val root = runCatching { JSONObject(raw) }.getOrNull() ?: return SimulatedReadingConfig()
     val item = root.optJSONObject(key) ?: return SimulatedReadingConfig()
     return SimulatedReadingConfig(
         enabled = item.optBoolean("enabled", false),
@@ -666,10 +709,7 @@ internal fun saveSimulatedReadingConfig(
     config: SimulatedReadingConfig
 ) {
     val key = bookUri?.trim()?.takeIf { it.isNotBlank() } ?: return
-    val prefs = context.getSharedPreferences(LEGADO_READER_SETTINGS_PREFS, Context.MODE_PRIVATE)
-    val root = prefs.getString(LEGADO_READER_SIMULATED_READING_KEY, null)
-        ?.let { runCatching { JSONObject(it) }.getOrNull() }
-        ?: JSONObject()
+    val root = readBookJsonMap(context, LEGADO_READER_SIMULATED_READING_KEY) ?: JSONObject()
     root.put(
         key,
         JSONObject().apply {
@@ -679,7 +719,5 @@ internal fun saveSimulatedReadingConfig(
             put("dailyChapters", config.dailyChapters.coerceAtLeast(1))
         }
     )
-    prefs.edit()
-        .putString(LEGADO_READER_SIMULATED_READING_KEY, root.toString())
-        .apply()
+    writeBookJsonMap(context, LEGADO_READER_SIMULATED_READING_KEY, root)
 }

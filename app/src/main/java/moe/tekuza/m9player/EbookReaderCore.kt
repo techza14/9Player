@@ -853,7 +853,7 @@ private fun buildFilteredTextMap(raw: String): FilteredTextMap {
     var offset = 0
     while (offset < raw.length) {
         val codePoint = raw.codePointAt(offset)
-        if (codePoint.isReaderMatchableCodePoint()) {
+        if (codePoint.isReaderChar()) {
             filtered.appendCodePoint(codePoint)
             rawIndices += offset
         }
@@ -867,7 +867,7 @@ private fun String.filteredReaderMatchText(): String {
     var offset = 0
     while (offset < length) {
         val codePoint = codePointAt(offset)
-        if (codePoint.isReaderMatchableCodePoint()) {
+        if (codePoint.isReaderChar()) {
             builder.appendCodePoint(codePoint)
         }
         offset += Character.charCount(codePoint)
@@ -875,7 +875,7 @@ private fun String.filteredReaderMatchText(): String {
     return builder.toString()
 }
 
-private fun Int.isReaderMatchableCodePoint(): Boolean =
+internal fun Int.isReaderChar(): Boolean =
     when (this) {
         in '0'.code..'9'.code,
         in 'A'.code..'Z'.code,
@@ -1119,14 +1119,14 @@ private fun parseRubyHtml(rubyHtml: String, sourcePath: String): ParsedRubyHtml 
     return ParsedRubyHtml(
         baseText = baseText,
         annotation = annotation,
-        kind = if (baseText.codePointCountSafe() == 1) EbookRubyKind.MONO else EbookRubyKind.GROUP
+        kind = if (Character.codePointCount(baseText, 0, baseText.length) == 1) EbookRubyKind.MONO else EbookRubyKind.GROUP
     )
 }
 
 private fun rubyKindFor(baseText: String, segments: List<EbookRubySegment>): EbookRubyKind {
-    if (segments.size == 1 && baseText.codePointCountSafe() == 1) return EbookRubyKind.MONO
+    if (segments.size == 1 && Character.codePointCount(baseText, 0, baseText.length) == 1) return EbookRubyKind.MONO
     if (segments.size > 1 && segments.all { segment ->
-            baseText.substring(segment.baseStart, segment.baseEnd).codePointCountSafe() == 1
+            Character.codePointCount(baseText, segment.baseStart, segment.baseEnd) == 1
         }
     ) {
         return EbookRubyKind.JUKUGO
@@ -1154,9 +1154,6 @@ private fun rubyAnnotationText(rubyHtml: String): String {
 
 private fun String.htmlText(): String =
     Html.fromHtml(this, Html.FROM_HTML_MODE_LEGACY).toString()
-
-private fun String.codePointCountSafe(): Int =
-    codePointCount(0, length)
 
 private fun logRubyWarning(sourcePath: String, reason: String, rubyHtml: String) {
     val snippet = rubyHtml

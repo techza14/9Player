@@ -90,7 +90,7 @@
                 android:gravity="start|center_vertical"
                 android:singleLine="true"
                 android:textColor="#2C241B"
-                android:textSize="14sp" />
+                android:textSize="12sp" />
 
             <moe.tekuza.m9player.legado.reader.page.ReaderBatteryTextView
                 android:id="@+id/reader_title_addition_middle"
@@ -101,7 +101,7 @@
                 android:gravity="center"
                 android:singleLine="true"
                 android:textColor="#2C241B"
-                android:textSize="14sp" />
+                android:textSize="12sp" />
 
             <moe.tekuza.m9player.legado.reader.page.ReaderBatteryTextView
                 android:id="@+id/reader_title_addition_right"
@@ -112,7 +112,7 @@
                 android:gravity="end|center_vertical"
                 android:singleLine="true"
                 android:textColor="#2C241B"
-                android:textSize="14sp" />
+                android:textSize="12sp" />
         </LinearLayout>
     </LinearLayout>
 

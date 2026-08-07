@@ -322,7 +322,7 @@ class BookReaderActivity : AppCompatActivity() {
             val refreshedOverlayEnabled =
                 refreshed.floatingOverlayEnabled || refreshed.floatingOverlaySubtitleEnabled
             val appForeground = isAppProcessInForeground()
-            val readerOrPlayerVisible = isReaderOrPlayerScreenVisible()
+            val readerOrPlayerVisible = ReaderPlaybackScreenVisibility.isReaderOrPlayerScreenVisible()
             val shouldShowAfterReaderExit =
                 (refreshed.floatingOverlayShowOnReaderExit || !appForeground) && !readerOrPlayerVisible
             val stillPlaying = BookReaderFloatingBridge.isPlaying()
@@ -1511,7 +1511,7 @@ private fun BookReaderScreen(
             showOverallDuration = false
         }
     }
-    val sleepRemainingLabel = sleepTimerRemainingMs?.let(::formatBookTime)
+    val sleepRemainingLabel = sleepTimerRemainingMs?.let(::formatPlaybackTime)
     val favoriteCue = remember(playbackCueIndex, activeCueIndex, cues) {
         when {
             playbackCueIndex in cues.indices -> cues[playbackCueIndex]
@@ -2927,7 +2927,7 @@ private fun BookReaderScreen(
                         onPreviewPositionChanged = { dragPreviewPositionMs = it },
                         onSeekManual = { target -> seekToManual(target) },
                         onRequestTimeEdit = {
-                            timeEditInput = formatBookTime(displayedLeftTimeMs)
+                            timeEditInput = formatPlaybackTime(displayedLeftTimeMs)
                             timeEditError = null
                             timeEditDialogVisible = true
                         }
@@ -4550,7 +4550,7 @@ private fun BookReaderPlaybackTimelineModule(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = formatBookTime(displayedRightDurationTimeMs),
+                text = formatPlaybackTime(displayedRightDurationTimeMs),
                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                 maxLines = 1,
                 modifier = if (useChapterTimeline) {
@@ -4609,7 +4609,7 @@ private fun BookReaderPlaybackTimelineModule(
                 )
             }
             Text(
-                text = formatBookTime(displayedLeftTimeMs),
+                text = formatPlaybackTime(displayedLeftTimeMs),
                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                 color = MaterialTheme.colorScheme.primary,
                 maxLines = 1,
@@ -4623,7 +4623,7 @@ private fun BookReaderPlaybackTimelineModule(
         verticalAlignment = Alignment.CenterVertically
     ) {
         TextButton(onClick = onRequestTimeEdit) {
-            Text(formatBookTime(displayedLeftTimeMs))
+            Text(formatPlaybackTime(displayedLeftTimeMs))
         }
         Slider(
             modifier = Modifier
@@ -4651,7 +4651,7 @@ private fun BookReaderPlaybackTimelineModule(
             }
         )
         Text(
-            text = formatBookTime(displayedRightDurationTimeMs),
+            text = formatPlaybackTime(displayedRightDurationTimeMs),
             modifier = if (useChapterTimeline) {
                 Modifier.clickable(onClick = onToggleDurationMode)
             } else {
@@ -6637,18 +6637,6 @@ private fun findBookChapterIndexAtTime(chapters: List<ReaderAudioChapter>, timeM
         }
     }
     return candidate
-}
-
-private fun formatBookTime(ms: Long): String {
-    val totalSeconds = (ms.coerceAtLeast(0L) / 1000L)
-    val hours = totalSeconds / 3600L
-    val minutes = (totalSeconds % 3600L) / 60L
-    val seconds = totalSeconds % 60L
-    return if (hours > 0L) {
-        String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
-    } else {
-        String.format(Locale.US, "%02d:%02d", minutes, seconds)
-    }
 }
 
 private fun parseEditableTimeInputToMillis(raw: String): Long? {

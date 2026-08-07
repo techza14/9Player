@@ -3,6 +3,7 @@ package moe.tekuza.m9player.ui.theme
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -51,25 +52,26 @@ fun TsetTheme(
     } else {
         null
     }
+    val defaultTypography = Typography()
     val typography = globalFontFamily?.let { family ->
-        Typography.copy(
-            displayLarge = Typography.displayLarge.copy(fontFamily = family),
-            displayMedium = Typography.displayMedium.copy(fontFamily = family),
-            displaySmall = Typography.displaySmall.copy(fontFamily = family),
-            headlineLarge = Typography.headlineLarge.copy(fontFamily = family),
-            headlineMedium = Typography.headlineMedium.copy(fontFamily = family),
-            headlineSmall = Typography.headlineSmall.copy(fontFamily = family),
-            titleLarge = Typography.titleLarge.copy(fontFamily = family),
-            titleMedium = Typography.titleMedium.copy(fontFamily = family),
-            titleSmall = Typography.titleSmall.copy(fontFamily = family),
-            bodyLarge = Typography.bodyLarge.copy(fontFamily = family),
-            bodyMedium = Typography.bodyMedium.copy(fontFamily = family),
-            bodySmall = Typography.bodySmall.copy(fontFamily = family),
-            labelLarge = Typography.labelLarge.copy(fontFamily = family),
-            labelMedium = Typography.labelMedium.copy(fontFamily = family),
-            labelSmall = Typography.labelSmall.copy(fontFamily = family)
+        defaultTypography.copy(
+            displayLarge = defaultTypography.displayLarge.copy(fontFamily = family),
+            displayMedium = defaultTypography.displayMedium.copy(fontFamily = family),
+            displaySmall = defaultTypography.displaySmall.copy(fontFamily = family),
+            headlineLarge = defaultTypography.headlineLarge.copy(fontFamily = family),
+            headlineMedium = defaultTypography.headlineMedium.copy(fontFamily = family),
+            headlineSmall = defaultTypography.headlineSmall.copy(fontFamily = family),
+            titleLarge = defaultTypography.titleLarge.copy(fontFamily = family),
+            titleMedium = defaultTypography.titleMedium.copy(fontFamily = family),
+            titleSmall = defaultTypography.titleSmall.copy(fontFamily = family),
+            bodyLarge = defaultTypography.bodyLarge.copy(fontFamily = family),
+            bodyMedium = defaultTypography.bodyMedium.copy(fontFamily = family),
+            bodySmall = defaultTypography.bodySmall.copy(fontFamily = family),
+            labelLarge = defaultTypography.labelLarge.copy(fontFamily = family),
+            labelMedium = defaultTypography.labelMedium.copy(fontFamily = family),
+            labelSmall = defaultTypography.labelSmall.copy(fontFamily = family)
         )
-    } ?: Typography
+    } ?: defaultTypography
 
     MaterialTheme(
         colorScheme = colorScheme,

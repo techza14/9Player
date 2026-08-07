@@ -38,3 +38,5 @@ internal fun readerBatteryPercent(context: Context): Int {
 internal fun readerClockText(): String {
     return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
 }
+
+internal fun Int.dp(context: Context): Int = (this * context.resources.displayMetrics.density).toInt()
