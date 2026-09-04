@@ -9,7 +9,11 @@ internal data class TextChapter(
     val text: String,
     val chaptersSize: Int,
     val images: Map<Int, EbookImageRef> = emptyMap(),
-    val rubySpans: List<EbookRubySpan> = emptyList()
+    val rubySpans: List<EbookRubySpan> = emptyList(),
+    val isVolume: Boolean = false,
+    /** 句尾处理（句子不跨页）：章节坐标的句子起点/结尾集合（来自音频 cue 匹配） */
+    val sentenceStarts: Set<Int> = emptySet(),
+    val sentenceEnds: Set<Int> = emptySet()
 ) {
     private val textPages = arrayListOf<TextPage>()
     val pages: List<TextPage> get() = textPages

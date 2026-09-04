@@ -109,6 +109,7 @@
     <string name="reader_click_action_toggle_convert">切换转换状态</string>
     <string name="reader_click_action_catalog">目录</string>
     <string name="reader_click_action_search">搜索</string>
+    <string name="reader_click_action_toggle_repeat">重复</string>
     <string name="reader_click_region_menu_required">至少保留一个菜单区域，已将中间区域恢复为菜单</string>
     <string name="reader_menu_player">播放器</string>
     <string name="reader_menu_add_bookmark">添加书签</string>
@@ -221,9 +222,18 @@
     <string name="reader_repeat_playback_count_value">播放 %1$d 次</string>
     <string name="reader_repeat_tail_pause">收尾暂停</string>
     <string name="reader_repeat_follow_cue">逐句重复</string>
+    <string name="reader_sentence_no_cross_page">句子不跨页</string>
+    <string name="reader_sentence_no_cross_page_hint">页面放不下时整句移到下一页，句子不会被页尾截断</string>
+    <string name="reader_pause_after_page_end">读完此页暂停</string>
+    <string name="reader_pause_after_page_end_on">读完此页暂停：开（点击关闭）</string>
+    <string name="reader_pause_after_page_end_off">读完此页暂停：关（点击开启）</string>
+    <string name="reader_repeat_unavailable_with_page_end_pause">读完此页暂停开启时，逐句重复不可用</string>
     <string name="reader_repeat_enabled_content_description">重复播放，%1$s</string>
     <string name="reader_repeat_disabled_content_description">重复播放</string>
     <string name="reader_cross_page_cue_window">跨页句子窗口</string>
+
+    <string name="reader_cross_page_cue_window_overlay">跨页句子窗口</string>
+    <string name="reader_cross_page_cue_window_temp_page">临时页</string>
     <string name="reader_stop_on_image">遇到图片时停止播放</string>
     <string name="reader_image_pause_seconds">图片暂停秒数（0=翻页恢复）</string>
     <string name="reader_reverse_vertical_controls">纵书时反转听书/播放按钮动作</string>

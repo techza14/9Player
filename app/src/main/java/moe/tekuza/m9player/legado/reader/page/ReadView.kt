@@ -59,6 +59,8 @@ import java.util.Locale
 private const val M9_PAGE_SIMULATION_LOG_TAG = "M9PageSimulation"
 private const val M9_SELECTION_LOG_TAG = "M9Selection"
 private const val SELECTION_MENU_OPEN_SPACE_THRESHOLD_PX = 500
+private const val CROSS_PAGE_OVERLAY_FADE_MS = 220L
+private const val CROSS_PAGE_OVERLAY_TAIL_MARGIN_DP = 16
 
 private fun m9PageSimulationFormat(value: Float): String {
     return String.format(Locale.US, "%.1f", value)
@@ -163,6 +165,11 @@ internal class ReadView @JvmOverloads constructor(
             ).coerceAtLeast(0)
     val textSizePx: Float get() = pageView.contentView.textSizePx
 
+    /** 章节标题占用高度（含边距），供分页预留；标题隐藏时返回 0。 */
+    fun bodyTitleReserveFor(title: String, contentWidthPx: Int): Int {
+        return pageView.bodyTitleReserveFor(title, contentWidthPx)
+    }
+
     init {
         addView(targetPageView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         addView(pageView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
@@ -243,7 +250,19 @@ internal class ReadView @JvmOverloads constructor(
         if (assistToken == null) {
             assistOverlay.visibility = GONE
         }
-        crossPageCuePageOverlay.visibility = GONE
+        if (crossPageCuePageOverlay.visibility == VISIBLE) {
+            crossPageCuePageOverlay.animate().cancel()
+            crossPageCuePageOverlay.animate()
+                .alpha(0f)
+                .setDuration(CROSS_PAGE_OVERLAY_FADE_MS)
+                .withEndAction {
+                    crossPageCuePageOverlay.visibility = GONE
+                    crossPageCuePageOverlay.alpha = 1f
+                }
+                .start()
+        } else {
+            crossPageCuePageOverlay.visibility = GONE
+        }
     }
 
     fun setReaderColors(
@@ -1499,7 +1518,8 @@ internal class ReadView @JvmOverloads constructor(
         ADD_BOOKMARK,
         TOGGLE_CONVERT,
         CATALOG,
-        SEARCH
+        SEARCH,
+        TOGGLE_REPEAT
     }
 
     enum class SelectionAction {
@@ -1719,40 +1739,75 @@ internal class ReadView @JvmOverloads constructor(
         }
     }
 
-    private fun showCrossPageCuePageOverlay(page: TextPage, range: IntRange?) {
+    internal fun showCrossPageCuePageOverlay(page: TextPage, range: IntRange?, fullPage: Boolean = false) {
         assistToken = null
         assistOverlay.visibility = GONE
-        updateCrossPageCuePageOverlayStyle()
-        crossPageCuePageOverlay.setPage(page, null, null)
+        updateCrossPageCuePageOverlayStyle(fullPage = fullPage)
+        // 整页模式：range 作为最后一句的播放高亮范围（与正常页面的 cue 高亮一致）；
+        // 小窗模式：range 仅用于定位锚点。
+        crossPageCuePageOverlay.setPage(page, if (fullPage) range else null, null)
         crossPageCuePageOverlay.post {
-            val overlayWidth = page.width.toInt().coerceAtLeast(dp(48)) + dp(16)
-            val overlayHeight = page.height.toInt().coerceAtLeast(dp(48)) + dp(16)
-            val anchor = range?.let { pageView.rangeBounds(it) }
-                ?: RectF(width / 2f, height / 2f, width / 2f, height / 2f)
-            val target = computeCrossPageOverlayBounds(
-                anchor = anchor,
-                overlayWidth = overlayWidth,
-                overlayHeight = overlayHeight,
-                vertical = true
-            )
             val params = crossPageCuePageOverlay.layoutParams as LayoutParams
-            params.width = target.width().toInt()
-            params.height = target.height().toInt()
-            params.leftMargin = target.left.toInt()
-            params.topMargin = target.top.toInt()
+            if (fullPage) {
+                // 临时页：像正常页面一样铺满正文区（页眉页脚之外），无边框
+                val content = pageView.contentView
+                params.width = content.width
+                params.height = content.height
+                params.leftMargin = pageView.left + content.left
+                params.topMargin = pageView.top + content.top
+            } else {
+                val overlayWidth = page.width.toInt().coerceAtLeast(dp(48)) + dp(16)
+                val overlayHeight = page.height.toInt().coerceAtLeast(dp(48)) + dp(16)
+                val anchor = range?.let { pageView.rangeBounds(it) }
+                    ?: RectF(width / 2f, height / 2f, width / 2f, height / 2f)
+                val target = computeCrossPageOverlayBounds(
+                    anchor = anchor,
+                    overlayWidth = overlayWidth,
+                    overlayHeight = overlayHeight,
+                    vertical = true
+                )
+                params.width = target.width().toInt()
+                params.height = target.height().toInt()
+                params.leftMargin = target.left.toInt()
+                params.topMargin = target.top.toInt()
+            }
             crossPageCuePageOverlay.layoutParams = params
-            crossPageCuePageOverlay.visibility = VISIBLE
-            crossPageCuePageOverlay.bringToFront()
+            // 淡入显示（隐藏路径在 hideCrossPageCueOverlay 中淡出）。
+            // 已显示时直接换内容，避免句子切换时反复闪烁。
+            val wasVisible = crossPageCuePageOverlay.visibility == VISIBLE
+            if (!wasVisible) {
+                crossPageCuePageOverlay.animate().cancel()
+                crossPageCuePageOverlay.alpha = 0f
+                crossPageCuePageOverlay.visibility = VISIBLE
+                crossPageCuePageOverlay.bringToFront()
+                crossPageCuePageOverlay.animate()
+                    .alpha(1f)
+                    .setDuration(CROSS_PAGE_OVERLAY_FADE_MS)
+                    .start()
+            }
         }
     }
 
-    private fun updateCrossPageCuePageOverlayStyle() {
+    private fun updateCrossPageCuePageOverlayStyle(fullPage: Boolean = false) {
+        if (fullPage) {
+            // 临时页：使用阅读器页面背景色（setReaderColors 会设置纯色背景），无边框圆角；
+            // 内容边距与正常页面完全一致（PageView 的 contentView 为 0/18/0/18），
+            // 保证临时页文字位置与本页完全重合，不会右移或被边距压缩。
+            crossPageCuePageOverlay.setReaderColors(
+                pageView.solidBackgroundColor ?: overlayBgColor,
+                overlayTextColor,
+                overlayTextColor
+            )
+            crossPageCuePageOverlay.contentView.setPadding(0, dp(18), 0, dp(18))
+            return
+        }
         crossPageCuePageOverlay.setReaderColors(overlayBgColor, overlayTextColor, overlayTextColor)
         crossPageCuePageOverlay.background = GradientDrawable().apply {
             cornerRadius = dp(18).toFloat()
             setColor(overlayBgColor)
             setStroke(dp(1), if (isDarkColor(overlayBgColor)) 0x33FFFFFF else 0x22000000)
         }
+        crossPageCuePageOverlay.contentView.setPadding(dp(8), dp(8), dp(8), dp(8))
     }
 
     private fun isDarkColor(color: Int): Boolean {

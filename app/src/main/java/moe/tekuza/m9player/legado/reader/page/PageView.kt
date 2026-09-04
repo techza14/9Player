@@ -53,6 +53,15 @@ internal class PageView(context: Context) : LinearLayout(context) {
     private var footerMode: ReaderFooterMode = ReaderFooterMode.SHOW
     private var bodyTitleMode: ReaderBodyTitleMode = ReaderBodyTitleMode.LEFT
     private var bodyTitleSizeAddSp: Int = 0
+    private var readerTitleTypeface: Typeface? = null
+    /** 与 bodyTitleView 同款样式的测量用视图（分页时计算标题预留高度，不改动显示中的标题） */
+    private val titleMeasureView = TextView(context).apply {
+        includeFontPadding = true
+        maxLines = 2
+        // 离屏视图没有父容器，layoutParams 为 null 时 setText 内部
+        // checkForRelayout 读 mLayoutParams.width 会 NPE，先赋一个占位参数。
+        layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+    }
     private var bodyTitleTopSpacingDp: Int = 0
     private var bodyTitleBottomSpacingDp: Int = 0
     private var contentTextSizeSp: Float = 20f
@@ -292,7 +301,8 @@ internal class PageView(context: Context) : LinearLayout(context) {
 
     fun setReaderTypeface(typeface: Typeface?) {
         contentView.setReaderTypeface(typeface)
-        bodyTitleView.typeface = typeface ?: Typeface.DEFAULT
+        readerTitleTypeface = typeface
+        applyBodyTitleStyle()
     }
 
     fun setReaderPadding(left: Int, top: Int, right: Int, bottom: Int) {
@@ -436,19 +446,43 @@ internal class PageView(context: Context) : LinearLayout(context) {
 
     private fun applyBodyTitleStyle() {
         val page = currentPage
-        val show = page != null && page.pageInChapter == 0 && bodyTitleMode != ReaderBodyTitleMode.HIDE
+        // 卷页标题改由正文区居中渲染（isVolume），头部标题不再显示，避免重复。
+        val show = page != null && page.pageInChapter == 0 &&
+            bodyTitleMode != ReaderBodyTitleMode.HIDE && page.isVolume != true
         bodyTitleView.visibility = if (show) View.VISIBLE else View.GONE
         bodyTitleView.gravity = when (bodyTitleMode) {
             ReaderBodyTitleMode.LEFT -> Gravity.START
             ReaderBodyTitleMode.CENTER -> Gravity.CENTER
             ReaderBodyTitleMode.HIDE -> Gravity.START
         }
+        // 标题格式：加粗 + 可配置字号加成（bodyTitleSizeAddSp），
+        // 与参考实现 legado 用 titlePaint 渲染章节标题的观感对齐。
+        bodyTitleView.typeface = Typeface.create(readerTitleTypeface ?: Typeface.DEFAULT, Typeface.BOLD)
         bodyTitleView.textSize = contentTextSizeSp + bodyTitleSizeAddSp
+        // 注意：TextView.textSize 属性读写不对称（读返回 px、写按 sp 解释），
+        // 不能把 bodyTitleView.textSize 读回来再赋给测量视图，必须用同一个 sp 值。
+        titleMeasureView.typeface = bodyTitleView.typeface
+        titleMeasureView.textSize = contentTextSizeSp + bodyTitleSizeAddSp
         (bodyTitleView.layoutParams as? LayoutParams)?.let { params ->
             params.topMargin = dp(bodyTitleTopSpacingDp)
             params.bottomMargin = dp(bodyTitleBottomSpacingDp)
             bodyTitleView.layoutParams = params
         }
+    }
+
+    /**
+     * 计算某章节标题占用的垂直空间（含上下边距），供分页时预留：
+     * 标题显示时正文区会被压缩这么多，首页排版必须按此扣除，否则最下面
+     * 一行会被裁掉（长标题换行成两行时尤其明显）。
+     */
+    fun bodyTitleReserveFor(title: String, contentWidthPx: Int): Int {
+        if (bodyTitleMode == ReaderBodyTitleMode.HIDE) return 0
+        titleMeasureView.text = title
+        titleMeasureView.measure(
+            MeasureSpec.makeMeasureSpec(contentWidthPx.coerceAtLeast(1), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+        )
+        return titleMeasureView.measuredHeight + dp(bodyTitleTopSpacingDp) + dp(bodyTitleBottomSpacingDp)
     }
 
     private fun tipText(

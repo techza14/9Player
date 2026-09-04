@@ -32,8 +32,22 @@ internal data class EbookChapter(
     val text: String,
     val sourcePath: String? = null,
     val images: Map<Int, EbookImageRef> = emptyMap(),
-    val rubySpans: List<EbookRubySpan> = emptyList()
+    val rubySpans: List<EbookRubySpan> = emptyList(),
+    val isVolume: Boolean = false
 )
+
+/**
+ * 卷/部分标题模式，如"第一部分 睡眠这件事"、"第三部分 梦的产生和原因"、
+ * "卷二 春"、"卷首"、"Part One"等。匹配的章节在目录中灰色特殊显示，且正文不重复标题。
+ */
+private val volumeTitlePattern = Regex(
+    pattern = "^第\\s*[0-9〇零一二三四五六七八九十百千万两]+\\s*[卷部篇编][\\s　]*.*$|" +
+        "^卷首[\\s　]*$|" +
+        "^part\\s+\\S+.*$",
+    options = setOf(RegexOption.IGNORE_CASE)
+)
+
+private fun String.isVolumeTitle(): Boolean = volumeTitlePattern.matches(trim())
 
 internal data class EbookRubySpan(
     val start: Int,
@@ -390,7 +404,7 @@ private fun loadEpubDocumentFromZip(
             title = tocTitles.titleForPath(path)
                 ?: fallbackEpubChapterTitle(html, isFirstSpineItem = index == 0),
             imageResources = epubImages
-        ).takeIf { it.text.isNotBlank() }
+        ).takeIf { it.text.isNotBlank() || it.isVolume }
     }.ifEmpty {
         htmlEntries(entries).mapIndexed { index, (path, bytes) ->
             val html = bytes.decodeTextFile(preferredCharsetName)
@@ -400,7 +414,7 @@ private fun loadEpubDocumentFromZip(
                 title = fallbackEpubChapterTitle(html, isFirstSpineItem = index == 0),
                 imageResources = epubImages
             )
-        }.filter { it.text.isNotBlank() }
+        }.filter { it.text.isNotBlank() || it.isVolume }
     }
     Log.d(
         EBOOK_READER_CORE_LOG_TAG,
@@ -449,7 +463,7 @@ private fun loadEpubDocumentFromCache(
             title = tocTitles.titleForPath(path)
                 ?: fallbackEpubChapterTitle(html, isFirstSpineItem = index == 0),
             imageResources = epubImages
-        ).takeIf { it.text.isNotBlank() }
+        ).takeIf { it.text.isNotBlank() || it.isVolume }
     }.ifEmpty {
         htmlFiles(root).mapIndexed { index, file ->
             val path = file.relativeTo(root).invariantSeparatorsPath
@@ -460,7 +474,7 @@ private fun loadEpubDocumentFromCache(
                 title = fallbackEpubChapterTitle(html, isFirstSpineItem = index == 0),
                 imageResources = epubImages
             )
-        }.filter { it.text.isNotBlank() }
+        }.filter { it.text.isNotBlank() || it.isVolume }
     }
     Log.d(
         EBOOK_READER_CORE_LOG_TAG,
@@ -520,14 +534,16 @@ private fun buildEpubChapterFromHtml(
     val content = htmlToReaderContent(
         html = html,
         htmlBasePath = path.substringBeforeLast('/', missingDelimiterValue = ""),
-        imageResources = imageResources
+        imageResources = imageResources,
+        chapterTitle = title
     )
     return EbookChapter(
         title = title,
         text = content.text,
         sourcePath = path,
         images = content.images,
-        rubySpans = content.rubySpans
+        rubySpans = content.rubySpans,
+        isVolume = content.text.isBlank() && title.isVolumeTitle()
     )
 }
 
@@ -997,10 +1013,24 @@ private fun buildEpubImageMapFromCache(
 private fun htmlToReaderContent(
     html: String,
     htmlBasePath: String,
-    imageResources: Map<String, EpubImageResource>
+    imageResources: Map<String, EpubImageResource>,
+    chapterTitle: String
 ): ReaderHtmlContent {
     var body = Regex("(?is)<body[^>]*>(.*?)</body>").find(html)?.groupValues?.getOrNull(1) ?: html
     body = Regex("(?is)<(script|style)[^>]*>.*?</\\1>").replace(body, "")
+    // 章级标题元素（h1/h2）从正文剥离：章节标题只由阅读器头部
+    // （PageView.bodyTitleView）显示一次，避免与章节标题重复显示两次。
+    // 参考实现 legado 会剥离全部 h1-h6；这里只剥 h1/h2，保留 h3+ 小节标题。
+    // 必须在图片/ruby 替换之前执行，保证被剥掉的元素不会产生悬空标记。
+    val headingStripped = Regex("(?is)<h[12]\\b(?!/)[^>]*>.*?</h[12]>").replace(body, "")
+    // 只有标题没有正文的页面（剥掉 h1/h2 后为空）：
+    // - 卷页（"第一部分 xxx"等）：正文留空，标题只由阅读器头部显示一次；
+    // - 其他页面：保留原标题文本，避免整章被上层按空章节丢弃。
+    body = if (headingStripped.replace(Regex("<[^>]*>"), "").isBlank()) {
+        if (chapterTitle.isVolumeTitle()) "" else body
+    } else {
+        headingStripped
+    }
     val rubyTexts = linkedMapOf<Int, ParsedRubyHtml>()
     var rubyId = 0
     body = Regex("(?is)<ruby\\b[^>]*>.*?</ruby>").replace(body) { match ->

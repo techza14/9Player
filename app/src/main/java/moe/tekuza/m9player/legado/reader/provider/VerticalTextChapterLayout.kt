@@ -1,12 +1,15 @@
 package moe.tekuza.m9player.legado.reader.provider
 
 import android.graphics.Paint
+import android.graphics.Typeface
 import android.text.TextPaint
 import moe.tekuza.m9player.EBOOK_IMAGE_MARKER
+import moe.tekuza.m9player.EbookImageRef
 import moe.tekuza.m9player.VerticalTextGlyphEngine
 import moe.tekuza.m9player.decodeBitmapBounds
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9ReadBookConfig
+import moe.tekuza.m9player.legado.reader.READER_TITLE_SCALE
 import moe.tekuza.m9player.legado.reader.applyM9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.ImageColumn
 import moe.tekuza.m9player.legado.reader.entities.RubyLayoutEngine
@@ -20,12 +23,19 @@ import kotlin.math.max
 internal class VerticalTextChapterLayout(
     private val config: M9ReadBookConfig,
     private val visibleWidth: Int,
-    private val visibleHeight: Int
+    private val visibleHeight: Int,
+    private val firstPageReservePx: Float = 0f
 ) {
     private val contentPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = config.textSizePx
         color = config.textColor
         applyM9TextWeight(config.textWeight, config.typeface)
+    }
+    // 卷标题画笔：比正文大一号 + 加粗（与参考实现 legado 的 titlePaint 一致）
+    private val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = config.textSizePx * READER_TITLE_SCALE
+        color = config.textColor
+        typeface = Typeface.create(config.typeface ?: Typeface.DEFAULT, Typeface.BOLD)
     }
     private val fontMetrics = contentPaint.fontMetrics
     private val glyphWidth = VerticalTextGlyphEngine.estimateCellWidth(contentPaint)
@@ -46,8 +56,10 @@ internal class VerticalTextChapterLayout(
         rubyByStart = buildRubyPlacements(chapter.rubySpans)
         val text = chapter.text
         if (text.isBlank()) {
+            // 卷页（"第一部分 xxx"等）：标题在正文区垂直居中的单栏显示，
+            // 与参考实现 legado 的 emptyContent 标题排版一致。
             chapter.addPage(
-                TextPage(
+                if (chapter.isVolume) buildVolumeTitlePage(chapter) else TextPage(
                     index = 0,
                     pageInChapter = 0,
                     chapterPageCount = 1,
@@ -68,88 +80,203 @@ internal class VerticalTextChapterLayout(
         var pageStart = 0
         var x = (visibleWidth - columnWidth).coerceAtLeast(0f)
         var paragraphNum = 0
+
+        // 首页可用高度 = 页高 - 章节标题预留；第一页完成后恢复整页高度，
+        // 避免标题换行等导致的最下面文字被裁剪。
+        fun currentPageHeight(): Float =
+            if (pageColumns.isEmpty()) {
+                (visibleHeight - firstPageReservePx).coerceAtLeast(1f)
+            } else {
+                visibleHeight.toFloat()
+            }
+
+        /**
+         * 竖排句子块所需列数：模拟 buildVerticalLineEnd 逐列切行（含段首缩进），
+         * 用于块级分页判断——块完整放下所需列数与布局行循环一致。
+         */
+        fun measureVerticalBlockColumns(
+            start: Int,
+            end: Int,
+            firstLineStartY: Float
+        ): Int {
+            var cursor = start
+            var columns = 0
+            var y = firstLineStartY
+            val pageH = currentPageHeight()
+            while (cursor < end) {
+                if (y > 0f) {
+                    // 与行循环一致：缩进行放不下则换列
+                    if (y + glyphHeight > pageH) {
+                        y = 0f
+                        continue
+                    }
+                    val firstToken = nextToken(text, cursor, end)
+                    if (firstToken.length > 0 && y + tokenHeight(firstToken) > pageH) {
+                        y = 0f
+                        continue
+                    }
+                }
+                val lineEnd = buildVerticalLineEnd(
+                    text,
+                    cursor,
+                    end,
+                    (pageH - y).coerceAtLeast(glyphHeight)
+                )
+                columns += 1
+                if (lineEnd <= cursor) break
+                cursor = lineEnd
+                while (
+                    cursor < end &&
+                    VerticalTextGlyphEngine.isAsciiRunSpace(text[cursor]) &&
+                    text.getOrNull(cursor + 1)?.let(VerticalTextGlyphEngine::isAsciiWordChar) == true
+                ) {
+                    cursor += 1
+                }
+                y = 0f
+            }
+            return columns.coerceAtLeast(1)
+        }
+
+        /**
+         * 填充一个不含图片标记的竖排文字段 [segmentStart, segmentEnd)。
+         * 缩进只给段首第一行；段末行视为段落结尾。
+         * NEXT_PAGE 句尾处理：按 cue 句子起点切块——一个句子块整体放入页面，
+         * 放不下则整块推到下一页（列）；句子块内部正常换列（列可断在句子中间，
+         * 但句子不跨页）。
+         */
+        fun layoutVerticalTextSegment(
+            paragraphNum: Int,
+            paragraphStart: Int,
+            segmentStart: Int,
+            segmentEnd: Int
+        ) {
+            val sentenceStarts = chapter.sentenceStarts
+            fun indentYFor(lineStart: Int): Float {
+                return if (lineStart == paragraphStart && config.paragraphIndent.isNotEmpty()) {
+                    glyphHeight * config.paragraphIndent.length
+                } else {
+                    0f
+                }
+            }
+            var blockStart = segmentStart
+            while (blockStart < segmentEnd) {
+                val blockEnd = if (sentenceStarts.isNotEmpty()) {
+                    sentenceStarts.filter { it > blockStart && it < segmentEnd }.minOrNull() ?: segmentEnd
+                } else {
+                    segmentEnd
+                }
+                // 句子块整体放入当前页：块所需列数 > 当前页剩余可开列数 → 整块推到下一页
+                // （竖排每行占一列；超长块由行内 x<0 兜底翻页，块仍可跨页）
+                val blockColumns = measureVerticalBlockColumns(blockStart, blockEnd, indentYFor(blockStart))
+                val remainingColumns = (x / columnWidth).toInt() + 1
+                if (currentColumns.isNotEmpty() && blockColumns > remainingColumns) {
+                    pageColumns += currentColumns
+                    pageStarts += pageStart
+                    pageStart = blockStart
+                    currentColumns = mutableListOf()
+                    x = (visibleWidth - columnWidth).coerceAtLeast(0f)
+                }
+                var lineStart = blockStart
+                var y = indentYFor(lineStart)
+                while (lineStart < blockEnd) {
+                    if (y + glyphHeight > currentPageHeight()) {
+                        x -= columnWidth
+                        y = 0f
+                    }
+                    if (currentColumns.isNotEmpty() && x < 0f) {
+                        pageColumns += currentColumns
+                        pageStarts += pageStart
+                        pageStart = lineStart
+                        currentColumns = mutableListOf()
+                        x = (visibleWidth - columnWidth).coerceAtLeast(0f)
+                        y = indentYFor(lineStart)
+                    }
+                    val firstToken = nextToken(text, lineStart, blockEnd)
+                    if (y + tokenHeight(firstToken) > currentPageHeight() && y > 0f) {
+                        x -= columnWidth
+                        y = 0f
+                    }
+                    if (currentColumns.isNotEmpty() && x < 0f) {
+                        pageColumns += currentColumns
+                        pageStarts += pageStart
+                        pageStart = lineStart
+                        currentColumns = mutableListOf()
+                        x = (visibleWidth - columnWidth).coerceAtLeast(0f)
+                        y = 0f
+                    }
+                    val lineEnd = buildVerticalLineEnd(text, lineStart, blockEnd, currentPageHeight() - y)
+                    val lineText = text.substring(lineStart, lineEnd)
+                    val line = createVerticalLine(
+                        text = lineText,
+                        chapter = chapter,
+                        paragraphNum = paragraphNum,
+                        chapterPosition = lineStart,
+                        pagePosition = max(0, lineStart - pageStart),
+                        x = x,
+                        startY = y,
+                        isParagraphEnd = lineEnd >= segmentEnd
+                    )
+                    currentColumns += line
+                    x -= columnWidth
+                    y = 0f
+                    lineStart = lineEnd
+                    while (
+                        lineStart < blockEnd &&
+                        VerticalTextGlyphEngine.isAsciiRunSpace(text[lineStart]) &&
+                        text.getOrNull(lineStart + 1)?.let(VerticalTextGlyphEngine::isAsciiWordChar) == true
+                    ) {
+                        lineStart += 1
+                    }
+                }
+                blockStart = blockEnd
+            }
+        }
+
         var paragraphStart = 0
         while (paragraphStart <= text.length) {
             val paragraphEnd = text.indexOf('\n', paragraphStart).let { if (it < 0) text.length else it }
             paragraphNum += 1
-            var y = if (config.paragraphIndent.isNotEmpty()) glyphHeight * config.paragraphIndent.length else 0f
-            var lineStart = paragraphStart
-            if (paragraphEnd - paragraphStart == 1 && text[paragraphStart] == EBOOK_IMAGE_MARKER) {
-                val imageSize = imageBlockSize(chapter, paragraphStart)
+            // 与横排一致：段落内嵌的图片标记也切成独立图片栏（参考实现 legado 的
+            // 默认图片样式即把段落按图片切段），图片独占一栏、按比例缩放。
+            var segmentStart = paragraphStart
+            while (segmentStart < paragraphEnd) {
+                val markerIndex = text.indexOf(EBOOK_IMAGE_MARKER, segmentStart)
+                if (markerIndex < 0 || markerIndex >= paragraphEnd) {
+                    layoutVerticalTextSegment(
+                        paragraphNum = paragraphNum,
+                        paragraphStart = paragraphStart,
+                        segmentStart = segmentStart,
+                        segmentEnd = paragraphEnd
+                    )
+                    break
+                }
+                if (markerIndex > segmentStart) {
+                    layoutVerticalTextSegment(
+                        paragraphNum = paragraphNum,
+                        paragraphStart = paragraphStart,
+                        segmentStart = segmentStart,
+                        segmentEnd = markerIndex
+                    )
+                }
+                val imageSize = imageBlockSize(chapter, markerIndex, currentPageHeight())
                 val imageLeft = x + columnWidth - imageSize.width
                 if (currentColumns.isNotEmpty() && imageLeft < 0f) {
                     pageColumns += currentColumns
                     pageStarts += pageStart
-                    pageStart = paragraphStart
+                    pageStart = markerIndex
                     currentColumns = mutableListOf()
                     x = (visibleWidth - columnWidth).coerceAtLeast(0f)
                 }
                 currentColumns += createImageColumnLine(
                     chapter = chapter,
-                    chapterPosition = paragraphStart,
-                    pagePosition = max(0, paragraphStart - pageStart),
+                    chapterPosition = markerIndex,
+                    pagePosition = max(0, markerIndex - pageStart),
                     x = x,
                     width = imageSize.width,
                     height = imageSize.height
                 )
                 x = x + columnWidth - imageSize.width - columnWidth - paragraphSpacing
-                if (paragraphEnd == text.length) break
-                paragraphStart = paragraphEnd + 1
-                continue
-            }
-            while (lineStart < paragraphEnd) {
-                if (y + glyphHeight > visibleHeight) {
-                    x -= columnWidth
-                    y = 0f
-                }
-                if (currentColumns.isNotEmpty() && x < 0f) {
-                    pageColumns += currentColumns
-                    pageStarts += pageStart
-                    pageStart = lineStart
-                    currentColumns = mutableListOf()
-                    x = (visibleWidth - columnWidth).coerceAtLeast(0f)
-                    y = if (lineStart == paragraphStart && config.paragraphIndent.isNotEmpty()) {
-                        glyphHeight * config.paragraphIndent.length
-                    } else {
-                        0f
-                    }
-                }
-                val firstToken = nextToken(text, lineStart, paragraphEnd)
-                if (y + tokenHeight(firstToken) > visibleHeight && y > 0f) {
-                    x -= columnWidth
-                    y = 0f
-                }
-                if (currentColumns.isNotEmpty() && x < 0f) {
-                    pageColumns += currentColumns
-                    pageStarts += pageStart
-                    pageStart = lineStart
-                    currentColumns = mutableListOf()
-                    x = (visibleWidth - columnWidth).coerceAtLeast(0f)
-                    y = 0f
-                }
-                val lineEnd = buildVerticalLineEnd(text, lineStart, paragraphEnd, visibleHeight - y)
-                val lineText = text.substring(lineStart, lineEnd)
-                val line = createVerticalLine(
-                    text = lineText,
-                    chapter = chapter,
-                    paragraphNum = paragraphNum,
-                    chapterPosition = lineStart,
-                    pagePosition = max(0, lineStart - pageStart),
-                    x = x,
-                    startY = y,
-                    isParagraphEnd = lineEnd >= paragraphEnd
-                )
-                currentColumns += line
-                x -= columnWidth
-                y = 0f
-                lineStart = lineEnd
-                while (
-                    lineStart < paragraphEnd &&
-                    VerticalTextGlyphEngine.isAsciiRunSpace(text[lineStart]) &&
-                    text.getOrNull(lineStart + 1)?.let(VerticalTextGlyphEngine::isAsciiWordChar) == true
-                ) {
-                    lineStart += 1
-                }
+                segmentStart = markerIndex + 1
             }
             if (paragraphEnd == text.length) break
             x -= paragraphSpacing
@@ -203,6 +330,63 @@ internal class VerticalTextChapterLayout(
         return chapter
     }
 
+    /**
+     * 卷页（"第一部分 xxx"等）标题页（竖排）：标题单栏竖排，栏水平居中、
+     * 字符垂直居中，与参考实现 legado 的 emptyContent 标题排版一致。
+     */
+    private fun buildVolumeTitlePage(chapter: TextChapter): TextPage {
+        val paint = titlePaint
+        val metrics = paint.fontMetrics
+        val titleGlyphHeight = (metrics.descent - metrics.ascent).coerceAtLeast(1f)
+        val title = chapter.title.ifBlank { " " }
+        val titleColumnWidth = (titleGlyphHeight + config.lineSpacingPx).coerceAtLeast(1f)
+        val totalHeight = title.length * titleGlyphHeight
+        val x = ((visibleWidth - titleColumnWidth) / 2f).coerceAtLeast(0f)
+        var y = ((visibleHeight - totalHeight) / 2f).coerceAtLeast(0f)
+        val page = TextPage(
+            index = 0,
+            pageInChapter = 0,
+            chapterPageCount = 1,
+            chapterIndex = chapter.chapterIndex,
+            chapterSize = chapter.chaptersSize,
+            title = chapter.title,
+            text = chapter.title,
+            charStart = 0,
+            charEnd = 0
+        )
+        val line = TextLine(
+            text = title,
+            lineTop = x,
+            lineBase = x + titleColumnWidth / 2f,
+            lineBottom = x + titleColumnWidth,
+            crossStart = y,
+            crossEnd = y + totalHeight,
+            paragraphNum = 1,
+            chapterPosition = 0,
+            pagePosition = 0,
+            isParagraphEnd = true,
+            layoutMode = M9LayoutMode.VERTICAL,
+            isTitle = true
+        )
+        title.forEach { ch ->
+            line.addColumn(
+                TextColumn(
+                    start = y,
+                    end = y + titleGlyphHeight,
+                    charData = ch.toString(),
+                    sourceStart = 0,
+                    sourceEnd = 0
+                )
+            )
+            y += titleGlyphHeight
+        }
+        line.crossEnd = y
+        page.addLine(line)
+        page.height = visibleHeight.toFloat()
+        page.width = visibleWidth.toFloat()
+        return page
+    }
+
     private fun createVerticalLine(
         text: String,
         chapter: TextChapter,
@@ -236,18 +420,26 @@ internal class VerticalTextChapterLayout(
             val sourceEnd = sourceStart + token.length
             if (tokenText.length == 1 && tokenText.first().code == EBOOK_IMAGE_MARKER.code) {
                 chapter.images[sourceStart]?.let { image ->
+                    // 行内图片：以栏宽为基准按图片宽高比计算纵向高度，避免被压成
+                    // 固定 4 倍字高的窄条（既变形又会盖住栏内前后文字）。
+                    val availableHeight = (visibleHeight - y).coerceAtLeast(glyphHeight)
+                    val blockHeight = inlineImageBlockHeight(
+                        image = image,
+                        columnWidth = line.width,
+                        availableHeight = availableHeight
+                    )
                     line.addColumn(
                         ImageColumn(
                             start = y,
-                            end = y + glyphHeight * 4f,
+                            end = (y + blockHeight).coerceAtMost(visibleHeight.toFloat()),
                             image = image,
                             width = line.width,
-                            height = glyphHeight * 4f,
+                            height = blockHeight,
                             sourceStart = sourceStart,
                             sourceEnd = sourceEnd
                         )
                     )
-                    y += glyphHeight * 4f
+                    y += blockHeight
                 }
             } else {
                 val tokenHeight = if (token.isLatinRun) {
@@ -317,20 +509,47 @@ internal class VerticalTextChapterLayout(
         return line
     }
 
-    private fun imageBlockSize(chapter: TextChapter, chapterPosition: Int): ImageBlockSize {
+    /**
+     * 竖排独立段落图片的显示尺寸：按原图比例计算，只缩小、不放大、不做钳制
+     * （与参考实现 legado 的 setTypeImage 行为一致），保证绘制矩形与图片同比例。
+     * [availableHeight] 为当前页可用高度（首页需扣除章节标题预留）。
+     */
+    private fun imageBlockSize(
+        chapter: TextChapter,
+        chapterPosition: Int,
+        availableHeight: Float = visibleHeight.toFloat()
+    ): ImageBlockSize {
         val bounds = chapter.images[chapterPosition]?.readBytes()?.let(::decodeBitmapBounds)
-        val sourceWidth = bounds?.width?.toFloat()?.coerceAtLeast(1f) ?: visibleWidth.toFloat()
-        val sourceHeight = bounds?.height?.toFloat()?.coerceAtLeast(1f) ?: visibleHeight.toFloat()
-        val maxWidth = visibleWidth.toFloat().coerceAtLeast(columnWidth)
-        val maxHeight = visibleHeight.toFloat().coerceAtLeast(glyphHeight * 6f)
-        val scale = minOf(maxWidth / sourceWidth, maxHeight / sourceHeight)
-            .takeIf { it.isFinite() && it > 0f }
-            ?: 1f
-        val width = (sourceWidth * scale)
-            .coerceIn(columnWidth * 4f, maxWidth)
-        val height = (sourceHeight * scale)
-            .coerceIn(glyphHeight * 6f, maxHeight)
+        val sourceWidth = bounds?.width?.toFloat()?.takeIf { it > 0f }
+        val sourceHeight = bounds?.height?.toFloat()?.takeIf { it > 0f }
+        if (sourceWidth == null || sourceHeight == null) {
+            return ImageBlockSize(width = columnWidth * 4f, height = glyphHeight * 6f)
+        }
+        var width = sourceWidth
+        var height = sourceHeight
+        val maxWidth = visibleWidth.toFloat()
+        val maxHeight = availableHeight
+        if (width > maxWidth) {
+            height = height * maxWidth / width
+            width = maxWidth
+        }
+        if (height > maxHeight) {
+            width = width * maxHeight / height
+            height = maxHeight
+        }
         return ImageBlockSize(width = width, height = height)
+    }
+
+    /**
+     * 竖排行内图片的纵向高度：以栏宽为基准按图片宽高比缩放，保证不变形。
+     */
+    private fun inlineImageBlockHeight(image: EbookImageRef, columnWidth: Float, availableHeight: Float): Float {
+        val bounds = image.readBytes()?.let(::decodeBitmapBounds)
+        val sourceWidth = bounds?.width?.toFloat()?.takeIf { it > 0f }
+        val sourceHeight = bounds?.height?.toFloat()?.takeIf { it > 0f }
+        if (sourceWidth == null || sourceHeight == null) return glyphHeight * 4f
+        val height = columnWidth * sourceHeight / sourceWidth
+        return height.coerceAtLeast(glyphHeight).coerceAtMost(availableHeight)
     }
 
     private fun nextToken(text: String, start: Int, end: Int): VerticalToken {

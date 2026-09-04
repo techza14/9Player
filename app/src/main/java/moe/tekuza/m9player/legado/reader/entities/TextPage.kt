@@ -17,6 +17,7 @@ internal data class TextPage(
     var documentCharStart: Int = 0,
     var documentCharEnd: Int = 0,
     var documentCharCount: Int = 0,
+    var isVolume: Boolean = false,
     var height: Float = 0f,
     var width: Float = 0f,
     private val textLines: ArrayList<TextLine> = arrayListOf()

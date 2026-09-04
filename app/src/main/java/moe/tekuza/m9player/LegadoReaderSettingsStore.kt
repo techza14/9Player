@@ -68,6 +68,20 @@ internal enum class ReaderBodyTitleMode {
     HIDE
 }
 
+/**
+ * 跨页句子处理模式（勾选启用后二选一）：
+ * OVERLAY   跨页句子窗口（当前句跨页时弹出浮层/小页显示完整句子）
+ * TEMP_PAGE 临时页（整页覆盖显示完整句子，淡入淡出，像正常页面）
+ */
+internal enum class CrossPageCueWindowMode {
+    OVERLAY,
+    TEMP_PAGE
+}
+
+/**
+ * 句尾处理：开启后本页最后一句显示不完全时整句推到下一页排版（句子不跨页）。
+ * （可滚动临时页模式 SCROLL_PAGE 已删除，保留提示词见 docs/scrollable-tail-page-revival-prompt.md）
+ */
 internal enum class ReaderHeaderMode {
     HIDE_WHEN_STATUS_BAR_SHOW,
     SHOW,
@@ -186,6 +200,7 @@ internal data class LegadoReaderPersistedState(
     val readBarStyleFollowPage: Boolean = false,
     val playbackBarPinnedVisible: Boolean = false,
     val crossPageCueWindowEnabled: Boolean = true,
+    val crossPageCueWindowMode: CrossPageCueWindowMode = CrossPageCueWindowMode.OVERLAY,
     val stopPlaybackOnImage: Boolean = false,
     val imagePauseSeconds: Int = 0,
     val audioCueRepeatPauseUsesCueDuration: Boolean = true,
@@ -194,6 +209,8 @@ internal data class LegadoReaderPersistedState(
     val audioCueRepeatCount: Int = 0,
     val audioCueRepeatTailPauseEnabled: Boolean = false,
     val audioCueRepeatFollowCueEnabled: Boolean = false,
+    val sentenceNoCrossPage: Boolean = false,
+    val pauseAfterPageEnd: Boolean = false,
     val verticalControlDirectionReversed: Boolean = false,
     val verticalProgressDirectionReversed: Boolean = false,
     val selectionPrimaryActionKey: String = "default",
@@ -372,6 +389,11 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         readBarStyleFollowPage = json.optBoolean("readBarStyleFollowPage", false),
         playbackBarPinnedVisible = json.optBoolean("playbackBarPinnedVisible", false),
         crossPageCueWindowEnabled = json.optBoolean("crossPageCueWindowEnabled", true),
+        crossPageCueWindowMode = if (json.has("crossPageCueWindowMode")) {
+            json.optEnum("crossPageCueWindowMode", CrossPageCueWindowMode.OVERLAY)
+        } else {
+            CrossPageCueWindowMode.OVERLAY
+        },
         stopPlaybackOnImage = json.optBoolean("stopPlaybackOnImage", false),
         imagePauseSeconds = json.optInt("imagePauseSeconds", 0).coerceIn(0, 300),
         audioCueRepeatPauseUsesCueDuration = json.optBoolean("audioCueRepeatPauseUsesCueDuration", true),
@@ -380,6 +402,12 @@ internal fun loadLegadoReaderPersistedState(context: Context): LegadoReaderPersi
         audioCueRepeatCount = json.optInt("audioCueRepeatCount", 0).coerceIn(0, 20),
         audioCueRepeatTailPauseEnabled = json.optBoolean("audioCueRepeatTailPauseEnabled", false),
         audioCueRepeatFollowCueEnabled = json.optBoolean("audioCueRepeatFollowCueEnabled", false),
+        // 旧键 sentenceTailHandlingEnabled 兼容迁移
+        sentenceNoCrossPage = json.optBoolean(
+            "sentenceNoCrossPage",
+            json.optBoolean("sentenceTailHandlingEnabled", false)
+        ),
+        pauseAfterPageEnd = json.optBoolean("pauseAfterPageEnd", false),
         verticalControlDirectionReversed = json.optBoolean("verticalControlDirectionReversed", false),
         verticalProgressDirectionReversed = json.optBoolean("verticalProgressDirectionReversed", false),
         selectionPrimaryActionKey = json.optString("selectionPrimaryActionKey")
@@ -583,6 +611,7 @@ internal fun saveLegadoReaderPersistedState(
         put("readBarStyleFollowPage", state.readBarStyleFollowPage)
         put("playbackBarPinnedVisible", state.playbackBarPinnedVisible)
         put("crossPageCueWindowEnabled", state.crossPageCueWindowEnabled)
+        put("crossPageCueWindowMode", state.crossPageCueWindowMode.name)
         put("stopPlaybackOnImage", state.stopPlaybackOnImage)
         put("imagePauseSeconds", state.imagePauseSeconds)
         put("audioCueRepeatPauseUsesCueDuration", state.audioCueRepeatPauseUsesCueDuration)
@@ -591,6 +620,8 @@ internal fun saveLegadoReaderPersistedState(
         put("audioCueRepeatCount", state.audioCueRepeatCount)
         put("audioCueRepeatTailPauseEnabled", state.audioCueRepeatTailPauseEnabled)
         put("audioCueRepeatFollowCueEnabled", state.audioCueRepeatFollowCueEnabled)
+        put("sentenceNoCrossPage", state.sentenceNoCrossPage)
+        put("pauseAfterPageEnd", state.pauseAfterPageEnd)
         put("verticalControlDirectionReversed", state.verticalControlDirectionReversed)
         put("verticalProgressDirectionReversed", state.verticalProgressDirectionReversed)
         put("selectionPrimaryActionKey", state.selectionPrimaryActionKey)

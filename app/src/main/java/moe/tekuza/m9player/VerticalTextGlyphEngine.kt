@@ -193,7 +193,18 @@ internal object VerticalTextGlyphEngine {
             }
             return VerticalTextToken(start, end, tokenText)
         }
-        return VerticalTextToken(start, start + 1, text.substring(start, start + 1))
+        // 代理对（CJK 扩展 B 等非 BMP 字符）必须整体作为一个 token，
+        // 否则拆成两个孤立代理项各自渲染会变成豆腐（缺字形）。
+        val unitCount = if (
+            Character.isHighSurrogate(text[start]) &&
+            start + 1 < endLimit &&
+            Character.isLowSurrogate(text[start + 1])
+        ) {
+            2
+        } else {
+            1
+        }
+        return VerticalTextToken(start, start + unitCount, text.substring(start, start + unitCount))
     }
 
     fun isTateChuYokoToken(text: String): Boolean {

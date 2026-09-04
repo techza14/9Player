@@ -26,15 +26,20 @@ internal fun String.readerCharCount(fromIndex: Int = 0, toIndex: Int = length): 
 
 internal class TextPageFactory(
     private val config: M9ReadBookConfig,
-    private val emptyPageText: String
+    private val emptyPageText: String,
+    /** 句尾处理（句子不跨页）：按章节索引的句子起点集合（章节坐标） */
+    private val sentenceStartsByChapter: Map<Int, Set<Int>> = emptyMap(),
+    /** 句尾处理（句子不跨页）：按章节索引的句子结尾集合（章节坐标） */
+    private val sentenceEndsByChapter: Map<Int, Set<Int>> = emptyMap()
 ) {
     fun createPages(
         document: EbookDocument,
         contentWidthPx: Int,
-        contentHeightPx: Int
+        contentHeightPx: Int,
+        firstPageReservePx: Float = 0f
     ): List<TextPage> {
         val chapters = document.chapters.mapIndexed { index, chapter ->
-            layoutChapter(document, index, contentWidthPx, contentHeightPx)
+            layoutChapter(document, index, contentWidthPx, contentHeightPx, firstPageReservePx)
         }
         val allPages = chapters.flatMap { it.pages }.ifEmpty {
             listOf(
@@ -60,11 +65,12 @@ internal class TextPageFactory(
         document: EbookDocument,
         chapterIndex: Int,
         contentWidthPx: Int,
-        contentHeightPx: Int
+        contentHeightPx: Int,
+        firstPageReservePx: Float = 0f
     ): List<TextPage> {
         val safeIndex = chapterIndex.coerceIn(0, document.chapters.lastIndex.coerceAtLeast(0))
         val pages = document.chapters.getOrNull(safeIndex)
-            ?.let { layoutChapter(document, safeIndex, contentWidthPx, contentHeightPx).pages }
+            ?.let { layoutChapter(document, safeIndex, contentWidthPx, contentHeightPx, firstPageReservePx).pages }
             .orEmpty()
         return assignGlobalPageNumbers(
             pages.ifEmpty {
@@ -94,7 +100,8 @@ internal class TextPageFactory(
         document: EbookDocument,
         index: Int,
         contentWidthPx: Int,
-        contentHeightPx: Int
+        contentHeightPx: Int,
+        firstPageReservePx: Float
     ): TextChapter {
         val chapter = document.chapters[index]
         val textChapter = TextChapter(
@@ -103,12 +110,23 @@ internal class TextPageFactory(
             text = chapter.text,
             chaptersSize = document.chapters.size,
             images = chapter.images,
-            rubySpans = if (config.showRubyText) chapter.rubySpans else emptyList()
+            rubySpans = if (config.showRubyText) chapter.rubySpans else emptyList(),
+            isVolume = chapter.isVolume,
+            sentenceStarts = sentenceStartsByChapter[index] ?: emptySet(),
+            sentenceEnds = sentenceEndsByChapter[index] ?: emptySet()
         )
-        return when (config.layoutMode) {
-            M9LayoutMode.HORIZONTAL -> TextChapterLayout(config, contentWidthPx, contentHeightPx).layout(textChapter)
-            M9LayoutMode.VERTICAL -> VerticalTextChapterLayout(config, contentWidthPx, contentHeightPx).layout(textChapter)
+        val laidOut = when (config.layoutMode) {
+            M9LayoutMode.HORIZONTAL -> TextChapterLayout(
+                config, contentWidthPx, contentHeightPx, firstPageReservePx
+            ).layout(textChapter)
+            M9LayoutMode.VERTICAL -> VerticalTextChapterLayout(
+                config, contentWidthPx, contentHeightPx, firstPageReservePx
+            ).layout(textChapter)
         }
+        if (chapter.isVolume) {
+            laidOut.pages.forEach { it.isVolume = true }
+        }
+        return laidOut
     }
 
     private fun assignGlobalPageNumbers(

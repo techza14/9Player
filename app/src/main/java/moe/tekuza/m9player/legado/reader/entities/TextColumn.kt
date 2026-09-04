@@ -28,7 +28,8 @@ internal data class TextColumn(
     var isSearchResult: Boolean = false
 
     override fun draw(view: ContentTextView, canvas: Canvas, line: TextLine, selected: Boolean) {
-        val paint = view.contentPaint
+        // 卷/标题行用标题画笔（大一号 + 加粗）绘制
+        val paint = if (line.isTitle) view.titlePaint else view.contentPaint
         paint.color = when {
             selected || this.selected || isSearchResult -> view.highlightTextColor
             line.isReadAloud -> view.highlightTextColor
@@ -36,6 +37,9 @@ internal data class TextColumn(
         }
         when (line.layoutMode) {
             M9LayoutMode.HORIZONTAL -> {
+                // 破折号用自定义细线统一绘制（不依赖字体字形：不同 CJK 字体的
+                // —/―/─/━/⸺ 渲染差异大，legado 直接画字形会过粗或位置不稳）。
+                // 线宽按字号比例取细线，BUTT 帽精确落在列边界内，不碰相邻文字。
                 if (isHorizontalDash(charData)) {
                     if (isFirstHorizontalDashInRun(line)) {
                         drawHorizontalDashRun(canvas, line, paint)
@@ -145,6 +149,20 @@ internal data class TextColumn(
         return run.takeIf { it.isNotEmpty() } ?: listOf(this)
     }
 
+    /**
+     * 破折号线宽：按字号比例取细线，并随当前字重微调（加粗 5.5% /
+     * 常规 4.5% / 细体 3.8%），接近所用字体自身破折号的笔画粗细。
+     */
+    private fun dashStrokeWidth(paint: Paint): Float {
+        val weight = paint.typeface?.weight ?: 400
+        val ratio = when {
+            weight >= 700 -> 0.055f
+            weight <= 300 -> 0.038f
+            else -> 0.045f
+        }
+        return (paint.textSize * ratio).coerceAtLeast(1f)
+    }
+
     private fun drawHorizontalDashRun(
         canvas: Canvas,
         line: TextLine,
@@ -155,17 +173,17 @@ internal data class TextColumn(
         val right = run.maxOf { it.end }
         val metrics = paint.fontMetrics
         val y = line.lineBase + (metrics.ascent + metrics.descent) * 0.5f
-        val strokeWidth = min(
-            (line.lineBottom - line.lineTop).coerceAtLeast(1f) * 0.12f,
-            paint.textSize * 0.08f
-        ).coerceAtLeast(1f)
+        // 线宽按字号比例取细线并随字重微调，接近字体自身破折号笔画粗细；
+        // 不随行高变化（避免被 ruby 预留撑粗）；BUTT 帽 + 精确列边界，
+        // 不伸出边界碰到相邻文字。
+        val strokeWidth = dashStrokeWidth(paint)
         val oldStyle = paint.style
         val oldStrokeWidth = paint.strokeWidth
         val oldStrokeCap = paint.strokeCap
         paint.style = Style.STROKE
         paint.strokeWidth = strokeWidth
-        paint.strokeCap = Cap.SQUARE
-        canvas.drawLine(left - strokeWidth * 0.5f, y, right + strokeWidth * 0.5f, y, paint)
+        paint.strokeCap = Cap.BUTT
+        canvas.drawLine(left, y, right, y, paint)
         paint.style = oldStyle
         paint.strokeWidth = oldStrokeWidth
         paint.strokeCap = oldStrokeCap
@@ -181,17 +199,17 @@ internal data class TextColumn(
         val top = run.minOf { it.start }
         val bottom = run.maxOf { it.end }
         val x = (line.lineTop + glyphRight) * 0.5f
-        val strokeWidth = min(
-            (glyphRight - line.lineTop).coerceAtLeast(1f) * 0.12f,
-            paint.textSize * 0.08f
-        ).coerceAtLeast(1f)
+        // 线宽按字号比例取细线并随字重微调，接近字体自身破折号笔画粗细；
+        // 不随行高/栏宽变化（避免被 ruby 预留撑粗）；BUTT 帽 + 精确边界，
+        // 不伸出列边界碰到相邻文字。
+        val strokeWidth = dashStrokeWidth(paint)
         val oldStyle = paint.style
         val oldStrokeWidth = paint.strokeWidth
         val oldStrokeCap = paint.strokeCap
         paint.style = Style.STROKE
         paint.strokeWidth = strokeWidth
-        paint.strokeCap = Cap.SQUARE
-        canvas.drawLine(x, top - strokeWidth * 0.5f, x, bottom + strokeWidth * 0.5f, paint)
+        paint.strokeCap = Cap.BUTT
+        canvas.drawLine(x, top, x, bottom, paint)
         paint.style = oldStyle
         paint.strokeWidth = oldStrokeWidth
         paint.strokeCap = oldStrokeCap

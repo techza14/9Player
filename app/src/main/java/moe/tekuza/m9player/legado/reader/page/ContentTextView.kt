@@ -1,5 +1,6 @@
 package moe.tekuza.m9player.legado.reader.page
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -8,11 +9,15 @@ import android.graphics.Typeface
 import android.text.TextPaint
 import android.util.AttributeSet
 import android.util.TypedValue
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
+import android.view.animation.DecelerateInterpolator
 import moe.tekuza.m9player.EbookImageRef
 import moe.tekuza.m9player.VerticalTextGlyphEngine
 import moe.tekuza.m9player.legado.reader.M9LayoutMode
 import moe.tekuza.m9player.legado.reader.M9TextWeight
+import moe.tekuza.m9player.legado.reader.READER_TITLE_SCALE
 import moe.tekuza.m9player.legado.reader.applyM9TextWeight
 import moe.tekuza.m9player.legado.reader.entities.ImageColumn
 import moe.tekuza.m9player.legado.reader.entities.TextColumn
@@ -20,6 +25,7 @@ import moe.tekuza.m9player.legado.reader.entities.TextLine
 import moe.tekuza.m9player.legado.reader.entities.TextPage
 import java.text.BreakIterator
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 
 internal class ContentTextView @JvmOverloads constructor(
@@ -65,6 +71,8 @@ internal class ContentTextView @JvmOverloads constructor(
     )
 
     val contentPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
+    /** 卷/标题行画笔：比正文大一号 + 加粗（与布局层 READER_TITLE_SCALE 一致） */
+    val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
     val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     val searchPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -90,7 +98,6 @@ internal class ContentTextView @JvmOverloads constructor(
     private var scrollOffset: Float = 0f
     private var scrollHorizontal: Boolean = false
     private var scrollReverse: Boolean = false
-
     val textSizePx: Float get() = textSizePxValue
 
     init {
@@ -99,6 +106,7 @@ internal class ContentTextView @JvmOverloads constructor(
         searchPaint.color = 0xAAFFD54F.toInt()
         underlinePaint.style = Paint.Style.STROKE
         underlinePaint.strokeCap = Paint.Cap.SQUARE
+        applyTitlePaint()
     }
 
     fun setTextColor(color: Int) {
@@ -119,6 +127,7 @@ internal class ContentTextView @JvmOverloads constructor(
     fun setTextSizePx(sizePx: Float) {
         textSizePxValue = sizePx
         contentPaint.textSize = sizePx
+        applyTitlePaint()
         invalidate()
     }
 
@@ -141,6 +150,14 @@ internal class ContentTextView @JvmOverloads constructor(
 
     private fun applyTextTypeface() {
         contentPaint.applyM9TextWeight(textWeight, readerTypeface)
+        applyTitlePaint()
+    }
+
+    /** 标题画笔：跟随正文的字重/字体，字号放大 + 强制加粗。 */
+    private fun applyTitlePaint() {
+        titlePaint.set(contentPaint)
+        titlePaint.textSize = contentPaint.textSize * READER_TITLE_SCALE
+        titlePaint.typeface = Typeface.create(readerTypeface ?: Typeface.DEFAULT, Typeface.BOLD)
     }
 
     fun setPage(page: TextPage?, highlight: IntRange?, search: IntRange?) {

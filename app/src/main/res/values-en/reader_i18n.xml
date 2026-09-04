@@ -109,6 +109,7 @@
     <string name="reader_click_action_toggle_convert">Toggle convert state</string>
     <string name="reader_click_action_catalog">Catalog</string>
     <string name="reader_click_action_search">Search</string>
+    <string name="reader_click_action_toggle_repeat">Repeat</string>
     <string name="reader_click_region_menu_required">At least one menu zone is required. Center was restored to Menu.</string>
     <string name="reader_menu_player">Player</string>
     <string name="reader_menu_add_bookmark">Add bookmark</string>
@@ -214,6 +215,9 @@
     <string name="reader_srt_parse_failed">No subtitles were parsed from the SRT</string>
     <string name="reader_srt_loading">Loading SRT…</string>
     <string name="reader_cross_page_cue_window">Cross-page sentence window</string>
+
+    <string name="reader_cross_page_cue_window_overlay">Cross-page sentence window</string>
+    <string name="reader_cross_page_cue_window_temp_page">Temporary page</string>
     <string name="reader_stop_on_image">Stop playback on images</string>
     <string name="reader_image_pause_seconds">Image pause seconds (0 = resume after page turn)</string>
     <string name="reader_reverse_vertical_controls">Reverse listen/playback button actions in vertical writing</string>
@@ -247,6 +251,12 @@
     <string name="reader_repeat_playback_count_value">Play %1$d times</string>
     <string name="reader_repeat_tail_pause">Pause at end</string>
     <string name="reader_repeat_follow_cue">Repeat each cue</string>
+    <string name="reader_sentence_no_cross_page">Keep sentences on one page</string>
+    <string name="reader_sentence_no_cross_page_hint">Sentences that do not fit are moved to the next page whole; they are never cut off at the page bottom</string>
+    <string name="reader_pause_after_page_end">Pause after finishing this page</string>
+    <string name="reader_pause_after_page_end_on">Pause after page end: on (tap to turn off)</string>
+    <string name="reader_pause_after_page_end_off">Pause after page end: off (tap to turn on)</string>
+    <string name="reader_repeat_unavailable_with_page_end_pause">Sentence repeat unavailable while pause-after-page-end is enabled</string>
     <string name="reader_repeat_enabled_content_description">Repeat, %1$s</string>
     <string name="reader_repeat_disabled_content_description">Repeat</string>
 

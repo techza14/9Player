@@ -3,6 +3,9 @@ package moe.tekuza.m9player.legado.reader
 import android.graphics.Typeface
 import android.text.TextPaint
 
+/** 卷/章节标题字号 = 正文字号 × 该比例（布局与绘制共用） */
+internal const val READER_TITLE_SCALE = 1.2f
+
 internal data class M9ReadBookConfig(
     var textSizePx: Float,
     var lineSpacingPx: Float,

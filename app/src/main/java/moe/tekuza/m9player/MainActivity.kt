@@ -5144,7 +5144,8 @@ private object BookCoverThumbnailCache {
             cache.get(key)?.let { return@withContext it }
         }
 
-        val originalSize = readBookCoverOriginalSize(context, uri)
+        var originalWidth = 0
+        var originalHeight = 0
         val bitmap = try {
             val source = if (uri.scheme.equals("file", ignoreCase = true)) {
                 ImageDecoder.createSource(File(uri.path ?: return@withContext null))
@@ -5152,6 +5153,10 @@ private object BookCoverThumbnailCache {
                 ImageDecoder.createSource(context.contentResolver, uri)
             }
             ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                // 原始尺寸在解码回调里顺便拿到（info.size），
+                // 无需再单独打开文件读一遍文件头
+                originalWidth = info.size.width
+                originalHeight = info.size.height
                 val longest = maxOf(info.size.width, info.size.height).coerceAtLeast(1)
                 val scale = minOf(1f, targetDimension.toFloat() / longest)
                 decoder.setTargetSize(
@@ -5167,33 +5172,13 @@ private object BookCoverThumbnailCache {
         bitmap.prepareToDraw()
         val entry = DecodedBookCover(
             bitmap = bitmap,
-            originalWidth = originalSize?.first ?: bitmap.width,
-            originalHeight = originalSize?.second ?: bitmap.height
+            originalWidth = originalWidth.takeIf { it > 0 } ?: bitmap.width,
+            originalHeight = originalHeight.takeIf { it > 0 } ?: bitmap.height
         )
         synchronized(cache) {
             cache.put(key, entry)
         }
         entry
-    }
-
-    private fun readBookCoverOriginalSize(context: Context, uri: Uri): Pair<Int, Int>? {
-        return try {
-            val input = if (uri.scheme.equals("file", ignoreCase = true)) {
-                File(uri.path ?: return null).inputStream()
-            } else {
-                context.contentResolver.openInputStream(uri) ?: return null
-            }
-            input.use { stream ->
-                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeStream(stream, null, options)
-                val width = options.outWidth.takeIf { it > 0 } ?: return null
-                val height = options.outHeight.takeIf { it > 0 } ?: return null
-                width to height
-            }
-        } catch (error: Exception) {
-            Log.w("BookCoverThumbnail", "bounds decode failed uri=$uri", error)
-            null
-        }
     }
 
     private fun cacheKey(uri: Uri, targetDimension: Int): String =
